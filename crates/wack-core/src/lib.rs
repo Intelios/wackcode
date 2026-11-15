@@ -16,7 +16,7 @@ pub mod secrets;
 pub mod store;
 pub mod terminal;
 
-pub use appearance::{Appearance, Backdrop, Mode};
+pub use appearance::{Appearance, Backdrop, Mode, Texture};
 pub use run::{Job, RunEvent, RunSetup, run};
 pub use store::{
     Chat, Connection, Model, ModelChoice, NewConnection, Project, Resolved, Store, Ui, title_from,

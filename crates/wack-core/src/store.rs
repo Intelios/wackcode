@@ -451,6 +451,11 @@ impl Store {
         self.backgrounds_folder().join(&backdrop.file)
     }
 
+    /// The softened copy drawn behind a conversation ([`crate::appearance::soften`]).
+    pub fn backdrop_soft_path(&self, backdrop: &Backdrop) -> PathBuf {
+        self.backgrounds_folder().join(crate::appearance::soft_name(&backdrop.file))
+    }
+
     pub fn ui(&self) -> &Ui {
         &self.state.ui
     }

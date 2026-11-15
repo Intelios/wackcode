@@ -205,11 +205,18 @@ pub struct ChooseAccent {
     pub hex: Option<String>,
 }
 
-/// How far the backdrop is toned towards the window's colour, in percent.
+/// How much the backdrop is dimmed behind a conversation, in percent.
 #[derive(Clone, Debug, PartialEq, Action)]
 #[action(namespace = wackcode, no_json)]
-pub struct ChooseVeil {
-    pub veil: u8,
+pub struct ChooseDim {
+    pub dim: u8,
+}
+
+/// How the backdrop is drawn on the new-chat screen.
+#[derive(Clone, Debug, PartialEq, Action)]
+#[action(namespace = wackcode, no_json)]
+pub struct ChooseTexture {
+    pub texture: wack_core::Texture,
 }
 
 /// The part of the backdrop kept in view: 0, 1 or 2 across and down.

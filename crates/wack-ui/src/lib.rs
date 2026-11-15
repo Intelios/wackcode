@@ -12,6 +12,7 @@ pub mod chat;
 pub mod colour;
 pub mod composer;
 pub mod conversation;
+pub mod edge_fade;
 pub mod fixtures;
 pub mod highlight;
 pub mod icon;

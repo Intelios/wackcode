@@ -252,9 +252,10 @@ impl AppState {
                 app.importing = false;
                 match result {
                     Ok(mut backdrop) => {
-                        // A new picture keeps the veil the old one had.
+                        // A new picture keeps the dim and texture the old one had.
                         if let Some(old) = &app.store.appearance().backdrop {
-                            backdrop.veil = old.veil;
+                            backdrop.dim = old.dim;
+                            backdrop.texture = old.texture;
                         }
                         app.set_appearance(|appearance| appearance.backdrop = Some(backdrop), cx);
                     }
@@ -273,10 +274,12 @@ impl AppState {
         let backdrop = self.store.appearance().backdrop.as_ref()?;
         Some(Picture {
             path: self.store.backdrop_path(backdrop).to_string_lossy().to_string().into(),
+            soft_path: self.store.backdrop_soft_path(backdrop).to_string_lossy().to_string().into(),
             width: backdrop.width,
             height: backdrop.height,
             focus: (backdrop.focus_x, backdrop.focus_y),
-            veil: backdrop.veil as f32 / 100.,
+            dim: backdrop.dim as f32 / 100.,
+            texture: backdrop.texture,
         })
     }
 

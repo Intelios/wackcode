@@ -110,7 +110,7 @@ impl RenderOnce for Sidebar {
             .min_h_0()
             .flex()
             .flex_col()
-            .bg(theme.sidebar)
+            // No ground of its own: the shell lays the sidebar's, a tint when a picture is behind.
             .child(
                 div()
                     .flex()

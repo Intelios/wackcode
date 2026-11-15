@@ -48,7 +48,7 @@ WackCode is a native macOS coding agent: a Rust app drawn with GPUI, with its ow
 WackCode should feel like a distinctive macOS app with its own character, never a generic web app or generic AI-generated design. Make deliberate choices in layout, typography, detail and interaction that reinforce that character.
 
 - **Focused, not configurable.** One layout and one look, chosen on purpose. The user personalises colour (theme colour, accent, light or dark, an image backdrop), never structure.
-- **Asymmetric and typographic.** Prefer strong type hierarchy and off-centre composition to centred columns and rows of pills.
+- **Asymmetric and typographic.** Prefer strong type hierarchy and off-centre composition to centred columns and rows of pills. The new-chat and welcome screens are the exception: centred, on the owner's call.
 - **Motion is identity.** Expressive, considered transitions make the app feel alive. Every animation respects the system's reduced-motion setting, with a still end state for anything that loops.
 - **Design for every theme.** Each view must look right in light and dark, with any theme colour and accent, and over an image backdrop. The accent recolours interaction, never meaning: danger, warning, diff and success stay fixed.
 - **Native, not web.** Own title strip that drags the window, macOS key glyphs (⌘⇧⌥⌃), and settings named as `Settings › Section`.

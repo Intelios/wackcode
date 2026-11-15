@@ -29,6 +29,8 @@ use gpui::{Animation, AnimationExt, App, ElementId, IntoElement, Styled, px};
 
 /// How long an arrival takes.
 pub const ARRIVE: Duration = Duration::from_millis(260);
+/// How long something laid over the window takes to fade in.
+const FADE: Duration = Duration::from_millis(450);
 /// How far an arriving thing rises, in points.
 const RISE: f32 = 8.;
 /// How long the working duck holds each step of its paddle.
@@ -76,6 +78,11 @@ pub fn slide_in<E: IntoElement + Styled + 'static>(
         let rest = 1. - t;
         element.opacity(t).relative().left(px(from_right * rest)).top(px(from_below * rest))
     })
+}
+
+/// Fades in, without moving: for something laid over the window, such as the backdrop's hero.
+pub fn fade_in<E: IntoElement + Styled + 'static>(id: impl Into<ElementId>, element: E) -> impl IntoElement {
+    element.with_animation(id, Animation::new(FADE).with_easing(spring), |element, t| element.opacity(t))
 }
 
 /// Raises a working duck to the paddle's current step.

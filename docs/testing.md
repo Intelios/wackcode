@@ -20,7 +20,7 @@ Scenes render from sample data in `crates/wack-ui/src/fixtures.rs`: a believable
 
 Rendering is headless: GPUI's test platform with the real Metal renderer and the real macOS text system. No window opens and nothing takes focus, so it works from any shell. Images are rendered at 2x. The gallery draws a scene twice so pictures loaded by the first frame show, and renders with Reduce Motion on, so every movement is shown where it comes to rest.
 
-Backdrop scenes (`*-backdrop`) draw over a dusk landscape that `fixtures::backdrop` paints once into `target/gallery/`. The owner usually runs with a backdrop, so a view that can sit beside open space should be checked over one too.
+Backdrop scenes (`*-backdrop*`) draw over a picture that `fixtures::backdrop` imports once into `target/gallery/backdrop/`: a real photo saved as `target/gallery/fixture-photo.jpg` if you put one there (`sips -s format jpeg <any picture> --out target/gallery/fixture-photo.jpg`), otherwise a generated dusk landscape. A real photo shows far better what the owner will see. The owner usually runs with a backdrop, so any view should be checked over one too.
 
 When you change a view: add or update its scene, render it in both themes, and look at the result. A UI change is not verified until you have looked at it.
 

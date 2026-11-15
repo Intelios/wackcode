@@ -1,126 +1,59 @@
-//! The image backdrop: the user's picture behind the window, and the veil that keeps text off it.
+//! The image backdrop, after WackCode 2 and Zeron.
 //!
-//! The treatment is the app's own: the picture is never blurred or dimmed into mud behind text.
-//! Instead every place text lives is an *island* of solid window colour (the title strip, the
-//! reading column, the new-chat block), and each island's edge dissolves into the picture
-//! through an ordered dither of small square cells, like a print's halftone. The picture shows
-//! cleanly in the open space the composition already leaves to the right.
+//! - **Behind everything** ([`behind`]): on every screen the picture fills the window, softened
+//!   (the blurred copy made on import) and dimmed towards the window's colour, so text over it
+//!   stays easy to read. The sidebar and title strip are see-through over it; the composer,
+//!   cards and docks keep solid grounds.
+//! - **The hero** ([`hero`]): on the new-chat and welcome screens the picture also shows clear
+//!   across the top of the main column, as it is or through a texture. It fades out down its
+//!   whole height and is feathered away around the centred block, so it dissolves into the
+//!   softened picture beneath without an edge.
 //!
 //! Invariants:
-//! - Inside an island is solid; farther than `BAND` from every island is clear; in between, a
-//!   cell is solid when its coverage beats its Bayer threshold, so the density falls smoothly
-//!   with distance and the pattern is stable from frame to frame (no shimmer while resizing).
-//! - Cells sit on a grid fixed to the window, so moving an island never makes the pattern crawl.
-//!   Islands grow to whole cells, so no sliver of picture shows along an edge.
-//! - The picture covers the whole window, not just the area drawn, so it stays put when the
-//!   sidebar comes and goes.
-//! - The veil is pure geometry ([`cells`]) and tested; [`Veil`] keeps it between frames, so it
-//!   is worked out again only when the window's shape changes.
+//! - Both layers are fitted to the whole window with the same focus ([`cover`]), so the clear
+//!   picture lies exactly over the soft one, and neither moves when the sidebar comes and goes.
+//! - The hero's mask is drawn by the GPU (`Window::paint_image_fitted_masked`): resizing the
+//!   window or moving the block rasterizes nothing.
+//! - A texture is worked out once per picture, texture, and light or dark, off the UI thread,
+//!   and kept ([`artwork`]). Until it is ready the hero is simply not drawn.
+//!
+//! The textures and the hero's mask are adapted from Zeron (MIT, github.com/zeronsh/zeron,
+//! `crates/ui/src/new_thread_background_effects.rs` and `new_thread_background_mask.rs`).
 
-use std::rc::Rc;
+use std::{cell::Cell, path::PathBuf, rc::Rc, sync::Arc};
 
-use gpui::{Bounds, Hsla, ObjectFit, Pixels, SharedString, Window, canvas, div, fill, img, point, prelude::*, px, size};
+use gpui::{
+    App, Bounds, Global, Hsla, ImageAlphaMask, ObjectFit, Pixels, RenderImage, SharedString, Window, canvas, div,
+    img, point, prelude::*, px, size,
+};
+use wack_core::Texture;
 
 use crate::panes::Rect;
 
-/// One dither cell, in points.
-pub const CELL: f32 = 3.;
-/// How far a dissolve reaches from an island's edge, in points.
-pub const BAND: f32 = 96.;
+/// The hero's height as a share of the space below the title strip, and its most.
+const HERO_SHARE: f32 = 0.72;
+const HERO_MAX: f32 = 760.;
+/// The long side of the copy textures are drawn from.
+const ARTWORK_EDGE: u32 = 2048;
+/// How many textures and decoded pictures are kept.
+const KEPT: usize = 4;
 
-/// The 8×8 Bayer matrix: each cell's threshold, spread so neighbouring thresholds differ most.
-const BAYER: [[u8; 8]; 8] = [
-    [0, 32, 8, 40, 2, 34, 10, 42],
-    [48, 16, 56, 24, 50, 18, 58, 26],
-    [12, 44, 4, 36, 14, 46, 6, 38],
-    [60, 28, 52, 20, 62, 30, 54, 22],
-    [3, 35, 11, 43, 1, 33, 9, 41],
-    [51, 19, 59, 27, 49, 17, 57, 25],
-    [15, 47, 7, 39, 13, 45, 5, 37],
-    [63, 31, 55, 23, 61, 29, 53, 21],
-];
+/// Where the centred block is, measured while the frame is laid out and read when the hero is
+/// painted, so the mask follows the block in the same frame.
+pub type Cutout = Rc<Cell<Option<Bounds<Pixels>>>>;
 
-/// How far `(x, y)` is from the nearest island; 0 inside one.
-fn distance(islands: &[Rect], x: f32, y: f32) -> f32 {
-    islands
-        .iter()
-        .map(|island| {
-            let dx = (island.x - x).max(x - island.right()).max(0.);
-            let dy = (island.y - y).max(y - island.bottom()).max(0.);
-            (dx * dx + dy * dy).sqrt()
-        })
-        .fold(f32::INFINITY, f32::min)
-}
-
-/// The solid parts of the veil over `area`: the islands (clipped to it) and the dither cells
-/// around them, with neighbouring cells in a row joined into one rectangle.
-pub fn cells(area: Rect, islands: &[Rect]) -> Vec<Rect> {
-    // Each island grows to whole cells, so a cell is either inside one or wholly outside: no
-    // sliver of picture is left along an edge that falls part-way through a cell.
-    let islands: Vec<Rect> = islands
-        .iter()
-        .map(|island| {
-            let x = (island.x / CELL).floor() * CELL;
-            let y = (island.y / CELL).floor() * CELL;
-            Rect { x, y, width: (island.right() / CELL).ceil() * CELL - x, height: (island.bottom() / CELL).ceil() * CELL - y }
-        })
-        .collect();
-    let islands = islands.as_slice();
-    let mut solid: Vec<Rect> = islands
-        .iter()
-        .filter_map(|island| {
-            let x = island.x.max(area.x);
-            let y = island.y.max(area.y);
-            let right = island.right().min(area.right());
-            let bottom = island.bottom().min(area.bottom());
-            (right > x && bottom > y).then_some(Rect { x, y, width: right - x, height: bottom - y })
-        })
-        .collect();
-    if solid.is_empty() {
-        return solid;
-    }
-    // Cells on the window's grid, covering the area.
-    let first_column = (area.x / CELL).floor() as i64;
-    let first_row = (area.y / CELL).floor() as i64;
-    let last_column = (area.right() / CELL).ceil() as i64;
-    let last_row = (area.bottom() / CELL).ceil() as i64;
-    for row in first_row..last_row {
-        let top = row as f32 * CELL;
-        let mut run: Option<(f32, f32)> = None;
-        for column in first_column..last_column {
-            let left = column as f32 * CELL;
-            let d = distance(islands, left + CELL / 2., top + CELL / 2.);
-            let on = d > 0. && d < BAND && {
-                // Smoothstep: a soft start and end to the dissolve.
-                let t = 1. - d / BAND;
-                let coverage = t * t * (3. - 2. * t);
-                let threshold = (BAYER[row.rem_euclid(8) as usize][column.rem_euclid(8) as usize] as f32 + 0.5) / 64.;
-                coverage > threshold
-            };
-            match (on, &mut run) {
-                (true, Some((_, end))) => *end = left + CELL,
-                (true, None) => run = Some((left, left + CELL)),
-                (false, Some((start, end))) => {
-                    solid.push(Rect { x: *start, y: top, width: *end - *start, height: CELL });
-                    run = None;
-                }
-                (false, None) => {}
-            }
-        }
-        if let Some((start, end)) = run {
-            solid.push(Rect { x: start, y: top, width: end - start, height: CELL });
-        }
-    }
-    // Cells at the area's edge are cut to it.
-    solid.retain_mut(|rect| {
-        let x = rect.x.max(area.x);
-        let y = rect.y.max(area.y);
-        let right = rect.right().min(area.right());
-        let bottom = rect.bottom().min(area.bottom());
-        *rect = Rect { x, y, width: right - x, height: bottom - y };
-        rect.width > 0. && rect.height > 0.
-    });
-    solid
+/// What the shell needs to draw a backdrop.
+#[derive(Clone, Debug, PartialEq)]
+pub struct Picture {
+    pub path: SharedString,
+    /// The softened copy, for behind a conversation.
+    pub soft_path: SharedString,
+    pub width: u32,
+    pub height: u32,
+    pub focus: (f32, f32),
+    /// 0–1: how much of the window's colour covers the softened picture.
+    pub dim: f32,
+    pub texture: Texture,
 }
 
 /// The picture drawn to cover `frame`, keeping `focus` (0–1 across and down) in view.
@@ -139,138 +72,305 @@ pub fn cover(frame: Rect, picture: (u32, u32), focus: (f32, f32)) -> Rect {
     }
 }
 
-/// What the shell needs to draw a backdrop.
-#[derive(Clone, Debug, PartialEq)]
-pub struct Picture {
-    pub path: SharedString,
-    pub width: u32,
-    pub height: u32,
-    pub focus: (f32, f32),
-    /// 0–1: how far the picture is toned towards the window's colour.
-    pub veil: f32,
+/// How tall the hero is below a title strip, given the height under it.
+pub fn hero_height(content_height: f32) -> f32 {
+    (content_height * HERO_SHARE).clamp(0., HERO_MAX)
 }
 
-/// The veil's cells, worked out again only when the area or the islands change: a window that
-/// is not being resized costs nothing per frame.
-#[derive(Default)]
-pub struct Veil {
-    key: Option<(Rect, Vec<Rect>)>,
-    cells: Rc<Vec<Rect>>,
-}
-
-impl Veil {
-    pub fn cells(&mut self, area: Rect, islands: Vec<Rect>) -> Rc<Vec<Rect>> {
-        if self.key.as_ref() != Some(&(area, islands.clone())) {
-            self.cells = Rc::new(cells(area, &islands));
-            self.key = Some((area, islands));
-        }
-        self.cells.clone()
-    }
-}
-
-/// The backdrop over `area` of the window, both in window coordinates: the picture covering the
-/// whole `window` (so it stays put when the sidebar comes and goes), its tone, and the veil's
-/// `solid` cells from [`Veil::cells`]. `ground` is the window's colour.
-pub fn view(picture: Picture, window: Rect, area: Rect, solid: Rc<Vec<Rect>>, ground: Hsla) -> impl IntoElement {
+/// The softened, dimmed picture across the whole `window`.
+pub fn behind(picture: &Picture, window: Rect, ground: Hsla) -> impl IntoElement + use<> {
     let drawn = cover(window, (picture.width, picture.height), picture.focus);
     div()
         .absolute()
         .left_0()
         .top_0()
-        .w(px(area.width))
-        .h(px(area.height))
+        .w(px(window.width))
+        .h(px(window.height))
         .overflow_hidden()
-        .bg(ground)
         .child(
-            img(std::path::PathBuf::from(picture.path.as_ref()))
+            img(PathBuf::from(picture.soft_path.as_ref()))
                 .absolute()
-                .left(px(drawn.x - area.x))
-                .top(px(drawn.y - area.y))
+                .left(px(drawn.x))
+                .top(px(drawn.y))
                 .w(px(drawn.width))
                 .h(px(drawn.height))
                 .object_fit(ObjectFit::Fill),
         )
-        .when(picture.veil > 0., |backdrop| {
-            backdrop.child(div().absolute().left_0().top_0().size_full().bg(Hsla { a: picture.veil.clamp(0., 0.9), ..ground }))
-        })
-        .child(
-            canvas(
-                |_, _, _| {},
-                move |bounds: Bounds<Pixels>, _, window: &mut Window, _| {
-                    for rect in solid.iter() {
-                        let origin = point(bounds.origin.x + px(rect.x - area.x), bounds.origin.y + px(rect.y - area.y));
-                        window.paint_quad(fill(Bounds::new(origin, size(px(rect.width), px(rect.height))), ground));
-                    }
+        .child(div().absolute().left_0().top_0().size_full().bg(Hsla { a: picture.dim.clamp(0., 0.9), ..ground }))
+}
+
+/// The clear picture over `area` (window coordinates), fitted to the whole `window` like
+/// [`behind`], fading out downwards and feathered away around `cutout`.
+pub fn hero(artwork: Arc<RenderImage>, picture: &Picture, window: Rect, area: Rect, cutout: Cutout) -> impl IntoElement + use<> {
+    let fitted = cover(window, (picture.width, picture.height), picture.focus);
+    canvas(
+        |_, _, _| {},
+        move |bounds: Bounds<Pixels>, _, window: &mut Window, _| {
+            let fitted = Bounds::new(point(px(fitted.x), px(fitted.y)), size(px(fitted.width), px(fitted.height)));
+            let height = f32::from(bounds.size.height).max(1.);
+            let fade = Some((bounds.bottom(), px(height)));
+            let mask = match cutout.get() {
+                // The cleared area runs on to the hero's foot, so the picture never comes back
+                // in beneath the block.
+                Some(block) => ImageAlphaMask {
+                    bounds: Bounds::new(block.origin, size(block.size.width, block.bottom().max(bounds.bottom()) - block.top())),
+                    radius: px(18.),
+                    feather: px((height * 0.52).clamp(120., 280.)),
+                    clearance: px(8.),
+                    bottom_fade: fade,
                 },
-            )
-            .absolute()
-            .left_0()
-            .top_0()
-            .size_full(),
-        )
+                // Nothing to clear: an exclusion below the hero leaves only the fade.
+                None => ImageAlphaMask {
+                    bounds: Bounds::new(point(bounds.left(), bounds.bottom() + px(1.)), bounds.size),
+                    radius: px(0.),
+                    feather: px(1.),
+                    clearance: px(0.),
+                    bottom_fade: fade,
+                },
+            };
+            let _ = window.paint_image_fitted_masked(bounds, fitted, Default::default(), artwork, 0, false, Some(mask));
+        },
+    )
+    .absolute()
+    .left(px(area.x))
+    .top(px(area.y))
+    .w(px(area.width))
+    .h(px(area.height))
+}
+
+/// A picture decoded once, small enough to texture quickly.
+struct Source {
+    width: u32,
+    height: u32,
+    luma: Vec<u8>,
+    colours: Vec<[u8; 4]>,
+}
+
+/// A textured picture's key: its path, texture, and whether it is for a light window.
+type ArtworkKey = (SharedString, Texture, bool);
+
+#[derive(Default)]
+struct Artworks {
+    /// Decoded pictures, by path.
+    sources: Vec<(SharedString, Arc<Source>)>,
+    /// Textured pictures by path, texture and light; `None` while one is being made.
+    images: Vec<(ArtworkKey, Option<Arc<RenderImage>>)>,
+}
+
+impl Global for Artworks {}
+
+/// The picture as the hero draws it, or `None` while it is being made (the windows redraw
+/// when it is ready).
+pub fn artwork(picture: &Picture, light: bool, cx: &mut App) -> Option<Arc<RenderImage>> {
+    // Dither and the plain picture look the same in light and dark.
+    let light = light && !matches!(picture.texture, Texture::None | Texture::Dither);
+    let key = (picture.path.clone(), picture.texture, light);
+    let artworks = cx.default_global::<Artworks>();
+    if let Some((_, image)) = artworks.images.iter().find(|(cached, _)| *cached == key) {
+        return image.clone();
+    }
+    artworks.images.push((key.clone(), None));
+    if artworks.images.len() > KEPT {
+        artworks.images.remove(0);
+    }
+    let source = artworks.sources.iter().find(|(path, _)| *path == key.0).map(|(_, source)| source.clone());
+    let (path, texture) = (key.0.clone(), key.1);
+    cx.spawn(async move |cx| {
+        let made = cx
+            .background_executor()
+            .spawn(async move {
+                let source = match source {
+                    Some(source) => source,
+                    None => Arc::new(Source::open(path.as_ref())?),
+                };
+                let image = Arc::new(source.render(texture, light));
+                Some((source, image))
+            })
+            .await;
+        cx.update(|cx| {
+            let artworks = cx.default_global::<Artworks>();
+            let Some((source, image)) = made else {
+                // A picture that cannot be read leaves no hero, and is not retried until it changes.
+                return;
+            };
+            if !artworks.sources.iter().any(|(path, _)| *path == key.0) {
+                artworks.sources.push((key.0.clone(), source));
+                if artworks.sources.len() > KEPT {
+                    artworks.sources.remove(0);
+                }
+            }
+            if let Some(entry) = artworks.images.iter_mut().find(|(cached, _)| *cached == key) {
+                entry.1 = Some(image);
+            }
+            cx.refresh_windows();
+        });
+    })
+    .detach();
+    None
+}
+
+impl Source {
+    fn open(path: &str) -> Option<Source> {
+        let proxy = image::open(path).ok()?.thumbnail(ARTWORK_EDGE, ARTWORK_EDGE);
+        let luma = proxy.to_luma8();
+        Some(Source {
+            width: luma.width(),
+            height: luma.height(),
+            luma: luma.into_raw(),
+            colours: proxy.to_rgba8().pixels().map(|pixel| pixel.0).collect(),
+        })
+    }
+
+    fn colour(&self, x: u32, y: u32) -> [u8; 4] {
+        self.colours[(y.min(self.height - 1) * self.width + x.min(self.width - 1)) as usize]
+    }
+
+    fn luma(&self, x: u32, y: u32) -> u8 {
+        self.luma[(y.min(self.height - 1) * self.width + x.min(self.width - 1)) as usize]
+    }
+
+    /// The picture through `texture`, in the BGRA order GPUI draws.
+    fn render(&self, texture: Texture, light: bool) -> RenderImage {
+        let pixels = match texture {
+            Texture::None => image::RgbaImage::from_fn(self.width, self.height, |x, y| {
+                let [r, g, b, a] = self.colour(x, y);
+                image::Rgba([b, g, r, a])
+            }),
+            Texture::Dither => self.dither(),
+            Texture::Ascii => self.ascii(light),
+            Texture::Halftone => self.halftone(light),
+            Texture::Scanlines => self.scanlines(light),
+        };
+        RenderImage::new([image::Frame::new(pixels)])
+    }
+
+    /// Every third row dimmed (lightened on a light ground), like a cathode-ray screen.
+    fn scanlines(&self, light: bool) -> image::RgbaImage {
+        image::RgbaImage::from_fn(self.width, self.height, |x, y| {
+            let [r, g, b, a] = self.colour(x, y);
+            let gain = if y % 3 == 0 { 0.52 } else { 1. };
+            let channel = |value: u8| {
+                if light { (value as f32 + (255. - value as f32) * (1. - gain)) as u8 } else { (value as f32 * gain) as u8 }
+            };
+            image::Rgba([channel(b), channel(g), channel(r), a])
+        })
+    }
+
+    /// Small bitmap glyphs, denser where the picture is brighter (darker, on a light ground),
+    /// over the picture itself.
+    fn ascii(&self, light: bool) -> image::RgbaImage {
+        // Five columns by seven rows, with a column and a row of spacing.
+        const GLYPHS: [[u8; 7]; 10] = [
+            [0, 0, 0, 0, 0, 0, 0],
+            [0, 0, 0, 0, 0, 4, 0],
+            [0, 4, 0, 0, 4, 0, 0],
+            [0, 0, 0, 14, 0, 0, 0],
+            [0, 0, 14, 0, 14, 0, 0],
+            [0, 4, 4, 31, 4, 4, 0],
+            [0, 21, 14, 31, 14, 21, 0],
+            [10, 10, 31, 10, 31, 10, 10],
+            [17, 2, 4, 4, 8, 16, 17],
+            [14, 17, 23, 21, 23, 16, 14],
+        ];
+        image::RgbaImage::from_fn(self.width, self.height, |x, y| {
+            let (cell_x, cell_y) = (x / 6 * 6 + 3, y / 8 * 8 + 4);
+            let luma = self.luma(cell_x, cell_y);
+            let ink_density = if light { 255 - luma } else { luma };
+            let glyph = ((ink_density as f32 / 255.).sqrt() * 9.) as usize;
+            let ink = x % 6 < 5 && y % 8 < 7 && GLYPHS[glyph][y as usize % 8] & (1 << (4 - x % 6)) != 0;
+            let [r, g, b, a] = self.colour(x, y);
+            let [cr, cg, cb, _] = self.colour(cell_x, cell_y);
+            let paper = if light { 255. } else { 0. };
+            let mix = |base: u8, glyph: u8| (base as f32 * 0.6 + if ink { glyph as f32 * 0.4 } else { paper * 0.4 }) as u8;
+            image::Rgba([mix(b, cb), mix(g, cg), mix(r, cr), a])
+        })
+    }
+
+    /// Dots on a four-pixel grid, larger where the picture is brighter.
+    fn halftone(&self, light: bool) -> image::RgbaImage {
+        let paper = if light { 255 } else { 0 };
+        let mut pixels = image::RgbaImage::from_pixel(self.width, self.height, image::Rgba([paper, paper, paper, 255]));
+        for y in (0..self.height).step_by(4) {
+            for x in (0..self.width).step_by(4) {
+                let luma = self.luma(x, y);
+                let luma = if light { 255 - luma } else { luma };
+                let radius = 2. * (0.3 + 0.7 * (luma as f32 / 255.).sqrt());
+                let [r, g, b, a] = self.colour(x + 2, y + 2);
+                for dy in 0..4.min(self.height - y) {
+                    for dx in 0..4.min(self.width - x) {
+                        let distance = ((dx as f32 - 1.5).powi(2) + (dy as f32 - 1.5).powi(2)).sqrt();
+                        let coverage = (radius + 0.5 - distance).clamp(0., 1.) * a as f32 / 255.;
+                        let [sr, sg, sb, sa] = self.colour(x + dx, y + dy);
+                        let blend = |source: u8, dot: u8| {
+                            (source as f32 * 0.6 + (dot as f32 * coverage + paper as f32 * (1. - coverage)) * 0.4) as u8
+                        };
+                        pixels.put_pixel(x + dx, y + dy, image::Rgba([blend(sb, b), blend(sg, g), blend(sr, r), sa]));
+                    }
+                }
+            }
+        }
+        pixels
+    }
+
+    /// Two-pixel dots through a 4×4 Bayer matrix: each dot either its colour at full brightness
+    /// or nearly black.
+    fn dither(&self) -> image::RgbaImage {
+        const BAYER: [[u8; 4]; 4] = [[0, 8, 2, 10], [12, 4, 14, 6], [3, 11, 1, 9], [15, 7, 13, 5]];
+        let mut pixels = image::RgbaImage::new(self.width, self.height);
+        for y in (0..self.height).step_by(2) {
+            for x in (0..self.width).step_by(2) {
+                let [r, g, b, a] = dither_colour(self.colour(x + 1, y + 1), BAYER[y as usize / 2 % 4][x as usize / 2 % 4]);
+                for dy in 0..2.min(self.height - y) {
+                    for dx in 0..2.min(self.width - x) {
+                        pixels.put_pixel(x + dx, y + dy, image::Rgba([b, g, r, a]));
+                    }
+                }
+            }
+        }
+        pixels
+    }
+}
+
+fn dither_colour([r, g, b, a]: [u8; 4], threshold: u8) -> [u8; 4] {
+    let peak = r.max(g).max(b) as f32;
+    let bright = peak / 255. > (threshold as f32 + 0.5) / 16.;
+    let gain = if bright { 255. / peak.max(1.) } else { 0.08 };
+    [(r as f32 * gain).round() as u8, (g as f32 * gain).round() as u8, (b as f32 * gain).round() as u8, a]
 }
 
 #[cfg(test)]
 mod tests {
     use super::*;
 
-    fn covered(solid: &[Rect], x: f32, y: f32) -> bool {
-        solid.iter().any(|rect| x >= rect.x && x < rect.right() && y >= rect.y && y < rect.bottom())
-    }
-
-    fn density(solid: &[Rect], x: f32, y: f32, span: f32) -> f32 {
-        let mut on = 0;
-        let mut all = 0;
-        let mut sample_y = y;
-        while sample_y < y + span {
-            let mut sample_x = x;
-            while sample_x < x + span {
-                all += 1;
-                if covered(solid, sample_x + 0.5, sample_y + 0.5) {
-                    on += 1;
-                }
-                sample_x += CELL;
-            }
-            sample_y += CELL;
-        }
-        on as f32 / all as f32
+    fn source() -> Source {
+        let (width, height) = (24, 16);
+        let colours: Vec<[u8; 4]> = (0..width * height).map(|i| [(i * 7 % 256) as u8, 120, 200, 255]).collect();
+        Source { width, height, luma: colours.iter().map(|c| ((c[0] as u32 + c[1] as u32 + c[2] as u32) / 3) as u8).collect(), colours }
     }
 
     #[test]
-    fn islands_are_solid_and_fade_into_the_picture() {
-        let area = Rect { x: 0., y: 0., width: 1200., height: 800. };
-        let column = Rect { x: 0., y: 0., width: 600., height: 800. };
-        let solid = cells(area, &[column]);
-        assert!(covered(&solid, 300., 400.), "inside the island");
-        assert!(!covered(&solid, 600. + BAND + 10., 400.), "past the band is clear");
-        let near = density(&solid, 606., 300., 24.);
-        let middle = density(&solid, 600. + BAND / 2. - 12., 300., 24.);
-        let far = density(&solid, 600. + BAND - 30., 300., 24.);
-        assert!(near > middle && middle > far, "density falls with distance: {near} {middle} {far}");
-        assert!(near > 0.8 && far < 0.2);
-        // An edge part-way through a cell leaves no sliver of picture beside it.
-        let ragged = cells(area, &[Rect { width: 601.5, ..column }]);
-        assert!((0..800).step_by(3).all(|y| covered(&ragged, 601.6, y as f32 + 0.5)));
-        for rect in &solid {
-            assert!(rect.x >= area.x && rect.right() <= area.right() + 0.001 && rect.y >= 0. && rect.bottom() <= 800.001);
+    fn every_texture_keeps_the_pictures_size_in_gpui_order() {
+        let source = source();
+        for texture in Texture::ALL {
+            for light in [false, true] {
+                let image = source.render(texture, light);
+                let size = image.size(0);
+                assert_eq!((size.width.0, size.height.0), (24, 16), "{texture:?}");
+            }
         }
+        // The plain picture is the source with red and blue swapped for GPUI.
+        let plain = match image::RgbaImage::from_raw(24, 16, source.render(Texture::None, false).as_bytes(0).unwrap().to_vec()) {
+            Some(plain) => plain,
+            None => panic!("a plain picture of the source's size"),
+        };
+        let [r, g, b, a] = source.colour(5, 3);
+        assert_eq!(plain.get_pixel(5, 3).0, [b, g, r, a]);
     }
 
     #[test]
-    fn the_pattern_stays_put_when_an_island_moves() {
-        let area = Rect { x: 0., y: 0., width: 900., height: 300. };
-        let a = cells(area, &[Rect { x: 0., y: 0., width: 400., height: 300. }]);
-        let b = cells(area, &[Rect { x: 0., y: 0., width: 401., height: 300. }]);
-        // Cells far from both edges agree: the grid belongs to the window, not the island.
-        for x in [300., 520., 560.] {
-            for y in [30., 150.] {
-                let near_edge = |solid: &Vec<Rect>| covered(solid, x, y);
-                if (x - 400.).abs() > 12. {
-                    assert_eq!(near_edge(&a), near_edge(&b), "at {x},{y}");
-                }
-            }
-        }
-        assert!(cells(area, &[]).is_empty(), "no islands, no veil");
+    fn dither_is_full_or_nearly_black() {
+        assert_eq!(dither_colour([200, 100, 50, 255], 0), [255, 128, 64, 255]);
+        assert_eq!(dither_colour([20, 10, 5, 255], 15), [2, 1, 0, 255]);
     }
 
     #[test]
@@ -282,5 +382,11 @@ mod tests {
         assert_eq!(bottom.y, -500.);
         let wide = cover(frame, (4000, 1000), (0., 0.5));
         assert_eq!((wide.width, wide.height, wide.x), (2000., 500., 0.));
+    }
+
+    #[test]
+    fn the_hero_takes_most_of_the_height_up_to_a_limit() {
+        assert_eq!(hero_height(500.), 360.);
+        assert_eq!(hero_height(2000.), HERO_MAX);
     }
 }

@@ -9,7 +9,7 @@ use gpui::{Entity, Hsla, ObjectFit, SharedString, div, img, prelude::*, px};
 use wack_core::Mode;
 
 use crate::{
-    actions::{ChooseAccent, ChooseBackdrop, ChooseFocus, ChooseMode, ChooseThemeColour, ChooseVeil, RemoveBackdrop},
+    actions::{ChooseAccent, ChooseBackdrop, ChooseDim, ChooseFocus, ChooseMode, ChooseTexture, ChooseThemeColour, RemoveBackdrop},
     backdrop::Picture,
     tags::Tag,
     text_field::TextField,
@@ -17,8 +17,8 @@ use crate::{
     typography::{Type, Typography},
 };
 
-/// The veil's steps, in percent, and their names.
-pub const VEILS: [(u8, &str); 4] = [(0, "None"), (25, "Light"), (50, "Medium"), (75, "Strong")];
+/// How much the picture is dimmed behind a conversation, in percent, and the names offered.
+pub const DIMS: [(u8, &str); 4] = [(45, "Light"), (65, "Medium"), (80, "Strong"), (90, "Most")];
 
 #[derive(Clone)]
 pub struct AppearanceData {
@@ -92,7 +92,7 @@ pub fn page(data: AppearanceData, theme: &Theme) -> impl IntoElement {
         ))
         .child(section(
             "Backdrop",
-            "A picture behind the window. Text keeps a solid ground; the picture shows in the open space and dissolves into it.",
+            "A picture behind the window: clear across the top of a new chat, softened and dimmed behind a conversation so text stays easy to read.",
             backdrop(&data, theme),
         ))
         .when_some(data.notice.clone(), |page, notice| {
@@ -215,9 +215,13 @@ fn backdrop(data: &AppearanceData, theme: &Theme) -> gpui::AnyElement {
                 .object_fit(ObjectFit::Fill),
         );
 
-    let veils = div().flex().gap(px(16.)).children(VEILS.map(|(veil, label)| {
-        let chosen = (picture.veil * 100.).round() as u8 == veil;
-        word(format!("veil-{label}"), label, chosen, theme).on_click(dispatch(ChooseVeil { veil }))
+    let dims = div().flex().gap(px(16.)).children(DIMS.map(|(dim, label)| {
+        let chosen = (picture.dim * 100.).round() as u8 == dim;
+        word(format!("dim-{label}"), label, chosen, theme).on_click(dispatch(ChooseDim { dim }))
+    }));
+    let textures = div().flex().flex_wrap().gap(px(16.)).children(wack_core::Texture::ALL.map(|texture| {
+        word(format!("texture-{}", texture.name()), texture.name(), picture.texture == texture, theme)
+            .on_click(dispatch(ChooseTexture { texture }))
     }));
     // A 3×3 grid: which part of the picture stays in view when the window crops it.
     let focus = div().flex().flex_col().gap(px(3.)).children((0..3u8).map(|row| {
@@ -232,7 +236,7 @@ fn backdrop(data: &AppearanceData, theme: &Theme) -> gpui::AnyElement {
                 .on_click(dispatch(ChooseFocus { across: column, down: row }))
         }))
     }));
-    let label = |text: &'static str| div().w(px(56.)).flex_none().typography(Type::Ui).text_color(theme.text_soft).child(text);
+    let label = |text: &'static str| div().w(px(64.)).flex_none().typography(Type::Ui).text_color(theme.text_soft).child(text);
     div()
         .flex()
         .gap(px(24.))
@@ -242,7 +246,8 @@ fn backdrop(data: &AppearanceData, theme: &Theme) -> gpui::AnyElement {
                 .flex()
                 .flex_col()
                 .gap(px(16.))
-                .child(div().flex().items_center().child(label("Veil")).child(veils))
+                .child(div().flex().items_center().child(label("Texture")).child(textures))
+                .child(div().flex().items_center().child(label("Dim")).child(dims))
                 .child(div().flex().items_start().child(label("Keep")).child(focus))
                 .child(
                     div()

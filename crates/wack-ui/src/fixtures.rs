@@ -346,18 +346,46 @@ test result: \x1b[32mok\x1b[0m. 4 passed; 0 failed; 0 ignored; 0 measured; 61 fi
 \x1b[31m??\x1b[0m crates/wack-llm/tests/tail.rs\r\n\
 \x1b[1;32m➜\x1b[0m  \x1b[1;36mwackcode\x1b[0m \x1b[1;34mgit:(\x1b[31m3.0-Remake\x1b[34m) \x1b[33m✗\x1b[0m ";
 
-/// The gallery's backdrop: a dusk landscape drawn once into `target/gallery`, so backdrop scenes
-/// show a real picture's light and detail without shipping a photo.
-pub fn backdrop() -> crate::backdrop::Picture {
-    let (width, height) = (2400, 1500);
+/// The gallery's backdrop, imported once into `target/gallery/backdrop/` through the app's own
+/// import (so it has a softened copy too). A real photo saved as
+/// `target/gallery/fixture-photo.jpg` is used when there is one; otherwise a dusk landscape is
+/// drawn, so backdrop scenes render on any machine.
+pub fn backdrop(texture: wack_core::Texture) -> crate::backdrop::Picture {
     let workspace = Path::new(env!("CARGO_MANIFEST_DIR")).parent().and_then(Path::parent).unwrap_or(Path::new("."));
-    let path = workspace.join("target/gallery/fixture-backdrop-1.png");
-    if !path.exists() {
-        let _ = std::fs::create_dir_all(workspace.join("target/gallery"));
-        let picture = image::RgbImage::from_fn(width, height, |x, y| dusk(x as f32 / width as f32, y as f32 / height as f32));
-        let _ = picture.save(&path);
+    let gallery = workspace.join("target/gallery");
+    let folder = gallery.join("backdrop");
+    let record = folder.join("backdrop.json");
+    let photo = gallery.join("fixture-photo.jpg");
+    let source = if photo.exists() { photo } else { gallery.join("fixture-dusk.png") };
+    let imported = std::fs::read_to_string(&record)
+        .ok()
+        .and_then(|text| serde_json::from_str::<(String, wack_core::Backdrop)>(&text).ok())
+        .filter(|(from, backdrop)| *from == source.to_string_lossy() && folder.join(&backdrop.file).exists());
+    let backdrop = match imported {
+        Some((_, backdrop)) => backdrop,
+        None => {
+            let _ = std::fs::remove_dir_all(&folder);
+            if !source.exists() {
+                let (width, height) = (2400, 1500);
+                let _ = std::fs::create_dir_all(&gallery);
+                let picture = image::RgbImage::from_fn(width, height, |x, y| dusk(x as f32 / width as f32, y as f32 / height as f32));
+                let _ = picture.save(&source);
+            }
+            let backdrop = wack_core::appearance::import_backdrop(&source, &folder).expect("the gallery's backdrop imports");
+            let _ = std::fs::write(&record, serde_json::to_string(&(source.to_string_lossy(), &backdrop)).unwrap_or_default());
+            backdrop
+        }
+    };
+    let path = |file: String| folder.join(file).to_string_lossy().to_string().into();
+    crate::backdrop::Picture {
+        path: path(backdrop.file.clone()),
+        soft_path: path(wack_core::appearance::soft_name(&backdrop.file)),
+        width: backdrop.width,
+        height: backdrop.height,
+        focus: (0.5, 0.5),
+        dim: wack_core::appearance::DEFAULT_DIM as f32 / 100.,
+        texture,
     }
-    crate::backdrop::Picture { path: path.to_string_lossy().to_string().into(), width, height, focus: (0.5, 0.5), veil: 0. }
 }
 
 /// One pixel of the dusk picture, at `u` across and `v` down.

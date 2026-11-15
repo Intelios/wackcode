@@ -178,12 +178,6 @@ const NAV_WIDTH: f32 = 150.;
 const NAV_GAP: f32 = 40.;
 const CONTENT_WIDTH: f32 = 720.;
 
-/// How far from the main column's left edge the page's text can reach.
-pub fn width(inset: Pixels, narrow: bool) -> Pixels {
-    let navigation = if narrow { 0. } else { NAV_WIDTH + NAV_GAP };
-    inset + px(navigation + CONTENT_WIDTH + 24.)
-}
-
 /// The page: the sections down the left (across the top when narrow), the one open beside them.
 pub fn page(data: SettingsData, inset: Pixels, narrow: bool, theme: &Theme) -> impl IntoElement {
     let nav = div()

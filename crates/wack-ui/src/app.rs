@@ -226,6 +226,13 @@ impl AppState {
                 shown: appearance.shown.as_deref() == Some(backdrop.file.as_str()),
                 theme: backdrop.theme,
                 picture: self.picture(backdrop),
+                // A picture whose thumbnail could not be made is drawn from the picture itself.
+                thumb: Some(self.store.backdrop_thumb_path(backdrop))
+                    .filter(|thumb| thumb.exists())
+                    .unwrap_or_else(|| self.store.backdrop_path(backdrop))
+                    .to_string_lossy()
+                    .to_string()
+                    .into(),
             })
             .collect()
     }

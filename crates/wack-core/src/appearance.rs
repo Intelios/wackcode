@@ -11,7 +11,8 @@
 //!   no larger than [`MAX_BACKDROP_EDGE`] on its long side, so a huge photo costs no more to draw
 //!   than a screenful.
 //! - Beside it is a softened copy ([`soft_name`]): small and blurred once, on import, so the
-//!   picture behind a conversation costs nothing to soften while the window draws.
+//!   picture behind a conversation costs nothing to soften while the window draws; and a small
+//!   sharp copy ([`thumb_name`]) for Settings, so a library of pictures costs little to show.
 //! - A backdrop carries how dark and light its softened copy gets ([`shade`]), measured on
 //!   import (or on the first launch after, for one imported before), so the theme can keep text
 //!   readable over it without opening the picture.
@@ -289,15 +290,17 @@ impl Appearance {
     }
 
     /// Adds a newly imported picture to the library and shows it, in the theme in use. It keeps
-    /// the dim, blur and texture of the picture it replaces on screen.
+    /// the dim, blur and texture of the picture on screen, or with none, of the last one added.
+    /// A picture already in the library (the same file) is shown as it was kept.
     pub fn add(&mut self, mut picture: Backdrop) {
-        if let Some(old) = self.backdrop() {
-            (picture.dim, picture.blur, picture.texture) = (old.dim, old.blur, old.texture);
-        }
         let file = picture.file.clone();
-        picture.theme = None;
-        self.pictures.retain(|kept| kept.file != file);
-        self.pictures.push(picture);
+        if !self.pictures.iter().any(|kept| kept.file == file) {
+            if let Some(old) = self.backdrop().or(self.pictures.last()) {
+                (picture.dim, picture.blur, picture.texture) = (old.dim, old.blur, old.texture);
+            }
+            picture.theme = None;
+            self.pictures.push(picture);
+        }
         self.show(Some(&file));
     }
 
@@ -334,6 +337,29 @@ impl Appearance {
 pub fn soft_name(file: &str) -> String {
     let stem = file.rsplit_once('.').map_or(file, |(stem, _)| stem);
     format!("{stem}-soft.jpg")
+}
+
+/// The small sharp copy's file name beside a backdrop's `file`: what Settings shows it as.
+pub fn thumb_name(file: &str) -> String {
+    let stem = file.rsplit_once('.').map_or(file, |(stem, _)| stem);
+    format!("{stem}-thumb.jpg")
+}
+
+/// Writes the small sharp copy of the picture at `path` beside it, for one imported before
+/// there were thumbnails. Slow: run it off the UI thread.
+pub fn thumbnail(path: &Path) -> Result<std::path::PathBuf, String> {
+    let picture = image::open(path).map_err(|error| format!("Could not open the backdrop: {error}."))?;
+    let file = path.file_name().map(|name| name.to_string_lossy().to_string()).unwrap_or_default();
+    let thumb = path.with_file_name(thumb_name(&file));
+    write_jpeg(&thumb_copy(&picture), &thumb)?;
+    Ok(thumb)
+}
+
+/// The thumbnail's long side, in pixels: a tile is about 130 points wide, at 2x with room.
+const THUMB_EDGE: u32 = 384;
+
+fn thumb_copy(picture: &image::DynamicImage) -> image::RgbImage {
+    picture.resize(THUMB_EDGE, THUMB_EDGE, FilterType::Triangle).to_rgb8()
 }
 
 /// Writes the softened copy of the picture at `path` beside it. Slow: run it off the UI thread.
@@ -433,6 +459,7 @@ pub fn import_backdrop(source: &Path, backgrounds: &Path) -> Result<Backdrop, St
     fs::create_dir_all(backgrounds).map_err(|error| format!("Could not create the backgrounds folder: {error}."))?;
     write_jpeg(&picture, &backgrounds.join(&file))?;
     write_jpeg(&soft, &backgrounds.join(soft_name(&file)))?;
+    write_jpeg(&thumb_copy(&image::DynamicImage::ImageRgb8(picture.clone())), &backgrounds.join(thumb_name(&file)))?;
     Ok(Backdrop {
         file,
         width: picture.width(),
@@ -447,15 +474,16 @@ pub fn import_backdrop(source: &Path, backgrounds: &Path) -> Result<Backdrop, St
     })
 }
 
-/// Deletes copies in `backgrounds` other than those named in `keep` and their softened copies.
+/// Deletes copies in `backgrounds` other than those named in `keep`, their softened copies and
+/// their thumbnails.
 pub fn tidy_backgrounds(backgrounds: &Path, keep: &[&str]) {
     let Ok(entries) = fs::read_dir(backgrounds) else {
         return;
     };
-    let soft: Vec<String> = keep.iter().map(|file| soft_name(file)).collect();
+    let copies: Vec<String> = keep.iter().flat_map(|file| [soft_name(file), thumb_name(file)]).collect();
     for entry in entries.flatten() {
         let name = entry.file_name().to_string_lossy().to_string();
-        if !keep.contains(&name.as_str()) && !soft.contains(&name) {
+        if !keep.contains(&name.as_str()) && !copies.contains(&name) {
             let _ = fs::remove_file(entry.path());
         }
     }
@@ -511,6 +539,8 @@ mod tests {
         assert!(!backgrounds.join("old.jpg").exists());
         assert!(backgrounds.join(&backdrop.file).exists());
         assert!(backgrounds.join(soft_name(&backdrop.file)).exists(), "the softened copy is kept with it");
+        let thumb = image::open(backgrounds.join(thumb_name(&backdrop.file))).unwrap();
+        assert_eq!((thumb.width(), thumb.height()), (THUMB_EDGE, THUMB_EDGE / 2), "and the small sharp copy");
     }
 
     fn picture(file: &str) -> Backdrop {
@@ -552,6 +582,18 @@ mod tests {
         assert_eq!(appearance.theme, ThemeName::Mono, "choosing with no picture showing changes none");
         appearance.show(Some("gone.jpg"));
         assert_eq!((appearance.shown.as_deref(), appearance.theme), (None, ThemeName::Mono));
+
+        appearance.show(Some("b.jpg"));
+        appearance.backdrop_mut().unwrap().focus_x = 0.;
+        appearance.show(Some("a.jpg"));
+        appearance.add(picture("b.jpg"));
+        let again = appearance.backdrop().unwrap();
+        assert_eq!((again.focus_x, again.theme, appearance.theme), (0., Some(ThemeName::Mono), ThemeName::Mono), "adding b again shows it as kept");
+
+        appearance.show(None);
+        appearance.add(picture("c.jpg"));
+        assert_eq!(appearance.backdrop().unwrap().dim, 40, "added with none showing, it takes the last picture's look");
+        appearance.remove("c.jpg");
 
         appearance.show(Some("a.jpg"));
         appearance.remove("a.jpg");

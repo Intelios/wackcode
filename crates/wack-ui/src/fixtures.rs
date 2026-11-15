@@ -547,9 +547,10 @@ pub fn appearance(backdrop: Option<crate::backdrop::Picture>, cx: &mut gpui::App
     let theme = crate::theme::Theme::get(cx).input.theme;
     let pictures = backdrop.iter().flat_map(|picture| {
         [
-            crate::appearance_page::Thumbnail { file: "shown.jpg".into(), picture: picture.clone(), shown: true, theme: Some(theme) },
+            crate::appearance_page::Thumbnail { file: "shown.jpg".into(), thumb: picture.path.clone(), picture: picture.clone(), shown: true, theme: Some(theme) },
             crate::appearance_page::Thumbnail {
                 file: "corner.jpg".into(),
+                thumb: picture.path.clone(),
                 picture: crate::backdrop::Picture { focus: (0., 0.), ..picture.clone() },
                 shown: false,
                 theme: Some(wack_core::ThemeName::Solar),

@@ -274,8 +274,8 @@ impl Store {
         Ok(store)
     }
 
-    /// Pictures whose copy has gone are let go of, and one imported before pictures were measured
-    /// is measured once, now. A picture that cannot be read stays unmeasured, and the theme then
+    /// Pictures whose copy has gone are let go of; one imported before thumbnails were made gets
+    /// one; and one imported before pictures were measured is measured once, now. A picture that cannot be read stays unmeasured, and the theme then
     /// allows for anything behind the text.
     fn tend_pictures(&mut self) {
         let before = self.state.appearance.clone();
@@ -287,6 +287,11 @@ impl Store {
             .collect();
         for file in gone {
             self.state.appearance.remove(&file);
+        }
+        for picture in &self.state.appearance.pictures {
+            if !self.backdrop_thumb_path(picture).exists() {
+                let _ = crate::appearance::thumbnail(&self.backdrop_path(picture));
+            }
         }
         let unmeasured: Vec<(usize, Result<[u8; 2], String>)> = self
             .state
@@ -592,6 +597,11 @@ impl Store {
         let keep: Vec<&str> = self.state.appearance.pictures.iter().map(|picture| picture.file.as_str()).collect();
         crate::appearance::tidy_backgrounds(&self.backgrounds_folder(), &keep);
         Ok(())
+    }
+
+    /// The small sharp copy Settings shows a picture as.
+    pub fn backdrop_thumb_path(&self, backdrop: &Backdrop) -> PathBuf {
+        self.backgrounds_folder().join(crate::appearance::thumb_name(&backdrop.file))
     }
 
     pub fn backgrounds_folder(&self) -> PathBuf {
@@ -1018,6 +1028,7 @@ mod tests {
         store.set_appearance(fewer).unwrap();
         assert!(!store.backdrop_path(&first).exists(), "the copy goes with the picture");
         assert!(!store.backgrounds_folder().join(crate::appearance::soft_name(&first.file)).exists());
+        assert!(!store.backdrop_thumb_path(&first).exists());
         let mut missing = Appearance::default();
         missing.add(first);
         assert!(store.set_appearance(missing).is_err(), "a picture that is gone is refused");
@@ -1034,12 +1045,14 @@ mod tests {
         let picture = folder.path().join("grey.png");
         image::RgbImage::from_pixel(40, 20, image::Rgb([119, 119, 119])).save(&picture).unwrap();
         let backdrop = crate::appearance::import_backdrop(&picture, &store.backgrounds_folder()).unwrap();
-        let unmeasured = Backdrop { shade: None, ..backdrop };
+        let unmeasured = Backdrop { shade: None, ..backdrop.clone() };
         let mut appearance = Appearance::default();
         appearance.add(unmeasured);
         store.set_appearance(appearance).unwrap();
 
+        std::fs::remove_file(store.backdrop_thumb_path(&backdrop)).unwrap();
         let reopened = Store::open(folder.path()).unwrap();
+        assert!(reopened.backdrop_thumb_path(&backdrop).exists(), "a picture from before thumbnails gets one on open");
         let [dark, light] = reopened.appearance().backdrop().unwrap().shade.expect("measured on open");
         assert!(dark.abs_diff(119) <= 2 && light.abs_diff(119) <= 2, "{dark} to {light}");
         let again = Store::open(folder.path()).unwrap();

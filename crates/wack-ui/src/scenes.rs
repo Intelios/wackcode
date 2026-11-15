@@ -469,13 +469,13 @@ pub fn all() -> Vec<Scene> {
         },
         Scene {
             name: "settings-appearance",
-            description: "Settings › Appearance with the default colours and no backdrop yet.",
+            description: "Settings › Appearance in the theme it is drawn with, and no picture yet.",
             size: size(px(1180.), px(900.)),
             build: |_, cx| settings_scene(None, cx),
         },
         Scene {
             name: "settings-appearance-backdrop",
-            description: "Settings › Appearance with a backdrop chosen, drawn over it.",
+            description: "Settings › Appearance over a backdrop: a library of two pictures, each captioned with its theme.",
             size: size(px(1440.), px(900.)),
             build: |_, cx| settings_scene(Some(over(fixtures::backdrop(wack_core::Texture::None), cx)), cx),
         },

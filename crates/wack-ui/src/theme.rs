@@ -21,8 +21,9 @@
 //!   - A sweep paints the accent's fills ([`Theme::accent_fill`]): the send button, primary
 //!     pills, switches that are on, slider fills. Lines, text, the selection and the terminal's
 //!     cursor stay the solid accent. Sweeps are three-stop and linear, never Ultra's five-colour
-//!     prism; GPUI draws two stops, so a sweep runs from its first stop to its last, blended in
-//!     OKLab, which passes close by its middle one.
+//!     prism. GPUI draws two stops, so for now a sweep runs from its first stop to its last,
+//!     blended in OKLab; that misses each middle stop by 0.03 to 0.05 in OKLab, a visible
+//!     difference, and painting all three is open with the owner (`docs/redesign.md`).
 //!
 //! Over a picture (the fourth input, [`Ground`]) the picture is dimmed exactly as the user chose
 //! ([`Theme::veil`]), and text sits on glass panes over it: the window's colour at
@@ -334,10 +335,16 @@ impl Theme {
         // The accent fill is the theme's colour exactly; only text drawn in it is adjusted. A grey
         // accent is the exception: in light it mirrors, so Mono's near-white becomes near-black.
         let accent_source = lch(colours.accent);
-        let accent = if !dark && accent_source.c < GREY_ACCENT { accent_source.with_l(1. - accent_source.l) } else { accent_source };
-        let accent_hover = accent.with_l(accent.l + if dark { 0.05 } else { -0.05 });
+        let grey_accent = accent_source.c < GREY_ACCENT;
+        let accent = if !dark && grey_accent { accent_source.with_l(1. - accent_source.l) } else { accent_source };
+        // Hover lightens a fill in dark and darkens it in light, except a fill already near black,
+        // which can only show a change by lightening.
+        let accent_hover = accent.with_l(accent.l + if dark || accent.l < 0.3 { 0.05 } else { -0.05 });
+        // Text in the accent is given colour in light so it reads as the accent, not as ink; a
+        // grey accent stays grey rather than taking on whatever hue it happens to have.
+        let text_chroma = if grey_accent { 0. } else { accent.c.max(0.12) };
         let accent_text = readable_on(
-            if dark { accent } else { accent.with_c(accent.c.max(0.12)) },
+            if dark { accent } else { accent.with_c(text_chroma) },
             text_ground,
             4.5,
         );
@@ -375,7 +382,7 @@ impl Theme {
         let code_keyword = if dark {
             Lch::new(0.86, accent.c * 0.6, accent.h)
         } else {
-            readable_on(Lch::new(0.42, accent.c.max(0.12), accent.h), window, 4.5)
+            readable_on(Lch::new(0.42, text_chroma, accent.h), window, 4.5)
         };
 
         let hsla = |colour: Lch| to_hsla(colour.to_srgb());
@@ -836,12 +843,15 @@ mod tests {
         assert_eq!(sweeping, 4, "Lagoon, Verdant, Nebula and Solar sweep");
     }
 
-    /// A fill in the accent stands off the window in every theme: Mono's mirrors in light.
+    /// A fill in the accent stands off the window in every theme (Mono's mirrors in light), and
+    /// hovering it visibly changes it.
     #[test]
     fn the_accent_fill_shows_on_the_window() {
         for theme in themes() {
             let ratio = contrast(srgb(theme.accent), srgb(theme.window));
             assert!(ratio >= 1.2, "the accent is {ratio:.2} on the window in {:?}", theme.input);
+            let hover = contrast(srgb(theme.accent), srgb(theme.accent_hover));
+            assert!(hover >= 1.08, "hover changes the accent by only {hover:.2} in {:?}", theme.input);
         }
     }
 
@@ -849,7 +859,7 @@ mod tests {
     fn mono_is_true_grey_and_nebula_is_violet() {
         for appearance in [Appearance::Light, Appearance::Dark] {
             let mono = Theme::derive(ThemeInput { appearance, theme: ThemeName::Mono, ground: None });
-            for token in [mono.window, mono.surface, mono.text, mono.text_dim, mono.accent] {
+            for token in [mono.window, mono.surface, mono.text, mono.text_dim, mono.accent, mono.accent_text, mono.code_keyword] {
                 assert!(srgb(token).to_lch().c < 0.002, "{appearance:?}");
             }
             let nebula = Theme::derive(ThemeInput { appearance, theme: ThemeName::Nebula, ground: None });

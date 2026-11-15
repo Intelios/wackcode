@@ -72,6 +72,8 @@ pub fn page(data: AppearanceData, theme: &Theme) -> impl IntoElement {
 pub struct Thumbnail {
     pub file: SharedString,
     pub picture: Picture,
+    /// The small sharp copy to draw the tile from.
+    pub thumb: SharedString,
     pub shown: bool,
     /// The theme it remembers; none until it has been shown.
     pub theme: Option<ThemeName>,
@@ -241,7 +243,7 @@ fn strip(data: &AppearanceData, theme: &Theme) -> impl IntoElement {
         let image = frame(thumbnail.shown, theme)
             .relative()
             .child(
-                img(std::path::PathBuf::from(picture.path.as_ref()))
+                img(std::path::PathBuf::from(thumbnail.thumb.as_ref()))
                     .absolute()
                     .left(px(drawn.x))
                     .top(px(drawn.y))

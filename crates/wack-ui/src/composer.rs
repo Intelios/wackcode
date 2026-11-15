@@ -23,7 +23,7 @@ use std::{cell::Cell, rc::Rc};
 
 use gpui::{
     AnchoredPositionMode, AnimationExt, App, Bounds, Entity, Focusable, Hsla, MouseButton, Pixels, SharedString, Window, anchored,
-    canvas, deferred, div, point, prelude::*, px,
+    deferred, div, point, prelude::*, px,
 };
 use wack_core::{AgentMode, Reasoning};
 
@@ -585,7 +585,7 @@ fn effort_slider(menu: MenuData, model: SharedString, theme: &Theme) -> impl Int
             }
         }
     };
-    let pick = Rc::new(pick);
+    let pick: crate::slide::Pick = Rc::new(pick);
     let knob_x = stop_x(current, count, width);
     let fill_ground = if ultra { theme.ultra } else { theme.accent };
     let mut track = div()
@@ -594,7 +594,7 @@ fn effort_slider(menu: MenuData, model: SharedString, theme: &Theme) -> impl Int
         .h(px(TRACK_HEIGHT))
         .rounded_full()
         .bg(theme.hover)
-        .child(canvas(move |bounds, _, _| drawn.set(Some(bounds)), |_, _, _, _| {}).absolute().left_0().top_0().size_full())
+        .child(crate::slide::follow("effort-track", drawn, pick.clone()).absolute().left_0().top_0().size_full())
         .when(on, |track| {
             track.child(div().absolute().left_0().top_0().bottom_0().w(px(knob_x + TRACK_HEIGHT / 2.)).rounded_full().bg(fill_ground))
         });
@@ -623,20 +623,10 @@ fn effort_slider(menu: MenuData, model: SharedString, theme: &Theme) -> impl Int
                 .border_color(theme.border_strong)
                 .shadow_sm(),
         )
-        .on_mouse_down(MouseButton::Left, {
-            let pick = pick.clone();
-            move |event, window, cx| {
-                cx.stop_propagation();
-                pick(event.position.x, window, cx)
-            }
-        })
-        .on_mouse_move({
-            let pick = pick.clone();
-            move |event, window, cx| {
-                if event.pressed_button == Some(MouseButton::Left) {
-                    pick(event.position.x, window, cx)
-                }
-            }
+        .on_mouse_down(MouseButton::Left, move |event, window, cx| {
+            cx.stop_propagation();
+            crate::slide::begin("effort-track");
+            pick(event.position.x, window, cx)
         })
         .tag("effort-track");
 

@@ -26,6 +26,7 @@ pub mod question;
 pub mod scenes;
 pub mod settings;
 pub mod settings_kit;
+pub mod slide;
 pub mod shell;
 pub mod sidebar;
 pub mod specimen;

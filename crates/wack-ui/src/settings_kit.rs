@@ -6,16 +6,18 @@
 //! rows. A control too wide to sit beside its label drops beneath it ([`Row::stacked`]).
 //!
 //! Controls are round, like the rest of the app: [`pill`] buttons, a [`segmented`] choice in a
-//! track, the switch (`tools_page::switch`) and a [`slider`] for a value along a range. A slider
+//! track, the switch (`tools_page::switch`) and a [`slider`] for a value along a range (its drag
+//! is `slide.rs`). A slider
 //! applies as it is dragged: each step saves the setting, which is cheap, so the window is the
 //! preview.
 
 use std::{cell::Cell, rc::Rc};
 
-use gpui::{App, Bounds, DispatchPhase, MouseButton, MouseMoveEvent, MouseUpEvent, Pixels, SharedString, Window, canvas, div, prelude::*, px};
+use gpui::{App, Bounds, MouseButton, Pixels, SharedString, Window, div, prelude::*, px};
 
 use crate::{
     icon::Icon,
+    slide,
     tags::Tag,
     theme::Theme,
     typography::{Type, Typography},
@@ -198,12 +200,6 @@ pub fn segmented<T: Copy + PartialEq + 'static>(
         }))
 }
 
-thread_local! {
-    /// The slider a press began on, while the button stays down. Views are rebuilt every frame, so
-    /// the drag is remembered here rather than in the element.
-    static SLIDING: Cell<Option<&'static str>> = const { Cell::new(None) };
-}
-
 /// A value along `0..=max` in steps of `step`, shown with `unit` beside the track. Pressing or
 /// dragging along the track moves the knob; each new step dispatches `action`.
 pub fn slider(
@@ -223,7 +219,7 @@ pub fn slider(
 
     // The track remembers where it was drawn, so a press or a drag finds the nearest step.
     let drawn: Rc<Cell<Option<Bounds<Pixels>>>> = Rc::default();
-    let pick = Rc::new({
+    let pick: slide::Pick = Rc::new({
         let drawn = drawn.clone();
         move |x: Pixels, window: &mut Window, cx: &mut App| {
             let Some(bounds) = drawn.get() else {
@@ -244,35 +240,7 @@ pub fn slider(
         .rounded_full()
         .bg(theme.hover)
         .cursor_pointer()
-        .child(
-            canvas(
-                move |bounds, _, _| drawn.set(Some(bounds)),
-                {
-                    let pick = pick.clone();
-                    // A drag that began on this track follows the pointer anywhere in the window
-                    // until the button is released, so running past either end reaches the end.
-                    move |_, _, window, _| {
-                        window.on_mouse_event(move |event: &MouseMoveEvent, phase, window, cx| {
-                            if phase == DispatchPhase::Bubble
-                                && event.pressed_button == Some(MouseButton::Left)
-                                && SLIDING.with(|sliding| sliding.get() == Some(id))
-                            {
-                                pick(event.position.x, window, cx)
-                            }
-                        });
-                        window.on_mouse_event(|_: &MouseUpEvent, phase, _, _| {
-                            if phase == DispatchPhase::Bubble {
-                                SLIDING.with(|sliding| sliding.set(None));
-                            }
-                        });
-                    }
-                },
-            )
-            .absolute()
-            .left_0()
-            .top_0()
-            .size_full(),
-        )
+        .child(slide::follow(id, drawn, pick.clone()).absolute().left_0().top_0().size_full())
         .child(div().absolute().left_0().top_0().bottom_0().w(px(knob_x + HEIGHT / 2.)).rounded_full().bg(theme.accent))
         .child(
             div()
@@ -288,7 +256,7 @@ pub fn slider(
         )
         .on_mouse_down(MouseButton::Left, move |event, window, cx| {
             cx.stop_propagation();
-            SLIDING.with(|sliding| sliding.set(Some(id)));
+            slide::begin(id);
             pick(event.position.x, window, cx)
         });
     let shown: SharedString = if value == 0 { "None".into() } else { format!("{value}{unit}").into() };

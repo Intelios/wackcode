@@ -26,11 +26,16 @@ actions!(
         Compact,
         /// Step back: closes a menu or Settings, or stops the run.
         Back,
-        /// Adds the connection the Settings form describes.
-        AddConnection,
-        /// Settings › Providers: show the form that adds a connection, or fold it away.
+        /// Settings › Providers: save the connection the editor describes.
+        SaveConnection,
+        /// Settings › Providers: puts a saved connection's fields back as they are stored.
+        DiscardConnection,
+        /// Settings › Providers: show the editor for a new connection.
         OpenConnectionForm,
+        /// Settings › Providers: back to the connections list, forgetting the editor's changes.
         CloseConnectionForm,
+        /// Settings › Providers: adds a blank model row to the connection editor.
+        AddModelRow,
         OpenModelMenu,
         OpenEffortMenu,
         CloseMenu,
@@ -107,6 +112,20 @@ pub struct RemovePicture {
 #[action(namespace = wackcode, no_json)]
 pub struct ChooseFormat {
     pub format: WireFormat,
+}
+
+/// Shows a saved connection in the Settings editor.
+#[derive(Clone, Debug, PartialEq, Action)]
+#[action(namespace = wackcode, no_json)]
+pub struct EditConnection {
+    pub id: String,
+}
+
+/// Takes a model row out of the connection editor.
+#[derive(Clone, Debug, PartialEq, Action)]
+#[action(namespace = wackcode, no_json)]
+pub struct RemoveModelRow {
+    pub index: usize,
 }
 
 /// Switches a connection on or off. Off keeps its key and models, out of the model menu.

@@ -82,7 +82,7 @@ pub struct AppState {
     pub new_chat_mode: AgentMode,
     /// Why the last chat could not start, shown under the new-chat composer.
     pub notice: Option<SharedString>,
-    /// Settings › Providers' add form.
+    /// Settings › Providers' connection editor.
     pub form: ProviderForm,
     pub menu: Option<Menu>,
     /// The section Settings shows.
@@ -99,11 +99,16 @@ pub struct AppState {
     /// Chats whose pane layout changed since it was last saved.
     unsaved_layouts: HashSet<String>,
     saving_layouts: Option<Task<()>>,
+    /// The connection editor's fields, re-subscribed whenever its model rows change.
+    form_subscriptions: Vec<Subscription>,
     _subscriptions: Vec<Subscription>,
 }
 
 /// How long a layout must stay still before it is saved.
 const LAYOUT_SAVE_DELAY: Duration = Duration::from_millis(400);
+
+/// How long a connection's "Saved" confirmation stays in the editor's bar.
+const SAVE_NOTICE_TIME: Duration = Duration::from_secs(3);
 
 impl AppState {
     /// Opens the store in the data folder: the dev app's own for a debug build.
@@ -122,17 +127,7 @@ impl AppState {
             }
         });
         let form = ProviderForm::new(cx);
-        let mut subscriptions = vec![draft_subscription];
-        for field in form.fields() {
-            subscriptions.push(cx.subscribe(field, |app, _, event, cx| match event {
-                TextFieldEvent::Enter | TextFieldEvent::SendNow => app.add_connection(cx),
-                TextFieldEvent::Changed => {
-                    if app.form.error.take().is_some() {
-                        cx.notify();
-                    }
-                }
-            }));
-        }
+        let subscriptions = vec![draft_subscription];
         let ui = store.ui().clone();
         // A fresh app: no tabs, no chat in front, and a new chat in the project last worked in (as
         // version 2 opened), rather than wherever the last one was left.
@@ -165,8 +160,10 @@ impl AppState {
             sidebar_hidden: ui.sidebar_hidden,
             unsaved_layouts: HashSet::new(),
             saving_layouts: None,
+            form_subscriptions: Vec::new(),
             _subscriptions: subscriptions,
         };
+        app.watch_form(cx);
         theme::apply(app.store.appearance(), cx);
         app.select(selection, cx);
         app
@@ -384,7 +381,7 @@ impl AppState {
         match &self.selection {
             Selection::NewChat(_) => Some(self.draft.clone()),
             Selection::Chat(chat) => self.sessions.get(chat).map(|session| session.read(cx).composer.clone()),
-            Selection::Settings => (self.settings_section == Section::Providers && self.form_showing()).then(|| self.form.name.clone()),
+            Selection::Settings => (self.settings_section == Section::Providers && self.form.open).then(|| self.form.name.clone()),
             Selection::Welcome => None,
         }
     }
@@ -859,53 +856,147 @@ impl AppState {
     }
 
     pub fn set_format(&mut self, format: WireFormat, cx: &mut Context<Self>) {
-        self.form.format = format;
+        self.form.set_format(format, cx);
+        self.form_changed(cx);
+    }
+
+    /// A new connection's editor, with one empty model row.
+    pub fn open_connection_form(&mut self, cx: &mut Context<Self>) {
+        self.form.open_new(cx);
+        self.watch_form(cx);
         cx.notify();
     }
 
-    /// Adds the connection the Settings form describes; the form is cleared once it is saved.
-    pub fn add_connection(&mut self, cx: &mut Context<Self>) {
-        let result = match self.form.read(cx) {
-            Ok((new, key)) => self.store.add_connection(new, &key),
-            Err(message) => Err(message),
+    /// The editor for a saved connection; its key field starts empty, since blank keeps the key.
+    pub fn edit_connection(&mut self, id: &str, cx: &mut Context<Self>) {
+        let Some(connection) = self.store.connections().iter().find(|connection| connection.id == id).cloned() else {
+            return;
+        };
+        self.form.edit(&connection, cx);
+        self.watch_form(cx);
+        cx.notify();
+    }
+
+    /// Back to the overview: the editor forgets what was typed.
+    pub fn close_connection_form(&mut self, cx: &mut Context<Self>) {
+        self.form.close(cx);
+        self.watch_form(cx);
+        cx.notify();
+    }
+
+    /// Puts the saved connection's fields back, keeping the editor open.
+    pub fn discard_connection_changes(&mut self, cx: &mut Context<Self>) {
+        let Some(id) = self.form.editing.clone() else {
+            return;
+        };
+        let Some(connection) = self.store.connections().iter().find(|connection| connection.id == id).cloned() else {
+            return;
+        };
+        self.form.edit(&connection, cx);
+        self.watch_form(cx);
+        cx.notify();
+    }
+
+    pub fn add_model_row(&mut self, cx: &mut Context<Self>) {
+        self.form.add_model("", None, cx);
+        self.watch_form(cx);
+        self.form_changed(cx);
+    }
+
+    pub fn remove_model_row(&mut self, index: usize, cx: &mut Context<Self>) {
+        self.form.remove_model(index);
+        self.watch_form(cx);
+        self.form_changed(cx);
+    }
+
+    /// Saves the connection the editor describes, adding or changing it; the editor stays, now
+    /// showing the saved connection, and the key field is emptied.
+    pub fn save_connection(&mut self, cx: &mut Context<Self>) {
+        let editing = self.form.editing.clone();
+        let has_saved_key = editing.as_deref().is_some_and(|id| self.store.has_key(id));
+        let (new, key) = match self.form.read(cx, !has_saved_key) {
+            Ok(described) => described,
+            Err(message) => {
+                self.form.error = Some(message.into());
+                self.form.notice = None;
+                cx.notify();
+                return;
+            }
+        };
+        let result = match editing.as_deref() {
+            Some(id) => self.store.update_connection(id, new, (!key.is_empty()).then_some(key.as_str())),
+            None => self.store.add_connection(new, &key),
         };
         match result {
-            Ok(_) => self.form.clear(cx),
-            Err(message) => self.form.error = Some(message.into()),
+            Ok(connection) => {
+                self.form.editing = Some(connection.id.clone());
+                self.form.prune_blank_models(cx);
+                // Empties the field; the key now lives only in the store.
+                self.form.key.update(cx, |field, cx| field.set_text("", cx));
+                self.form.error = None;
+                self.form.notice = Some(
+                    if key.is_empty() { "Saved." } else { "Saved. The API key is stored on this Mac." }.into(),
+                );
+                self.form.notice_serial = self.form.notice_serial.wrapping_add(1);
+                let serial = self.form.notice_serial;
+                // The confirmation tucks itself away, as version 2's save bar did.
+                cx.spawn(async move |app, cx| {
+                    cx.background_executor().timer(SAVE_NOTICE_TIME).await;
+                    let _ = app.update(cx, |app, cx| {
+                        if app.form.notice_serial == serial {
+                            app.form.notice = None;
+                            cx.notify();
+                        }
+                    });
+                })
+                .detach();
+                self.watch_form(cx);
+            }
+            Err(message) => {
+                self.form.error = Some(message.into());
+                self.form.notice = None;
+            }
         }
         cx.notify();
     }
 
-    /// The new-connection form is on the page: asked for, or there is nothing else to show.
-    pub fn form_showing(&self) -> bool {
-        self.form.open || self.store.connections().is_empty()
+    /// Watches every field of the connection editor, so saving knows as soon as it can.
+    fn watch_form(&mut self, cx: &mut Context<Self>) {
+        self.form_subscriptions.clear();
+        for field in self.form.all_fields() {
+            self.form_subscriptions.push(cx.subscribe(&field, |app, _, event: &TextFieldEvent, cx| match event {
+                TextFieldEvent::Enter | TextFieldEvent::SendNow => app.save_connection(cx),
+                TextFieldEvent::Changed => app.form_changed(cx),
+            }));
+        }
     }
 
-    pub fn open_connection_form(&mut self, cx: &mut Context<Self>) {
-        self.form.open = true;
-        cx.notify();
-    }
-
-    /// Cancel: the form folds away and forgets what was typed.
-    pub fn close_connection_form(&mut self, cx: &mut Context<Self>) {
-        self.form.clear(cx);
+    fn form_changed(&mut self, cx: &mut Context<Self>) {
+        self.form.error = None;
+        self.form.notice = None;
+        self.form.notice_serial = self.form.notice_serial.wrapping_add(1);
         cx.notify();
     }
 
     /// Switches a connection on or off; chats that used one switched off fall back to another.
     pub fn set_connection_enabled(&mut self, id: &str, on: bool, cx: &mut Context<Self>) {
         match self.store.set_connection_enabled(id, on) {
-            // An old failure goes once something works, unless it belongs to the open form.
-            Ok(()) if !self.form_showing() => self.form.error = None,
-            Ok(()) => {}
+            Ok(()) => self.form.error = None,
             Err(message) => self.form.error = Some(message.into()),
         }
         cx.notify();
     }
 
     pub fn remove_connection(&mut self, id: &str, cx: &mut Context<Self>) {
-        if let Err(message) = self.store.remove_connection(id) {
-            self.form.error = Some(message.into());
+        match self.store.remove_connection(id) {
+            Ok(()) => {
+                self.form.error = None;
+                if self.form.editing.as_deref() == Some(id) {
+                    self.form.close(cx);
+                    self.watch_form(cx);
+                }
+            }
+            Err(message) => self.form.error = Some(message.into()),
         }
         cx.notify();
     }

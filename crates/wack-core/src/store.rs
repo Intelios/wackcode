@@ -341,13 +341,73 @@ impl Store {
     }
 
     pub fn add_connection(&mut self, new: NewConnection, key: &str) -> Result<Connection, String> {
-        let name = new.name.trim();
-        let base_url = new.base_url.trim().trim_end_matches('/');
         let key = key.trim();
+        let format = new.format;
+        let (name, base_url, models) = self.clean_connection(None, new)?;
+        if key.is_empty() {
+            return Err("Enter the API key.".to_string());
+        }
+        let connection = Connection {
+            id: new_id("connection"),
+            name,
+            format,
+            base_url,
+            models,
+            enabled: true,
+        };
+        // The key first: a connection listed without its key would fail on first use.
+        self.secrets.set(&connection.id, key)?;
+        self.state.connections.push(connection.clone());
+        self.save()?;
+        Ok(connection)
+    }
+
+    /// Changes a saved connection in place, keeping its id (so chats that chose it keep it) and
+    /// whether it is switched on. A new key replaces the saved one; with none, the saved key
+    /// stays, and is never read to compare with anything.
+    pub fn update_connection(
+        &mut self,
+        id: &str,
+        new: NewConnection,
+        key: Option<&str>,
+    ) -> Result<Connection, String> {
+        let index = self
+            .state
+            .connections
+            .iter()
+            .position(|connection| connection.id == id)
+            .ok_or("That connection is no longer there.")?;
+        let format = new.format;
+        let (name, base_url, models) = self.clean_connection(Some(id), new)?;
+        if let Some(key) = key.map(str::trim).filter(|key| !key.is_empty()) {
+            self.secrets.set(id, key)?;
+        }
+        let connection = &mut self.state.connections[index];
+        connection.name = name;
+        connection.format = format;
+        connection.base_url = base_url;
+        connection.models = models;
+        let saved = connection.clone();
+        self.save()?;
+        Ok(saved)
+    }
+
+    /// A connection's fields as they are saved: trimmed, the address's trailing slash gone, and
+    /// at least one model. `except` is the connection being edited, which may keep its name.
+    fn clean_connection(
+        &self,
+        except: Option<&str>,
+        new: NewConnection,
+    ) -> Result<(String, String, Vec<Model>), String> {
+        let name = new.name.trim().to_string();
+        let base_url = new.base_url.trim().trim_end_matches('/').to_string();
         if name.is_empty() {
             return Err("Give the connection a name.".to_string());
         }
-        if self.connection(name).is_some() {
+        if self.state.connections.iter().any(|connection| {
+            Some(connection.id.as_str()) != except
+                && (connection.id == name || connection.name.eq_ignore_ascii_case(&name))
+        }) {
             return Err(format!("There is already a connection named {name}."));
         }
         if !(base_url.starts_with("https://") || base_url.starts_with("http://")) {
@@ -365,22 +425,7 @@ impl Store {
         if models.is_empty() {
             return Err("Add at least one model.".to_string());
         }
-        if key.is_empty() {
-            return Err("Enter the API key.".to_string());
-        }
-        let connection = Connection {
-            id: new_id("connection"),
-            name: name.to_string(),
-            format: new.format,
-            base_url: base_url.to_string(),
-            models,
-            enabled: true,
-        };
-        // The key first: a connection listed without its key would fail on first use.
-        self.secrets.set(&connection.id, key)?;
-        self.state.connections.push(connection.clone());
-        self.save()?;
-        Ok(connection)
+        Ok((name, base_url, models))
     }
 
     /// Switches a connection on or off. Its key, its models and every chat's choice of it stay as
@@ -996,6 +1041,60 @@ mod tests {
                 .unwrap()
                 .contains("sk-secret-value")
         );
+    }
+
+    #[test]
+    fn a_connection_is_updated_in_place_and_keeps_its_key() {
+        let folder = tempfile::tempdir().unwrap();
+        let mut store = Store::open(folder.path()).unwrap();
+        let added = store.add_connection(new("Testing"), "sk-first").unwrap();
+        store.set_connection_enabled(&added.id, false).unwrap();
+
+        let updated = store
+            .update_connection(
+                &added.id,
+                NewConnection {
+                    name: "Testing renamed".into(),
+                    format: WireFormat::AnthropicMessages,
+                    base_url: "https://other.example/v1/".into(),
+                    models: vec![Model {
+                        id: " new-model ".into(),
+                        context_window: Some(64_000),
+                    }],
+                },
+                None,
+            )
+            .unwrap();
+        assert_eq!(updated.id, added.id, "the id is what chats chose");
+        assert!(!updated.enabled, "the switch is left as it was");
+        assert_eq!(updated.name, "Testing renamed");
+        assert_eq!(updated.base_url, "https://other.example/v1");
+        assert_eq!(updated.models[0].id, "new-model");
+        assert!(store.has_key(&added.id), "no key given keeps the saved one");
+        assert!(store.provider(&updated).is_ok());
+
+        let second = store.add_connection(new("Second"), "sk-second").unwrap();
+        assert!(
+            store
+                .update_connection(
+                    &second.id,
+                    NewConnection {
+                        name: "TESTING RENAMED".into(),
+                        ..new("Ignored")
+                    },
+                    None
+                )
+                .unwrap_err()
+                .contains("already")
+        );
+        assert!(store.update_connection("missing", new("X"), None).is_err());
+
+        let with_new_key = store
+            .update_connection(&added.id, new("Testing"), Some(" sk-new "))
+            .unwrap();
+        assert!(store.provider(&with_new_key).is_ok());
+        let secrets = fs::read_to_string(folder.path().join("secrets.json")).unwrap();
+        assert!(secrets.contains("sk-new") && !secrets.contains("sk-first"));
     }
 
     #[test]

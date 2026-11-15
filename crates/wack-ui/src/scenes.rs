@@ -430,19 +430,25 @@ pub fn all() -> Vec<Scene> {
         },
         Scene {
             name: "settings-providers",
-            description: "Settings › Providers: two connections, Local switched off, the form folded away.",
+            description: "Settings › Providers: two connections, Local switched off, the overview.",
             size: size(px(1180.), px(820.)),
             build: |_, cx| providers_scene(Providers::Listed, false, cx),
         },
         Scene {
             name: "settings-providers-form",
-            description: "Settings › Providers with the new-connection form open and a problem to fix.",
-            size: size(px(1180.), px(1100.)),
+            description: "Settings › Providers' new-connection editor, with two models and a problem to fix.",
+            size: size(px(1180.), px(1080.)),
             build: |_, cx| providers_scene(Providers::Adding, false, cx),
         },
         Scene {
+            name: "settings-providers-edit",
+            description: "Settings › Providers editing a saved connection: its fields, two models, its switch.",
+            size: size(px(1180.), px(1000.)),
+            build: |_, cx| providers_scene(Providers::Editing, false, cx),
+        },
+        Scene {
             name: "settings-providers-empty",
-            description: "Settings › Providers with no connections yet: the form is the page.",
+            description: "Settings › Providers with no connections yet: the first-run tile.",
             size: size(px(1180.), px(900.)),
             build: |_, cx| providers_scene(Providers::Empty, false, cx),
         },
@@ -453,6 +459,12 @@ pub fn all() -> Vec<Scene> {
             build: |_, cx| providers_scene(Providers::Listed, true, cx),
         },
         Scene {
+            name: "settings-providers-form-small",
+            description: "The connection editor in the smallest window: the fields fit, the save bar stays at the foot.",
+            size: size(px(716.), px(900.)),
+            build: |_, cx| providers_scene(Providers::Adding, true, cx),
+        },
+        Scene {
             name: "settings-tools",
             description: "Settings › Tools, asking before planning loses its read-only restrictions.",
             size: size(px(1180.), px(760.)),
@@ -460,7 +472,7 @@ pub fn all() -> Vec<Scene> {
                 let form = ProviderForm::new(cx);
                 let data = SettingsData {
                     section: Section::Tools,
-                    providers: ProvidersData::new(&fixtures::connections(), |_| true, &form),
+                    providers: ProvidersData::new(&fixtures::connections(), |_| true, &form, cx),
                     appearance: fixtures::appearance(None, cx),
                     tools: crate::tools_page::ToolsData { unrestricted_planning: false, confirming: true },
                 };
@@ -624,6 +636,7 @@ fn over(picture: crate::backdrop::Picture, cx: &mut App) -> crate::backdrop::Pic
 enum Providers {
     Listed,
     Adding,
+    Editing,
     Empty,
 }
 
@@ -635,17 +648,21 @@ fn providers_scene(state: Providers, sidebar_hidden: bool, cx: &mut App) -> AnyV
     match state {
         Providers::Listed => {}
         Providers::Adding => {
-            form.open = true;
+            form.open_new(cx);
             form.name.update(cx, |field, cx| field.set_text("OpenRouter", cx));
             form.address.update(cx, |field, cx| field.set_text("openrouter.ai/api/v1", cx));
             form.key.update(cx, |field, cx| field.set_text("not-a-real-key", cx));
+            form.models[0].id.update(cx, |field, cx| field.set_text("anthropic/claude-sonnet-5.5", cx));
+            form.models[0].context.update(cx, |field, cx| field.set_text("200k", cx));
+            form.add_model("google/gemini-3-pro-preview", Some("1M"), cx);
             form.error = Some("The address must start with https:// or http://.".into());
         }
+        Providers::Editing => form.edit(&connections[0].clone(), cx),
         Providers::Empty => connections.clear(),
     }
     let data = SettingsData {
         section: Section::Providers,
-        providers: ProvidersData::new(&connections, |id| id != "c2", &form),
+        providers: ProvidersData::new(&connections, |id| id != "c2", &form, cx),
         appearance: fixtures::appearance(None, cx),
         tools: Default::default(),
     };
@@ -661,7 +678,7 @@ fn settings_scene(backdrop: Option<crate::backdrop::Picture>, cx: &mut App) -> A
     let form = ProviderForm::new(cx);
     let data = SettingsData {
         section: Section::Appearance,
-        providers: ProvidersData::new(&fixtures::connections(), |_| true, &form),
+        providers: ProvidersData::new(&fixtures::connections(), |_| true, &form, cx),
         appearance: fixtures::appearance(backdrop.clone(), cx),
         tools: Default::default(),
     };

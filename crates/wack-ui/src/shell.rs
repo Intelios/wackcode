@@ -39,9 +39,9 @@ use gpui::{
 
 use crate::{
     actions::{
-        self, ActivatePane, AddConnection, AddFolder, Back, ChooseBackdrop, ChooseEffort, SlideEffort, ToggleTodos, ToggleWaiting, ChooseFocus, CycleAgentMode, SetAgentMode, PickOption, ShowQuestion, NextQuestion, PreviousQuestion, SubmitAnswers, CancelQuestion, WrapUpQuestion, ShowDoneTodos, DiscardPlan, KeepPlan, ConfirmDiscardPlan, ApprovePlan, SavePlan, CopyPlan, ToggleUnrestrictedPlanning, ConfirmUnrestrictedPlanning, CancelUnrestrictedPlanning,
+        self, ActivatePane, AddFolder, Back, ChooseBackdrop, ChooseEffort, SlideEffort, ToggleTodos, ToggleWaiting, ChooseFocus, CycleAgentMode, SetAgentMode, PickOption, ShowQuestion, NextQuestion, PreviousQuestion, SubmitAnswers, CancelQuestion, WrapUpQuestion, ShowDoneTodos, DiscardPlan, KeepPlan, ConfirmDiscardPlan, ApprovePlan, SavePlan, CopyPlan, ToggleUnrestrictedPlanning, ConfirmUnrestrictedPlanning, CancelUnrestrictedPlanning,
         ChooseBlur, ChooseDim, ChooseFormat, OpenConnectionForm, CloseConnectionForm, SwitchConnection, ChooseMode, ChooseModel, ChooseTexture, ChooseTheme, CloseChatTab, CloseMenu, ClosePane,
-        ClosePaneId, CloseSettings, CloseTab, Compact, DeleteChat, EqualizeSplit, FocusNext, FocusPrevious, MovePane,
+        ClosePaneId, CloseSettings, CloseTab, Compact, DeleteChat, DiscardConnection, EditConnection, EqualizeSplit, FocusNext, FocusPrevious, MovePane, AddModelRow, RemoveModelRow, SaveConnection,
         NewChat, NewChatIn, NewTerminal, NewTerminalWith, NextTab, OpenEffortMenu, OpenModelMenu, OpenSettings,
         OpenSettingsSection, PinProject, PreviousTab, RemoveConnection, RemovePicture, ShowPicture, RemoveProject, ResetDockSize,
         SelectChat, Send, Stop, ToggleChanges, ToggleProject, ToggleSidebar, ToggleTerminal, Unqueue,
@@ -803,7 +803,7 @@ impl Render for Shell {
                         .key_context(actions::FORM_CONTEXT)
                         .on_action(|_: &FocusNext, window, cx| window.focus_next(cx))
                         .on_action(|_: &FocusPrevious, window, cx| window.focus_prev(cx))
-                        .child(arrive(id, settings::page(data, !solution.sidebar, narrow, &theme).into_any_element()))
+                        .child(arrive(id, settings::page(data, !solution.sidebar, narrow, solution.transcript.width < settings::FORM_STACK_BELOW, &theme).into_any_element()))
                         .into_any_element(),
                 )
             }
@@ -963,9 +963,9 @@ impl Render for Shell {
                 }))
                 .on_action(cx.listener(|shell, _: &ToggleTodos, _, cx| shell.with_session(cx, |session, cx| session.toggle_todos(cx))))
                 .on_action(cx.listener(|shell, _: &ToggleWaiting, _, cx| shell.with_session(cx, |session, cx| session.toggle_waiting(cx))))
-                .on_action(cx.listener(|shell, _: &AddConnection, _, cx| shell.with_app(cx, |app, cx| app.add_connection(cx))))
+                .on_action(cx.listener(|shell, _: &SaveConnection, _, cx| shell.with_app(cx, |app, cx| app.save_connection(cx))))
                 .on_action(cx.listener(|shell, _: &OpenConnectionForm, window, cx| {
-                    // The form opens ready to type its name.
+                    // The editor opens ready to type its name.
                     let Some(app) = shell.app() else {
                         return;
                     };
@@ -976,7 +976,45 @@ impl Render for Shell {
                     let handle = name.read(cx).focus_handle(cx);
                     window.defer(cx, move |window, cx| window.focus(&handle, cx));
                 }))
-                .on_action(cx.listener(|shell, _: &CloseConnectionForm, _, cx| shell.with_app(cx, |app, cx| app.close_connection_form(cx))))
+                .on_action(cx.listener(|shell, action: &EditConnection, window, cx| {
+                    let Some(app) = shell.app() else {
+                        return;
+                    };
+                    let id = action.id.clone();
+                    let name = app.update(cx, |app, cx| {
+                        app.edit_connection(&id, cx);
+                        app.form.name.clone()
+                    });
+                    let handle = name.read(cx).focus_handle(cx);
+                    window.defer(cx, move |window, cx| window.focus(&handle, cx));
+                }))
+                .on_action(cx.listener(|shell, _: &CloseConnectionForm, window, cx| {
+                    shell.with_app(cx, |app, cx| app.close_connection_form(cx));
+                    // The editor's fields are gone; the shell takes the keys again.
+                    if let Some(focus) = shell.focus.clone() {
+                        window.defer(cx, move |window, cx| window.focus(&focus, cx));
+                    }
+                }))
+                .on_action(cx.listener(|shell, _: &DiscardConnection, _, cx| {
+                    shell.with_app(cx, |app, cx| app.discard_connection_changes(cx));
+                }))
+                .on_action(cx.listener(|shell, _: &AddModelRow, window, cx| {
+                    let Some(app) = shell.app() else {
+                        return;
+                    };
+                    let field = app.update(cx, |app, cx| {
+                        app.add_model_row(cx);
+                        app.form.models.last().map(|row| row.id.clone())
+                    });
+                    if let Some(field) = field {
+                        let handle = field.read(cx).focus_handle(cx);
+                        window.defer(cx, move |window, cx| window.focus(&handle, cx));
+                    }
+                }))
+                .on_action(cx.listener(|shell, action: &RemoveModelRow, _, cx| {
+                    let index = action.index;
+                    shell.with_app(cx, |app, cx| app.remove_model_row(index, cx));
+                }))
                 .on_action(cx.listener(|shell, action: &SwitchConnection, _, cx| {
                     let (id, on) = (action.id.clone(), action.on);
                     shell.with_app(cx, |app, cx| app.set_connection_enabled(&id, on, cx));
@@ -1169,7 +1207,7 @@ fn live_view(app: &AppState, cx: &App) -> (SidebarData, Screen, StripData) {
             let appearance = store.appearance();
             Screen::Settings(SettingsData {
                 section: app.settings_section,
-                providers: ProvidersData::new(store.connections(), |id| store.has_key(id), &app.form),
+                providers: ProvidersData::new(store.connections(), |id| store.has_key(id), &app.form, cx),
                 appearance: AppearanceData {
                     mode: appearance.mode,
                     theme: appearance.theme,

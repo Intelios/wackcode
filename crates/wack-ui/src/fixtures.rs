@@ -100,19 +100,23 @@ pub fn composer_empty(roomy: bool) -> ComposerData {
         menu: None,
         question: None,
         todos: None,
+        activity: None,
+        todos_open: false,
+        waiting_open: false,
     }
 }
 
 /// After a turn, with `input` holding the next message.
 pub fn composer_after_turn(input: Input) -> ComposerData {
-    ComposerData { input, meter: meter("14% context"), ..composer_empty(false) }
+    ComposerData { input, meter: meter("14%"), ..composer_empty(false) }
 }
 
 pub fn composer_working() -> ComposerData {
     ComposerData {
         input: drawn(None, crate::chat::FOLLOW_UP_PLACEHOLDER),
-        meter: meter("21% context"),
+        meter: meter("21%"),
         working: true,
+        activity: Some(("Working  ·  8s".into(), Some("Running cargo test -p wack-llm retry".into()))),
         waiting: vec![
             Waiting { text: "Check the date form against RFC 9110 too.".into(), steering: true },
             Waiting { text: "Also cap the wait at 60 seconds, whatever the server asks for.".into(), steering: false },

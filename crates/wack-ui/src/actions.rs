@@ -72,6 +72,10 @@ actions!(
         KeepPlan,
         /// Shows the todo list's folded tasks.
         ShowDoneTodos,
+        /// Opens or folds the todo list from its status pill.
+        ToggleTodos,
+        /// Opens or folds the waiting messages from their status pill.
+        ToggleWaiting,
         /// Settings › Tools: turns unrestricted planning off, or asks before turning it on.
         ToggleUnrestrictedPlanning,
         ConfirmUnrestrictedPlanning,
@@ -107,6 +111,13 @@ pub struct ChooseModel {
 #[derive(Clone, Debug, PartialEq, Action)]
 #[action(namespace = wackcode, no_json)]
 pub struct ChooseEffort {
+    pub effort: Option<Reasoning>,
+}
+
+/// The effort slider moved: like [`ChooseEffort`], but the slider stays open.
+#[derive(Clone, Debug, PartialEq, Action)]
+#[action(namespace = wackcode, no_json)]
+pub struct SlideEffort {
     pub effort: Option<Reasoning>,
 }
 

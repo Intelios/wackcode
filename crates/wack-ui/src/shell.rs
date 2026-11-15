@@ -39,7 +39,7 @@ use gpui::{
 
 use crate::{
     actions::{
-        self, ActivatePane, AddConnection, AddFolder, Back, ChooseAccent, ChooseBackdrop, ChooseEffort, ChooseFocus, CycleAgentMode, SetAgentMode, PickOption, ShowQuestion, NextQuestion, PreviousQuestion, SubmitAnswers, CancelQuestion, WrapUpQuestion, ShowDoneTodos, DiscardPlan, KeepPlan, ConfirmDiscardPlan, ApprovePlan, SavePlan, CopyPlan, ToggleUnrestrictedPlanning, ConfirmUnrestrictedPlanning, CancelUnrestrictedPlanning,
+        self, ActivatePane, AddConnection, AddFolder, Back, ChooseAccent, ChooseBackdrop, ChooseEffort, SlideEffort, ToggleTodos, ToggleWaiting, ChooseFocus, CycleAgentMode, SetAgentMode, PickOption, ShowQuestion, NextQuestion, PreviousQuestion, SubmitAnswers, CancelQuestion, WrapUpQuestion, ShowDoneTodos, DiscardPlan, KeepPlan, ConfirmDiscardPlan, ApprovePlan, SavePlan, CopyPlan, ToggleUnrestrictedPlanning, ConfirmUnrestrictedPlanning, CancelUnrestrictedPlanning,
         ChooseBlur, ChooseDim, ChooseFormat, ChooseMode, ChooseModel, ChooseTexture, ChooseThemeColour, CloseChatTab, CloseMenu, ClosePane,
         ClosePaneId, CloseSettings, CloseTab, Compact, DeleteChat, EqualizeSplit, FocusNext, FocusPrevious, MovePane,
         NewChat, NewChatIn, NewTerminal, NewTerminalWith, NextTab, OpenEffortMenu, OpenModelMenu, OpenSettings,
@@ -939,6 +939,16 @@ impl Render for Shell {
                     let effort = action.effort;
                     shell.with_app(cx, |app, cx| app.choose(None, None, Some(effort), cx));
                 }))
+                .on_action(cx.listener(|shell, action: &SlideEffort, _, cx| {
+                    let effort = action.effort;
+                    shell.with_app(cx, |app, cx| {
+                        app.choose(None, None, Some(effort), cx);
+                        // The slider stays open as it moves.
+                        app.menu = Some(Menu::Effort);
+                    });
+                }))
+                .on_action(cx.listener(|shell, _: &ToggleTodos, _, cx| shell.with_session(cx, |session, cx| session.toggle_todos(cx))))
+                .on_action(cx.listener(|shell, _: &ToggleWaiting, _, cx| shell.with_session(cx, |session, cx| session.toggle_waiting(cx))))
                 .on_action(cx.listener(|shell, _: &AddConnection, _, cx| shell.with_app(cx, |app, cx| app.add_connection(cx))))
                 .on_action(cx.listener(|shell, action: &ChooseFormat, _, cx| {
                     let format = action.format;
@@ -1165,6 +1175,9 @@ fn live_view(app: &AppState, cx: &App) -> (SidebarData, Screen, StripData) {
                         menu: menu_data(app, resolved.as_ref()),
                         question: None,
                         todos: None,
+                        activity: None,
+                        todos_open: false,
+                        waiting_open: false,
                     },
                     notice: app.notice.clone(),
                 }
@@ -1213,6 +1226,9 @@ fn live_view(app: &AppState, cx: &App) -> (SidebarData, Screen, StripData) {
                         let view = crate::todo_panel::view(state.todos(), &state.todo_faded, state.todo_show_done);
                         (view.total > 0).then(|| crate::todo_panel::TodoData { view, busy: state.running(), folded: state.asking.is_some() })
                     },
+                    activity: state.running().then(|| state.activity()).flatten(),
+                    todos_open: state.todos_open,
+                    waiting_open: state.waiting_open,
                 },
             }
         }
@@ -1286,7 +1302,7 @@ pub fn effort_groups(current: Option<wack_core::Reasoning>) -> Vec<MenuGroup> {
             item(Some(Reasoning::Low), "Low", None),
             item(Some(Reasoning::Medium), "Medium", None),
             item(Some(Reasoning::High), "High", None),
-            item(Some(Reasoning::Xhigh), "Extra high", None),
+            item(Some(Reasoning::Xhigh), "Xhigh", None),
             item(Some(Reasoning::Max), "Max", None),
             item(Some(Reasoning::Ultra), "Ultra", Some("the most thorough work")),
         ],
@@ -1308,7 +1324,7 @@ fn model_words(resolved: Option<&wack_core::Resolved>) -> (SharedString, Option<
                     Some(wack_core::Reasoning::Low) => "Low",
                     Some(wack_core::Reasoning::Medium) => "Medium",
                     Some(wack_core::Reasoning::High) => "High",
-                    Some(wack_core::Reasoning::Xhigh) => "Extra high",
+                    Some(wack_core::Reasoning::Xhigh) => "Xhigh",
                     Some(wack_core::Reasoning::Max) => "Max",
                     Some(wack_core::Reasoning::Ultra) => "Ultra",
                 }
@@ -1328,21 +1344,22 @@ pub fn model_name(id: &str) -> String {
     id.rsplit('/').next().unwrap_or(id).to_string()
 }
 
-/// "14% context", or "41.2k context" when the model's window is unknown. Compact is offered
+/// "14%" of the window, or "41.2k tokens" when the model's window is unknown (the composer
+/// says what it measures in a tooltip). Compact is offered
 /// once there is enough to be worth summarising.
 fn meter(tokens: u64, window: Option<u64>, has_messages: bool) -> Meter {
     match window.filter(|window| *window > 0) {
         Some(window) => {
             let percent = tokens as f32 / window as f32 * 100.;
             let label = if percent > 0. && percent < 1. {
-                "<1% context".to_string()
+                "<1%".to_string()
             } else {
-                format!("{}% context", percent.round().min(100.))
+                format!("{}%", percent.round().min(100.))
             };
             Meter { label: label.into(), high: percent >= 80., can_compact: has_messages && percent >= 25. }
         }
         None => Meter {
-            label: format!("{} context", crate::work::count(tokens)).into(),
+            label: format!("{} tokens", crate::work::count(tokens)).into(),
             high: false,
             can_compact: has_messages && tokens >= 50_000,
         },
@@ -1821,23 +1838,23 @@ mod tests {
     #[test]
     fn the_meter_reads_as_a_share_and_offers_compact_from_a_quarter() {
         let small = meter(4_000, Some(1_000_000), true);
-        assert_eq!(small.label.as_ref(), "<1% context");
+        assert_eq!(small.label.as_ref(), "<1%");
         assert!(!small.can_compact && !small.high);
 
         let quarter = meter(250_000, Some(1_000_000), true);
-        assert_eq!(quarter.label.as_ref(), "25% context");
+        assert_eq!(quarter.label.as_ref(), "25%");
         assert!(quarter.can_compact);
         assert!(!meter(250_000, Some(1_000_000), false).can_compact, "nothing to compact in an empty chat");
 
         assert!(meter(850_000, Some(1_000_000), true).high);
-        assert_eq!(meter(0, Some(1_000), true).label.as_ref(), "0% context");
-        assert_eq!(meter(2_000_000, Some(1_000_000), true).label.as_ref(), "100% context");
+        assert_eq!(meter(0, Some(1_000), true).label.as_ref(), "0%");
+        assert_eq!(meter(2_000_000, Some(1_000_000), true).label.as_ref(), "100%");
     }
 
     #[test]
     fn without_a_window_the_meter_counts_tokens() {
         let unknown = meter(41_200, None, true);
-        assert_eq!(unknown.label.as_ref(), "41.2k context");
+        assert_eq!(unknown.label.as_ref(), "41.2k tokens");
         assert!(!unknown.can_compact);
         assert!(meter(60_000, Some(0), true).can_compact, "a zero window counts as unknown");
     }

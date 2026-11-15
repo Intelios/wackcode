@@ -19,7 +19,7 @@ Agreed with the owner on 2026-11-15, on a design canvas (claude.ai artifact "Wac
 1. **Frame, stage, glass, blur and dim** (done): `shell.rs`, `glass.rs`, `backdrop.rs`, `theme.rs` (`Theme::glass`), and the Blur choice on Settings › Appearance.
 2. **Sidebar and title strip** (done): the New chat pill, round project monograms, chats on a dotted rail, tab pills with the sidebar's state marks and a new-tab button; and the new-chat screen showing the picture clear, easing to glass when a chat opens. The canvas's Search chats field and Archived button wait until those exist.
 3. **Transcript** (done): bubbles, the work chip with its count of what was done, rows on a dotted rail with round icons, and sheets with a head band (code sheets copy). The canvas's scroll rail of prompt ticks and a reply's copy button wait for later.
-4. **Composer:** round controls, the effort pill and slider, status pills, the Ultra prism.
+4. **Composer** (done): round controls, the effort pill opening WackCode 2's slider (Default, then Low through Ultra; it stays open as it moves), status pills over the card (what the run is doing and for how long, the todo list and the waiting messages, which open above their pills), and the prism's edge in Ultra Plan. The context meter is a bare percentage with a tooltip. The "+" is still a mark with nothing behind it; attachments would make it a button.
 5. **Settings:** grouped navigation, cards and rows, switches (a connection's on and off is new engine state), and sliders for Blur and Dim replacing the words.
 6. **Themes:** WackCode 2's set ported from the legacy source (never its data files), replacing theme colour and accent in the engine's appearance and on Settings › Appearance.
 

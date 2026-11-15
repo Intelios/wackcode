@@ -94,7 +94,7 @@ pub fn page(data: AppearanceData, theme: &Theme) -> impl IntoElement {
         ))
         .child(section(
             "Backdrop",
-            "A picture behind the window: clear across the top of a new chat, and under frosted glass everywhere else. The glass keeps text readable on its own; blur and dim set how the picture looks around it.",
+            "A picture behind the window: shown clear across a new chat, and under frosted glass once the chat begins. The glass keeps text readable on its own; blur and dim set how the picture looks around it.",
             backdrop(&data, theme),
         ))
         .when_some(data.notice.clone(), |page, notice| {

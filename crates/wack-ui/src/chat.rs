@@ -90,6 +90,10 @@ pub struct ChatSession {
     pub todo_faded: HashSet<u64>,
     /// The folded tasks are shown anyway.
     pub todo_show_done: bool,
+    /// The todo list and the waiting messages are open above their status pills; folded, only
+    /// the pills show.
+    pub todos_open: bool,
+    pub waiting_open: bool,
 }
 
 /// A question the agent is waiting on, and the answers so far.
@@ -176,6 +180,8 @@ impl ChatSession {
             focus_request: None,
             todo_faded: HashSet::new(),
             todo_show_done: false,
+            todos_open: false,
+            waiting_open: false,
         };
         chat.refresh_from(0);
         chat.panes.sync(cx, |_, cx| cx.notify());
@@ -573,6 +579,25 @@ impl ChatSession {
     pub fn show_done_todos(&mut self, cx: &mut Context<Self>) {
         self.todo_show_done = true;
         cx.notify();
+    }
+
+    pub fn toggle_todos(&mut self, cx: &mut Context<Self>) {
+        self.todos_open = !self.todos_open;
+        cx.notify();
+    }
+
+    pub fn toggle_waiting(&mut self, cx: &mut Context<Self>) {
+        self.waiting_open = !self.waiting_open;
+        cx.notify();
+    }
+
+    /// While a run is going: how long it has run ("Working · 8s", or the retry it is waiting on)
+    /// and what it is doing now (`work::activity`), from its live work log.
+    pub fn activity(&self) -> Option<(SharedString, Option<SharedString>)> {
+        self.items.iter().rev().find_map(|item| match item {
+            Item::Work(work) if work.live => Some((work.summary.clone(), crate::work::activity(&work.rows).map(Into::into))),
+            _ => None,
+        })
     }
 
     pub fn todos(&self) -> &wack_core::todo::TodoList {

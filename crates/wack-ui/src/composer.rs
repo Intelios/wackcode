@@ -1,9 +1,15 @@
 //! The composer: where the user writes to the agent.
 //!
-//! One card, no toolbar of pills: the model and effort are plain words you click, the context
-//! meter is a number, and the one filled control is the send button (the stop button while the
-//! agent works). Messages waiting for the run sit just above the card, so the user sees what goes
-//! next.
+//! One card of round controls: the mode track, the model's pill, the effort's own pill (which
+//! opens WackCode 2's slider, Default through Ultra, staying open as it moves), the context meter
+//! and the send button, the one filled control (the stop button while the agent works). In Ultra
+//! Plan the card wears the prism's edge.
+//!
+//! Above the card, a row of status pills: what the run is doing and for how long, the todo list,
+//! the waiting messages. The list and the messages open above their pills and fold back into
+//! them (`ChatSession::todos_open`, `waiting_open`). An open question comes first: it stacks
+//! above the pills, the waiting messages stay folded, and in a short window the todo list stays
+//! shut.
 //!
 //! The mode toggle (Build | Plan) sits first in the controls, a recessed track with a pill that
 //! slides to the mode in force. Clicking Plan again switches to Ultra Plan and back; ⇧Tab cycles
@@ -13,14 +19,19 @@
 //! Renders from plain data ([`ComposerData`]) and reports clicks as actions (`crate::actions`),
 //! which the shell handles; in a gallery scene nothing handles them.
 
+use std::{cell::Cell, rc::Rc};
+
 use gpui::{
-    AnchoredPositionMode, AnimationExt, App, Entity, Focusable, Hsla, MouseButton, SharedString, Window, anchored, deferred, div,
-    point, prelude::*, px,
+    AnchoredPositionMode, AnimationExt, App, Bounds, Entity, Focusable, Hsla, MouseButton, Pixels, SharedString, Window, anchored,
+    canvas, deferred, div, point, prelude::*, px,
 };
 use wack_core::{AgentMode, Reasoning};
 
 use crate::{
-    actions::{ChooseEffort, ChooseModel, CloseMenu, Compact, OpenEffortMenu, OpenModelMenu, Send, SetAgentMode, Stop, Unqueue},
+    actions::{
+        ChooseEffort, ChooseModel, CloseMenu, Compact, OpenEffortMenu, OpenModelMenu, Send, SetAgentMode, SlideEffort, Stop, ToggleTodos,
+        ToggleWaiting, Unqueue,
+    },
     app::Menu,
     icon::Icon,
     tags::Tag,
@@ -28,7 +39,7 @@ use crate::{
     theme::Theme,
     tooltip::tip,
     typography::{Type, Typography},
-    ultra::{UltraLabel, UltraMark},
+    ultra::{UltraLabel, UltraMark, prism_edge},
 };
 
 #[derive(Clone)]
@@ -51,7 +62,7 @@ pub struct ComposerData {
     /// Whose composer this is (a chat's id, or the new chat's), so switching chats never plays
     /// the toggle's slide.
     pub key: SharedString,
-    /// "14% context", or a token count when the model's window is unknown.
+    /// "14%" of the context, or a token count when the model's window is unknown.
     pub meter: Option<Meter>,
     pub working: bool,
     /// Messages waiting for the run, oldest first.
@@ -64,6 +75,11 @@ pub struct ComposerData {
     pub question: Option<crate::question::QuestionData>,
     /// The agent's todo list, at the top of the column.
     pub todos: Option<crate::todo_panel::TodoData>,
+    /// While a run is going: how long, and what it is doing now (`ChatSession::activity`).
+    pub activity: Option<(SharedString, Option<SharedString>)>,
+    /// The todo list and the waiting messages are open above their pills.
+    pub todos_open: bool,
+    pub waiting_open: bool,
 }
 
 #[derive(Clone, Debug)]
@@ -181,25 +197,50 @@ impl RenderOnce for Composer {
             Input::Drawn { .. } => None,
         };
 
+        let ultra_plan = data.mode == AgentMode::UltraPlan;
+        let field_height = if data.roomy { 64. } else { 22. };
+        // From a pill's top to just above the card: the field and the space around it.
+        let rise = CARD_TOP + field_height + CARD_GAP + 8.;
         let mut controls = div()
             .flex()
             .items_center()
-            .gap(px(14.))
-            .child(Icon::Plus.view(px(16.), theme.text_dim))
+            .gap(px(6.))
+            .child(div().flex_none().w(px(24.)).flex().justify_center().child(Icon::Plus.view(px(16.), theme.text_dim)))
             .child(ModeToggle { mode: data.mode, locked: data.working, key: data.key.clone() })
             // In a narrow composer the model's name gives way first; the send button never does.
-            .child(picker("model", Word::Plain(data.model.clone()), theme.text_soft, OpenModelMenu, menu_for(Menu::Model), viewport, &theme));
+            .child(picker(
+                "model",
+                pill("model").min_w(px(MODEL_MIN)).text_color(theme.text_soft).hover(|pill| pill.bg(theme.hover).text_color(theme.text)).child(
+                    div().min_w_0().truncate().typography(Type::Ui).child(data.model.clone()),
+                ).child(Icon::ChevronDown.view(px(12.), theme.text_faint)),
+                menu_for(Menu::Model).map(|menu| menu_view(menu, &theme).into_any_element()),
+                true,
+                rise,
+                viewport,
+            ));
         if let Some(effort) = data.effort.clone() {
-            let word = if data.ultra_effort {
-                Word::Ultra(effort)
-            } else {
-                Word::Plain(effort)
-            };
-            controls = controls.child(picker("effort", word, theme.text_dim, OpenEffortMenu, menu_for(Menu::Effort), viewport, &theme));
+            let ultra = data.ultra_effort;
+            let button = pill("effort")
+                .flex_none()
+                .gap(px(6.))
+                .when(ultra, |pill| pill.bg(Hsla { a: 0.12, ..theme.ultra }).border_1().border_color(Hsla { a: 0.24, ..theme.ultra }))
+                .when(!ultra, |pill| pill.hover(|pill| pill.bg(theme.hover)))
+                .child(if ultra {
+                    UltraMark::new("effort-ultra-mark", px(12.)).into_any_element()
+                } else {
+                    Icon::Brain.view(px(13.), theme.accent_text).into_any_element()
+                })
+                .child(if ultra {
+                    UltraLabel::new("effort-ultra", effort, Type::Ui).into_any_element()
+                } else {
+                    div().typography(Type::Ui).text_color(theme.accent_text).child(effort).into_any_element()
+                });
+            let slider = menu_for(Menu::Effort).map(|menu| effort_slider(menu, data.model.clone(), &theme).into_any_element());
+            controls = controls.child(picker("effort", button, slider, false, rise, viewport));
         }
         controls = controls.child(div().flex_1());
         if let Some(meter) = data.meter {
-            controls = controls.child(meter_view(meter, data.working, &theme));
+            controls = controls.child(div().flex_none().pr(px(4.)).child(meter_view(meter, data.working, &theme)));
         }
         let controls = controls.child(send);
 
@@ -207,17 +248,17 @@ impl RenderOnce for Composer {
             .w_full()
             .flex()
             .flex_col()
-            .gap(px(10.))
-            .px(px(16.))
-            .pt(px(14.))
+            .gap(px(CARD_GAP))
+            .pl(px(16.))
+            .pr(px(12.))
+            .pt(px(CARD_TOP))
             .pb(px(10.))
-            .rounded(px(14.))
+            .rounded(px(CARD_RADIUS))
             .bg(theme.surface)
-            .border_1()
-            .border_color(theme.border)
+            .when(!ultra_plan, |card| card.border_1().border_color(theme.border))
             .child(
                 field
-                    .min_h(px(if data.roomy { 64. } else { 22. }))
+                    .min_h(px(field_height))
                     .when_some(focus_target, |field, target| {
                         // The whole text area takes a click, not only the line of text.
                         field.on_mouse_down(MouseButton::Left, move |_, window, cx| {
@@ -228,14 +269,24 @@ impl RenderOnce for Composer {
             )
             .child(controls)
             .tag("composer");
+        let card = if ultra_plan { prism_edge(CARD_RADIUS, card, &theme).into_any_element() } else { card.into_any_element() };
 
         // Inside a capped column the card stays whole and the question gives way first.
         let mut column = div().w_full().min_h_0().flex().flex_col().gap(px(6.));
-        // While a question is open it comes first: the todo list folds to its head and the
-        // waiting messages to one line, and in a short window both step aside for it.
         let asking = data.question.is_some();
         let short = f32::from(viewport.height) < SHORT_WINDOW;
+        let todo_pill = data.todos.as_ref().map(|todos| {
+            let view = &todos.view;
+            let live = todos.busy && view.active;
+            status_pill("todos-pill", data.todos_open, &theme)
+                .on_click(dispatch(ToggleTodos))
+                .child(div().size(px(6.)).rounded_full().bg(if live { theme.accent_text } else { theme.border_strong }))
+                .child(div().typography(Type::Small).text_color(theme.text_soft).child(format!("{} of {} tasks", view.done, view.total)))
+                .child(if data.todos_open { Icon::ChevronDown } else { Icon::ChevronRight }.view(px(11.), theme.text_faint))
+                .tag("todos-pill")
+        });
         if let Some(todos) = data.todos
+            && data.todos_open
             && !(asking && short)
         {
             column = column.child(div().flex_shrink(1.).min_h(px(40.)).flex().flex_col().child(crate::todo_panel::todo_panel(todos, &theme)));
@@ -245,16 +296,21 @@ impl RenderOnce for Composer {
                 div().min_h(px(QUESTION_MIN_HEIGHT)).flex_shrink(1.).flex().flex_col().pb(px(4.)).child(crate::question::QuestionCard::new(question)),
             );
         }
-        if asking && !data.waiting.is_empty() {
-            if !short {
-                let count = data.waiting.len();
-                let summary = Waiting {
-                    text: if count == 1 { "1 message waiting".into() } else { format!("{count} messages waiting").into() },
-                    steering: false,
-                };
-                column = column.child(div().flex_none().child(waiting_row(usize::MAX, summary, &theme)));
-            }
-        } else if !data.waiting.is_empty() {
+        let waiting_pill = (!data.waiting.is_empty()).then(|| {
+            let steering = data.waiting.iter().filter(|waiting| waiting.steering).count();
+            let queued = data.waiting.len() - steering;
+            let words = match (steering, queued) {
+                (0, queued) => format!("{queued} queued"),
+                (steering, 0) => format!("{steering} steering"),
+                (steering, queued) => format!("{steering} steering · {queued} queued"),
+            };
+            status_pill("waiting-pill", data.waiting_open && !asking, &theme)
+                .on_click(dispatch(ToggleWaiting))
+                .child(div().typography(Type::Small).text_color(theme.text_soft).child(words))
+                .child(if data.waiting_open && !asking { Icon::ChevronDown } else { Icon::ChevronRight }.view(px(11.), theme.text_faint))
+                .tag("waiting-pill")
+        });
+        if data.waiting_open && !asking && !data.waiting.is_empty() {
             // A long queue scrolls inside itself.
             let mut rows = div().id("waiting").flex_shrink(1.).min_h(px(36.)).max_h(px(WAITING_MAX_HEIGHT)).overflow_y_scroll().flex().flex_col().gap(px(6.));
             for (index, waiting) in data.waiting.into_iter().enumerate() {
@@ -262,8 +318,72 @@ impl RenderOnce for Composer {
             }
             column = column.child(rows);
         }
+        let activity_pill = data.activity.map(|(time, doing)| {
+            div()
+                .min_w_0()
+                .h(px(STATUS_HEIGHT))
+                .px(px(12.))
+                .rounded_full()
+                .flex()
+                .items_center()
+                .gap(px(7.))
+                .bg(theme.surface)
+                .border_1()
+                .border_color(theme.border)
+                .child(crate::motion::paddling(div().flex_none().child(Icon::Duck.view(px(13.), theme.accent_text))))
+                .child(div().flex_none().typography(Type::Small).text_color(theme.text).child(time))
+                .when_some(doing, |pill, doing| {
+                    pill.child(div().min_w_0().truncate().typography(Type::Small).text_color(theme.text_dim).child(doing))
+                })
+                .tag("activity")
+        });
+        if activity_pill.is_some() || todo_pill.is_some() || waiting_pill.is_some() {
+            column = column.child(
+                div()
+                    .flex_none()
+                    .px(px(4.))
+                    .flex()
+                    .items_center()
+                    .gap(px(6.))
+                    .children(activity_pill)
+                    .children(todo_pill)
+                    .child(div().flex_1())
+                    .children(waiting_pill),
+            );
+        }
         column.child(div().flex_none().child(card))
     }
+}
+
+/// The composer card's corners, the space above its field, and between the field and the bar.
+const CARD_RADIUS: f32 = 18.;
+const CARD_TOP: f32 = 14.;
+const CARD_GAP: f32 = 10.;
+/// The least of the model's pill a narrow composer keeps.
+const MODEL_MIN: f32 = 64.;
+/// A status pill's height.
+const STATUS_HEIGHT: f32 = 26.;
+
+/// A round control in the composer's bar.
+fn pill(tag: &'static str) -> gpui::Stateful<gpui::Div> {
+    div().id(tag).h(px(28.)).px(px(10.)).rounded_full().flex().items_center().gap(px(4.))
+}
+
+/// A status pill over the card that opens what it stands for; lit while open.
+fn status_pill(tag: &'static str, open: bool, theme: &Theme) -> gpui::Stateful<gpui::Div> {
+    div()
+        .id(tag)
+        .flex_none()
+        .h(px(STATUS_HEIGHT))
+        .px(px(12.))
+        .rounded_full()
+        .flex()
+        .items_center()
+        .gap(px(7.))
+        .bg(theme.surface)
+        .border_1()
+        .border_color(if open { theme.border_strong } else { theme.border })
+        .hover(|pill| pill.border_color(theme.border_strong))
 }
 
 /// A message waiting above the card. A queued one can be taken back to edit.
@@ -271,14 +391,14 @@ fn waiting_row(index: usize, waiting: Waiting, theme: &Theme) -> impl IntoElemen
     div()
         .id(("waiting", index))
         .group("waiting")
-        .mx(px(14.))
-        .px(px(12.))
+        .mx(px(4.))
+        .px(px(14.))
         .py(px(6.))
         .flex()
         .items_center()
         .gap(px(10.))
-        .rounded(px(9.))
-        .bg(theme.sidebar)
+        .rounded(px(14.))
+        .bg(theme.surface)
         .border_1()
         .border_color(theme.border)
         .child(
@@ -305,7 +425,7 @@ fn waiting_row(index: usize, waiting: Waiting, theme: &Theme) -> impl IntoElemen
         })
 }
 
-/// "14% context", and Compact beside it when there is something to compact.
+/// "14%" of the context, and Compact beside it when there is something to compact.
 fn meter_view(meter: Meter, working: bool, theme: &Theme) -> impl IntoElement {
     let colour: Hsla = if meter.high { theme.warning } else { theme.text_faint };
     div()
@@ -314,7 +434,7 @@ fn meter_view(meter: Meter, working: bool, theme: &Theme) -> impl IntoElement {
         .items_center()
         .gap(px(8.))
         .typography(Type::Small)
-        .child(div().text_color(colour).child(meter.label))
+        .child(div().id("meter").text_color(colour).tooltip(tip("How full the model’s context is")).child(meter.label))
         .when(meter.can_compact && !working, |row| {
             row.child(div().text_color(theme.text_faint).child("·")).child(
                 div()
@@ -335,56 +455,240 @@ const SHORT_WINDOW: f32 = 600.;
 /// The least an open question card keeps: its head, a little of its body, its buttons.
 const QUESTION_MIN_HEIGHT: f32 = 196.;
 
-/// What a picker shows.
-enum Word {
-    Plain(SharedString),
-    /// Ultra, in the prism.
-    Ultra(SharedString),
-}
-
-/// A word that opens a menu: the model, the effort. The menu opens upwards from the word, over
-/// everything, and a click anywhere else closes it.
+/// A pill that opens a popover upwards from itself (the model's menu, the effort's slider), over
+/// everything, `rise` points above the pill's top so it clears the card; a click anywhere else
+/// closes it. `shrinks` lets it give way in a narrow composer.
 fn picker(
     tag: &'static str,
-    name: Word,
-    colour: Hsla,
-    open: impl gpui::Action,
-    menu: Option<MenuData>,
+    button: gpui::Stateful<gpui::Div>,
+    popover: Option<gpui::AnyElement>,
+    shrinks: bool,
+    rise: f32,
     viewport: gpui::Size<gpui::Pixels>,
-    theme: &Theme,
 ) -> impl IntoElement {
-    let word = div()
-        .id(tag)
-        .min_w_0()
-        .flex()
-        .items_center()
-        .gap(px(3.))
-        .text_color(colour)
-        .hover(|word| word.text_color(theme.text))
-        .on_click(dispatch(open))
-        .child(match name {
-            Word::Plain(name) => div().min_w_0().truncate().typography(Type::Ui).child(name).into_any_element(),
-            Word::Ultra(name) => UltraLabel::new("effort-ultra", name, Type::Ui).into_any_element(),
-        })
-        .child(Icon::ChevronDown.view(px(12.), theme.text_faint))
-        .tag(tag);
-    // Only the model's name gives way in a narrow composer; the effort is a short word.
-    let shrinks = tag == "model";
-    div().relative().when(shrinks, |picker| picker.min_w_0()).when(!shrinks, |picker| picker.flex_none()).child(word).when_some(menu, |picker, menu| {
+    let open = match tag {
+        "model" => Box::new(OpenModelMenu) as Box<dyn gpui::Action>,
+        _ => Box::new(OpenEffortMenu),
+    };
+    let button = button.on_click(move |_, window, cx| window.dispatch_action(open.boxed_clone(), cx)).tag(tag);
+    div().relative().when(shrinks, |picker| picker.min_w(px(MODEL_MIN))).when(!shrinks, |picker| picker.flex_none()).child(button).when_some(popover, |picker, popover| {
         let backdrop = anchored().position_mode(AnchoredPositionMode::Window).position(point(px(0.), px(0.))).child(
             div().id("menu-backdrop").w(viewport.width).h(viewport.height).on_mouse_down(MouseButton::Left, |_, window, cx| {
                 cx.stop_propagation();
                 window.dispatch_action(Box::new(CloseMenu), cx);
             }),
         );
-        // The card rises into place inside a box that holds its position above the word.
-        let card = div().absolute().bottom(px(28.)).left(px(-12.)).child(crate::motion::enter(
-            gpui::ElementId::Name(format!("arrive-{tag}-menu").into()),
-            menu_view(menu, theme),
-        ));
+        // The card rises into place above the composer's card, kept inside the window.
+        let card = div().absolute().top_0().left_0().child(
+            anchored()
+                .anchor(gpui::Anchor::BottomLeft)
+                .offset(point(px(-4.), px(-rise)))
+                .snap_to_window_with_margin(px(8.))
+                .child(crate::motion::enter(gpui::ElementId::Name(format!("arrive-{tag}-menu").into()), div().child(popover))),
+        );
         picker.child(deferred(backdrop).with_priority(1)).child(deferred(card).with_priority(2))
     })
 }
+
+/// The effort slider's width, and its track's inside it.
+const SLIDER_WIDTH: f32 = 320.;
+const SLIDER_PAD: f32 = 14.;
+const TRACK_HEIGHT: f32 = 30.;
+const KNOB: f32 = 24.;
+
+/// Where stop `index` of `count` sits along a track `width` wide: the knob's centre.
+fn stop_x(index: usize, count: usize, width: f32) -> f32 {
+    let inset = TRACK_HEIGHT / 2.;
+    inset + (width - 2. * inset) * index as f32 / (count.max(2) - 1) as f32
+}
+
+/// The stop nearest `x` along a track `width` wide.
+fn nearest_stop(x: f32, count: usize, width: f32) -> usize {
+    let inset = TRACK_HEIGHT / 2.;
+    let along = ((x - inset) / (width - 2. * inset).max(1.)).clamp(0., 1.);
+    (along * (count.max(2) - 1) as f32).round() as usize
+}
+
+/// WackCode 2's effort slider, from the effort menu's choices (Default, then Low through Ultra):
+/// a head naming the effort and the model, a track with a stop for each choice and a knob, and the
+/// stops' names beneath. Clicking or dragging along the track, or clicking a name, moves the
+/// effort at once and leaves the slider open (`SlideEffort`).
+fn effort_slider(menu: MenuData, model: SharedString, theme: &Theme) -> impl IntoElement {
+    let items: Vec<MenuItem> = menu.groups.into_iter().flat_map(|group| group.items).collect();
+    let choices: Vec<Option<Reasoning>> = items
+        .iter()
+        .map(|item| match item.choice {
+            Choice::Effort(effort) => effort,
+            Choice::Model { .. } => None,
+        })
+        .collect();
+    let count = items.len();
+    let current = items.iter().position(|item| item.selected).unwrap_or(0);
+    let ultra = choices.get(current).copied().flatten() == Some(Reasoning::Ultra);
+    let on = current > 0;
+    let width = SLIDER_WIDTH - 2. * SLIDER_PAD;
+    let (tone, wash) = if ultra { (theme.ultra, Hsla { a: 0.14, ..theme.ultra }) } else { (theme.accent, theme.accent_wash) };
+    let selected = &items[current.min(count.saturating_sub(1))];
+
+    let head = div()
+        .flex()
+        .items_center()
+        .gap(px(10.))
+        .child(
+            div()
+                .flex_none()
+                .size(px(30.))
+                .rounded_full()
+                .flex()
+                .items_center()
+                .justify_center()
+                .bg(if on { wash } else { theme.hover })
+                .child(if ultra {
+                    UltraMark::new("slider-ultra-mark", px(14.)).into_any_element()
+                } else {
+                    Icon::Brain.view(px(15.), if on { theme.accent_text } else { theme.text_dim }).into_any_element()
+                }),
+        )
+        .child(
+            div()
+                .flex_1()
+                .min_w_0()
+                .flex()
+                .flex_col()
+                .child(if ultra {
+                    UltraLabel::new("slider-ultra", selected.label.clone(), Type::UiStrong).into_any_element()
+                } else {
+                    div()
+                        .typography(Type::UiStrong)
+                        .text_color(if on { theme.accent_text } else { theme.text })
+                        .child(selected.label.clone())
+                        .into_any_element()
+                })
+                .child(div().truncate().typography(Type::Small).text_color(theme.text_dim).child(model)),
+        )
+        .when_some(selected.detail.clone(), |head, detail| {
+            head.child(div().flex_none().typography(Type::Small).text_color(theme.text_faint).child(detail))
+        });
+
+    // The track remembers where it was drawn, so a press or a drag finds the nearest stop.
+    let drawn: Rc<Cell<Option<Bounds<Pixels>>>> = Rc::default();
+    let pick = {
+        let drawn = drawn.clone();
+        let choices = choices.clone();
+        move |x: Pixels, window: &mut Window, cx: &mut App| {
+            let Some(bounds) = drawn.get() else {
+                return;
+            };
+            let index = nearest_stop(f32::from(x - bounds.left()), count, f32::from(bounds.size.width));
+            if index != current {
+                window.dispatch_action(Box::new(SlideEffort { effort: choices[index] }), cx);
+            }
+        }
+    };
+    let pick = Rc::new(pick);
+    let knob_x = stop_x(current, count, width);
+    let fill_ground = if ultra { theme.ultra } else { theme.accent };
+    let mut track = div()
+        .id("effort-track")
+        .relative()
+        .h(px(TRACK_HEIGHT))
+        .rounded_full()
+        .bg(theme.hover)
+        .child(canvas(move |bounds, _, _| drawn.set(Some(bounds)), |_, _, _, _| {}).absolute().left_0().top_0().size_full())
+        .when(on, |track| {
+            track.child(div().absolute().left_0().top_0().bottom_0().w(px(knob_x + TRACK_HEIGHT / 2.)).rounded_full().bg(fill_ground))
+        });
+    for index in 0..count {
+        let lit = on && index <= current;
+        track = track.child(
+            div()
+                .absolute()
+                .top(px(TRACK_HEIGHT / 2. - 2.))
+                .left(px(stop_x(index, count, width) - 2.))
+                .size(px(4.))
+                .rounded_full()
+                .bg(if lit { Hsla { a: 0.45, ..theme.on_accent } } else { theme.border_strong }),
+        );
+    }
+    let track = track
+        .child(
+            div()
+                .absolute()
+                .top(px((TRACK_HEIGHT - KNOB) / 2.))
+                .left(px(knob_x - KNOB / 2.))
+                .size(px(KNOB))
+                .rounded_full()
+                .bg(theme.raised)
+                .border_1()
+                .border_color(theme.border_strong)
+                .shadow_sm(),
+        )
+        .on_mouse_down(MouseButton::Left, {
+            let pick = pick.clone();
+            move |event, window, cx| {
+                cx.stop_propagation();
+                pick(event.position.x, window, cx)
+            }
+        })
+        .on_mouse_move({
+            let pick = pick.clone();
+            move |event, window, cx| {
+                if event.pressed_button == Some(MouseButton::Left) {
+                    pick(event.position.x, window, cx)
+                }
+            }
+        })
+        .tag("effort-track");
+
+    let mut names = div().relative().h(px(16.)).mt(px(7.));
+    for (index, item) in items.iter().enumerate() {
+        let effort = choices[index];
+        let chosen = index == current;
+        let label = item.label.clone();
+        names = names.child(
+            div()
+                .id(("effort-stop", index))
+                .absolute()
+                .top_0()
+                .left(px(stop_x(index, count, width) - STOP_LABEL / 2.))
+                .w(px(STOP_LABEL))
+                .flex()
+                .justify_center()
+                .on_click(move |_, window, cx| window.dispatch_action(Box::new(SlideEffort { effort }), cx))
+                .child(if effort == Some(Reasoning::Ultra) {
+                    UltraLabel::new(("slider-stop-ultra", index), label, Type::Small).decode_on_arrival(false).into_any_element()
+                } else {
+                    div()
+                        .typography(Type::Small)
+                        .when(chosen, |name| name.font_weight(gpui::FontWeight::SEMIBOLD))
+                        .text_color(if chosen { theme.text } else { theme.text_faint })
+                        .hover(|name| name.text_color(theme.text))
+                        .child(label)
+                        .into_any_element()
+                }),
+        );
+    }
+
+    div()
+        .id("effort-slider")
+        .w(px(SLIDER_WIDTH))
+        .p(px(SLIDER_PAD))
+        .pb(px(10.))
+        .rounded(px(16.))
+        .bg(theme.raised)
+        .border_1()
+        .border_color(if ultra { Hsla { a: 0.34, ..tone } } else { theme.border_strong })
+        .shadow_lg()
+        .flex()
+        .flex_col()
+        .gap(px(14.))
+        .child(head)
+        .child(div().flex().flex_col().child(track).child(names))
+        .tag("effort-slider")
+}
+
+/// The room each stop's name has beneath the track.
+const STOP_LABEL: f32 = 46.;
 
 fn menu_view(menu: MenuData, theme: &Theme) -> gpui::Stateful<gpui::Div> {
     let mut card = div()
@@ -688,6 +992,19 @@ pub fn keyframes(keys: &[(f32, f32)], t: f32) -> f32 {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn the_slider_finds_the_nearest_stop() {
+        let width = 292.;
+        assert_eq!(stop_x(0, 7, width), 15.);
+        assert_eq!(stop_x(6, 7, width), width - 15.);
+        for index in 0..7 {
+            assert_eq!(nearest_stop(stop_x(index, 7, width), 7, width), index);
+            assert_eq!(nearest_stop(stop_x(index, 7, width) + 10., 7, width), index);
+        }
+        assert_eq!(nearest_stop(-40., 7, width), 0);
+        assert_eq!(nearest_stop(width + 40., 7, width), 6);
+    }
 
     #[test]
     fn shift_tab_cycles_all_three_and_plan_toggles_ultra() {

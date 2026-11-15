@@ -13,12 +13,62 @@
 
 use std::time::{Duration, Instant};
 
-use gpui::{App, ElementId, HighlightStyle, Hsla, Pixels, SharedString, StyledText, Window, div, prelude::*, px};
+use gpui::{
+    App, BoxShadow, Bounds, ContentMask, ElementId, HighlightStyle, Hsla, Pixels, SharedString, StyledText, Window, canvas,
+    div, fill, linear_color_stop, linear_gradient, point, prelude::*, px, size,
+};
 
 use crate::{
     theme::Theme,
     typography::{Type, Typography},
 };
+
+// ── The edge ──────────────────────────────────────────
+
+/// How thick the prism's edge is, in points.
+const EDGE: f32 = 1.5;
+
+/// `child` (a card rounded by `radius`) inside a hairline of the prism, cyan to peach from left to
+/// right, glowing faintly: Ultra Plan's composer. GPUI's gradients have two stops, so the edge is
+/// painted in slices, one between each pair of the prism's stops, each clipped to its share of
+/// the width. It never moves, so Reduce Motion has nothing to stop.
+pub fn prism_edge(radius: f32, child: impl IntoElement, theme: &Theme) -> gpui::Div {
+    let stops = theme.ultra_spectrum;
+    let outer = radius + EDGE;
+    div()
+        .relative()
+        .p(px(EDGE))
+        .rounded(px(outer))
+        .shadow(vec![BoxShadow {
+            color: Hsla { a: 0.22, ..theme.ultra },
+            offset: point(px(0.), px(0.)),
+            blur_radius: px(28.),
+            spread_radius: px(0.),
+            inset: false,
+        }])
+        .child(
+            canvas(
+                |_, _, _| {},
+                move |bounds: Bounds<Pixels>, _, window: &mut Window, _| {
+                    let spans = stops.len() - 1;
+                    let width = bounds.size.width / spans as f32;
+                    for span in 0..spans {
+                        let slice = Bounds::new(point(bounds.origin.x + width * span as f32, bounds.origin.y), size(width, bounds.size.height));
+                        let (from, to) = (span as f32 / spans as f32, (span + 1) as f32 / spans as f32);
+                        let gradient = linear_gradient(90., linear_color_stop(stops[span], from), linear_color_stop(stops[span + 1], to));
+                        window.with_content_mask(Some(ContentMask { bounds: slice }), |window| {
+                            window.paint_quad(fill(bounds, gradient).corner_radii(px(outer)));
+                        });
+                    }
+                },
+            )
+            .absolute()
+            .left_0()
+            .top_0()
+            .size_full(),
+        )
+        .child(child)
+}
 
 // ── The mark ──────────────────────────────────────────
 

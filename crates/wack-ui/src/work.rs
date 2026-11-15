@@ -165,6 +165,30 @@ pub fn tally(rows: &[WorkRow]) -> String {
         .join(" · ")
 }
 
+/// What a live log is doing now, for the status pill over the composer: its unfinished step in
+/// the present tense, with a path cut to its file ("Editing retry.rs", "Running cargo test").
+/// `None` between steps.
+pub fn activity(rows: &[WorkRow]) -> Option<String> {
+    let row = rows.iter().rev().find(|row| matches!(row.meta, Meta::Running))?;
+    let verb = match row.verb.as_ref() {
+        "Read" => "Reading",
+        "Wrote" => "Writing",
+        "Edited" => "Editing",
+        "Ran" => "Running",
+        "Searched" => "Searching",
+        "Found" => "Finding",
+        "Listed" => "Listing",
+        "Looked for" => "Looking for",
+        "Asked" => "Asking",
+        other => other,
+    };
+    let target = match &row.target {
+        Target::Code(text) if row.verb.as_ref() != "Ran" => text.rsplit('/').next().unwrap_or(text).to_string(),
+        Target::Code(text) | Target::Words(text) | Target::Note(text) => text.to_string(),
+    };
+    Some(if target.is_empty() { verb.to_string() } else { format!("{verb} {target}") })
+}
+
 /// The facts under a finished turn: how long, how many tokens.
 fn footer(turn: &Turn) -> Option<String> {
     let mut parts = Vec::new();
@@ -474,6 +498,24 @@ mod tests {
 
     use super::*;
     use crate::conversation::ToolResult;
+
+    #[test]
+    fn the_activity_is_the_unfinished_step_in_the_present_tense() {
+        let row = |verb: &str, target: Target, running: bool| WorkRow {
+            key: "k".into(),
+            verb: verb.to_string().into(),
+            target,
+            meta: if running { Meta::Running } else { Meta::None },
+            detail: None,
+            open: false,
+        };
+        let read = row("Read", Target::Code("crates/wack-llm/src/sse.rs".into()), false);
+        let edit = row("Edited", Target::Code("crates/wack-llm/src/retry.rs".into()), true);
+        assert_eq!(activity(&[read.clone(), edit]).as_deref(), Some("Editing retry.rs"));
+        let run = row("Ran", Target::Code("cargo test -p wack-llm".into()), true);
+        assert_eq!(activity(&[run]).as_deref(), Some("Running cargo test -p wack-llm"));
+        assert_eq!(activity(&[read]), None, "nothing under way between steps");
+    }
 
     #[test]
     fn a_tally_counts_what_was_done_and_leaves_thoughts_out() {

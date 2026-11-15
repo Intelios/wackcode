@@ -204,8 +204,62 @@ pub fn all() -> Vec<Scene> {
             },
         },
         Scene {
+            name: "effort-slider",
+            description: "The effort slider at High, opened from the effort's pill in the smallest window.",
+            size: size(px(716.), px(720.)),
+            build: |_, cx| {
+                cx.new(|_| {
+                    let composer = ComposerData {
+                        effort: Some("High".into()),
+                        menu: Some(crate::composer::MenuData {
+                            kind: crate::app::Menu::Effort,
+                            groups: crate::shell::effort_groups(Some(wack_core::Reasoning::High)),
+                        }),
+                        ..fixtures::composer_after_turn(Input::Drawn { text: None, placeholder: crate::chat::FOLLOW_UP_PLACEHOLDER.into() })
+                    };
+                    Shell::showing(
+                        fixtures::sidebar(Selected::Finished),
+                        Screen::Chat {
+                            title: fixtures::FINISHED_TITLE.into(),
+                            project: fixtures::project(),
+                            body: Body::Items(fixtures::finished_turn()),
+                            composer,
+                        },
+                    )
+                })
+                .into()
+            },
+        },
+        Scene {
+            name: "effort-slider-default",
+            description: "The effort slider at Default: the provider's own effort, no fill.",
+            size: WINDOW,
+            build: |_, cx| {
+                cx.new(|_| {
+                    let composer = ComposerData {
+                        effort: Some("Default effort".into()),
+                        menu: Some(crate::composer::MenuData {
+                            kind: crate::app::Menu::Effort,
+                            groups: crate::shell::effort_groups(None),
+                        }),
+                        ..fixtures::composer_after_turn(Input::Drawn { text: None, placeholder: crate::chat::FOLLOW_UP_PLACEHOLDER.into() })
+                    };
+                    Shell::showing(
+                        fixtures::sidebar(Selected::Finished),
+                        Screen::Chat {
+                            title: fixtures::FINISHED_TITLE.into(),
+                            project: fixtures::project(),
+                            body: Body::Items(fixtures::finished_turn()),
+                            composer,
+                        },
+                    )
+                })
+                .into()
+            },
+        },
+        Scene {
             name: "effort-menu",
-            description: "The effort menu with Ultra chosen, over a chat in Ultra Plan.",
+            description: "The effort slider with Ultra chosen, over a chat in Ultra Plan.",
             size: WINDOW,
             build: |_, cx| {
                 cx.new(|_| {
@@ -304,13 +358,14 @@ pub fn all() -> Vec<Scene> {
         },
         Scene {
             name: "todo-list",
-            description: "A Build run keeping a todo list: one task folded, one under way, dependencies shown.",
+            description: "A Build run keeping a todo list, opened from its pill: one task folded, one under way, dependencies shown.",
             size: WINDOW,
             build: |_, cx| {
                 cx.new(|_| {
                     let composer = ComposerData {
                         working: true,
                         todos: Some(fixtures::todos()),
+                        todos_open: true,
                         ..fixtures::composer_working()
                     };
                     Shell::showing_tabs(
@@ -324,14 +379,21 @@ pub fn all() -> Vec<Scene> {
         },
         Scene {
             name: "todo-queue-small",
-            description: "A todo list and a long queue in the smallest window: the queue scrolls.",
+            description: "A todo list and a long queue, both opened, in the smallest window: the queue scrolls.",
             size: size(px(716.), px(492.)),
             build: |_, cx| {
                 cx.new(|_| {
                     let waiting = (1..=6)
                         .map(|n| crate::composer::Waiting { text: format!("Queued message number {n}, waiting for the run.").into(), steering: n == 1 })
                         .collect();
-                    let composer = ComposerData { working: true, todos: Some(fixtures::todos()), waiting, ..fixtures::composer_working() };
+                    let composer = ComposerData {
+                        working: true,
+                        todos: Some(fixtures::todos()),
+                        waiting,
+                        todos_open: true,
+                        waiting_open: true,
+                        ..fixtures::composer_working()
+                    };
                     Shell::showing_tabs(
                         fixtures::sidebar(Selected::Working),
                         Screen::Chat { title: fixtures::WORKING_TITLE.into(), project: fixtures::project(), body: Body::Items(fixtures::working_turn()), composer },
@@ -355,6 +417,7 @@ pub fn all() -> Vec<Scene> {
                         working: true,
                         question: Some(fixtures::question(false)),
                         todos: Some(todos),
+                        todos_open: true,
                         ..fixtures::composer_working()
                     };
                     Shell::showing_tabs(

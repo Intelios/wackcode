@@ -5,8 +5,9 @@ use gpui::{
     WindowOptions, actions, point, prelude::*, px, size,
 };
 use wack_ui::{
-    actions::{AddFolder, NewChat, OpenSettings},
-    shell::Shell,
+    actions::{AddFolder, CloseTab, NewChat, NewTerminal, NextTab, OpenSettings, PreviousTab, ToggleChanges, ToggleSidebar, ToggleTerminal},
+    panes::solve::{CONTENT_MIN_HEIGHT, WINDOW_MIN_WIDTH},
+    shell::{Shell, TITLE_STRIP_HEIGHT},
     text_field,
 };
 
@@ -26,7 +27,12 @@ fn main() {
                 MenuItem::separator(),
                 MenuItem::action("Quit WackCode", Quit),
             ]),
-            Menu::new("File").items([MenuItem::action("New Chat", NewChat), MenuItem::action("Add Folder…", AddFolder)]),
+            Menu::new("File").items([
+                MenuItem::action("New Chat", NewChat),
+                MenuItem::action("Add Folder…", AddFolder),
+                MenuItem::separator(),
+                MenuItem::action("Close Tab", CloseTab),
+            ]),
             Menu::new("Edit").items([
                 MenuItem::action("Undo", text_field::Undo),
                 MenuItem::action("Redo", text_field::Redo),
@@ -35,6 +41,15 @@ fn main() {
                 MenuItem::action("Copy", text_field::Copy),
                 MenuItem::action("Paste", text_field::Paste),
                 MenuItem::action("Select All", text_field::SelectAll),
+            ]),
+            Menu::new("View").items([
+                MenuItem::action("Sidebar", ToggleSidebar),
+                MenuItem::action("Changes", ToggleChanges),
+                MenuItem::action("Terminal", ToggleTerminal),
+                MenuItem::action("New Terminal", NewTerminal),
+                MenuItem::separator(),
+                MenuItem::action("Next Tab", NextTab),
+                MenuItem::action("Previous Tab", PreviousTab),
             ]),
         ]);
         cx.on_window_closed(|cx, _| {
@@ -57,7 +72,8 @@ fn main() {
             }),
             // The shell draws the title strip and moves the window itself (`wack_ui::shell`).
             app_owns_titlebar_drag: true,
-            window_min_size: Some(size(px(720.), px(480.))),
+            // The solver keeps the transcript readable down to this size (`panes::solve`).
+            window_min_size: Some(size(px(WINDOW_MIN_WIDTH), px(CONTENT_MIN_HEIGHT) + TITLE_STRIP_HEIGHT)),
             ..Default::default()
         };
         if let Err(error) = cx.open_window(options, |window, cx| {

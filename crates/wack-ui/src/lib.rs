@@ -14,6 +14,7 @@ pub mod fixtures;
 pub mod highlight;
 pub mod icon;
 pub mod markdown;
+pub mod panes;
 pub mod scenes;
 pub mod settings;
 pub mod shell;

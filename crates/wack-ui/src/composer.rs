@@ -120,6 +120,7 @@ impl RenderOnce for Composer {
         let send = if data.working && !has_text {
             div()
                 .id("stop")
+                .flex_none()
                 .size(px(30.))
                 .rounded_full()
                 .flex()
@@ -136,6 +137,7 @@ impl RenderOnce for Composer {
         } else {
             div()
                 .id("send")
+                .flex_none()
                 .size(px(30.))
                 .rounded_full()
                 .flex()
@@ -166,6 +168,7 @@ impl RenderOnce for Composer {
             .items_center()
             .gap(px(14.))
             .child(Icon::Plus.view(px(16.), theme.text_dim))
+            // In a narrow composer the model's name gives way first; the send button never does.
             .child(picker("model", data.model.clone(), theme.text_soft, OpenModelMenu, menu_for(Menu::Model), viewport, &theme));
         if let Some(effort) = data.effort.clone() {
             controls =
@@ -254,6 +257,7 @@ fn waiting_row(index: usize, waiting: Waiting, theme: &Theme) -> impl IntoElemen
 fn meter_view(meter: Meter, working: bool, theme: &Theme) -> impl IntoElement {
     let colour: Hsla = if meter.high { theme.warning } else { theme.text_faint };
     div()
+        .flex_none()
         .flex()
         .items_center()
         .gap(px(8.))
@@ -285,16 +289,19 @@ fn picker(
 ) -> impl IntoElement {
     let word = div()
         .id(tag)
+        .min_w_0()
         .flex()
         .items_center()
         .gap(px(3.))
         .text_color(colour)
         .hover(|word| word.text_color(theme.text))
         .on_click(dispatch(open))
-        .child(div().typography(Type::Ui).child(name))
+        .child(div().min_w_0().truncate().typography(Type::Ui).child(name))
         .child(Icon::ChevronDown.view(px(12.), theme.text_faint))
         .tag(tag);
-    div().relative().child(word).when_some(menu, |picker, menu| {
+    // Only the model's name gives way in a narrow composer; the effort is a short word.
+    let shrinks = tag == "model";
+    div().relative().when(shrinks, |picker| picker.min_w_0()).when(!shrinks, |picker| picker.flex_none()).child(word).when_some(menu, |picker, menu| {
         let backdrop = anchored().position_mode(AnchoredPositionMode::Window).position(point(px(0.), px(0.))).child(
             div().id("menu-backdrop").w(viewport.width).h(viewport.height).on_mouse_down(MouseButton::Left, |_, window, cx| {
                 cx.stop_propagation();

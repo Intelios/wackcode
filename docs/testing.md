@@ -36,6 +36,7 @@ ask() { echo "$1" | nc -U -w 5 target/automation.sock; }
 ask '{"cmd":"tree"}'                           # window size and every tag's bounds
 ask '{"cmd":"screenshot","path":"/abs/out.png"}'
 ask '{"cmd":"click","tag":"send"}'             # or {"x":10,"y":20}; optional "count", "right"
+ask '{"cmd":"drag","x":716,"y":250,"to_x":560,"to_y":250}'   # a dock edge, a divider, a pane tab
 ask '{"cmd":"type","text":"hello"}'            # into whatever has focus
 ask '{"cmd":"key","keys":"cmd-n enter"}'
 ask '{"cmd":"resize","width":900,"height":600}'

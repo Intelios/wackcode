@@ -26,6 +26,7 @@ pub enum Icon {
     Plus,
     Search,
     Settings,
+    Sidebar,
     Stop,
     Terminal,
 }
@@ -46,6 +47,7 @@ const FILES: &[(&str, &[u8])] = &[
     ("icons/plus.svg", include_bytes!("../assets/icons/plus.svg")),
     ("icons/search.svg", include_bytes!("../assets/icons/search.svg")),
     ("icons/settings.svg", include_bytes!("../assets/icons/settings.svg")),
+    ("icons/sidebar.svg", include_bytes!("../assets/icons/sidebar.svg")),
     ("icons/stop.svg", include_bytes!("../assets/icons/stop.svg")),
     ("icons/terminal.svg", include_bytes!("../assets/icons/terminal.svg")),
 ];
@@ -67,6 +69,7 @@ impl Icon {
             Icon::Plus => "icons/plus.svg",
             Icon::Search => "icons/search.svg",
             Icon::Settings => "icons/settings.svg",
+            Icon::Sidebar => "icons/sidebar.svg",
             Icon::Stop => "icons/stop.svg",
             Icon::Terminal => "icons/terminal.svg",
         }
@@ -123,6 +126,7 @@ mod tests {
             Icon::Plus,
             Icon::Search,
             Icon::Settings,
+            Icon::Sidebar,
             Icon::Stop,
             Icon::Terminal,
         ] {

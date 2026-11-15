@@ -8,17 +8,23 @@
 //!   going while the user looks elsewhere. Removing it drops its run.
 //! - Nothing the user wrote is lost: a message that cannot be sent stays in its composer, and
 //!   queued or steering messages a run did not deliver go back into the composer.
+//! - `tabs` lists chats that exist, each once; a chat on screen is always one of them. Tabs, the
+//!   chat in front and whether the sidebar is hidden are saved as they change, and a chat's pane
+//!   layout shortly after it changes (a drag changes it on every frame).
 
 use std::{
     collections::{HashMap, HashSet},
     path::{Path, PathBuf},
 };
 
-use gpui::{App, AppContext, Context, Entity, SharedString, Subscription};
-use wack_core::{Chat, Effort, Job, ModelChoice, Outcome, Project, Store, WireFormat, title_from};
+use std::time::Duration;
+
+use gpui::{App, AppContext, Context, Entity, SharedString, Subscription, Task};
+use wack_core::{Chat, Effort, Job, ModelChoice, Outcome, Project, Store, Ui, WireFormat, title_from};
 
 use crate::{
     chat::{ChatEvent, ChatSession, now_millis},
+    panes::Layout,
     settings::ProviderForm,
     text_field::{TextField, TextFieldEvent},
     typography::Type,
@@ -61,8 +67,17 @@ pub struct AppState {
     /// Settings › Providers' add form.
     pub form: ProviderForm,
     pub menu: Option<Menu>,
+    /// Chats open as tabs, in order.
+    tabs: Vec<String>,
+    sidebar_hidden: bool,
+    /// Chats whose pane layout changed since it was last saved.
+    unsaved_layouts: HashSet<String>,
+    saving_layouts: Option<Task<()>>,
     _subscriptions: Vec<Subscription>,
 }
+
+/// How long a layout must stay still before it is saved.
+const LAYOUT_SAVE_DELAY: Duration = Duration::from_millis(400);
 
 impl AppState {
     /// Opens the store in the data folder: the dev app's own for a debug build.
@@ -92,9 +107,17 @@ impl AppState {
                 }
             }));
         }
-        let selection = match store.projects().first() {
-            Some(project) => Selection::NewChat(project.id.clone()),
-            None => Selection::Welcome,
+        let ui = store.ui().clone();
+        let mut tabs: Vec<String> = Vec::new();
+        for id in ui.tabs {
+            if store.chat(&id).is_some() && !tabs.contains(&id) {
+                tabs.push(id);
+            }
+        }
+        let selection = match (ui.current.filter(|id| tabs.contains(id)), store.projects().first()) {
+            (Some(chat), _) => Selection::Chat(chat),
+            (None, Some(project)) => Selection::NewChat(project.id.clone()),
+            (None, None) => Selection::Welcome,
         };
         let mut app = Self {
             store,
@@ -108,6 +131,10 @@ impl AppState {
             notice: None,
             form,
             menu: None,
+            tabs,
+            sidebar_hidden: ui.sidebar_hidden,
+            unsaved_layouts: HashSet::new(),
+            saving_layouts: None,
             _subscriptions: subscriptions,
         };
         app.select(selection, cx);
@@ -128,6 +155,103 @@ impl AppState {
 
     pub fn is_open(&self, project: &str) -> bool {
         self.open_projects.contains(project)
+    }
+
+    pub fn tabs(&self) -> &[String] {
+        &self.tabs
+    }
+
+    pub fn sidebar_hidden(&self) -> bool {
+        self.sidebar_hidden
+    }
+
+    pub fn toggle_sidebar(&mut self, cx: &mut Context<Self>) {
+        self.sidebar_hidden = !self.sidebar_hidden;
+        self.save_ui();
+        cx.notify();
+    }
+
+    /// The chat in front, if a chat is on screen.
+    pub fn current_chat(&self) -> Option<&Entity<ChatSession>> {
+        match &self.selection {
+            Selection::Chat(id) => self.sessions.get(id),
+            _ => None,
+        }
+    }
+
+    /// Closes a chat's tab. The chat stays in the sidebar, and its session keeps running.
+    pub fn close_tab(&mut self, id: &str, cx: &mut Context<Self>) {
+        let Some(index) = self.tabs.iter().position(|tab| tab == id) else {
+            return;
+        };
+        self.tabs.remove(index);
+        if self.selection == Selection::Chat(id.to_string()) {
+            // The neighbour on the right takes its place, as in a browser; else the one before.
+            match self.tabs.get(index).or_else(|| index.checked_sub(1).and_then(|before| self.tabs.get(before))).cloned() {
+                Some(next) => self.select(Selection::Chat(next), cx),
+                None => {
+                    let project = self.store.chat(id).map(|chat| chat.project.clone());
+                    match project {
+                        Some(project) => self.select(Selection::NewChat(project), cx),
+                        None => self.select_somewhere(cx),
+                    }
+                }
+            }
+        }
+        self.save_ui();
+        cx.notify();
+    }
+
+    /// Steps through the tabs, wrapping round; from the new-chat screen, to the last tab.
+    pub fn step_tab(&mut self, forward: bool, cx: &mut Context<Self>) {
+        if self.tabs.is_empty() {
+            return;
+        }
+        let count = self.tabs.len();
+        let next = match &self.selection {
+            Selection::Chat(id) => match self.tabs.iter().position(|tab| tab == id) {
+                Some(index) if forward => (index + 1) % count,
+                Some(index) => (index + count - 1) % count,
+                None => 0,
+            },
+            _ => count - 1,
+        };
+        let id = self.tabs[next].clone();
+        self.select(Selection::Chat(id), cx);
+    }
+
+    fn save_ui(&mut self) {
+        let current = match &self.selection {
+            Selection::Chat(id) => Some(id.clone()),
+            _ => self.store.ui().current.clone().filter(|id| self.tabs.contains(id)),
+        };
+        let ui = Ui { sidebar_hidden: self.sidebar_hidden, tabs: self.tabs.clone(), current };
+        if let Err(message) = self.store.set_ui(ui) {
+            self.notice = Some(message.into());
+        }
+    }
+
+    /// Saves a chat's pane layout once it has stopped changing for a moment.
+    fn layout_changed(&mut self, chat: &str, cx: &mut Context<Self>) {
+        self.unsaved_layouts.insert(chat.to_string());
+        self.saving_layouts = Some(cx.spawn(async move |app, cx| {
+            cx.background_executor().timer(LAYOUT_SAVE_DELAY).await;
+            let _ = app.update(cx, |app, cx| app.save_layouts(cx));
+        }));
+    }
+
+    fn save_layouts(&mut self, cx: &mut Context<Self>) {
+        for chat in std::mem::take(&mut self.unsaved_layouts) {
+            let Some(session) = self.sessions.get(&chat) else {
+                continue;
+            };
+            let layout = &session.read(cx).panes.layout;
+            let value = (*layout != Layout::default()).then(|| serde_json::to_value(layout).ok()).flatten();
+            if let Err(message) = self.store.set_layout(&chat, value) {
+                self.notice = Some(message.into());
+            }
+        }
+        self.saving_layouts = None;
     }
 
     pub fn branch(&self, project: &str) -> Option<&str> {
@@ -169,6 +293,9 @@ impl AppState {
                 });
                 self.open_projects.insert(chat.project.clone());
                 self.look_up_branch(&chat.project, cx);
+                if !self.tabs.contains(id) {
+                    self.tabs.push(id.clone());
+                }
             }
             Selection::NewChat(project) => {
                 if self.store.project(project).is_none() {
@@ -187,6 +314,7 @@ impl AppState {
         self.notice = None;
         self.menu = None;
         self.selection = selection;
+        self.save_ui();
         cx.notify();
     }
 
@@ -256,6 +384,7 @@ impl AppState {
         if gone {
             self.select_somewhere(cx);
         }
+        self.save_ui();
         cx.notify();
     }
 
@@ -271,6 +400,7 @@ impl AppState {
                 None => self.select_somewhere(cx),
             }
         }
+        self.save_ui();
         cx.notify();
     }
 
@@ -285,6 +415,8 @@ impl AppState {
     fn drop_session(&mut self, chat: &str) {
         self.sessions.remove(chat);
         self.session_subscriptions.remove(chat);
+        self.unsaved_layouts.remove(chat);
+        self.tabs.retain(|tab| tab != chat);
     }
 
     /// Sends the new-chat composer's text as the first message of a new chat.
@@ -441,7 +573,8 @@ impl AppState {
         }
         let cwd = self.store.project(&chat.project).map(|project| project.path.clone()).unwrap_or_else(|| PathBuf::from("/"));
         let path = self.store.session_path(chat);
-        let session = cx.new(|cx| ChatSession::load(&chat.id, cwd, &path, cx));
+        let layout = Layout::from_saved(chat.layout.as_ref());
+        let session = cx.new(|cx| ChatSession::load(&chat.id, cwd, &path, layout, cx));
         let id = chat.id.clone();
         let composer = session.read(cx).composer.clone();
         let subscriptions = vec![
@@ -450,6 +583,7 @@ impl AppState {
                 let id = id.clone();
                 move |app, _, event: &ChatEvent, cx| match event {
                     ChatEvent::Finished(result) => app.finished(&id, result, cx),
+                    ChatEvent::LayoutChanged => app.layout_changed(&id, cx),
                 }
             }),
             cx.subscribe(&composer, {

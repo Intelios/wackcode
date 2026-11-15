@@ -9,6 +9,8 @@
 //!   Events only ever change the conversation's last entry or add entries after it.
 //! - One run at a time. The run itself is on Tokio; its events come back through a channel and are
 //!   applied a batch at a time. Dropping this model drops the run's task, which stops the run.
+//! - The chat's panes (`panes`) live here too, so they outlast switching chats; every change to
+//!   their layout goes through `change_layout`, which tells the app to save it.
 //! - Messages written while the agent works either wait in `queue` (↩, sent after the run) or go
 //!   to the model straight away as steering (⌘↩); `steering` holds those not yet delivered.
 //!   Neither is ever silently dropped: when a run ends without sending them, the app puts them
@@ -28,6 +30,7 @@ use wack_core::{Control, Event, HistoryEntry, Job, Outcome, RunEvent, RunSetup};
 
 use crate::{
     conversation::{Conversation, Entry},
+    panes::{ChatPanes, Layout, PaneKind, PaneModel},
     text_field::TextField,
     transcript::Item,
     typography::Type,
@@ -41,6 +44,8 @@ pub const FOLLOW_UP_PLACEHOLDER: &str = "Reply, or ask for the next change";
 pub enum ChatEvent {
     /// A run ended, with how.
     Finished(Result<Outcome, String>),
+    /// The panes moved, opened or closed: worth saving.
+    LayoutChanged,
 }
 
 pub struct ChatSession {
@@ -54,6 +59,7 @@ pub struct ChatSession {
     spans: Vec<usize>,
     pub list: ListState,
     pub composer: Entity<TextField>,
+    pub panes: ChatPanes,
     /// Sent one at a time after the run ends.
     pub queue: Vec<String>,
     /// Handed to the run, not yet delivered to the model.
@@ -83,7 +89,7 @@ pub fn now_millis() -> u64 {
 
 impl ChatSession {
     /// A chat as saved in `session_path`, or an empty one when it has never run.
-    pub fn load(id: &str, cwd: PathBuf, session_path: &std::path::Path, cx: &mut Context<Self>) -> Self {
+    pub fn load(id: &str, cwd: PathBuf, session_path: &std::path::Path, layout: Layout, cx: &mut Context<Self>) -> Self {
         let mut context_tokens = None;
         let conversation = if session_path.exists() {
             match wack_core::history(session_path) {
@@ -103,7 +109,7 @@ impl ChatSession {
         let composer = cx.new(|cx| TextField::new(Type::Body, FOLLOW_UP_PLACEHOLDER, cx).multiline(12));
         let mut chat = Self {
             id: id.to_string(),
-            cwd,
+            cwd: cwd.clone(),
             conversation,
             open: HashSet::new(),
             cache: ReplyCache::default(),
@@ -111,6 +117,7 @@ impl ChatSession {
             spans: Vec::new(),
             list: ListState::new(0, ListAlignment::Bottom, px(800.)),
             composer,
+            panes: ChatPanes::new(layout, cwd.clone()),
             queue: Vec::new(),
             steering: Vec::new(),
             run: None,
@@ -119,7 +126,31 @@ impl ChatSession {
             unread: false,
         };
         chat.refresh_from(0);
+        chat.panes.sync(cx, |_, cx| cx.notify());
         chat
+    }
+
+    /// Changes the panes' layout. When anything changed, makes models for panes now on screen,
+    /// refreshes a Changes pane that just came back into view, and tells the app to save.
+    pub fn change_layout<R>(&mut self, cx: &mut Context<Self>, change: impl FnOnce(&mut Layout) -> R) -> R {
+        let before = self.panes.layout.clone();
+        let result = change(&mut self.panes.layout);
+        if self.panes.layout != before {
+            let was_visible: Vec<_> = before.visible().iter().map(|pane| pane.id).collect();
+            let made = self.panes.sync(cx, |_, cx| cx.notify());
+            for pane in self.panes.layout.visible() {
+                if !was_visible.contains(&pane.id)
+                    && !made.contains(&pane.id)
+                    && pane.kind == PaneKind::Changes
+                    && let Some(PaneModel::Changes(changes)) = self.panes.model(pane.id)
+                {
+                    changes.update(cx, |changes, cx| changes.refresh(cx));
+                }
+            }
+            cx.emit(ChatEvent::LayoutChanged);
+            cx.notify();
+        }
+        result
     }
 
     pub fn items(&self) -> &[Item] {
@@ -249,6 +280,8 @@ impl ChatSession {
                         }
                         // Everything waiting is delivered together.
                         Event::Steered(_) => self.steering.clear(),
+                        // A tool may have changed files.
+                        Event::ToolResult { .. } => self.panes.refresh_changes(cx),
                         _ => {}
                     }
                     self.conversation.apply(&event, now);
@@ -267,6 +300,7 @@ impl ChatSession {
                     if let Some(run) = self.run.take() {
                         run.events.detach();
                     }
+                    self.panes.refresh_changes(cx);
                     finished = Some(result);
                 }
             }

@@ -10,6 +10,7 @@
 //! {"cmd":"tree"}                                  the window size and every tagged element's bounds
 //! {"cmd":"screenshot","path":"/abs/file.png"}     writes what the window is showing
 //! {"cmd":"click","tag":"send"}                    also {"x":10,"y":20}; optional "count", "right"
+//! {"cmd":"drag","x":10,"y":20,"to_x":300,"to_y":20}   presses, moves in steps, releases
 //! {"cmd":"type","text":"hello"}                   types into whatever has focus
 //! {"cmd":"key","keys":"cmd-n enter"}              space-separated keystrokes
 //! {"cmd":"resize","width":900,"height":600}
@@ -66,6 +67,12 @@ enum Command {
         count: usize,
         #[serde(default)]
         right: bool,
+    },
+    Drag {
+        x: f32,
+        y: f32,
+        to_x: f32,
+        to_y: f32,
     },
     Type {
         text: String,
@@ -243,6 +250,43 @@ async fn run(command: Command, cx: &mut AsyncApp) -> Result<Value, String> {
             settle(window, cx).await;
             Ok(json!({ "ok": true, "x": f32::from(position.x), "y": f32::from(position.y) }))
         }
+        Command::Drag { x, y, to_x, to_y } => {
+            let modifiers = Modifiers::default();
+            let at = |step: usize| point(px(x + (to_x - x) * step as f32 / DRAG_STEPS as f32), px(y + (to_y - y) * step as f32 / DRAG_STEPS as f32));
+            on_window(window, cx, |window, cx| {
+                window.dispatch_event(PlatformInput::MouseMove(MouseMoveEvent { position: at(0), pressed_button: None, modifiers }), cx);
+                window.dispatch_event(
+                    PlatformInput::MouseDown(MouseDownEvent {
+                        button: MouseButton::Left,
+                        position: at(0),
+                        modifiers,
+                        click_count: 1,
+                        first_mouse: false,
+                    }),
+                    cx,
+                );
+            })?;
+            // Each step is its own frame, as a real drag is: handlers drawn for one frame see the
+            // next move.
+            for step in 1..=DRAG_STEPS {
+                settle_briefly(window, cx).await;
+                on_window(window, cx, |window, cx| {
+                    window.dispatch_event(
+                        PlatformInput::MouseMove(MouseMoveEvent { position: at(step), pressed_button: Some(MouseButton::Left), modifiers }),
+                        cx,
+                    );
+                })?;
+            }
+            settle_briefly(window, cx).await;
+            on_window(window, cx, |window, cx| {
+                window.dispatch_event(
+                    PlatformInput::MouseUp(MouseUpEvent { button: MouseButton::Left, position: at(DRAG_STEPS), modifiers, click_count: 1 }),
+                    cx,
+                );
+            })?;
+            settle(window, cx).await;
+            Ok(json!({ "ok": true }))
+        }
         Command::Type { text } => {
             on_window(window, cx, |window, cx| {
                 for character in text.chars() {
@@ -342,6 +386,14 @@ fn on_window<R>(
 ) -> Result<R, String> {
     cx.update(|cx| cx.update_window(window, |_, window, cx| update(window, cx)))
         .map_err(|_| "The window closed.".to_string())
+}
+
+/// How many moves a drag is made of.
+const DRAG_STEPS: usize = 8;
+
+async fn settle_briefly(window: AnyWindowHandle, cx: &mut AsyncApp) {
+    on_window(window, cx, |window, _| window.refresh()).ok();
+    cx.background_executor().timer(Duration::from_millis(30)).await;
 }
 
 /// Asks for a redraw, then waits for it, so what is read next reflects what was just done.

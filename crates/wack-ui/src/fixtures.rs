@@ -258,3 +258,90 @@ pub fn working_turn() -> Vec<Item> {
     conversation.apply(&Event::Text("Retry-After is now read from both 429 and 503 responses. Running the retry tests to check the date form".into()), now);
     items(&conversation, &[], now)
 }
+
+/// The title strip's tabs, with `active` in front (or the new-chat tab when `None`).
+pub fn strip(active: Option<&'static str>) -> crate::shell::StripData {
+    let tab = |title: &'static str, state| crate::shell::TabData {
+        id: title.into(),
+        title: title.into(),
+        active: active == Some(title),
+        state,
+    };
+    crate::shell::StripData {
+        tabs: vec![
+            tab(FINISHED_TITLE, ChatState::Idle),
+            tab(WORKING_TITLE, ChatState::Working),
+            tab("Tool search for other hosts", ChatState::Unread),
+        ],
+        new_chat: active.is_none(),
+    }
+}
+
+/// What the Changes pane lists after the SSE fix.
+pub fn changed_files() -> Vec<wack_core::git::ChangedFile> {
+    use wack_core::git::{ChangedFile, FileStatus};
+    let file = |path: &str, status, lines| ChangedFile { path: path.into(), old_path: None, status, lines };
+    vec![
+        file("README.md", FileStatus::Modified, Some((2, 2))),
+        file("crates/wack-llm/src/sse.rs", FileStatus::Modified, Some((14, 3))),
+        file("crates/wack-llm/src/stream.rs", FileStatus::Modified, Some((3, 1))),
+        file("crates/wack-llm/tests/tail.rs", FileStatus::Untracked, Some((41, 0))),
+        file("notes/decoder.txt", FileStatus::Deleted, Some((0, 12))),
+    ]
+}
+
+pub const CHANGES_SELECTED: &str = "crates/wack-llm/src/sse.rs";
+
+pub const CHANGES_DIFF: &str = "diff --git a/crates/wack-llm/src/sse.rs b/crates/wack-llm/src/sse.rs
+--- a/crates/wack-llm/src/sse.rs
++++ b/crates/wack-llm/src/sse.rs
+@@ -38,9 +38,12 @@ impl Decoder {
+     /// Feeds a chunk of the body. Returns the events it completed.
+     pub fn feed(&mut self, chunk: &[u8]) -> Vec<Event> {
+         self.buffer.extend_from_slice(chunk);
+-        self.drain()
++        let mut events = self.drain();
++        events.retain(|event| !event.data.is_empty());
++        events
+     }
+ 
+@@ -71,8 +74,19 @@ impl Decoder {
+     /// Called once the body is exhausted.
+-    pub fn finish(&mut self) {}
++    pub fn finish(&mut self) -> Option<Event> {
++        // A server may close the stream without the blank line that ends the last event:
++        // whatever is buffered is still an event.
++        if !self.buffer.is_empty() {
++            self.line(&std::mem::take(&mut self.buffer));
++        }
++        if self.data.is_empty() {
++            return None;
++        }
++        Some(self.take_event())
++    }
+ 
+     fn take_event(&mut self) -> Event {
+         let data = std::mem::take(&mut self.data);
+";
+
+/// A terminal that ran the tests: a prompt, coloured output, and the prompt again.
+pub const TERMINAL_SESSION: &str = "\x1b[1;32m➜\x1b[0m  \x1b[1;36mwackcode\x1b[0m \x1b[1;34mgit:(\x1b[31m3.0-Remake\x1b[34m)\x1b[0m cargo test -p wack-llm sse\r\n\
+\x1b[1;32m   Compiling\x1b[0m wack-llm v3.0.0-dev.0 (/Users/you/Documents/GitHub/wackcode/crates/wack-llm)\r\n\
+\x1b[1;32m    Finished\x1b[0m `test` profile [unoptimized + debuginfo] target(s) in 2.41s\r\n\
+\x1b[1;32m     Running\x1b[0m unittests src/lib.rs (target/debug/deps/wack_llm-5c1e0d)\r\n\
+\r\n\
+running 4 tests\r\n\
+test sse::tests::splits_events_across_chunks ... \x1b[32mok\x1b[0m\r\n\
+test sse::tests::ignores_comments ... \x1b[32mok\x1b[0m\r\n\
+test sse::tests::keeps_a_tail_without_a_blank_line ... \x1b[32mok\x1b[0m\r\n\
+test sse::tests::drops_empty_data ... \x1b[32mok\x1b[0m\r\n\
+\r\n\
+test result: \x1b[32mok\x1b[0m. 4 passed; 0 failed; 0 ignored; 0 measured; 61 filtered out; finished in 0.01s\r\n\
+\r\n\
+\x1b[1;32m➜\x1b[0m  \x1b[1;36mwackcode\x1b[0m \x1b[1;34mgit:(\x1b[31m3.0-Remake\x1b[34m) \x1b[33m✗\x1b[0m git status --short\r\n\
+ \x1b[31mM\x1b[0m README.md\r\n\
+ \x1b[31mM\x1b[0m crates/wack-llm/src/sse.rs\r\n\
+ \x1b[31mM\x1b[0m crates/wack-llm/src/stream.rs\r\n\
+ \x1b[31mD\x1b[0m notes/decoder.txt\r\n\
+\x1b[31m??\x1b[0m crates/wack-llm/tests/tail.rs\r\n\
+\x1b[1;32m➜\x1b[0m  \x1b[1;36mwackcode\x1b[0m \x1b[1;34mgit:(\x1b[31m3.0-Remake\x1b[34m) \x1b[33m✗\x1b[0m ";

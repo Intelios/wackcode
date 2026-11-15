@@ -43,6 +43,8 @@ pub enum Type {
     Mono,
     /// Code blocks and diffs.
     Code,
+    /// The terminal's grid: tighter lines than code, so box drawing joins up.
+    Terminal,
 }
 
 pub struct TypeStyle {
@@ -77,6 +79,7 @@ impl Type {
             Type::Small => style(UI_FONT, 11.5, 15., FontWeight::NORMAL),
             Type::Mono => style(MONO_FONT, 12., 18., FontWeight::NORMAL),
             Type::Code => style(MONO_FONT, 12., 19., FontWeight::NORMAL),
+            Type::Terminal => style(MONO_FONT, 12., 16., FontWeight::NORMAL),
         }
     }
 }

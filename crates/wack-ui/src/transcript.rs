@@ -289,45 +289,7 @@ fn detail_view(detail: &Detail, key: &SharedString, theme: &Theme) -> AnyElement
 }
 
 fn diff_card(diff: &Diff, key: &SharedString, theme: &Theme) -> impl IntoElement {
-    let mut lines = div().flex().flex_col().py(px(6.));
-    for line in &diff.lines {
-        if line.kind == LineKind::Gap {
-            lines = lines.child(
-                div()
-                    .h(px(19.))
-                    .pl(px(54.))
-                    .flex()
-                    .items_center()
-                    .typography(Type::Small)
-                    .text_color(theme.text_faint)
-                    .child(if line.text.is_empty() { SharedString::from("⋯") } else { line.text.clone() }),
-            );
-            continue;
-        }
-        let (ground, sign, ink, sign_colour) = match line.kind {
-            LineKind::Added => (Some(theme.diff_added_ground), "+", theme.text_body, theme.diff_added),
-            LineKind::Removed => (Some(theme.diff_removed_ground), "−", theme.text_body, theme.diff_removed),
-            _ => (None, " ", theme.text_soft, theme.text_faint),
-        };
-        lines = lines.child(
-            div()
-                .min_h(px(19.))
-                .flex()
-                .typography(Type::Code)
-                .when_some(ground, |row, ground| row.bg(ground))
-                .child(
-                    div()
-                        .flex_none()
-                        .w(px(40.))
-                        .pr(px(10.))
-                        .text_right()
-                        .text_color(theme.text_faint)
-                        .child(line.number.map(|n| n.to_string()).unwrap_or_default()),
-                )
-                .child(div().flex_none().w(px(14.)).text_color(sign_colour).child(sign))
-                .child(div().flex_1().min_w_0().pr(px(12.)).text_color(ink).child(line.text.clone())),
-        );
-    }
+    let lines = div().flex().flex_col().py(px(6.)).children(diff.lines.iter().map(|line| diff_line(line, theme)));
     div()
         .rounded(px(10.))
         .border_1()
@@ -355,6 +317,44 @@ fn diff_card(diff: &Diff, key: &SharedString, theme: &Theme) -> impl IntoElement
                 ),
         )
         .child(div().id(SharedString::from(format!("{key}-diff"))).max_h(px(420.)).overflow_y_scroll().child(lines))
+}
+
+/// One line of a diff: number, sign and text, on the added or removed ground. Shared by edit
+/// diffs in the transcript and the Changes pane.
+pub fn diff_line(line: &DiffLine, theme: &Theme) -> AnyElement {
+    if line.kind == LineKind::Gap {
+        return div()
+            .h(px(19.))
+            .pl(px(54.))
+            .flex()
+            .items_center()
+            .typography(Type::Small)
+            .text_color(theme.text_faint)
+            .child(if line.text.is_empty() { SharedString::from("⋯") } else { line.text.clone() })
+            .into_any_element();
+    }
+    let (ground, sign, ink, sign_colour) = match line.kind {
+        LineKind::Added => (Some(theme.diff_added_ground), "+", theme.text_body, theme.diff_added),
+        LineKind::Removed => (Some(theme.diff_removed_ground), "−", theme.text_body, theme.diff_removed),
+        _ => (None, " ", theme.text_soft, theme.text_faint),
+    };
+    div()
+        .min_h(px(19.))
+        .flex()
+        .typography(Type::Code)
+        .when_some(ground, |row, ground| row.bg(ground))
+        .child(
+            div()
+                .flex_none()
+                .w(px(40.))
+                .pr(px(10.))
+                .text_right()
+                .text_color(theme.text_faint)
+                .child(line.number.map(|n| n.to_string()).unwrap_or_default()),
+        )
+        .child(div().flex_none().w(px(14.)).text_color(sign_colour).child(sign))
+        .child(div().flex_1().min_w_0().pr(px(12.)).text_color(ink).child(line.text.clone()))
+        .into_any_element()
 }
 
 fn reply(blocks: &[markdown::Block], theme: &Theme, handlers: &Handlers) -> impl IntoElement {

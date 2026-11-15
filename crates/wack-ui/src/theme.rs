@@ -124,6 +124,16 @@ pub struct Theme {
     pub code_title: Hsla,
     pub code_meta: Hsla,
     pub code_comment: Hsla,
+
+    // Docks and the terminal.
+    /// Behind the panes beside and below the transcript: a step back, like the sidebar, so the
+    /// transcript is the lit page between them.
+    pub dock: Hsla,
+    pub terminal_text: Hsla,
+    /// The 16 ANSI colours: black, red, green, yellow, blue, magenta, cyan, white, then the
+    /// bright eight. Their own hues, leaning slightly towards the accent; never muted, because
+    /// red and green in a terminal carry meaning.
+    pub ansi: [Hsla; 16],
 }
 
 impl Global for Theme {}
@@ -260,6 +270,29 @@ impl Theme {
 
         let hsla = |colour: Lch| to_hsla(colour.to_srgb());
         let fixed = meaning(dark);
+
+        // ANSI: six hues at a fixed lightness, and four tinted greys for black and white.
+        let ansi_hue = |hue: f64, bright: bool| {
+            let (l, c) = match (dark, bright) {
+                (true, false) => (0.72, 0.13),
+                (true, true) => (0.82, 0.12),
+                (false, false) => (0.50, 0.15),
+                // In light, "bright" is deeper rather than lighter, or it would not read on the ground.
+                (false, true) => (0.45, 0.17),
+            };
+            hsla(Lch::new(l, c, hue + lean))
+        };
+        let ansi_grey = |l: f64| hsla(Lch::new(l, 0.02 * tint, tint_source.h));
+        let greys = if dark { [0.30, 0.82, 0.52, 0.97] } else { [0.22, 0.86, 0.48, 0.96] };
+        let hues = [25., 145., 95., 255., 330., 200.];
+        let mut ansi = [Hsla::default(); 16];
+        for (bright, offset) in [(false, 0), (true, 8)] {
+            ansi[offset] = ansi_grey(greys[if bright { 2 } else { 0 }]);
+            ansi[offset + 7] = ansi_grey(greys[if bright { 3 } else { 1 }]);
+            for (index, hue) in hues.iter().enumerate() {
+                ansi[offset + 1 + index] = ansi_hue(*hue, bright);
+            }
+        }
         Theme {
             appearance,
             sidebar: hsla(neutral(&ramp.sidebar)),
@@ -295,8 +328,33 @@ impl Theme {
             code_title: hsla(syntax(226., 0.06)),
             code_meta: hsla(syntax(180., 0.05)),
             code_comment: hsla(neutral(&ramp.text_dim)),
+            dock: hsla(neutral(&ramp.sidebar)),
+            terminal_text: hsla(neutral(&ramp.text_body)),
+            ansi,
             input,
         }
+    }
+
+    /// One of a terminal's 256 indexed colours: the ANSI sixteen, then the standard 6×6×6 cube
+    /// and the 24-step grey ramp.
+    pub fn indexed(&self, index: u8) -> Hsla {
+        match index {
+            0..16 => self.ansi[index as usize],
+            16..232 => {
+                let cube = index - 16;
+                let level = |step: u8| if step == 0 { 0. } else { (55. + 40. * step as f64) / 255. };
+                to_hsla(Srgb { r: level(cube / 36), g: level(cube / 6 % 6), b: level(cube % 6) })
+            }
+            _ => {
+                let grey = (8. + 10. * (index - 232) as f64) / 255.;
+                to_hsla(Srgb { r: grey, g: grey, b: grey })
+            }
+        }
+    }
+
+    /// A colour a terminal program gave exactly. Shown as asked: it is the program's choice.
+    pub fn exact(r: u8, g: u8, b: u8) -> Hsla {
+        to_hsla(Srgb { r: r as f64 / 255., g: g as f64 / 255., b: b as f64 / 255. })
     }
 
     pub fn get(cx: &App) -> &Theme {
@@ -431,6 +489,20 @@ mod tests {
             }
             let on_accent = contrast(srgb(theme.on_accent), srgb(theme.accent));
             assert!(on_accent >= 4.5, "on_accent is {on_accent:.2} in {label}");
+        }
+    }
+
+    /// The six ANSI hues read on the terminal's ground in every theme.
+    #[test]
+    fn terminal_colours_read_on_the_dock() {
+        for theme in themes() {
+            for index in [1, 2, 3, 4, 5, 6, 9, 10, 11, 12, 13, 14] {
+                let ratio = contrast(srgb(theme.ansi[index]), srgb(theme.dock));
+                assert!(ratio >= 3., "ANSI {index} is {ratio:.2} in {:?}", theme.input);
+            }
+            assert_eq!(theme.indexed(3), theme.ansi[3]);
+            assert_eq!(hex(theme.indexed(16)), "#000000");
+            assert_eq!(hex(theme.indexed(231)), "#ffffff");
         }
     }
 

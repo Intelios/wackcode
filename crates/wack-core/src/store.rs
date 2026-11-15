@@ -79,6 +79,22 @@ pub struct Chat {
     pub updated: u64,
     #[serde(default)]
     pub choice: ModelChoice,
+    /// Where the chat's panes are, as the UI wrote it. The engine keeps it without reading it.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub layout: Option<serde_json::Value>,
+}
+
+/// How the window was left, so it opens the same way.
+#[derive(Clone, Debug, Default, PartialEq, Serialize, Deserialize)]
+pub struct Ui {
+    #[serde(default)]
+    pub sidebar_hidden: bool,
+    /// Chats open as tabs, in order.
+    #[serde(default)]
+    pub tabs: Vec<String>,
+    /// The chat that was in front.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub current: Option<String>,
 }
 
 #[derive(Default, Serialize, Deserialize)]
@@ -92,6 +108,8 @@ struct State {
     /// The last model the user picked; new chats start with it.
     #[serde(default)]
     defaults: ModelChoice,
+    #[serde(default)]
+    ui: Ui,
 }
 
 /// A connection and model resolved from a [`ModelChoice`], ready to build a run.
@@ -352,6 +370,7 @@ impl Store {
             created: now,
             updated: now,
             choice,
+            layout: None,
         };
         self.state.chats.push(chat.clone());
         self.save()?;
@@ -383,6 +402,27 @@ impl Store {
             .find(|chat| chat.id == id)
             .ok_or("That chat is gone.")?;
         chat.title = title.to_string();
+        self.save()
+    }
+
+    pub fn set_layout(&mut self, id: &str, layout: Option<serde_json::Value>) -> Result<(), String> {
+        let chat = self.state.chats.iter_mut().find(|chat| chat.id == id).ok_or("That chat is gone.")?;
+        if chat.layout == layout {
+            return Ok(());
+        }
+        chat.layout = layout;
+        self.save()
+    }
+
+    pub fn ui(&self) -> &Ui {
+        &self.state.ui
+    }
+
+    pub fn set_ui(&mut self, ui: Ui) -> Result<(), String> {
+        if self.state.ui == ui {
+            return Ok(());
+        }
+        self.state.ui = ui;
         self.save()
     }
 

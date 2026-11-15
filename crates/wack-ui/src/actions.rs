@@ -7,6 +7,8 @@
 use gpui::{Action, App, KeyBinding, actions};
 use wack_core::{Effort, WireFormat};
 
+use crate::panes::{Dock, PaneId, Target, dock::PANE_CONTEXT, terminal::TERMINAL_CONTEXT};
+
 actions!(
     wackcode,
     [
@@ -32,6 +34,20 @@ actions!(
         /// Moves focus to the next or previous field of a form.
         FocusNext,
         FocusPrevious,
+        ToggleSidebar,
+        /// Shows the chat's Changes pane, or hides its dock when it is in front.
+        ToggleChanges,
+        /// Shows the chat's terminal, or hides its dock when it is in front.
+        ToggleTerminal,
+        NewTerminal,
+        /// Closes the pane that has focus.
+        ClosePane,
+        /// Closes the chat tab in front; the chat itself stays in the sidebar.
+        CloseTab,
+        NextTab,
+        PreviousTab,
+        /// Esc typed into a terminal, which goes to the shell rather than stepping back.
+        TerminalEscape,
     ]
 );
 
@@ -110,6 +126,56 @@ pub struct Unqueue {
     pub index: usize,
 }
 
+#[derive(Clone, Debug, PartialEq, Action)]
+#[action(namespace = wackcode, no_json)]
+pub struct CloseChatTab {
+    pub id: String,
+}
+
+/// Brings a pane to the front of its stack.
+#[derive(Clone, Debug, PartialEq, Action)]
+#[action(namespace = wackcode, no_json)]
+pub struct ActivatePane {
+    pub pane: PaneId,
+}
+
+#[derive(Clone, Debug, PartialEq, Action)]
+#[action(namespace = wackcode, no_json)]
+pub struct ClosePaneId {
+    pub pane: PaneId,
+}
+
+/// A dragged tab was dropped.
+#[derive(Clone, Debug, PartialEq, Action)]
+#[action(namespace = wackcode, no_json)]
+pub struct MovePane {
+    pub pane: PaneId,
+    pub target: Target,
+}
+
+/// A new terminal as a tab beside this pane.
+#[derive(Clone, Debug, PartialEq, Action)]
+#[action(namespace = wackcode, no_json)]
+pub struct NewTerminalWith {
+    pub pane: PaneId,
+}
+
+/// Back to the dock's size before the user dragged it.
+#[derive(Clone, Debug, PartialEq, Action)]
+#[action(namespace = wackcode, no_json)]
+pub struct ResetDockSize {
+    pub dock: Dock,
+}
+
+/// Gives the two stacks either side of a divider equal shares again.
+#[derive(Clone, Debug, PartialEq, Action)]
+#[action(namespace = wackcode, no_json)]
+pub struct EqualizeSplit {
+    pub dock: Dock,
+    pub path: Vec<usize>,
+    pub index: usize,
+}
+
 const CONTEXT: &str = "Shell";
 /// The key context of a form whose fields Tab moves between.
 pub const FORM_CONTEXT: &str = "Form";
@@ -122,6 +188,19 @@ pub fn init(cx: &mut App) {
         KeyBinding::new("escape", Back, Some(CONTEXT)),
         KeyBinding::new("tab", FocusNext, Some(FORM_CONTEXT)),
         KeyBinding::new("shift-tab", FocusPrevious, Some(FORM_CONTEXT)),
+        KeyBinding::new("ctrl-cmd-s", ToggleSidebar, Some(CONTEXT)),
+        KeyBinding::new("cmd-shift-g", ToggleChanges, Some(CONTEXT)),
+        KeyBinding::new("ctrl-`", ToggleTerminal, Some(CONTEXT)),
+        // macOS may report ⌃⇧` as either.
+        KeyBinding::new("ctrl-shift-`", NewTerminal, Some(CONTEXT)),
+        KeyBinding::new("ctrl-~", NewTerminal, Some(CONTEXT)),
+        KeyBinding::new("cmd-w", CloseTab, Some(CONTEXT)),
+        KeyBinding::new("cmd-w", ClosePane, Some(PANE_CONTEXT)),
+        KeyBinding::new("cmd-}", NextTab, Some(CONTEXT)),
+        KeyBinding::new("cmd-{", PreviousTab, Some(CONTEXT)),
+        KeyBinding::new("ctrl-tab", NextTab, Some(CONTEXT)),
+        KeyBinding::new("ctrl-shift-tab", PreviousTab, Some(CONTEXT)),
+        KeyBinding::new("escape", TerminalEscape, Some(TERMINAL_CONTEXT)),
     ]);
 }
 

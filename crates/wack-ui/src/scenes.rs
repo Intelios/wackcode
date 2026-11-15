@@ -7,6 +7,7 @@ use gpui::{AnyView, App, Context, Pixels, Size, Window, prelude::*, px, size};
 
 use crate::{
     composer::{ComposerData, Input},
+    panes::{ChangesPane, ChatPanes, Dock, Edge, Layout, PaneKind, PaneModel, Target, TerminalPane},
     settings::{ProviderForm, ProvidersData},
     fixtures::{self, Selected},
     shell::{Body, Screen, Shell},
@@ -48,13 +49,14 @@ pub fn all() -> Vec<Scene> {
             size: WINDOW,
             build: |_, cx| {
                 cx.new(|_| {
-                    Shell::showing(
+                    Shell::showing_tabs(
                         fixtures::sidebar(Selected::None),
                         Screen::NewChat {
                             project: fixtures::project(),
                             composer: fixtures::composer_empty(true),
                             notice: None,
                         },
+                        fixtures::strip(None),
                     )
                 })
                 .into()
@@ -89,7 +91,7 @@ pub fn all() -> Vec<Scene> {
                     field
                 });
                 cx.new(|_| {
-                    Shell::showing(
+                    Shell::showing_tabs(
                         fixtures::sidebar(Selected::Finished),
                         Screen::Chat {
                             title: fixtures::FINISHED_TITLE.into(),
@@ -97,6 +99,7 @@ pub fn all() -> Vec<Scene> {
                             body: Body::Items(fixtures::finished_turn()),
                             composer: fixtures::composer_after_turn(Input::Field(field)),
                         },
+                        fixtures::strip(Some(fixtures::FINISHED_TITLE)),
                     )
                 })
                 .into()
@@ -108,7 +111,7 @@ pub fn all() -> Vec<Scene> {
             size: WINDOW,
             build: |_, cx| {
                 cx.new(|_| {
-                    Shell::showing(
+                    Shell::showing_tabs(
                         fixtures::sidebar(Selected::Working),
                         Screen::Chat {
                             title: fixtures::WORKING_TITLE.into(),
@@ -116,9 +119,47 @@ pub fn all() -> Vec<Scene> {
                             body: Body::Items(fixtures::working_turn()),
                             composer: fixtures::composer_working(),
                         },
+                        fixtures::strip(Some(fixtures::WORKING_TITLE)),
                     )
                 })
                 .into()
+            },
+        },
+        Scene {
+            name: "chat-panes",
+            description: "A chat with Changes beside the transcript and a terminal below, at a wide window.",
+            size: size(px(1480.), px(940.)),
+            build: |_, cx| {
+                let mut layout = Layout::default();
+                let changes = layout.open(PaneKind::Changes);
+                let terminal = layout.add(PaneKind::Terminal);
+                layout.right_width = Some(560.);
+                panes_scene(layout, &[changes, terminal], false, cx)
+            },
+        },
+        Scene {
+            name: "chat-panes-narrow",
+            description: "The smallest window, 700 points: the sidebar steps aside and the transcript keeps its minimum.",
+            size: size(px(700.), px(720.)),
+            build: |_, cx| {
+                let mut layout = Layout::default();
+                let changes = layout.open(PaneKind::Changes);
+                panes_scene(layout, &[changes], false, cx)
+            },
+        },
+        Scene {
+            name: "chat-panes-split",
+            description: "Sidebar hidden; the right dock split into Changes over two terminal tabs.",
+            size: size(px(1280.), px(860.)),
+            build: |_, cx| {
+                let mut layout = Layout::default();
+                let changes = layout.open(PaneKind::Changes);
+                let first = layout.add(PaneKind::Terminal);
+                let second = layout.add(PaneKind::Terminal);
+                layout.move_pane(first, Target::Beside(changes, Edge::Bottom));
+                layout.move_pane(second, Target::With(first));
+                layout.set_hidden(Dock::Bottom, true);
+                panes_scene(layout, &[changes, first, second], true, cx)
             },
         },
         Scene {
@@ -166,6 +207,37 @@ pub fn all() -> Vec<Scene> {
             build: |_, cx| cx.new(|_| Specimen).into(),
         },
     ]
+}
+
+/// The finished chat with `layout`'s panes showing fixture models.
+fn panes_scene(layout: Layout, ids: &[u32], sidebar_hidden: bool, cx: &mut App) -> AnyView {
+    cx.new(|cx| {
+        let mut panes = ChatPanes::new(layout, "/".into());
+        for id in ids {
+            let kind = panes.layout.panes().iter().find(|(_, pane)| pane.id == *id).map(|(_, pane)| pane.kind);
+            let model = match kind {
+                Some(PaneKind::Changes) => PaneModel::Changes(cx.new(|cx| {
+                    ChangesPane::fixture(fixtures::changed_files(), fixtures::CHANGES_SELECTED, fixtures::CHANGES_DIFF, cx)
+                })),
+                _ => PaneModel::Terminal(cx.new(|cx| {
+                    TerminalPane::fixture(fixtures::TERMINAL_SESSION.as_bytes(), 140, 22, None, cx)
+                })),
+            };
+            panes.insert(*id, model, cx);
+        }
+        Shell::showing_tabs(
+            fixtures::sidebar(Selected::Finished),
+            Screen::Chat {
+                title: fixtures::FINISHED_TITLE.into(),
+                project: fixtures::project(),
+                body: Body::Items(fixtures::finished_turn()),
+                composer: fixtures::composer_after_turn(Input::Drawn { text: None, placeholder: crate::chat::FOLLOW_UP_PLACEHOLDER.into() }),
+            },
+            fixtures::strip(Some(fixtures::FINISHED_TITLE)),
+        )
+        .with_panes(panes, sidebar_hidden)
+    })
+    .into()
 }
 
 pub fn find(name: &str) -> Option<Scene> {

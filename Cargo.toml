@@ -38,6 +38,8 @@ regex = "1"
 serde = { version = "1", features = ["derive"] }
 serde_json = "1"
 tokio = { version = "1", features = ["full"] }
+# The terminal pane's emulator: the grid, escape sequences, the PTY. Drawing is ours.
+alacritty_terminal = "0.26"
 
 [profile.dev]
 # Line tables keep file:line in panics without the multi-gigabyte cost of full debug info.

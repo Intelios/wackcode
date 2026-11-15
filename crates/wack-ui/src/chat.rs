@@ -520,6 +520,11 @@ impl ChatSession {
         self.conversation.awaiting_plan().map(|proposal| proposal.text.clone())
     }
 
+    /// Puts focus back in the composer at the next frame: after the plan card is acted on.
+    pub fn focus_composer(&mut self, cx: &mut Context<Self>) {
+        self.focus_request = Some(self.composer.read(cx).focus_handle(cx));
+    }
+
     /// Rebuilds the card of the plan awaiting review.
     fn refresh_plan_card(&mut self, cx: &mut Context<Self>) {
         if let Some(index) = self.conversation.awaiting {
@@ -559,6 +564,7 @@ impl ChatSession {
             self.refresh_entry(index);
         }
         cx.emit(ChatEvent::ModeChanged(wack_core::AgentMode::Build));
+        self.focus_composer(cx);
         cx.notify();
         Ok(())
     }

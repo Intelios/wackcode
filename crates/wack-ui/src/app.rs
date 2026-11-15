@@ -675,6 +675,7 @@ impl AppState {
         }
         self.set_chat_mode(&id, AgentMode::Build, cx);
         self.run(&id, Job::Prompt(crate::plan_card::IMPLEMENT.into()), cx);
+        session.update(cx, |session, cx| session.focus_composer(cx));
     }
 
     /// Writes the plan awaiting review to PLAN.md in the chat's project.

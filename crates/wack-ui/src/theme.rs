@@ -255,6 +255,13 @@ const LIGHT: Ramp = Ramp {
 };
 
 impl Theme {
+    /// How much of the window's colour lies over the picture where text sits on the panes: the
+    /// dim and the glass together. Something laid straight on the clear picture takes this much
+    /// window, frosted, for the ink floors to hold there too.
+    pub fn cover(&self) -> f32 {
+        cover_of(self.veil as f64, self.glass as f64) as f32
+    }
+
     /// The default theme colour and accent in `appearance`.
     pub fn new(appearance: Appearance) -> Self {
         Self::derive(ThemeInput::new(appearance))

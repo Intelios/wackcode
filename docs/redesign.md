@@ -26,3 +26,6 @@ Agreed with the owner on 2026-11-15, on a design canvas (claude.ai artifact "Wac
 ## Open with the owner
 
 - **Binding a theme to a picture.** WackCode 2 bound a theme to each picture in a library. Themes are coming back (phase 6); whether the picture library comes back with the binding is still to agree.
+- **Themes in light mode.** WackCode 2's theme backgrounds are all near-black; how each theme reads in light is to agree before phase 6.
+- **Gradient accents.** Four of WackCode 2's themes paint the accent as a gradient; whether that comes back with them.
+- **The glass behind the new-chat heading.** It is the one patch of dim left on the clear picture, wider with a long path and heavier at a high dim. Dropping it would leave the heading on the bare picture.

@@ -772,7 +772,7 @@ impl Render for Shell {
             }
             Screen::NewChat { project, composer, notice } => {
                 let id = format!("arrive-new-chat-{}", project.path);
-                let ground = (clearness > 0.).then_some(Hsla { a: theme.glass, ..theme.window });
+                let ground = (clearness > 0.).then_some(Hsla { a: theme.cover(), ..theme.window });
                 let body = new_chat(project, composer, notice, cutout.clone(), ground, &theme).into_any_element();
                 (tab_strip(&strip, None, strip_ground, &theme), arrive(id, body))
             }
@@ -1377,16 +1377,19 @@ fn kicker(text: &'static str, theme: &Theme) -> impl IntoElement {
         .child(div().typography(Type::Label).text_color(theme.text_dim).child(text))
 }
 
-/// A problem under a screen's block. Over the clear picture it sits on `ground`, a pill of glass.
+/// `child` as it is, or over the clear picture (`ground`) on a frosted pill as thick as the panes'
+/// glass and dim together, so its ink reads as it would on them.
+fn on_ground(child: gpui::Div, ground: Option<Hsla>, theme: &Theme) -> gpui::AnyElement {
+    match ground {
+        Some(ground) => glass(11., GLASS_BLUR, ground, theme.border, child.px(px(12.)).py(px(3.))).into_any_element(),
+        None => child.into_any_element(),
+    }
+}
+
+/// A problem under a screen's block, on `ground` over the clear picture ([`on_ground`]).
 fn notice_line(notice: Option<SharedString>, ground: Option<Hsla>, theme: &Theme) -> impl IntoElement {
     div().when_some(notice, |line, notice| {
-        line.pt(px(14.)).child(
-            div()
-                .typography(Type::Ui)
-                .text_color(theme.danger)
-                .when_some(ground, |text, ground| text.px(px(12.)).py(px(4.)).rounded_full().bg(ground))
-                .child(notice),
-        )
+        line.pt(px(14.)).child(on_ground(div().typography(Type::Ui).text_color(theme.danger).child(notice), ground, theme))
     })
 }
 
@@ -1494,15 +1497,11 @@ fn new_chat(
             )
             .child(div().w_full().pt(px(30.)).child(Composer::new(composer)))
             .child(
-                div().pt(px(12.)).child(
-                    div()
-                        .flex()
-                        .gap(px(20.))
-                        .typography(Type::Small)
-                        .when_some(ground, |hints, ground| hints.px(px(12.)).py(px(3.)).rounded_full().bg(ground))
-                        .child(hint("↩", "send"))
-                        .child(hint("⇧↩", "new line")),
-                ),
+                div().pt(px(12.)).child(on_ground(
+                    div().flex().gap(px(20.)).typography(Type::Small).child(hint("↩", "send")).child(hint("⇧↩", "new line")),
+                    ground,
+                    theme,
+                )),
             )
             .child(notice_line(notice, ground, theme)),
     )
@@ -1610,33 +1609,28 @@ fn tab_strip(strip: &StripData, chat: Option<(Option<ProjectInfo>, PaneWords)>, 
             )
             .tag(if active { "chat-tab-active" } else { "chat-tab" })
     };
-    let mut tabs: Vec<_> = strip
-        .tabs
-        .iter()
-        .map(|data| tab(Some(data.id.clone()), data.title.clone(), data.active, data.state).into_any_element())
-        .collect();
+    let mut tabs: Vec<_> = strip.tabs.iter().map(|data| tab(Some(data.id.clone()), data.title.clone(), data.active, data.state)).collect();
     if strip.new_chat {
-        tabs.push(tab(None, "New chat".into(), true, ChatState::Idle).into_any_element());
-    } else {
-        // While a new chat is open its own tab stands for this.
-        tabs.push(
-            div()
-                .id("new-tab")
-                .occlude()
-                .flex_none()
-                .size(px(28.))
-                .rounded_full()
-                .flex()
-                .items_center()
-                .justify_center()
-                .when_some(ground, |button, ground| button.bg(ground))
-                .hover(|button| button.bg(theme.hover))
-                .on_click(|_, window, cx| window.dispatch_action(Box::new(NewChat), cx))
-                .child(Icon::Plus.view(px(14.), theme.text_dim))
-                .tag("new-tab")
-                .into_any_element(),
-        );
+        tabs.push(tab(None, "New chat".into(), true, ChatState::Idle));
     }
+    // While a new chat is open its own tab stands for this. Outside the clipped row, so it shows
+    // however many tabs there are.
+    let new_tab = (!strip.new_chat).then(|| {
+        div()
+            .id("new-tab")
+            .occlude()
+            .flex_none()
+            .size(px(28.))
+            .rounded_full()
+            .flex()
+            .items_center()
+            .justify_center()
+            .when_some(ground, |button, ground| button.bg(ground))
+            .hover(|button| button.bg(theme.hover))
+            .on_click(|_, window, cx| window.dispatch_action(Box::new(NewChat), cx))
+            .child(Icon::Plus.view(px(14.), theme.text_dim))
+            .tag("new-tab")
+    });
     let word = |id: &'static str, label: &'static str, count: Option<usize>, on: bool, action: Box<dyn gpui::Action>| {
         div()
             .id(id)
@@ -1693,7 +1687,9 @@ fn tab_strip(strip: &StripData, chat: Option<(Option<ProjectInfo>, PaneWords)>, 
         .flex()
         .items_center()
         .gap(px(8.))
-        .child(div().flex_1().min_w_0().h_full().flex().items_center().gap(px(4.)).overflow_hidden().children(tabs))
+        .child(div().flex_initial().min_w_0().h_full().flex().items_center().gap(px(4.)).overflow_hidden().children(tabs))
+        .children(new_tab)
+        .child(div().flex_1())
         .children(right)
 }
 

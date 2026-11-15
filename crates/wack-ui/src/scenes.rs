@@ -434,8 +434,17 @@ pub fn all() -> Vec<Scene> {
             },
         },
         Scene {
+            name: "welcome-backdrop",
+            description: "First launch over a backdrop: the picture clear across the stage.",
+            size: WINDOW,
+            build: |_, cx| {
+                let picture = over(fixtures::backdrop(wack_core::Texture::None), cx);
+                cx.new(|_| Shell::showing(Default::default(), Screen::Welcome { notice: None }).with_backdrop(picture)).into()
+            },
+        },
+        Scene {
             name: "new-chat-backdrop-ascii",
-            description: "The new-chat screen over a backdrop drawn through the ASCII texture.",
+            description: "The new-chat screen over a backdrop drawn through the ASCII texture, with a notice under the composer.",
             size: WINDOW,
             build: |_, cx| {
                 let picture = over(fixtures::backdrop(wack_core::Texture::Ascii), cx);
@@ -445,7 +454,7 @@ pub fn all() -> Vec<Scene> {
                         Screen::NewChat {
                             project: fixtures::project(),
                             composer: fixtures::composer_empty(true),
-                            notice: None,
+                            notice: Some("Add a connection in Settings › Providers to start chatting.".into()),
                         },
                         fixtures::strip(None),
                     )

@@ -3,16 +3,14 @@
 //! The app draws its own title strip, so the 40-point band across the top of both columns is what
 //! moves the window. The traffic lights sit in the sidebar's band.
 //!
-//! Composition is deliberately off-centre: content hangs from one left edge (`CONTENT_INSET` into
-//! the main column) and the space to its right is left open, because that is where a chat's panes
-//! will open. Nothing is centred in the window.
+//! The title strip and settings hang from one left edge (`CONTENT_INSET` into the main column).
+//! The reading surfaces are centred, on the owner's call: a chat's transcript and composer sit
+//! in a reading-width column centred in the space beside its panes, and the new-chat and
+//! welcome screens centre their block like a title page, with the composer in the middle.
 //!
 //! Where things go comes from the pane solver (`panes::solve`): the sidebar, the transcript and a
 //! chat's docks are placed from the window's size on every frame, so the transcript keeps its
 //! minimum width at any size the window allows, and the sidebar steps aside before a dock shrinks.
-//!
-//! The new-chat and welcome screens are the exception: their block is centred, like a title
-//! page, with the composer in the middle of the window.
 //!
 //! Over an image backdrop the softened picture lies behind the whole window and the sidebar and
 //! title strip are see-through over it; the new-chat and welcome screens also show it clear
@@ -721,7 +719,7 @@ impl Render for Shell {
             }
             Screen::Chat { project, body, composer, .. } => (
                 tab_strip(&strip, Some((roomy_strip.then_some(project), words.unwrap_or_default())), inset, &theme),
-                chat(body, composer, inset, narrow).into_any_element(),
+                chat(body, composer, narrow).into_any_element(),
             ),
             Screen::Settings(data) => {
                 let id = format!("arrive-settings-{}", data.section.name());
@@ -1484,16 +1482,23 @@ fn tab_strip(strip: &StripData, chat: Option<(Option<ProjectInfo>, PaneWords)>, 
         .children(right)
 }
 
-/// One transcript item in the column: inset from the left edge, no wider than a reading line.
-fn column(child: impl IntoElement, inset: Pixels, narrow: bool) -> impl IntoElement {
-    div()
-        .w_full()
-        .pl(inset)
-        .pr(if narrow { px(24.) } else { px(48.) })
-        .child(div().max_w(TRANSCRIPT_MAX_WIDTH).child(child))
+/// The space kept either side of the centred transcript.
+fn gutter(narrow: bool) -> Pixels {
+    if narrow { px(24.) } else { px(48.) }
 }
 
-fn chat(body: Body, composer: ComposerData, inset: Pixels, narrow: bool) -> impl IntoElement {
+/// One transcript item in the column: centred in the space beside the panes, no wider than a
+/// reading line.
+fn column(child: impl IntoElement, narrow: bool) -> impl IntoElement {
+    div()
+        .w_full()
+        .flex()
+        .justify_center()
+        .px(gutter(narrow))
+        .child(div().w_full().max_w(TRANSCRIPT_MAX_WIDTH).child(child))
+}
+
+fn chat(body: Body, composer: ComposerData, narrow: bool) -> impl IntoElement {
     let transcript = match body {
         Body::Items(items) => div()
             .size_full()
@@ -1502,7 +1507,7 @@ fn chat(body: Body, composer: ComposerData, inset: Pixels, narrow: bool) -> impl
             .flex_col()
             .justify_end()
             .pb(DOCK_FADE)
-            .child(column(Transcript::new(items), inset, narrow))
+            .child(column(Transcript::new(items), narrow))
             .into_any_element(),
         Body::Live(session, list_state) => {
             let state = session.clone();
@@ -1523,7 +1528,7 @@ fn chat(body: Body, composer: ComposerData, inset: Pixels, narrow: bool) -> impl
                     return div().into_any_element();
                 };
                 let previous = index.checked_sub(1).and_then(|index| items.get(index));
-                column(transcript::item(current, previous, theme, &handlers), inset, narrow).into_any_element()
+                column(transcript::item(current, previous, theme, &handlers), narrow).into_any_element()
             })
             .size_full()
             .pt(px(24.))
@@ -1543,11 +1548,14 @@ fn chat(body: Body, composer: ComposerData, inset: Pixels, narrow: bool) -> impl
                 .flex_none()
                 // Reaches up over the transcript's foot, where its text has faded out.
                 .mt(-DOCK_FADE)
-                .pl(inset - px(16.))
-                .pr(if narrow { px(16.) } else { px(32.) })
+                .flex()
+                .justify_center()
+                // 16 points wider each side than the column, so its text lines up with the
+                // transcript's.
+                .px(gutter(narrow) - px(16.))
                 .pt(DOCK_FADE)
                 .pb(px(18.))
-                .child(div().max_w(TRANSCRIPT_MAX_WIDTH + px(32.)).child(Composer::new(composer))),
+                .child(div().w_full().max_w(TRANSCRIPT_MAX_WIDTH + px(32.)).child(Composer::new(composer))),
         )
 }
 

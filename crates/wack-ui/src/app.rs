@@ -946,8 +946,11 @@ impl AppState {
 
     /// Switches a connection on or off; chats that used one switched off fall back to another.
     pub fn set_connection_enabled(&mut self, id: &str, on: bool, cx: &mut Context<Self>) {
-        if let Err(message) = self.store.set_connection_enabled(id, on) {
-            self.form.error = Some(message.into());
+        match self.store.set_connection_enabled(id, on) {
+            // An old failure goes once something works, unless it belongs to the open form.
+            Ok(()) if !self.form_showing() => self.form.error = None,
+            Ok(()) => {}
+            Err(message) => self.form.error = Some(message.into()),
         }
         cx.notify();
     }

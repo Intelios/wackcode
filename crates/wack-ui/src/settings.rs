@@ -330,6 +330,9 @@ fn providers(data: ProvidersData, theme: &Theme) -> impl IntoElement {
         }
         connections = Some(list);
     }
+    // A switch or a removal that fails says so here while the form, where errors usually show, is
+    // folded away.
+    let problem = data.error.clone().filter(|_| !data.form_open).map(|error| div().typography(Type::Ui).text_color(theme.danger).child(error));
     let adding = data.form_open.then(|| form(&data, theme));
     div()
         .flex()
@@ -341,6 +344,7 @@ fn providers(data: ProvidersData, theme: &Theme) -> impl IntoElement {
             action,
             theme,
         ))
+        .children(problem)
         .children(adding)
         .children(connections)
 }

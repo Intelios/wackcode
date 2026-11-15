@@ -3,6 +3,8 @@
 //! - **Presence** ([`enter`]): something new arrives by rising a few points as it fades in. A
 //!   screen, a menu, a settings section.
 //! - **From an edge** ([`slide_in`]): a dock's pane arrives from the side it opens on.
+//! - **Between states** ([`Ease`]): the picture clears on a new chat and frosts over once the
+//!   first message is sent.
 //! - **At work** ([`paddling`]): the duck paddles while the agent works.
 //!
 //! Arrivals move on a [`spring`]: critically damped, so they start quickly and settle without
@@ -22,7 +24,7 @@
 
 use std::{
     sync::atomic::{AtomicUsize, Ordering},
-    time::Duration,
+    time::{Duration, Instant},
 };
 
 use gpui::{Animation, AnimationExt, App, ElementId, IntoElement, Styled, px};
@@ -85,6 +87,51 @@ pub fn fade_in<E: IntoElement + Styled + 'static>(id: impl Into<ElementId>, elem
     element.with_animation(id, Animation::new(FADE).with_easing(spring), |element, t| element.opacity(t))
 }
 
+/// A value that eases to each new target over [`FADE`], for a change that outlives any one
+/// element, such as the picture clearing on a new chat and frosting over when it is sent. The
+/// holder calls [`Ease::toward`] as it renders and asks for another frame while
+/// [`Ease::moving`]. Nothing moves the first time, or with Reduce Motion on.
+#[derive(Clone, Copy, Debug)]
+pub struct Ease {
+    from: f32,
+    to: f32,
+    since: Option<Instant>,
+}
+
+impl Ease {
+    pub fn at(value: f32) -> Self {
+        Self { from: value, to: value, since: None }
+    }
+
+    /// Where the value is now.
+    pub fn value(&self) -> f32 {
+        self.value_at(Instant::now())
+    }
+
+    fn value_at(&self, now: Instant) -> f32 {
+        match self.since {
+            Some(since) => {
+                let t = now.saturating_duration_since(since).as_secs_f32() / FADE.as_secs_f32();
+                self.from + (self.to - self.from) * spring(t)
+            }
+            None => self.to,
+        }
+    }
+
+    pub fn moving(&self) -> bool {
+        self.since.is_some_and(|since| since.elapsed() < FADE)
+    }
+
+    /// Heads for `to` from wherever the value is now; `still` jumps straight there.
+    pub fn toward(&mut self, to: f32, still: bool) {
+        if to == self.to {
+            return;
+        }
+        let now = Instant::now();
+        *self = Self { from: self.value_at(now), to, since: (!still).then_some(now) };
+    }
+}
+
 /// Raises a working duck to the paddle's current step.
 pub fn paddling<E: Styled>(element: E) -> E {
     element.relative().top(px(PADDLE[PADDLE_AT.load(Ordering::Relaxed) % PADDLE.len()]))
@@ -115,5 +162,24 @@ mod tests {
             last = value;
         }
         assert!(spring(0.3) > 0.7, "most of the way there early: {}", spring(0.3));
+    }
+
+    #[test]
+    fn an_ease_starts_still_and_heads_for_each_new_target_from_where_it_is() {
+        let mut ease = Ease::at(1.);
+        assert_eq!(ease.value(), 1.);
+        assert!(!ease.moving());
+        ease.toward(0., false);
+        assert!(ease.moving());
+        let start = ease.since.unwrap();
+        assert_eq!(ease.value_at(start), 1.);
+        assert_eq!(ease.value_at(start + FADE), 0.);
+        let halfway = ease.value_at(start + FADE / 4);
+        assert!(halfway > 0. && halfway < 1.);
+        ease.toward(0., false);
+        assert_eq!(ease.since, Some(start), "the same target does not restart it");
+        ease.toward(1., true);
+        assert_eq!(ease.value(), 1.);
+        assert!(!ease.moving(), "Reduce Motion lands at once");
     }
 }

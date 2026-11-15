@@ -414,7 +414,7 @@ pub fn all() -> Vec<Scene> {
         },
         Scene {
             name: "new-chat-backdrop",
-            description: "The new-chat screen over a backdrop: clear across the top, dissolving around the centred block.",
+            description: "The new-chat screen over a backdrop: the picture clear across the stage, glass only around the heading.",
             size: WINDOW,
             build: |_, cx| {
                 let picture = over(fixtures::backdrop(wack_core::Texture::None), cx);

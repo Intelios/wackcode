@@ -13,7 +13,7 @@ WackCode is a native macOS coding agent: a Rust app drawn with GPUI, with its ow
 - Cargo only. No Node, no pnpm, no web UI.
 - No data compatibility with version 2: never read or write its files. The one shared contract is the usage ledger ([docs/wackcode-usage-v1.md](docs/wackcode-usage-v1.md)).
 - Out of scope; don't propose these as fixes: embedded editors, permission prompts (tool-call approval gates), automatic merging, notarization, auto-updates.
-- Cut from version 3 on purpose; don't bring these back: arcade games, checkpoints / rewind / fork, per-chat worktrees, the menu bar duck, the goal loop, Pi packages, subscription sign-ins, composer styles, theme presets, dynamic backdrops, renaming the agent.
+- Cut from version 3 on purpose; don't bring these back: arcade games, checkpoints / rewind / fork, per-chat worktrees, the menu bar duck, the goal loop, Pi packages, subscription sign-ins, composer styles, dynamic backdrops, renaming the agent.
 - To port something from version 2, read it from the legacy checkout (`../wackcode-legacy`, or `git show 2.5-Legacy:<path>`). Port the idea and the tested logic; don't port Tauri, Pi or web-view workarounds.
 - `todo.md` (gitignored) is the owner's idea list: ask before starting anything from it.
 
@@ -47,11 +47,11 @@ WackCode is a native macOS coding agent: a Rust app drawn with GPUI, with its ow
 
 WackCode should feel like a distinctive macOS app with its own character, never a generic web app or generic AI-generated design. Make deliberate choices in layout, typography, detail and interaction that reinforce that character.
 
-- **Focused, not configurable.** One layout and one look, chosen on purpose. The user personalises colour (theme colour, accent, light or dark, an image backdrop), never structure.
+- **Focused, not configurable.** One layout and one look, chosen on purpose. The user personalises by choosing, never by making: a theme from a fixed set (WackCode 2's, being brought back; never hand-picked colours), light or dark, an image backdrop. Never structure.
 - **A frame and a stage.** The window is a frame around glass panes (the sidebar, and the stage holding the screen); over an image backdrop the picture shows in the frame and through the glass. The redesign agreed with the owner is in [docs/redesign.md](docs/redesign.md): build toward it.
 - **Typographic, with round controls.** Strong type hierarchy; controls are pills and circles. The serif is for the rare place it lifts the page (a screen's one display line), never every label. The chat column and the new-chat and welcome screens are centred, on the owner's call.
 - **Motion is identity.** Expressive, considered transitions make the app feel alive. Every animation respects the system's reduced-motion setting, with a still end state for anything that loops.
-- **Design for every theme.** Each view must look right in light and dark, with any theme colour and accent, and over an image backdrop. The accent recolours interaction, never meaning: danger, warning, diff and success stay fixed.
+- **Design for every theme.** Each view must look right in light and dark, with every theme, and over an image backdrop. The accent recolours interaction, never meaning: danger, warning, diff and success stay fixed.
 - **Native, not web.** Own title strip that drags the window, macOS key glyphs (⌘⇧⌥⌃), and settings named as `Settings › Section`.
 - **Panes are planned, not bolted on.** Each chat owns a pane tree beside its transcript; the transcript never drops below its minimum width. Anything new that needs screen space is a pane.
 - **The duck stays.**

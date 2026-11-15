@@ -20,8 +20,9 @@
 //!
 //! Over an image backdrop the picture fills the window, blurred and dimmed as the user chose, and
 //! both panes are frosted glass over it (`glass.rs`); text outside them (the tabs) sits on pills
-//! of the same glass. The new-chat and welcome screens also show the picture clear across the top
-//! of the stage, dissolving around their block (`backdrop.rs`). Without a picture the frame is the
+//! of the same glass. The new-chat and welcome screens show the picture clear across the whole
+//! stage, with glass only behind the heading (`backdrop.rs`); opening a chat eases it away to the
+//! glass, and New chat eases it back (`clear`, `motion::Ease`). Without a picture the frame is the
 //! sidebar's colour and the stage is the lit window.
 //!
 //! The shell draws from plain data ([`SidebarData`], [`Screen`]). In the app that data is read
@@ -156,6 +157,9 @@ pub struct Shell {
     focus: Option<FocusHandle>,
     /// The duck's next paddle step is on its way.
     paddling: bool,
+    /// How clear the picture on the stage is: 1 on the new-chat and welcome screens, easing to 0
+    /// (the glass) once a chat opens. `None` until the first frame.
+    clear: Option<motion::Ease>,
 }
 
 impl Shell {
@@ -185,6 +189,7 @@ impl Shell {
             _activation: Some(activation),
             focus: Some(cx.focus_handle()),
             paddling: false,
+            clear: None,
         }
     }
 
@@ -204,6 +209,7 @@ impl Shell {
             _activation: None,
             focus: None,
             paddling: false,
+            clear: None,
         }
     }
 
@@ -689,31 +695,38 @@ impl Render for Shell {
         let inset = if narrow { NARROW_INSET } else { CONTENT_INSET };
 
         // The picture, when there is one: blurred and dimmed behind everything, and clear across
-        // the top of the stage on the new-chat and welcome screens.
+        // the stage on the new-chat and welcome screens, frosting over as a chat opens.
         let picture = match &self.source {
             Source::Live(app) => app.read(cx).backdrop(),
             _ => self.scene_backdrop.clone(),
         };
         let over_picture = picture.is_some();
+        let hero_screen = matches!(screen, Screen::Welcome { .. } | Screen::NewChat { .. });
+        let target = if over_picture && hero_screen { 1. } else { 0. };
+        let still = cx.reduce_motion();
+        let clear = self.clear.get_or_insert(motion::Ease::at(target));
+        clear.toward(target, still);
+        let (clearness, clearing) = (clear.value(), clear.moving());
+        if clearing {
+            window.request_animation_frame();
+        }
         let cutout = Cutout::default();
         let whole = Rect { x: 0., y: 0., width: window_width, height: window_height };
         let (behind, hero) = match &picture {
             Some(picture) => {
                 let behind = backdrop::behind(picture, whole, theme.window, theme.veil);
-                let hero_screen = matches!(screen, Screen::Welcome { .. } | Screen::NewChat { .. });
                 let light = theme.appearance == crate::theme::Appearance::Light;
-                let artwork = if hero_screen { backdrop::artwork(picture, light, cx) } else { None };
-                let hero_height = backdrop::hero_height(window_height) - f32::from(TITLE_STRIP_HEIGHT);
+                let artwork = (clearness > 0.001).then(|| backdrop::artwork(picture, light, cx)).flatten();
                 let hero = artwork.map(|artwork| {
-                    motion::fade_in(
+                    div().absolute().left_0().top_0().size_full().opacity(clearness).child(motion::fade_in(
                         "hero",
                         div()
                             .absolute()
                             .left_0()
                             .top_0()
                             .size_full()
-                            .child(backdrop::hero(artwork, picture, whole, hero_height, PANE_RADIUS, cutout.clone())),
-                    )
+                            .child(backdrop::hero(artwork, picture, whole, PANE_RADIUS, cutout.clone())),
+                    ))
                 });
                 (Some(behind), hero)
             }
@@ -759,7 +772,8 @@ impl Render for Shell {
             }
             Screen::NewChat { project, composer, notice } => {
                 let id = format!("arrive-new-chat-{}", project.path);
-                let body = new_chat(project, composer, notice, cutout.clone(), &theme).into_any_element();
+                let ground = (clearness > 0.).then_some(Hsla { a: theme.glass, ..theme.window });
+                let body = new_chat(project, composer, notice, cutout.clone(), ground, &theme).into_any_element();
                 (tab_strip(&strip, None, strip_ground, &theme), arrive(id, body))
             }
             Screen::Chat { project, body, composer, .. } => (
@@ -1363,11 +1377,20 @@ fn kicker(text: &'static str, theme: &Theme) -> impl IntoElement {
         .child(div().typography(Type::Label).text_color(theme.text_dim).child(text))
 }
 
-fn notice_line(notice: Option<SharedString>, theme: &Theme) -> impl IntoElement {
-    div().when_some(notice, |line, notice| line.pt(px(14.)).typography(Type::Ui).text_color(theme.danger).child(notice))
+/// A problem under a screen's block. Over the clear picture it sits on `ground`, a pill of glass.
+fn notice_line(notice: Option<SharedString>, ground: Option<Hsla>, theme: &Theme) -> impl IntoElement {
+    div().when_some(notice, |line, notice| {
+        line.pt(px(14.)).child(
+            div()
+                .typography(Type::Ui)
+                .text_color(theme.danger)
+                .when_some(ground, |text, ground| text.px(px(12.)).py(px(4.)).rounded_full().bg(ground))
+                .child(notice),
+        )
+    })
 }
 
-/// Reports a centred block's bounds to the hero while the frame is laid out (`backdrop::Cutout`).
+/// Reports a screen's heading's bounds to the hero while the frame is laid out (`backdrop::Cutout`).
 fn measured(cutout: Cutout) -> impl IntoElement {
     canvas(move |bounds, _, _| cutout.set(Some(bounds)), |_, _, _, _| {}).absolute().left_0().top_0().size_full()
 }
@@ -1426,11 +1449,20 @@ fn welcome(notice: Option<SharedString>, cutout: Cutout, theme: &Theme) -> impl 
                     )
                     .child(div().typography(Type::Small).text_color(theme.text_faint).child("⌘O")),
             )
-            .child(notice_line(notice, theme)),
+            .child(notice_line(notice, None, theme)),
     )
 }
 
-fn new_chat(project: ProjectInfo, composer: ComposerData, notice: Option<SharedString>, cutout: Cutout, theme: &Theme) -> impl IntoElement {
+/// The new-chat screen. `ground` is the glass the words under the composer sit on over the clear
+/// picture.
+fn new_chat(
+    project: ProjectInfo,
+    composer: ComposerData,
+    notice: Option<SharedString>,
+    cutout: Cutout,
+    ground: Option<Hsla>,
+    theme: &Theme,
+) -> impl IntoElement {
     let hint = |keys: &'static str, what: &'static str| {
         div()
             .flex()
@@ -1446,14 +1478,33 @@ fn new_chat(project: ProjectInfo, composer: ComposerData, notice: Option<SharedS
             .flex()
             .flex_col()
             .items_center()
-            .child(measured(cutout))
-            .child(kicker("New chat in", theme))
-            .child(div().pt(px(6.)).typography(Type::Display).text_color(theme.text).child(project.name.clone()))
-            // Held to the block's width, so a long path ends in an ellipsis instead of spilling out.
-            .child(project_line(&project, theme).max_w_full().pt(px(8.)))
+            // Only the heading is cleared of the picture: the composer is a card of its own.
+            .child(
+                div()
+                    .relative()
+                    .max_w_full()
+                    .flex()
+                    .flex_col()
+                    .items_center()
+                    .child(measured(cutout))
+                    .child(kicker("New chat in", theme))
+                    .child(div().pt(px(6.)).typography(Type::Display).text_color(theme.text).child(project.name.clone()))
+                    // Held to the block's width, so a long path ends in an ellipsis instead of spilling out.
+                    .child(project_line(&project, theme).max_w_full().pt(px(8.))),
+            )
             .child(div().w_full().pt(px(30.)).child(Composer::new(composer)))
-            .child(div().pt(px(12.)).flex().gap(px(20.)).typography(Type::Small).child(hint("↩", "send")).child(hint("⇧↩", "new line")))
-            .child(notice_line(notice, theme)),
+            .child(
+                div().pt(px(12.)).child(
+                    div()
+                        .flex()
+                        .gap(px(20.))
+                        .typography(Type::Small)
+                        .when_some(ground, |hints, ground| hints.px(px(12.)).py(px(3.)).rounded_full().bg(ground))
+                        .child(hint("↩", "send"))
+                        .child(hint("⇧↩", "new line")),
+                ),
+            )
+            .child(notice_line(notice, ground, theme)),
     )
 }
 
@@ -1483,7 +1534,7 @@ fn sidebar_toggle(theme: &Theme) -> impl IntoElement {
         .id("toggle-sidebar")
         .occlude()
         .size(px(24.))
-        .rounded(px(6.))
+        .rounded_full()
         .flex()
         .items_center()
         .justify_center()
@@ -1493,7 +1544,8 @@ fn sidebar_toggle(theme: &Theme) -> impl IntoElement {
         .tag("toggle-sidebar")
 }
 
-/// The open chats as pills across the strip, the one in front lit. On a chat, its project and the
+/// The open chats as pills across the strip, the one in front lit and wearing its close button,
+/// then a round button for a new chat. On a chat, its project and the
 /// pane words sit at the right. Over a picture everything sits on `ground`, the panes' glass, so
 /// it reads on the frame.
 fn tab_strip(strip: &StripData, chat: Option<(Option<ProjectInfo>, PaneWords)>, ground: Option<Hsla>, theme: &Theme) -> gpui::Div {
@@ -1523,11 +1575,12 @@ fn tab_strip(strip: &StripData, chat: Option<(Option<ProjectInfo>, PaneWords)>, 
             .when(active, |tab| tab.bg(ground.unwrap_or(theme.window)).border_1().border_color(theme.border_strong))
             .when(!active, |tab| tab.hover(|tab| tab.bg(theme.hover)))
             .when_some(select, |tab, select| tab.on_click(move |_, window, cx| window.dispatch_action(Box::new(select.clone()), cx)))
-            .when(state != ChatState::Idle, |tab| {
-                tab.child(div().flex_none().size(px(6.)).rounded_full().bg(match state {
-                    ChatState::Working => theme.accent,
-                    _ => theme.accent_text,
-                }))
+            // The same marks as the sidebar: the paddling duck while it works, a dot once it has
+            // finished unseen.
+            .map(|tab| match state {
+                ChatState::Working => tab.child(motion::paddling(div().flex_none().child(Icon::Duck.view(px(12.), theme.accent_text)))),
+                ChatState::Unread => tab.child(div().flex_none().size(px(6.)).rounded_full().bg(theme.accent_text)),
+                ChatState::Idle => tab,
             })
             .child(
                 div()
@@ -1547,8 +1600,7 @@ fn tab_strip(strip: &StripData, chat: Option<(Option<ProjectInfo>, PaneWords)>, 
                     .flex()
                     .items_center()
                     .justify_center()
-                    .invisible()
-                    .group_hover(group.clone(), |close| close.visible())
+                    .when(!active, |close| close.invisible().group_hover(group.clone(), |close| close.visible()))
                     .hover(|close| close.bg(theme.hover))
                     .on_click(move |_, window, cx| {
                         cx.stop_propagation();
@@ -1558,9 +1610,32 @@ fn tab_strip(strip: &StripData, chat: Option<(Option<ProjectInfo>, PaneWords)>, 
             )
             .tag(if active { "chat-tab-active" } else { "chat-tab" })
     };
-    let mut tabs: Vec<_> = strip.tabs.iter().map(|data| tab(Some(data.id.clone()), data.title.clone(), data.active, data.state)).collect();
+    let mut tabs: Vec<_> = strip
+        .tabs
+        .iter()
+        .map(|data| tab(Some(data.id.clone()), data.title.clone(), data.active, data.state).into_any_element())
+        .collect();
     if strip.new_chat {
-        tabs.push(tab(None, "New chat".into(), true, ChatState::Idle));
+        tabs.push(tab(None, "New chat".into(), true, ChatState::Idle).into_any_element());
+    } else {
+        // While a new chat is open its own tab stands for this.
+        tabs.push(
+            div()
+                .id("new-tab")
+                .occlude()
+                .flex_none()
+                .size(px(28.))
+                .rounded_full()
+                .flex()
+                .items_center()
+                .justify_center()
+                .when_some(ground, |button, ground| button.bg(ground))
+                .hover(|button| button.bg(theme.hover))
+                .on_click(|_, window, cx| window.dispatch_action(Box::new(NewChat), cx))
+                .child(Icon::Plus.view(px(14.), theme.text_dim))
+                .tag("new-tab")
+                .into_any_element(),
+        );
     }
     let word = |id: &'static str, label: &'static str, count: Option<usize>, on: bool, action: Box<dyn gpui::Action>| {
         div()
@@ -1568,20 +1643,21 @@ fn tab_strip(strip: &StripData, chat: Option<(Option<ProjectInfo>, PaneWords)>, 
             .occlude()
             .relative()
             .flex_none()
-            .h_full()
-            .px(px(8.))
+            .h(px(22.))
+            .px(px(9.))
+            .rounded_full()
             .flex()
             .items_center()
             .gap(px(5.))
             .typography(if on { Type::UiStrong } else { Type::Ui })
             .text_color(if on { theme.text } else { theme.text_dim })
+            .when(on, |word| word.bg(theme.hover))
             .hover(|word| word.text_color(theme.text))
             .on_click(move |_, window, cx| window.dispatch_action(action.boxed_clone(), cx))
             .child(label)
             .when_some(count.filter(|count| *count > 0), |word, count| {
                 word.child(div().typography(Type::Small).text_color(theme.text_faint).child(count.to_string()))
             })
-            .when(on, |word| word.child(div().absolute().bottom_0().left(px(8.)).right(px(8.)).h(px(2.)).rounded(px(1.)).bg(theme.accent_line)))
             .tag(id)
     };
     let right = chat.map(|(project, words)| {

@@ -1,9 +1,11 @@
 //! The sidebar: projects and their chats.
 //!
-//! Typographic, not boxed: no monogram tiles, no pill buttons. Pinned projects come first under
-//! their own label; a project's chats are listed under it when it is open. The selected chat is
-//! the only filled row, in the accent wash, so the eye finds it at once. A row's own controls (new
-//! chat, pin, remove) appear only while the pointer is over it.
+//! Round, like the rest of the frame (`docs/redesign.md`): New chat is the one accent pill at the
+//! top, every row is a pill, and a project wears a round monogram, lit while it is open. An open
+//! project's chats hang from a dotted rail that drops from its monogram. Pinned projects come
+//! first under their own label. The selected chat is the only filled row, in the accent wash, so
+//! the eye finds it at once. A row's own controls (new chat, pin, remove) appear only while the
+//! pointer is over it.
 //!
 //! Renders from plain data ([`SidebarData`]) and reports clicks as actions (`crate::actions`); it
 //! holds no state of its own.
@@ -19,6 +21,9 @@ use crate::{
 };
 
 pub const SIDEBAR_WIDTH: gpui::Pixels = px(252.);
+/// A project's monogram, and the padding before it: its chats' rail drops from its middle.
+const MONOGRAM: f32 = 20.;
+const ROW_INSET: f32 = 4.;
 
 #[derive(Clone, Debug, Default)]
 pub struct SidebarData {
@@ -117,7 +122,8 @@ impl RenderOnce for Sidebar {
                     .flex_col()
                     .px(px(10.))
                     .gap(px(1.))
-                    .child(action("new-chat", Icon::Plus, "New chat", "⌘N", true, NewChat, &theme)),
+                    .pt(px(4.))
+                    .child(new_chat_pill(&theme)),
             )
             .child(div().id("sidebar-list").flex_1().min_h_0().overflow_y_scroll().child(list))
             .child(
@@ -125,41 +131,76 @@ impl RenderOnce for Sidebar {
                     .flex_none()
                     .px(px(10.))
                     .pb(px(12.))
-                    .child(action("settings", Icon::Settings, "Settings", "⌘,", false, OpenSettings, &theme)),
+                    .child(settings_row(&theme)),
             )
     }
 }
 
-/// A command row: icon, name, shortcut.
-fn action(
-    tag: &'static str,
-    icon: Icon,
-    name: &'static str,
-    keys: &'static str,
-    strong: bool,
-    action: impl gpui::Action,
-    theme: &Theme,
-) -> impl IntoElement {
+/// The accent pill at the top: a filled circle holding the plus, the words, the shortcut.
+fn new_chat_pill(theme: &Theme) -> impl IntoElement {
     div()
-        .id(tag)
+        .id("new-chat")
+        .h(px(34.))
+        .pl(px(6.))
+        .pr(px(12.))
+        .rounded_full()
+        .flex()
+        .items_center()
+        .gap(px(10.))
+        .bg(theme.accent_wash)
+        .border_1()
+        .border_color(theme.accent_line)
+        .hover(|pill| pill.border_color(theme.accent))
+        .on_click(dispatch(NewChat))
+        .child(
+            div()
+                .flex_none()
+                .size(px(22.))
+                .rounded_full()
+                .flex()
+                .items_center()
+                .justify_center()
+                .bg(theme.accent)
+                .child(Icon::Plus.view(px(12.), theme.on_accent)),
+        )
+        .child(div().flex_1().typography(Type::UiStrong).text_color(theme.text).child("New chat"))
+        .child(div().typography(Type::Small).text_color(theme.text_dim).child("⌘N"))
+        .tag("new-chat")
+}
+
+/// Settings, at the foot.
+fn settings_row(theme: &Theme) -> impl IntoElement {
+    div()
+        .id("settings")
         .h(px(30.))
         .px(px(10.))
-        .rounded(px(7.))
+        .rounded_full()
         .flex()
         .items_center()
         .gap(px(9.))
         .hover(|row| row.bg(theme.hover))
-        .on_click(dispatch(action))
-        .child(icon.view(px(15.), if strong { theme.text } else { theme.text_dim }))
-        .child(
-            div()
-                .flex_1()
-                .typography(if strong { Type::UiStrong } else { Type::Ui })
-                .text_color(if strong { theme.text } else { theme.text_soft })
-                .child(name),
-        )
-        .child(div().typography(Type::Small).text_color(theme.text_faint).child(keys))
-        .tag(tag)
+        .on_click(dispatch(OpenSettings))
+        .child(Icon::Settings.view(px(15.), theme.text_dim))
+        .child(div().flex_1().typography(Type::Ui).text_color(theme.text_soft).child("Settings"))
+        .child(div().typography(Type::Small).text_color(theme.text_faint).child("⌘,"))
+        .tag("settings")
+}
+
+/// A project's round monogram: its name's first letter, lit while the project is open.
+fn monogram(name: &str, lit: bool, theme: &Theme) -> impl IntoElement {
+    let letter: String = name.chars().find(|c| c.is_alphanumeric()).map(|c| c.to_uppercase().collect()).unwrap_or_default();
+    div()
+        .flex_none()
+        .size(px(MONOGRAM))
+        .rounded_full()
+        .flex()
+        .items_center()
+        .justify_center()
+        .bg(if lit { theme.text } else { theme.hover })
+        .typography(Type::Small)
+        .font_weight(FontWeight::SEMIBOLD)
+        .text_color(if lit { theme.window } else { theme.text_soft })
+        .child(letter)
 }
 
 /// A section name, set in the serif's italic.
@@ -187,7 +228,7 @@ fn small_button(id: impl Into<gpui::ElementId>, icon: Icon, colour: Hsla, theme:
         .id(id)
         .flex_none()
         .size(px(20.))
-        .rounded(px(5.))
+        .rounded_full()
         .flex()
         .items_center()
         .justify_center()
@@ -205,7 +246,9 @@ fn project_rows(project: ProjectRow, theme: &Theme) -> impl IntoElement {
         .top_0()
         .bottom_0()
         .right(px(4.))
-        .pl(px(6.))
+        .my(px(4.))
+        .px(px(2.))
+        .rounded_full()
         .bg(theme.hover)
         .flex()
         .items_center()
@@ -237,14 +280,15 @@ fn project_rows(project: ProjectRow, theme: &Theme) -> impl IntoElement {
         .group(group)
         .relative()
         .h(px(28.))
-        .pl(px(10.))
+        .pl(px(ROW_INSET))
         .pr(px(4.))
-        .rounded(px(7.))
+        .rounded_full()
         .flex()
         .items_center()
         .gap(px(8.))
         .hover(|row| row.bg(theme.hover))
         .on_click(dispatch(ToggleProject { id: id.clone() }))
+        .child(monogram(&project.name, project.open || has_selection, theme))
         .child(
             div()
                 .flex_1()
@@ -257,12 +301,21 @@ fn project_rows(project: ProjectRow, theme: &Theme) -> impl IntoElement {
         .children(count)
         .child(controls);
 
-    let mut rows = div().flex().flex_col().child(header);
-    if project.open {
-        for chat in project.chats {
-            rows = rows.child(chat_row(chat, theme));
-        }
-        rows = rows.child(div().h(px(6.)));
+    let mut rows = div().flex().flex_col().gap(px(2.)).child(header);
+    if project.open && !project.chats.is_empty() {
+        // The rail runs down from the middle of the monogram.
+        let rail = div()
+            .ml(px(ROW_INSET + MONOGRAM / 2.))
+            .mb(px(6.))
+            .pl(px(6.))
+            .border_l_1()
+            .border_dashed()
+            .border_color(theme.border_strong)
+            .flex()
+            .flex_col()
+            .gap(px(1.))
+            .children(project.chats.into_iter().map(|chat| chat_row(chat, theme)));
+        rows = rows.child(rail);
     }
     rows
 }
@@ -281,10 +334,9 @@ fn chat_row(chat: ChatRow, theme: &Theme) -> impl IntoElement {
         .group(group.clone())
         .relative()
         .h(px(28.))
-        .ml(px(6.))
         .pl(px(4.))
         .pr(px(4.))
-        .rounded(px(7.))
+        .rounded_full()
         .flex()
         .items_center()
         .gap(px(6.))

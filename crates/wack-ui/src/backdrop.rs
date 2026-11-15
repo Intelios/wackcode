@@ -4,18 +4,23 @@
 //!   and dimmed towards the window's colour exactly as the user chose. The sidebar and the stage
 //!   are glass panes over it (`glass.rs`), thick enough that text on them reads; only the window's
 //!   frame around them shows the picture as chosen.
-//! - **The hero** ([`hero`]): on the new-chat and welcome screens the picture also shows clear
-//!   across the top of the stage, as it is or through a texture. It fades out down its whole
-//!   height and is feathered away around the centred block, so it dissolves into the glass
-//!   without an edge.
+//! - **The hero** ([`hero`]): on the new-chat and welcome screens the whole stage shows the
+//!   picture clear, as it is or through a texture, undimmed: the owner wants to see it there. Only
+//!   a tight, feathered patch around the screen's heading is cleared, so the glass beneath shows
+//!   through and the heading reads. When the first message is sent the hero fades away and the
+//!   glass is left (the shell eases it, `motion::Ease`).
 //!
 //! Invariants:
 //! - Both layers are fitted to the whole window with the same focus ([`cover`]), so the clear
 //!   picture lies exactly over the soft one, and neither moves when the sidebar comes and goes.
+//! - The hero stays inside the stage. The frame, the sidebar and the title strip's pills keep the
+//!   blurred, dimmed picture the theme's readability sums assume (`Theme::glass`).
 //! - The hero's mask is drawn by the GPU (`Window::paint_image_fitted_masked`): resizing the
-//!   window or moving the block rasterizes nothing.
+//!   window or moving the heading rasterizes nothing.
 //! - A texture is worked out once per picture, texture, and light or dark, off the UI thread,
-//!   and kept ([`artwork`]). Until it is ready the hero is simply not drawn.
+//!   and kept ([`artwork`]). Until it is ready the hero is simply not drawn. The plain picture is
+//!   kept larger than a textured one ([`PLAIN_EDGE`]), since it is shown clear across a Retina
+//!   stage.
 //! - A heavy blur starts from the softened copy made on import, so the GPU only blurs the rest
 //!   of the way ([`SOFT_COPY_BLUR`]).
 //!
@@ -32,11 +37,12 @@ use wack_core::Texture;
 
 use crate::panes::Rect;
 
-/// The hero's height as a share of the space below the title strip, and its most.
-const HERO_SHARE: f32 = 0.72;
-const HERO_MAX: f32 = 760.;
 /// The long side of the copy textures are drawn from.
 const ARTWORK_EDGE: u32 = 2048;
+/// The long side of the plain picture the hero shows: enough for a full-screen Retina window.
+pub const PLAIN_EDGE: u32 = 3840;
+/// How far the glass around the heading fades into the clear picture, in points.
+const CUTOUT_FEATHER: f32 = 64.;
 /// How many textures and decoded pictures are kept.
 const KEPT: usize = 4;
 
@@ -83,11 +89,6 @@ pub fn cover(frame: Rect, picture: (u32, u32), focus: (f32, f32)) -> Rect {
         width,
         height,
     }
-}
-
-/// How tall the hero is below a title strip, given the height under it.
-pub fn hero_height(content_height: f32) -> f32 {
-    (content_height * HERO_SHARE).clamp(0., HERO_MAX)
 }
 
 /// About how soft the copy made on import already is, in points across a laptop's window.
@@ -142,45 +143,29 @@ pub fn behind(picture: &Picture, window: Rect, ground: Hsla, dim: f32) -> impl I
         .child(div().absolute().left_0().top_0().size_full().bg(Hsla { a: dim.clamp(0., 1.), ..ground }))
 }
 
-/// The clear picture filling its parent, fitted to the whole `window` like [`behind`], fading out
-/// downwards and feathered away around `cutout`; its top corners rounded by `radius`, to sit in
-/// the stage.
-pub fn hero(artwork: Arc<RenderImage>, picture: &Picture, window: Rect, height: f32, radius: f32, cutout: Cutout) -> impl IntoElement + use<> {
+/// The clear picture filling its parent (the stage), fitted to the whole `window` like
+/// [`behind`], with `radius`-rounded corners. The patch around `cutout`, when one was measured,
+/// fades away so the glass beneath shows through.
+pub fn hero(artwork: Arc<RenderImage>, picture: &Picture, window: Rect, radius: f32, cutout: Cutout) -> impl IntoElement + use<> {
     let fitted = cover(window, (picture.width, picture.height), picture.focus);
     canvas(
         |_, _, _| {},
         move |bounds: Bounds<Pixels>, _, window: &mut Window, _| {
             let fitted = Bounds::new(point(px(fitted.x), px(fitted.y)), size(px(fitted.width), px(fitted.height)));
-            let height = f32::from(bounds.size.height).max(1.);
-            let fade = Some((bounds.bottom(), px(height)));
-            let mask = match cutout.get() {
-                // The cleared area runs on to the hero's foot, so the picture never comes back
-                // in beneath the block.
-                Some(block) => ImageAlphaMask {
-                    bounds: Bounds::new(block.origin, size(block.size.width, block.bottom().max(bounds.bottom()) - block.top())),
-                    radius: px(18.),
-                    feather: px((height * 0.52).clamp(120., 280.)),
-                    clearance: px(8.),
-                    bottom_fade: fade,
-                },
-                // Nothing to clear: an exclusion below the hero leaves only the fade.
-                None => ImageAlphaMask {
-                    bounds: Bounds::new(point(bounds.left(), bounds.bottom() + px(1.)), bounds.size),
-                    radius: px(0.),
-                    feather: px(1.),
-                    clearance: px(0.),
-                    bottom_fade: fade,
-                },
-            };
-            let corners = Corners { top_left: px(radius), top_right: px(radius), ..Default::default() };
-            let _ = window.paint_image_fitted_masked(bounds, fitted, corners, artwork, 0, false, Some(mask));
+            let mask = cutout.get().map(|heading| ImageAlphaMask {
+                bounds: heading,
+                radius: px(24.),
+                feather: px(CUTOUT_FEATHER),
+                clearance: px(12.),
+                bottom_fade: None,
+            });
+            let _ = window.paint_image_fitted_masked(bounds, fitted, Corners::all(px(radius)), artwork, 0, false, mask);
         },
     )
     .absolute()
     .left_0()
     .top_0()
-    .w_full()
-    .h(px(height))
+    .size_full()
 }
 
 /// A picture decoded once, small enough to texture quickly.
@@ -224,12 +209,15 @@ pub fn artwork(picture: &Picture, light: bool, cx: &mut App) -> Option<Arc<Rende
         let made = cx
             .background_executor()
             .spawn(async move {
+                if texture == Texture::None {
+                    return Some((None, Arc::new(plain(path.as_ref())?)));
+                }
                 let source = match source {
                     Some(source) => source,
                     None => Arc::new(Source::open(path.as_ref())?),
                 };
                 let image = Arc::new(source.render(texture, light));
-                Some((source, image))
+                Some((Some(source), image))
             })
             .await;
         cx.update(|cx| {
@@ -238,7 +226,9 @@ pub fn artwork(picture: &Picture, light: bool, cx: &mut App) -> Option<Arc<Rende
                 // A picture that cannot be read leaves no hero, and is not retried until it changes.
                 return;
             };
-            if !artworks.sources.iter().any(|(path, _)| *path == key.0) {
+            if let Some(source) = source
+                && !artworks.sources.iter().any(|(path, _)| *path == key.0)
+            {
                 artworks.sources.push((key.0.clone(), source));
                 if artworks.sources.len() > KEPT {
                     artworks.sources.remove(0);
@@ -252,6 +242,17 @@ pub fn artwork(picture: &Picture, light: bool, cx: &mut App) -> Option<Arc<Rende
     })
     .detach();
     None
+}
+
+/// The picture as it is, up to [`PLAIN_EDGE`] on its long side, in the BGRA order GPUI draws.
+fn plain(path: &str) -> Option<RenderImage> {
+    let picture = image::open(path).ok()?;
+    let picture = if picture.width().max(picture.height()) > PLAIN_EDGE { picture.thumbnail(PLAIN_EDGE, PLAIN_EDGE) } else { picture };
+    let mut pixels = picture.to_rgba8();
+    for pixel in pixels.pixels_mut() {
+        pixel.0.swap(0, 2);
+    }
+    Some(RenderImage::new([image::Frame::new(pixels)]))
 }
 
 impl Source {
@@ -430,12 +431,10 @@ mod tests {
     }
 
     #[test]
-    fn the_hero_takes_most_of_the_height_up_to_a_limit() {
-        assert_eq!(hero_height(500.), 360.);
+    fn a_heavy_blur_starts_from_the_softened_copy() {
         assert_eq!(blur_plan(0.), (false, 0.));
         assert_eq!(blur_plan(8.), (false, 8.));
         let (soft, more) = blur_plan(40.);
         assert!(soft && (more - (40f32 * 40. - SOFT_COPY_BLUR * SOFT_COPY_BLUR).sqrt()).abs() < 0.01);
-        assert_eq!(hero_height(2000.), HERO_MAX);
     }
 }

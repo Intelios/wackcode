@@ -1555,7 +1555,7 @@ fn new_chat(
             .flex_col()
             .items_center()
             .child(on_ground(kicker("New chat in", theme), ground, theme))
-            .child(div().pt(px(6.)).child(display_line(project.name.clone(), ground.is_some(), theme)))
+            .child(div().pt(px(6.)).child(display_line(project.name.clone(), false, theme)))
             // Held to the block's width, so a long path ends in an ellipsis instead of spilling out.
             .child(div().max_w_full().pt(px(8.)).child(on_ground(project_line(&project, theme).max_w_full(), ground, theme)))
             .child(div().w_full().pt(px(30.)).child(Composer::new(composer)))

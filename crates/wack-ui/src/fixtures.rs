@@ -541,22 +541,12 @@ fn dusk(u: f32, v: f32) -> image::Rgb<u8> {
     image::Rgb(colour.map(|channel| ((channel + grain).clamp(0., 1.) * 255.).round() as u8))
 }
 
-/// Settings › Appearance as first opened: the default colours, and `backdrop` if given.
+/// Settings › Appearance as first opened, in the theme the scene is drawn with, and `backdrop`
+/// if given.
 pub fn appearance(backdrop: Option<crate::backdrop::Picture>, cx: &mut gpui::App) -> crate::appearance_page::AppearanceData {
-    use gpui::AppContext;
-    let field = |hex: &'static str, cx: &mut gpui::App| {
-        cx.new(|cx| {
-            let mut field = crate::text_field::TextField::new(crate::typography::Type::Mono, hex, cx);
-            field.set_text(hex, cx);
-            field
-        })
-    };
     crate::appearance_page::AppearanceData {
         mode: wack_core::Mode::System,
-        theme_colour: crate::theme::DEFAULT_THEME_COLOUR.into(),
-        accent: crate::theme::DEFAULT_ACCENT.into(),
-        theme_field: field(crate::theme::DEFAULT_THEME_COLOUR, cx),
-        accent_field: field(crate::theme::DEFAULT_ACCENT, cx),
+        theme: crate::theme::Theme::get(cx).input.theme,
         backdrop,
         importing: false,
         notice: None,

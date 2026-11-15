@@ -12,11 +12,12 @@ Every view state worth looking at is a **scene** in `crates/wack-ui/src/scenes.r
 cargo snap --list                              # what scenes exist
 cargo snap chat --theme dark                   # writes target/gallery/chat-dark.png
 cargo snap chat --theme light --out /tmp/a.png
-cargo snap chat --colour '#2f5bd6' --accent '#ff8fb8'   # a user's theme colour and accent
+cargo snap chat --look nebula                  # in one of the ten themes (WackCode by default)
+cargo snap chat --look all --theme light       # in every theme: target/gallery/chat-<theme>-light.png
 cargo snap --all                               # every scene, light and dark
 ```
 
-Scenes render from sample data in `crates/wack-ui/src/fixtures.rs`: a believable session, so lengths and rhythm are real. The `specimen` scene shows every text style and colour token in the theme it is rendered with. A view must look right with any theme colour and accent, so try at least one vivid pair as well as the default.
+Scenes render from sample data in `crates/wack-ui/src/fixtures.rs`: a believable session, so lengths and rhythm are real. The `specimen` scene shows every text style and colour token in the theme it is rendered with. A view must look right in every theme, so try at least one vivid theme (Nebula, Solar) and Mono as well as the default, and a sweeping one (Lagoon, Verdant, Nebula, Solar) for anything filled with the accent.
 
 Rendering is headless: GPUI's test platform with the real Metal renderer and the real macOS text system. No window opens and nothing takes focus, so it works from any shell. Images are rendered at 2x. The gallery draws a scene twice so pictures loaded by the first frame show, and renders with Reduce Motion on, so every movement is shown where it comes to rest.
 

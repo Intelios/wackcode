@@ -1,7 +1,7 @@
 //! Buttons for cards that ask the user to decide: the question card, the plan card, a
 //! confirmation. A word on a rounded ground; one primary per row.
 
-use gpui::{App, ClickEvent, Hsla, SharedString, Window, div, prelude::*, px};
+use gpui::{App, Background, ClickEvent, Hsla, SharedString, Window, div, prelude::*, px};
 
 use crate::{
     theme::Theme,
@@ -59,11 +59,11 @@ impl Button {
 impl RenderOnce for Button {
     fn render(self, _: &mut Window, cx: &mut App) -> impl IntoElement {
         let theme = Theme::get(cx);
-        let (ground, hover, ink, line): (Option<Hsla>, Hsla, Hsla, Option<Hsla>) = match self.kind {
-            Kind::Primary => (Some(theme.accent), theme.accent_hover, theme.on_accent, None),
-            Kind::Ultra => (Some(theme.ultra), theme.ultra_glow, theme.on_ultra, None),
-            Kind::Secondary => (None, theme.hover, theme.text_soft, Some(theme.border_strong)),
-            Kind::Danger => (None, theme.hover, theme.danger, Some(theme.border_strong)),
+        let (ground, hover, ink, line): (Option<Background>, Background, Hsla, Option<Hsla>) = match self.kind {
+            Kind::Primary => (Some(theme.accent_fill()), theme.accent_fill_hover(), theme.on_accent, None),
+            Kind::Ultra => (Some(theme.ultra.into()), theme.ultra_glow.into(), theme.on_ultra, None),
+            Kind::Secondary => (None, theme.hover.into(), theme.text_soft, Some(theme.border_strong)),
+            Kind::Danger => (None, theme.hover.into(), theme.danger, Some(theme.border_strong)),
         };
         let enabled = self.enabled;
         div()

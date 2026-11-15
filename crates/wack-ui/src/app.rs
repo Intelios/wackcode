@@ -27,7 +27,7 @@ use crate::{
     chat::{ChatEvent, ChatSession, now_millis},
     panes::Layout,
     settings::{ProviderForm, Section},
-    theme::{self, DEFAULT_ACCENT, DEFAULT_THEME_COLOUR},
+    theme,
     text_field::{TextField, TextFieldEvent},
     typography::Type,
 };
@@ -85,9 +85,6 @@ pub struct AppState {
     pub menu: Option<Menu>,
     /// The section Settings shows.
     pub settings_section: Section,
-    /// Settings › Appearance's hex fields, for colours the chips do not offer.
-    pub theme_field: Entity<TextField>,
-    pub accent_field: Entity<TextField>,
     /// Why the last appearance change could not be made.
     pub appearance_notice: Option<SharedString>,
     /// A backdrop picture is being read.
@@ -123,33 +120,7 @@ impl AppState {
             }
         });
         let form = ProviderForm::new(cx);
-        let theme_field = cx.new(|cx| TextField::new(Type::Mono, DEFAULT_THEME_COLOUR, cx));
-        let accent_field = cx.new(|cx| TextField::new(Type::Mono, DEFAULT_ACCENT, cx));
         let mut subscriptions = vec![draft_subscription];
-        for (field, accent) in [(&theme_field, false), (&accent_field, true)] {
-            subscriptions.push(cx.subscribe(field, move |app, field, event, cx| {
-                let text = field.read(cx).text().to_string();
-                match event {
-                    // A complete colour applies as it is typed, so the page previews it.
-                    // Writing the colour in use into the field changes nothing.
-                    TextFieldEvent::Changed => {
-                        if let Some(hex) = wack_core::appearance::hex_colour(&text).filter(|_| text.trim().trim_start_matches('#').len() == 6)
-                            && hex != app.colour(accent)
-                        {
-                            app.set_colour(accent, Some(hex), false, cx);
-                        }
-                    }
-                    TextFieldEvent::Enter | TextFieldEvent::SendNow => match wack_core::appearance::hex_colour(&text) {
-                        Some(hex) => app.set_colour(accent, Some(hex), true, cx),
-                        None if text.trim().is_empty() => app.set_colour(accent, None, true, cx),
-                        None => {
-                            app.appearance_notice = Some(format!("“{}” is not a colour. Write it as #rrggbb.", text.trim()).into());
-                            cx.notify();
-                        }
-                    },
-                }
-            }));
-        }
         for field in form.fields() {
             subscriptions.push(cx.subscribe(field, |app, _, event, cx| match event {
                 TextFieldEvent::Enter | TextFieldEvent::SendNow => app.add_connection(cx),
@@ -187,8 +158,6 @@ impl AppState {
             menu: None,
             settings_section: Section::default(),
             confirming_unrestricted: false,
-            theme_field,
-            accent_field,
             appearance_notice: None,
             importing: false,
             tabs,
@@ -198,7 +167,6 @@ impl AppState {
             _subscriptions: subscriptions,
         };
         theme::apply(app.store.appearance(), cx);
-        app.show_colours(cx);
         app.select(selection, cx);
         app
     }
@@ -215,46 +183,6 @@ impl AppState {
             Err(message) => self.appearance_notice = Some(message.into()),
         }
         cx.notify();
-    }
-
-    /// Sets the theme colour or the accent; `None` is the default. `show` also writes the colour
-    /// into its hex field (not while the user is typing there).
-    pub fn set_colour(&mut self, accent: bool, hex: Option<String>, show: bool, cx: &mut Context<Self>) {
-        // The default chosen by hand is kept as the default, so it follows any later change to it.
-        let default = if accent { DEFAULT_ACCENT } else { DEFAULT_THEME_COLOUR };
-        let hex = hex.filter(|hex| !hex.eq_ignore_ascii_case(default));
-        self.set_appearance(
-            |appearance| {
-                if accent {
-                    appearance.accent = hex;
-                } else {
-                    appearance.theme_colour = hex;
-                }
-            },
-            cx,
-        );
-        if show {
-            self.show_colours(cx);
-        }
-    }
-
-    /// The theme colour or accent in use, as `#rrggbb`.
-    pub fn colour(&self, accent: bool) -> String {
-        let appearance = self.store.appearance();
-        let (chosen, default) =
-            if accent { (&appearance.accent, DEFAULT_ACCENT) } else { (&appearance.theme_colour, DEFAULT_THEME_COLOUR) };
-        chosen.clone().unwrap_or_else(|| default.into())
-    }
-
-    /// Writes the colours in use into their hex fields.
-    fn show_colours(&mut self, cx: &mut Context<Self>) {
-        for (field, hex) in [(self.theme_field.clone(), self.colour(false)), (self.accent_field.clone(), self.colour(true))] {
-            field.update(cx, |field, cx| {
-                if field.text() != hex {
-                    field.set_text(&hex, cx);
-                }
-            });
-        }
     }
 
     /// Reads a picture off the UI thread and makes it the backdrop.

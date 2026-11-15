@@ -177,8 +177,8 @@ impl RenderOnce for Composer {
                 .flex()
                 .items_center()
                 .justify_center()
-                .bg(if has_text { theme.accent } else { theme.hover })
-                .when(has_text, |button| button.hover(|button| button.bg(theme.accent_hover)))
+                .when(has_text, |button| button.bg(theme.accent_fill()).hover(|button| button.bg(theme.accent_fill_hover())))
+                .when(!has_text, |button| button.bg(theme.hover))
                 .on_click(dispatch(Send))
                 .child(Icon::ArrowUp.view(px(15.), if has_text { theme.on_accent } else { theme.text_faint }))
                 .tag("send")
@@ -587,7 +587,7 @@ fn effort_slider(menu: MenuData, model: SharedString, theme: &Theme) -> impl Int
     };
     let pick: crate::slide::Pick = Rc::new(pick);
     let knob_x = stop_x(current, count, width);
-    let fill_ground = if ultra { theme.ultra } else { theme.accent };
+    let fill_ground = if ultra { theme.ultra.into() } else { theme.accent_fill() };
     let mut track = div()
         .id("effort-track")
         .relative()

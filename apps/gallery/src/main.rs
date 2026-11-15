@@ -7,7 +7,8 @@
 //! ```text
 //! cargo snap --list
 //! cargo snap new-chat --theme dark --out /tmp/new-chat.png
-//! cargo snap chat --colour '#2f5bd6' --accent '#ff8fb8'   # any theme colour and accent
+//! cargo snap chat --look nebula          # any of the ten themes (WackCode by default)
+//! cargo snap settings-appearance --look all --theme light   # the scene in every theme
 //! cargo snap chat --tags                  # also print each tagged element's bounds
 //! cargo snap --all --out-dir target/gallery
 //! ```
@@ -19,12 +20,13 @@ use wack_ui::{
     icon::Assets,
     scenes::{self, Scene, SceneRoot},
     tags,
-    theme::{Appearance, DEFAULT_ACCENT, DEFAULT_THEME_COLOUR, Theme, ThemeInput},
+    theme::{Appearance, Theme, ThemeInput, ThemeName},
 };
 
 const USAGE: &str = "usage: gallery --list
-       gallery <scene> [--theme light|dark] [--colour <#hex>] [--accent <#hex>] [--out <file.png>] [--tags]
-       gallery --all [--colour <#hex>] [--accent <#hex>] [--out-dir <dir>] [--tags]";
+       gallery <scene> [--theme light|dark] [--look <theme>|all] [--out <file.png>] [--tags]
+       gallery --all [--look <theme>] [--out-dir <dir>] [--tags]
+themes: wackcode midnight lagoon verdant grape nebula rose solar ember mono";
 
 fn main() -> ExitCode {
     match run(std::env::args().skip(1).collect()) {
@@ -42,8 +44,8 @@ fn run(args: Vec<String>) -> Result<(), String> {
     let mut list = false;
     let mut print_tags = false;
     let mut theme = Appearance::Dark;
-    let mut theme_colour = DEFAULT_THEME_COLOUR.to_string();
-    let mut accent = DEFAULT_ACCENT.to_string();
+    // Which themes to draw in; more than one only for a single scene.
+    let mut looks = vec![ThemeName::default()];
     let mut out = None;
     let mut out_dir = PathBuf::from("target/gallery");
 
@@ -61,8 +63,15 @@ fn run(args: Vec<String>) -> Result<(), String> {
                     other => return Err(format!("Unknown theme \"{other}\": use light or dark.")),
                 }
             }
-            "--colour" => theme_colour = value("--colour")?,
-            "--accent" => accent = value("--accent")?,
+            "--look" => {
+                looks = match value("--look")?.as_str() {
+                    "all" => ThemeName::ALL.to_vec(),
+                    id => match ThemeName::ALL.into_iter().find(|look| look.id() == id) {
+                        Some(look) => vec![look],
+                        None => return Err(format!("Unknown look \"{id}\".\n{USAGE}")),
+                    },
+                }
+            }
             "--out" => out = Some(PathBuf::from(value("--out")?)),
             "--out-dir" => out_dir = PathBuf::from(value("--out-dir")?),
             flag if flag.starts_with("--") => {
@@ -79,21 +88,29 @@ fn run(args: Vec<String>) -> Result<(), String> {
         return Ok(());
     }
 
-    let mut renders: Vec<(Scene, Appearance, PathBuf)> = Vec::new();
+    let mut renders: Vec<(Scene, Appearance, ThemeName, PathBuf)> = Vec::new();
     if all {
+        if looks.len() > 1 {
+            return Err(format!("--all draws in one look at a time.\n{USAGE}"));
+        }
         for appearance in [Appearance::Light, Appearance::Dark] {
             for scene in scenes::all() {
-                let path = out_dir.join(file_name(&scene, appearance));
-                renders.push((scene, appearance, path));
+                let path = out_dir.join(file_name(&scene, appearance, looks[0]));
+                renders.push((scene, appearance, looks[0], path));
             }
         }
     } else {
         let name = scene_name.ok_or(USAGE)?;
-        let scene = scenes::find(&name).ok_or(format!(
-            "No scene named \"{name}\". Run with --list to see them."
-        ))?;
-        let path = out.unwrap_or_else(|| out_dir.join(file_name(&scene, theme)));
-        renders.push((scene, theme, path));
+        if out.is_some() && looks.len() > 1 {
+            return Err(format!("--out names one file; use --out-dir with --look all.\n{USAGE}"));
+        }
+        for look in looks {
+            let scene = scenes::find(&name).ok_or(format!(
+                "No scene named \"{name}\". Run with --list to see them."
+            ))?;
+            let path = out.clone().unwrap_or_else(|| out_dir.join(file_name(&scene, theme, look)));
+            renders.push((scene, theme, look, path));
+        }
     }
 
     // One headless app for every render: the Metal renderer and text system are costly to start.
@@ -107,13 +124,8 @@ fn run(args: Vec<String>) -> Result<(), String> {
     // A snapshot shows where every movement comes to rest, never a frame mid-way.
     cx.update(|cx| cx.set_reduce_motion(true));
 
-    for (scene, appearance, path) in renders {
-        let input = ThemeInput {
-            appearance,
-            theme_colour: theme_colour.clone(),
-            accent: accent.clone(),
-            ground: None,
-        };
+    for (scene, appearance, look, path) in renders {
+        let input = ThemeInput { appearance, theme: look, ground: None };
         cx.update(|cx| cx.set_global(Theme::derive(input)));
         let window = cx
             .open_window(scene.size, |window, cx| {
@@ -168,10 +180,15 @@ fn run(args: Vec<String>) -> Result<(), String> {
     Ok(())
 }
 
-fn file_name(scene: &Scene, appearance: Appearance) -> String {
+/// `<scene>-<light|dark>.png`, with the look between them when it is not the default.
+fn file_name(scene: &Scene, appearance: Appearance, look: ThemeName) -> String {
     let theme = match appearance {
         Appearance::Light => "light",
         Appearance::Dark => "dark",
     };
-    format!("{}-{theme}.png", scene.name)
+    if look == ThemeName::default() {
+        format!("{}-{theme}.png", scene.name)
+    } else {
+        format!("{}-{}-{theme}.png", scene.name, look.id())
+    }
 }

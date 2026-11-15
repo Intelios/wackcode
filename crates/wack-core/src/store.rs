@@ -555,7 +555,7 @@ impl Store {
         &self.state.appearance
     }
 
-    /// Changes how the app looks. Colours must be `#rrggbb`; a backdrop must be one
+    /// Changes how the app looks. A backdrop must be one
     /// [`crate::appearance::import_backdrop`] wrote into [`Store::backgrounds_folder`]. Copies no
     /// longer used are deleted.
     pub fn set_appearance(&mut self, appearance: Appearance) -> Result<(), String> {
@@ -979,16 +979,16 @@ mod tests {
         let first = crate::appearance::import_backdrop(&picture, &store.backgrounds_folder()).unwrap();
         let appearance = Appearance {
             mode: crate::Mode::Dark,
-            accent: Some("#FF8FB8".into()),
+            theme: crate::ThemeName::Rose,
             backdrop: Some(first.clone()),
             ..Appearance::default()
         };
         store.set_appearance(appearance).unwrap();
-        assert_eq!(store.appearance().accent.as_deref(), Some("#ff8fb8"));
         assert!(store.backdrop_path(&first).exists());
 
         let reopened = Store::open(folder.path()).unwrap();
         assert_eq!(reopened.appearance().backdrop.as_ref(), Some(&first));
+        assert_eq!(reopened.appearance().theme, crate::ThemeName::Rose);
 
         let without = Appearance { backdrop: None, ..store.appearance().clone() };
         store.set_appearance(without).unwrap();

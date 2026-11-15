@@ -39,8 +39,8 @@ use gpui::{
 
 use crate::{
     actions::{
-        self, ActivatePane, AddConnection, AddFolder, Back, ChooseAccent, ChooseBackdrop, ChooseEffort, SlideEffort, ToggleTodos, ToggleWaiting, ChooseFocus, CycleAgentMode, SetAgentMode, PickOption, ShowQuestion, NextQuestion, PreviousQuestion, SubmitAnswers, CancelQuestion, WrapUpQuestion, ShowDoneTodos, DiscardPlan, KeepPlan, ConfirmDiscardPlan, ApprovePlan, SavePlan, CopyPlan, ToggleUnrestrictedPlanning, ConfirmUnrestrictedPlanning, CancelUnrestrictedPlanning,
-        ChooseBlur, ChooseDim, ChooseFormat, OpenConnectionForm, CloseConnectionForm, SwitchConnection, ChooseMode, ChooseModel, ChooseTexture, ChooseThemeColour, CloseChatTab, CloseMenu, ClosePane,
+        self, ActivatePane, AddConnection, AddFolder, Back, ChooseBackdrop, ChooseEffort, SlideEffort, ToggleTodos, ToggleWaiting, ChooseFocus, CycleAgentMode, SetAgentMode, PickOption, ShowQuestion, NextQuestion, PreviousQuestion, SubmitAnswers, CancelQuestion, WrapUpQuestion, ShowDoneTodos, DiscardPlan, KeepPlan, ConfirmDiscardPlan, ApprovePlan, SavePlan, CopyPlan, ToggleUnrestrictedPlanning, ConfirmUnrestrictedPlanning, CancelUnrestrictedPlanning,
+        ChooseBlur, ChooseDim, ChooseFormat, OpenConnectionForm, CloseConnectionForm, SwitchConnection, ChooseMode, ChooseModel, ChooseTexture, ChooseTheme, CloseChatTab, CloseMenu, ClosePane,
         ClosePaneId, CloseSettings, CloseTab, Compact, DeleteChat, EqualizeSplit, FocusNext, FocusPrevious, MovePane,
         NewChat, NewChatIn, NewTerminal, NewTerminalWith, NextTab, OpenEffortMenu, OpenModelMenu, OpenSettings,
         OpenSettingsSection, PinProject, PreviousTab, RemoveBackdrop, RemoveConnection, RemoveProject, ResetDockSize,
@@ -63,7 +63,7 @@ use crate::{
     icon::Icon,
     sidebar::{ChatRow, ChatState, ProjectRow, SIDEBAR_WIDTH, Sidebar, SidebarData},
     tags::{self, Tag},
-    theme::{DEFAULT_ACCENT, DEFAULT_THEME_COLOUR, Theme},
+    theme::Theme,
     transcript::{self, Handlers, Item, Transcript},
     typography::{Type, Typography},
 };
@@ -991,13 +991,9 @@ impl Render for Shell {
                     let mode = action.mode;
                     shell.with_app(cx, |app, cx| app.set_appearance(|appearance| appearance.mode = mode, cx));
                 }))
-                .on_action(cx.listener(|shell, action: &ChooseThemeColour, _, cx| {
-                    let hex = action.hex.clone();
-                    shell.with_app(cx, |app, cx| app.set_colour(false, hex, true, cx));
-                }))
-                .on_action(cx.listener(|shell, action: &ChooseAccent, _, cx| {
-                    let hex = action.hex.clone();
-                    shell.with_app(cx, |app, cx| app.set_colour(true, hex, true, cx));
+                .on_action(cx.listener(|shell, action: &ChooseTheme, _, cx| {
+                    let theme = action.theme;
+                    shell.with_app(cx, |app, cx| app.set_appearance(|appearance| appearance.theme = theme, cx));
                 }))
                 .on_action(cx.listener(Self::choose_backdrop))
                 .on_action(cx.listener(|shell, _: &RemoveBackdrop, _, cx| {
@@ -1171,10 +1167,7 @@ fn live_view(app: &AppState, cx: &App) -> (SidebarData, Screen, StripData) {
                 providers: ProvidersData::new(store.connections(), |id| store.has_key(id), &app.form),
                 appearance: AppearanceData {
                     mode: appearance.mode,
-                    theme_colour: appearance.theme_colour.clone().unwrap_or_else(|| DEFAULT_THEME_COLOUR.into()),
-                    accent: appearance.accent.clone().unwrap_or_else(|| DEFAULT_ACCENT.into()),
-                    theme_field: app.theme_field.clone(),
-                    accent_field: app.accent_field.clone(),
+                    theme: appearance.theme,
                     backdrop: app.backdrop(),
                     importing: app.importing,
                     notice: app.appearance_notice.clone(),
@@ -1518,8 +1511,8 @@ fn welcome(notice: Option<SharedString>, ground: Option<Hsla>, theme: &Theme) ->
                             .flex()
                             .items_center()
                             .gap(px(8.))
-                            .bg(theme.accent)
-                            .hover(|button| button.bg(theme.accent_hover))
+                            .bg(theme.accent_fill())
+                            .hover(|button| button.bg(theme.accent_fill_hover()))
                             .on_click(|_, window, cx| window.dispatch_action(Box::new(AddFolder), cx))
                             .child(Icon::Folder.view(px(15.), theme.on_accent))
                             .child(div().typography(Type::UiStrong).text_color(theme.on_accent).child("Add folder…"))

@@ -423,7 +423,7 @@ pub fn asked_view(asked: &[Asked], theme: &Theme) -> impl IntoElement {
         let marker = |picked: bool| {
             let shape = div().flex_none().size(px(12.)).mt(px(3.));
             let shape = if question.multi_select { shape.rounded(px(3.)) } else { shape.rounded_full() };
-            if picked { shape.bg(theme.accent) } else { shape.border_1().border_color(theme.border_strong) }
+            if picked { shape.bg(theme.accent_fill()) } else { shape.border_1().border_color(theme.border_strong) }
         };
         div()
             .flex()

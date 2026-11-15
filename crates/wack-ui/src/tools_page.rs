@@ -30,7 +30,7 @@ pub fn switch(on: bool, theme: &Theme) -> impl IntoElement {
         .p(px(2.))
         .rounded_full()
         .flex()
-        .when(on, |track| track.justify_end().bg(theme.accent))
+        .when(on, |track| track.justify_end().bg(theme.accent_fill()))
         .when(!on, |track| track.bg(theme.border_strong))
         .child(div().size(px(16.)).rounded_full().bg(if on { theme.on_accent } else { theme.surface }))
 }

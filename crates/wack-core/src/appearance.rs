@@ -1,10 +1,11 @@
-//! How the app looks, as the user chose it: light or dark, the theme colour, the accent, and an
-//! image behind the window. The UI derives every colour from these (`wack-ui/src/theme.rs`); this
-//! module only keeps the choices and prepares the image.
+//! How the app looks, as the user chose it: light or dark, one of a fixed set of themes, and an
+//! image behind the window. The UI derives every colour from these (`wack-ui/src/theme.rs`, which
+//! holds each theme's colours); this module only keeps the choices and prepares the image.
 //!
 //! Invariants:
-//! - Colours are kept as `#rrggbb` or not at all (`None` is the default). Anything else is
-//!   refused here, so the theme never has to guess.
+//! - A theme is chosen from [`ThemeName::ALL`], never made: no colour is ever stored. A theme
+//!   name this build does not know (from a later build, or edited by hand) reads as the default,
+//!   so it never stops the settings from loading.
 //! - A backdrop is always WackCode's own copy in `backgrounds/`, never the user's original: the
 //!   original can move or be deleted without the window losing its picture. The copy is a JPEG
 //!   no larger than [`MAX_BACKDROP_EDGE`] on its long side, so a huge photo costs no more to draw
@@ -81,6 +82,89 @@ impl Texture {
     }
 }
 
+/// One of WackCode's themes (`docs/redesign.md`, phase 6): WackCode 2's set, by name. What each
+/// looks like is the UI's business.
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq, Hash)]
+pub enum ThemeName {
+    #[default]
+    WackCode,
+    Midnight,
+    Lagoon,
+    Verdant,
+    Grape,
+    Nebula,
+    Rose,
+    Solar,
+    Ember,
+    Mono,
+}
+
+impl ThemeName {
+    pub const ALL: [ThemeName; 10] = [
+        ThemeName::WackCode,
+        ThemeName::Midnight,
+        ThemeName::Lagoon,
+        ThemeName::Verdant,
+        ThemeName::Grape,
+        ThemeName::Nebula,
+        ThemeName::Rose,
+        ThemeName::Solar,
+        ThemeName::Ember,
+        ThemeName::Mono,
+    ];
+
+    /// How the theme is written in `wackcode.json`.
+    pub fn id(self) -> &'static str {
+        match self {
+            ThemeName::WackCode => "wackcode",
+            ThemeName::Midnight => "midnight",
+            ThemeName::Lagoon => "lagoon",
+            ThemeName::Verdant => "verdant",
+            ThemeName::Grape => "grape",
+            ThemeName::Nebula => "nebula",
+            ThemeName::Rose => "rose",
+            ThemeName::Solar => "solar",
+            ThemeName::Ember => "ember",
+            ThemeName::Mono => "mono",
+        }
+    }
+
+    /// How the theme is shown.
+    pub fn name(self) -> &'static str {
+        match self {
+            ThemeName::WackCode => "WackCode",
+            ThemeName::Midnight => "Midnight",
+            ThemeName::Lagoon => "Lagoon",
+            ThemeName::Verdant => "Verdant",
+            ThemeName::Grape => "Grape",
+            ThemeName::Nebula => "Nebula",
+            ThemeName::Rose => "Rosé",
+            ThemeName::Solar => "Solar",
+            ThemeName::Ember => "Ember",
+            ThemeName::Mono => "Mono",
+        }
+    }
+
+    /// The theme written as `id`; the default for anything else.
+    pub fn from_id(id: &str) -> ThemeName {
+        ThemeName::ALL.into_iter().find(|theme| theme.id() == id).unwrap_or_default()
+    }
+}
+
+impl Serialize for ThemeName {
+    fn serialize<S: serde::Serializer>(&self, serializer: S) -> Result<S::Ok, S::Error> {
+        serializer.serialize_str(self.id())
+    }
+}
+
+impl<'de> Deserialize<'de> for ThemeName {
+    fn deserialize<D: serde::Deserializer<'de>>(deserializer: D) -> Result<Self, D::Error> {
+        // Anything but a known name, even something that is not a string, is the default.
+        let value = serde_json::Value::deserialize(deserializer)?;
+        Ok(value.as_str().map(ThemeName::from_id).unwrap_or_default())
+    }
+}
+
 #[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
 pub struct Backdrop {
     /// The copy's file name inside `backgrounds/`.
@@ -124,21 +208,15 @@ fn default_blur() -> u8 {
 pub struct Appearance {
     #[serde(default)]
     pub mode: Mode,
-    #[serde(default, skip_serializing_if = "Option::is_none")]
-    pub theme_colour: Option<String>,
-    #[serde(default, skip_serializing_if = "Option::is_none")]
-    pub accent: Option<String>,
+    #[serde(default)]
+    pub theme: ThemeName,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub backdrop: Option<Backdrop>,
 }
 
 impl Appearance {
-    /// The same choices, checked: a colour that is not `#rrggbb` is refused, and the backdrop's
-    /// focus, dim and blur are kept in range.
+    /// The same choices, checked: the backdrop's focus, dim and blur are kept in range.
     pub fn checked(mut self) -> Result<Self, String> {
-        for colour in [&mut self.theme_colour, &mut self.accent].into_iter().flatten() {
-            *colour = hex_colour(colour).ok_or_else(|| format!("“{colour}” is not a colour. Write it as #rrggbb."))?;
-        }
         if let Some(backdrop) = &mut self.backdrop {
             let unit = |value: f32| if value.is_finite() { value.clamp(0., 1.) } else { 0.5 };
             backdrop.focus_x = unit(backdrop.focus_x);
@@ -151,17 +229,6 @@ impl Appearance {
         }
         Ok(self)
     }
-}
-
-/// `#rrggbb` in lower case for a colour written as `#RGB`, `#rrggbb` or without the `#`.
-pub fn hex_colour(text: &str) -> Option<String> {
-    let digits = text.trim().trim_start_matches('#');
-    let digits: String = match digits.len() {
-        3 => digits.chars().flat_map(|digit| [digit, digit]).collect(),
-        6 => digits.to_string(),
-        _ => return None,
-    };
-    digits.chars().all(|digit| digit.is_ascii_hexdigit()).then(|| format!("#{}", digits.to_ascii_lowercase()))
 }
 
 /// The softened copy's file name beside a backdrop's `file`.
@@ -298,15 +365,22 @@ pub fn tidy_backgrounds(backgrounds: &Path, keep: Option<&str>) {
 mod tests {
     use super::*;
 
+    /// A theme is stored by name; one this build does not know, and the colours earlier builds
+    /// kept, still open as the default.
     #[test]
-    fn colours_are_kept_as_hex_or_refused() {
-        assert_eq!(hex_colour("#C2EE4A").as_deref(), Some("#c2ee4a"));
-        assert_eq!(hex_colour("c2ee4a").as_deref(), Some("#c2ee4a"));
-        assert_eq!(hex_colour("#abc").as_deref(), Some("#aabbcc"));
-        assert_eq!(hex_colour("olive"), None);
-        assert_eq!(hex_colour("#12345"), None);
-        let refused = Appearance { accent: Some("lime".into()), ..Appearance::default() }.checked();
-        assert!(refused.is_err());
+    fn themes_are_kept_by_name() {
+        let chosen = Appearance { theme: ThemeName::Nebula, ..Appearance::default() };
+        let written = serde_json::to_string(&chosen).unwrap();
+        assert!(written.contains(r#""theme":"nebula""#), "{written}");
+        assert_eq!(serde_json::from_str::<Appearance>(&written).unwrap(), chosen);
+        let earlier: Appearance = serde_json::from_str(r##"{"mode":"dark","theme_colour":"#6f7a5c","accent":"#c2ee4a"}"##).unwrap();
+        assert_eq!((earlier.mode, earlier.theme), (Mode::Dark, ThemeName::WackCode));
+        for unknown in [r#"{"theme":"sepia"}"#, r#"{"theme":7}"#, r#"{"theme":null}"#] {
+            assert_eq!(serde_json::from_str::<Appearance>(unknown).unwrap().theme, ThemeName::WackCode, "{unknown}");
+        }
+        for theme in ThemeName::ALL {
+            assert_eq!(ThemeName::from_id(theme.id()), theme);
+        }
     }
 
     #[test]

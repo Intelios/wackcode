@@ -159,7 +159,7 @@ pub fn pill(id: impl Into<gpui::ElementId>, label: impl Into<SharedString>, icon
         .items_center()
         .gap(px(7.))
         .cursor_pointer()
-        .when(strong, |pill| pill.bg(theme.accent).hover(|pill| pill.bg(theme.accent_hover)))
+        .when(strong, |pill| pill.bg(theme.accent_fill()).hover(|pill| pill.bg(theme.accent_fill_hover())))
         .when(!strong, |pill| pill.border_1().border_color(theme.border_strong).hover(|pill| pill.bg(theme.hover)))
         .children(icon.map(|icon| icon.view(px(14.), ink)))
         .child(div().typography(Type::UiStrong).text_color(ink).child(label.into()))
@@ -241,7 +241,7 @@ pub fn slider(
         .bg(theme.hover)
         .cursor_pointer()
         .child(slide::follow(id, drawn, pick.clone()).absolute().left_0().top_0().size_full())
-        .child(div().absolute().left_0().top_0().bottom_0().w(px(knob_x + HEIGHT / 2.)).rounded_full().bg(theme.accent))
+        .child(div().absolute().left_0().top_0().bottom_0().w(px(knob_x + HEIGHT / 2.)).rounded_full().bg(theme.accent_fill()))
         .child(
             div()
                 .absolute()

@@ -1,17 +1,28 @@
 //! Theme tokens: every colour a view may use.
 //!
 //! Views never write a raw colour. They read a token from [`Theme`], which is the one place colours
-//! are defined, so the whole app follows the appearance, the theme colour and the accent.
+//! are defined, so the whole app follows the appearance and the theme.
 //! `raw_colours_live_only_here` below guards the rule.
 //!
-//! Every themeable token is derived from three inputs ([`ThemeInput`]):
+//! Every themeable token is derived from two choices ([`ThemeInput`]):
 //!
 //! - **Appearance** picks a lightness ramp. Lightness is fixed per token and appearance, so text
-//!   contrast never depends on the colours the user picks.
-//! - **Theme colour** gives the neutrals their hue. Its chroma sets how strongly they are tinted:
-//!   a grey theme colour gives true greys, a vivid one a clearly coloured app.
-//! - **Accent** paints interaction only: buttons, focus, selection, links. Text drawn in the accent
-//!   is moved in lightness until it reads on the window.
+//!   contrast never depends on the theme.
+//! - **Theme**: one of WackCode 2's ten ([`palette`]), each a background and an accent, four with
+//!   a sweep. The user chooses one; nobody picks colours (`docs/redesign.md`).
+//!   - The background gives the neutrals their hue, and its chroma sets how strongly they are
+//!     tinted against the ramp: Mono gives true greys, Nebula a clearly violet app. In dark the
+//!     window is the background exactly and the other surfaces keep their steps from it, so dark
+//!     is WackCode 2's ground; light carries the same hue, as strongly, onto the light ramp.
+//!   - The accent paints interaction only: buttons, focus, selection, links. Its fill is the
+//!     theme's colour exactly, except that a grey accent mirrors its lightness in light (Mono's
+//!     near-white would vanish on paper). Text drawn in the accent is moved in lightness until
+//!     it reads on the window.
+//!   - A sweep paints the accent's fills ([`Theme::accent_fill`]): the send button, primary
+//!     pills, switches that are on, slider fills. Lines, text, the selection and the terminal's
+//!     cursor stay the solid accent. Sweeps are three-stop and linear, never Ultra's five-colour
+//!     prism; GPUI draws two stops, so a sweep runs from its first stop to its last, blended in
+//!     OKLab, which passes close by its middle one.
 //!
 //! Over a picture (the fourth input, [`Ground`]) the picture is dimmed exactly as the user chose
 //! ([`Theme::veil`]), and text sits on glass panes over it: the window's colour at
@@ -25,7 +36,8 @@
 //! accent. Syntax colours keep their own hues so code stays readable, leaning slightly towards the
 //! accent so it looks at home in any theme.
 
-use gpui::{App, Global, Hsla, Rgba, Window, WindowAppearance, rgb};
+use gpui::{App, Background, ColorSpace, Global, Hsla, Rgba, Window, WindowAppearance, linear_color_stop, linear_gradient, rgb};
+pub use wack_core::ThemeName;
 
 use crate::colour::{Lch, Srgb, angle_delta, contrast, readable_on};
 
@@ -44,31 +56,47 @@ impl From<WindowAppearance> for Appearance {
     }
 }
 
-/// The lime of the app icon.
-pub const DEFAULT_ACCENT: &str = "#c2ee4a";
-/// A muted olive: tints the neutrals towards the icon's green without reading as green.
-pub const DEFAULT_THEME_COLOUR: &str = "#6f7a5c";
+/// A theme's own colours, as WackCode 2 defined them (its `THEME_PRESETS`).
+#[derive(Clone, Copy, Debug, PartialEq)]
+pub struct Palette {
+    /// The dark window, exactly; its hue and chroma tint every neutral in both appearances.
+    pub background: &'static str,
+    pub accent: &'static str,
+    /// Three stops the accent's fills sweep through, for the four themes that have one. Every
+    /// stop reads under `on_accent`.
+    pub sweep: Option<[&'static str; 3]>,
+}
+
+/// The colours of `theme`.
+pub fn palette(theme: ThemeName) -> Palette {
+    let (background, accent, sweep) = match theme {
+        // The lime of the app icon on a green-black.
+        ThemeName::WackCode => ("#111310", "#c2ee4a", None),
+        ThemeName::Midnight => ("#0f1218", "#6cc4ff", None),
+        ThemeName::Lagoon => ("#0d1517", "#5fd4c8", Some(["#54e0a8", "#4fd4e0", "#6aa8f2"])),
+        ThemeName::Verdant => ("#0a1410", "#6fd99e", Some(["#a8e268", "#4fd9a8", "#3ec9d4"])),
+        ThemeName::Grape => ("#14111b", "#b69cff", None),
+        ThemeName::Nebula => ("#1a0e20", "#c085f0", Some(["#9f8cf7", "#d47ae8", "#f77fb2"])),
+        ThemeName::Rose => ("#181114", "#ff8fb8", None),
+        ThemeName::Solar => ("#1c1606", "#ff9f70", Some(["#ffc15e", "#ff8a66", "#f26d9b"])),
+        ThemeName::Ember => ("#17120f", "#ff9a5c", None),
+        ThemeName::Mono => ("#111111", "#e6e6e6", None),
+    };
+    Palette { background, accent, sweep }
+}
 
 /// What the user chooses. Everything else is derived.
 #[derive(Clone, Debug, PartialEq)]
 pub struct ThemeInput {
     pub appearance: Appearance,
-    /// `#rrggbb`; an unreadable value falls back to the default.
-    pub theme_colour: String,
-    /// `#rrggbb`; an unreadable value falls back to the default.
-    pub accent: String,
+    pub theme: ThemeName,
     /// The picture behind the window, if there is one.
     pub ground: Option<Ground>,
 }
 
 impl ThemeInput {
     pub fn new(appearance: Appearance) -> Self {
-        Self {
-            appearance,
-            theme_colour: DEFAULT_THEME_COLOUR.into(),
-            accent: DEFAULT_ACCENT.into(),
-            ground: None,
-        }
+        Self { appearance, theme: ThemeName::default(), ground: None }
     }
 }
 
@@ -121,9 +149,13 @@ pub struct Theme {
     pub text_faint: Hsla,
 
     // Interaction.
-    /// Fills: the send button, toggles that are on.
+    /// The accent as one colour: lines, the terminal's cursor, and fills too small for a sweep.
+    /// A fill a person presses is painted with [`Theme::accent_fill`] instead.
     pub accent: Hsla,
     pub accent_hover: Hsla,
+    /// The stops a sweeping theme's fills run through, and the same lifted for hover.
+    pub accent_sweep: Option<[Hsla; 3]>,
+    pub accent_sweep_hover: Option<[Hsla; 3]>,
     /// Text and icons drawn on `accent`.
     pub on_accent: Hsla,
     /// The accent as text on the window: links, live status.
@@ -189,8 +221,10 @@ impl Global for Theme {}
 /// the blur under the glass does the rest.
 pub const GLASS_MIN: f32 = 0.72;
 
-/// Theme-colour chroma at or above this tints the neutrals fully; below it, proportionally less.
-const FULL_TINT_CHROMA: f64 = 0.14;
+/// The most a theme's background may tint the neutrals, as a multiple of the ramp's own chroma.
+const MAX_TINT: f64 = 2.;
+/// Below this chroma an accent is grey: in light its lightness is mirrored so its fill shows.
+const GREY_ACCENT: f64 = 0.02;
 /// How far syntax hues rotate towards the accent (0 none, 1 onto it).
 const SYNTAX_HUE_LEAN: f64 = 0.18;
 
@@ -262,7 +296,7 @@ impl Theme {
         cover_of(self.veil as f64, self.glass as f64) as f32
     }
 
-    /// The default theme colour and accent in `appearance`.
+    /// The default theme in `appearance`.
     pub fn new(appearance: Appearance) -> Self {
         Self::derive(ThemeInput::new(appearance))
     }
@@ -271,19 +305,19 @@ impl Theme {
         let appearance = input.appearance;
         let dark = appearance == Appearance::Dark;
         let ramp = if dark { &DARK } else { &LIGHT };
-        let lch = |hex: &str, fallback: &str| {
-            Srgb::from_hex(hex)
-                .or_else(|| Srgb::from_hex(fallback))
-                .map(Srgb::to_lch)
-                .unwrap_or(Lch::new(0.5, 0., 0.))
-        };
-        let tint_source = lch(&input.theme_colour, DEFAULT_THEME_COLOUR);
-        let accent_source = lch(&input.accent, DEFAULT_ACCENT);
-        let default_accent = lch(DEFAULT_ACCENT, DEFAULT_ACCENT);
+        let colours = palette(input.theme);
+        let lch = |hex: &str| Srgb::from_hex(hex).map(Srgb::to_lch).unwrap_or(Lch::new(0.5, 0., 0.));
+        let background = lch(colours.background);
+        let default_accent = lch(palette(ThemeName::default()).accent);
 
-        let tint = (tint_source.c / FULL_TINT_CHROMA).min(1.);
-        let neutral = |step: &Step| Lch::new(step.l, step.c * tint, tint_source.h);
-        let window = neutral(&ramp.window).to_srgb();
+        // The background's chroma against the window step's: Mono none, Nebula nearly twice.
+        let tint = (background.c / DARK.window.c).min(MAX_TINT);
+        let neutral = |step: &Step| Lch::new(step.l, step.c * tint, background.h);
+        // In dark the surfaces keep their steps from the theme's own window; ink keeps its
+        // lightness, so contrast never depends on the theme.
+        let shift = if dark { background.l - DARK.window.l } else { 0. };
+        let surface = |step: &Step| neutral(&Step { l: step.l + shift, c: step.c });
+        let window = if dark { Srgb::from_hex(colours.background).unwrap_or(surface(&ramp.window).to_srgb()) } else { surface(&ramp.window).to_srgb() };
 
         // Over a picture, ink is drawn on glass over the dimmed picture, so it must read over the
         // picture's worst part too (`over_picture`). Without one, the ramp is used as it is.
@@ -297,8 +331,10 @@ impl Theme {
         };
         let text_step = |step: &Step| neutral(&lifted(step, lift, dark));
 
-        // The accent fill is the user's colour exactly; only text drawn in it is adjusted.
-        let accent = accent_source;
+        // The accent fill is the theme's colour exactly; only text drawn in it is adjusted. A grey
+        // accent is the exception: in light it mirrors, so Mono's near-white becomes near-black.
+        let accent_source = lch(colours.accent);
+        let accent = if !dark && accent_source.c < GREY_ACCENT { accent_source.with_l(1. - accent_source.l) } else { accent_source };
         let accent_hover = accent.with_l(accent.l + if dark { 0.05 } else { -0.05 });
         let accent_text = readable_on(
             if dark { accent } else { accent.with_c(accent.c.max(0.12)) },
@@ -308,11 +344,15 @@ impl Theme {
         let ink = Lch::new(0.16, (accent.c * 0.3).min(0.06), accent.h).to_srgb();
         let paper = Lch::new(0.985, 0.008, accent.h).to_srgb();
         let accent_fill = accent.to_srgb();
-        let on_accent = if contrast(ink, accent_fill) >= contrast(paper, accent_fill) {
-            ink
-        } else {
-            paper
-        };
+        // A sweep's hover lifts every stop a little, as the solid fill's does.
+        let sweep = colours.sweep.map(|stops| stops.map(lch));
+        let sweep_hover = sweep.map(|stops| stops.map(|stop| stop.with_l(stop.l + 0.04)));
+        // Ink on the accent must read on every colour a fill can show, its sweep's stops included.
+        let grounds: Vec<Srgb> = std::iter::once(accent_fill)
+            .chain(sweep.into_iter().chain(sweep_hover).flatten().map(Lch::to_srgb))
+            .collect();
+        let least = |on: Srgb| grounds.iter().map(|ground| contrast(on, *ground)).fold(f64::INFINITY, f64::min);
+        let on_accent = if least(ink) >= least(paper) { ink } else { paper };
         let wash_strength = (accent.c / 0.2).min(1.);
         let accent_wash = if dark {
             Lch::new(0.135, 0.035 * wash_strength, accent.h)
@@ -352,7 +392,7 @@ impl Theme {
             };
             hsla(Lch::new(l, c, hue + lean))
         };
-        let ansi_grey = |l: f64| hsla(Lch::new(l, 0.02 * tint, tint_source.h));
+        let ansi_grey = |l: f64| hsla(Lch::new(l, 0.02 * tint, background.h));
         let greys = if dark { [0.30, 0.82, 0.52, 0.97] } else { [0.22, 0.86, 0.48, 0.96] };
         let hues = [25., 145., 95., 255., 330., 200.];
         let mut ansi = [Hsla::default(); 16];
@@ -365,13 +405,13 @@ impl Theme {
         }
         Theme {
             appearance,
-            sidebar: hsla(neutral(&ramp.sidebar)),
+            sidebar: hsla(surface(&ramp.sidebar)),
             window: to_hsla(window),
-            surface: hsla(neutral(&ramp.surface)),
-            raised: hsla(neutral(&ramp.raised)),
-            hover: hsla(neutral(&ramp.hover)),
-            border: hsla(neutral(&ramp.border)),
-            border_strong: hsla(neutral(&ramp.border_strong)),
+            surface: hsla(surface(&ramp.surface)),
+            raised: hsla(surface(&ramp.raised)),
+            hover: hsla(surface(&ramp.hover)),
+            border: hsla(surface(&ramp.border)),
+            border_strong: hsla(surface(&ramp.border_strong)),
             text: hsla(text_step(&ramp.text)),
             text_body: hsla(text_step(&ramp.text_body)),
             text_soft: hsla(text_step(&ramp.text_soft)),
@@ -379,6 +419,8 @@ impl Theme {
             text_faint: hsla(text_step(&ramp.text_faint)),
             accent: to_hsla(accent_fill),
             accent_hover: hsla(accent_hover),
+            accent_sweep: sweep.map(|stops| stops.map(hsla)),
+            accent_sweep_hover: sweep_hover.map(|stops| stops.map(hsla)),
             on_accent: to_hsla(on_accent),
             accent_text: hsla(accent_text),
             accent_wash: hsla(accent_wash),
@@ -395,20 +437,30 @@ impl Theme {
             ultra_glow: fixed.ultra_glow.into(),
             on_ultra: fixed.on_ultra.into(),
             ultra_spectrum: fixed.ultra_spectrum.map(Into::into),
-            code_ground: hsla(neutral(&ramp.code_ground)),
+            code_ground: hsla(surface(&ramp.code_ground)),
             code_keyword: hsla(code_keyword),
             code_string: hsla(syntax(64., 0.07)),
             code_number: hsla(syntax(320., 0.08)),
             code_title: hsla(syntax(226., 0.06)),
             code_meta: hsla(syntax(180., 0.05)),
             code_comment: hsla(neutral(&ramp.text_dim)),
-            dock: hsla(neutral(&ramp.sidebar)),
+            dock: hsla(surface(&ramp.sidebar)),
             terminal_text: hsla(neutral(&ramp.text_body)),
             ansi,
             veil: veil as f32,
             glass: glass as f32,
             input,
         }
+    }
+
+    /// What a fill in the accent is painted with: the theme's sweep, or the solid accent.
+    pub fn accent_fill(&self) -> Background {
+        sweep_or(self.accent_sweep, self.accent)
+    }
+
+    /// [`Theme::accent_fill`] under the pointer.
+    pub fn accent_fill_hover(&self) -> Background {
+        sweep_or(self.accent_sweep_hover, self.accent_hover)
     }
 
     /// The prism `along` (0–1) of the way from cyan to peach, blending between its stops.
@@ -447,7 +499,7 @@ impl Theme {
         cx.global::<Theme>()
     }
 
-    /// Switches every window to `appearance`, keeping the user's colours. A no-op when it is
+    /// Switches every window to `appearance`, keeping the user's theme. A no-op when it is
     /// already current.
     pub fn set_appearance(appearance: Appearance, cx: &mut App) {
         let current = Self::get(cx);
@@ -504,6 +556,16 @@ fn meaning(dark: bool) -> Meaning {
             on_ultra: rgb(0xffffff),
             ultra_spectrum: [rgb(0x0a84bd), rgb(0x5a50e0), rgb(0xa23ccb), rgb(0xcf3576), rgb(0xbf6410)],
         }
+    }
+}
+
+/// A sweep from its first stop to its last, towards the lower right as WackCode 2 drew it.
+fn sweep_or(sweep: Option<[Hsla; 3]>, solid: Hsla) -> Background {
+    match sweep {
+        Some([first, _, last]) => {
+            linear_gradient(135., linear_color_stop(first, 0.), linear_color_stop(last, 1.)).color_space(ColorSpace::Oklab)
+        }
+        None => solid.into(),
     }
 }
 
@@ -610,8 +672,7 @@ pub fn input_for(choice: &wack_core::Appearance, system: Appearance) -> ThemeInp
             wack_core::Mode::Light => Appearance::Light,
             wack_core::Mode::Dark => Appearance::Dark,
         },
-        theme_colour: choice.theme_colour.clone().unwrap_or_else(|| DEFAULT_THEME_COLOUR.into()),
-        accent: choice.accent.clone().unwrap_or_else(|| DEFAULT_ACCENT.into()),
+        theme: choice.theme,
         ground: choice.backdrop.as_ref().map(Ground::of),
     }
 }
@@ -642,39 +703,6 @@ pub fn follow_system_appearance(window: &mut Window) {
         .detach();
 }
 
-/// Colours offered as theme colours: tints for the neutrals, from none to strong.
-pub const THEME_SWATCHES: &[&str] = &[
-    DEFAULT_THEME_COLOUR,
-    "#808080",
-    "#5d6b7c",
-    "#3e5a8c",
-    "#4b7470",
-    "#5b7a4c",
-    "#8a7a58",
-    "#8c5a44",
-    "#7d5574",
-    "#5a4c8a",
-];
-
-/// Colours offered as accents.
-pub const ACCENT_SWATCHES: &[&str] = &[
-    DEFAULT_ACCENT,
-    "#6ee7b7",
-    "#6cc4ff",
-    "#5b7cff",
-    "#a78bfa",
-    "#ff8fb8",
-    "#ff7a59",
-    "#ffc94a",
-    "#e8e8e8",
-    "#ff4d5e",
-];
-
-/// A swatch's colour, to draw it.
-pub fn swatch(hex: &str) -> Hsla {
-    Srgb::from_hex(hex).map(to_hsla).unwrap_or_default()
-}
-
 pub(crate) fn init(cx: &mut App) {
     cx.set_global(Theme::new(cx.window_appearance().into()));
 }
@@ -690,30 +718,18 @@ mod tests {
         Srgb { r: rgba.r as f64, g: rgba.g as f64, b: rgba.b as f64 }
     }
 
+    /// Every theme in both appearances.
     fn themes() -> Vec<Theme> {
         let mut themes = Vec::new();
         for appearance in [Appearance::Light, Appearance::Dark] {
-            for (theme_colour, accent) in [
-                (DEFAULT_THEME_COLOUR, DEFAULT_ACCENT),
-                ("#808080", "#e6e6e6"),
-                ("#2f5bd6", "#ff8fb8"),
-                ("#d64f2f", "#6cc4ff"),
-                ("#7a3fd0", "#ffd400"),
-                ("#000000", "#1a1a1a"),
-                ("#ffffff", "#ffffff"),
-            ] {
-                themes.push(Theme::derive(ThemeInput {
-                    appearance,
-                    theme_colour: theme_colour.into(),
-                    accent: accent.into(),
-                    ground: None,
-                }));
+            for theme in ThemeName::ALL {
+                themes.push(Theme::derive(ThemeInput { appearance, theme, ground: None }));
             }
         }
         themes
     }
 
-    /// Whatever colours the user picks, text reads on the window and on cards.
+    /// In every theme, text reads on the window and on cards.
     #[test]
     fn text_stays_readable_in_every_theme() {
         for theme in themes() {
@@ -795,47 +811,65 @@ mod tests {
         assert_eq!((plain.veil, plain.glass), (0., 1.), "no picture: no veil, solid panes");
     }
 
+    /// Dark is WackCode 2's: the window is the theme's background and the accent its accent.
     #[test]
-    fn a_grey_theme_colour_gives_true_greys() {
-        let theme = Theme::derive(ThemeInput {
-            appearance: Appearance::Dark,
-            theme_colour: "#808080".into(),
-            accent: DEFAULT_ACCENT.into(),
-            ground: None,
-        });
-        for token in [theme.window, theme.surface, theme.text, theme.text_dim] {
-            assert!(srgb(token).to_lch().c < 0.002);
+    fn dark_is_version_two_exactly() {
+        for theme in ThemeName::ALL {
+            let derived = Theme::derive(ThemeInput { appearance: Appearance::Dark, theme, ground: None });
+            let colours = palette(theme);
+            assert_eq!(hex(derived.window), colours.background, "{theme:?}");
+            assert_eq!(hex(derived.accent), colours.accent, "{theme:?}");
+        }
+    }
+
+    /// Ink on the accent reads on every colour a fill shows: a sweep's stops, hovered or not.
+    #[test]
+    fn ink_reads_on_every_stop_of_a_sweep() {
+        for theme in themes() {
+            let stops = theme.accent_sweep.into_iter().chain(theme.accent_sweep_hover).flatten();
+            for stop in stops.chain([theme.accent]) {
+                let ratio = contrast(srgb(theme.on_accent), srgb(stop));
+                assert!(ratio >= 4.5, "on_accent on {} is {ratio:.2} in {:?}", hex(stop), theme.input);
+            }
+        }
+        let sweeping = ThemeName::ALL.into_iter().filter(|theme| palette(*theme).sweep.is_some()).count();
+        assert_eq!(sweeping, 4, "Lagoon, Verdant, Nebula and Solar sweep");
+    }
+
+    /// A fill in the accent stands off the window in every theme: Mono's mirrors in light.
+    #[test]
+    fn the_accent_fill_shows_on_the_window() {
+        for theme in themes() {
+            let ratio = contrast(srgb(theme.accent), srgb(theme.window));
+            assert!(ratio >= 1.2, "the accent is {ratio:.2} on the window in {:?}", theme.input);
         }
     }
 
     #[test]
-    fn meaning_colours_ignore_the_accent() {
-        let base = Theme::new(Appearance::Dark);
-        let other = Theme::derive(ThemeInput {
-            appearance: Appearance::Dark,
-            theme_colour: "#2f5bd6".into(),
-            accent: "#ff3b30".into(),
-            ground: None,
-        });
-        assert_eq!(base.danger, other.danger);
-        assert_eq!(base.success, other.success);
-        assert_eq!(base.diff_added, other.diff_added);
-        assert_eq!(base.diff_removed_ground, other.diff_removed_ground);
-        assert_eq!(base.ultra, other.ultra);
-        assert_eq!(base.ultra_spectrum, other.ultra_spectrum);
+    fn mono_is_true_grey_and_nebula_is_violet() {
+        for appearance in [Appearance::Light, Appearance::Dark] {
+            let mono = Theme::derive(ThemeInput { appearance, theme: ThemeName::Mono, ground: None });
+            for token in [mono.window, mono.surface, mono.text, mono.text_dim, mono.accent] {
+                assert!(srgb(token).to_lch().c < 0.002, "{appearance:?}");
+            }
+            let nebula = Theme::derive(ThemeInput { appearance, theme: ThemeName::Nebula, ground: None });
+            let window = srgb(nebula.window).to_lch();
+            assert!(window.c > 0.012 && (window.h - 314.).abs() < 10., "{appearance:?}: {window:?}");
+        }
     }
 
     #[test]
-    fn an_unreadable_colour_falls_back_to_the_default() {
-        let broken = Theme::derive(ThemeInput {
-            appearance: Appearance::Light,
-            theme_colour: "olive".into(),
-            accent: "".into(),
-            ground: None,
-        });
-        let default = Theme::new(Appearance::Light);
-        assert_eq!(broken.window, default.window);
-        assert_eq!(broken.accent, default.accent);
+    fn meaning_colours_ignore_the_theme() {
+        for appearance in [Appearance::Light, Appearance::Dark] {
+            let base = Theme::new(appearance);
+            let other = Theme::derive(ThemeInput { appearance, theme: ThemeName::Rose, ground: None });
+            assert_eq!(base.danger, other.danger);
+            assert_eq!(base.success, other.success);
+            assert_eq!(base.diff_added, other.diff_added);
+            assert_eq!(base.diff_removed_ground, other.diff_removed_ground);
+            assert_eq!(base.ultra, other.ultra);
+            assert_eq!(base.ultra_spectrum, other.ultra_spectrum);
+        }
     }
 
     /// A raw colour anywhere else would not follow the theme.

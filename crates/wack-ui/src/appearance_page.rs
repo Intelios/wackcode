@@ -1,21 +1,21 @@
-//! Settings › Appearance: light or dark, the theme colour, the accent, and the backdrop, as two
-//! cards of rows (`settings_kit.rs`).
+//! Settings › Appearance: light or dark, the theme, and the backdrop, as two cards of rows
+//! (`settings_kit.rs`).
 //!
 //! Everything applies the moment it is chosen, so the page itself is the preview: the Blur and
-//! Dim sliders save as they are dragged. Colours are still offered as paint chips with a hex field
-//! beside them; WackCode 2's fixed themes replace both (`docs/redesign.md`, phase 6). The page
-//! draws from plain data and dispatches actions, like every page.
+//! Dim sliders save as they are dragged. A theme is chosen from WackCode 2's ten, never made
+//! (`docs/redesign.md`): each tile is a small window drawn in that theme's own tokens, in the
+//! appearance showing now, so it shows what choosing it gives. The page draws from plain data and
+//! dispatches actions, like every page.
 
-use gpui::{Entity, Hsla, ObjectFit, SharedString, div, img, prelude::*, px};
-use wack_core::Mode;
+use gpui::{ObjectFit, SharedString, div, img, prelude::*, px};
+use wack_core::{Mode, ThemeName};
 
 use crate::{
-    actions::{ChooseAccent, ChooseBackdrop, ChooseBlur, ChooseDim, ChooseFocus, ChooseMode, ChooseTexture, ChooseThemeColour, RemoveBackdrop},
+    actions::{ChooseBackdrop, ChooseBlur, ChooseDim, ChooseFocus, ChooseMode, ChooseTexture, ChooseTheme, RemoveBackdrop},
     backdrop::Picture,
     settings_kit::{card, dispatch, head, pill, row, segmented, slider},
     tags::Tag,
-    text_field::TextField,
-    theme::{self, ACCENT_SWATCHES, DEFAULT_ACCENT, DEFAULT_THEME_COLOUR, THEME_SWATCHES, Theme},
+    theme::{Theme, ThemeInput},
     typography::{Type, Typography},
 };
 
@@ -27,11 +27,7 @@ pub const MOST_BLUR: u8 = 40;
 #[derive(Clone)]
 pub struct AppearanceData {
     pub mode: Mode,
-    /// The colours in use, as `#rrggbb`.
-    pub theme_colour: String,
-    pub accent: String,
-    pub theme_field: Entity<TextField>,
-    pub accent_field: Entity<TextField>,
+    pub theme: ThemeName,
     pub backdrop: Option<Picture>,
     /// A picture is being read.
     pub importing: bool,
@@ -47,93 +43,135 @@ pub fn page(data: AppearanceData, theme: &Theme) -> impl IntoElement {
         theme,
     );
     let look = card(Some("Look"), None, None, theme)
-        .child(row("Light or dark", Some("Matching the system follows macOS as it changes through the day.")).control(modes).view(theme))
         .child(
-            row("Theme colour", Some("Tints every surface and line. A grey gives true greys; a strong colour, a clearly coloured app."))
-                .control(colours("theme", THEME_SWATCHES, &data.theme_colour, DEFAULT_THEME_COLOUR, data.theme_field.clone(), true, theme))
+            row("Theme", Some("Sets the colour of every surface, and the accent on buttons, focus and links. Danger, warnings, success and diffs keep their own colours."))
+                .control(themes(data.theme, theme))
                 .stacked()
+                .first()
                 .view(theme),
         )
-        .child(
-            row("Accent", Some("Buttons, focus, selection and links. Danger, warnings, success and diffs keep their own colours."))
-                .control(colours("accent", ACCENT_SWATCHES, &data.accent, DEFAULT_ACCENT, data.accent_field.clone(), false, theme))
-                .stacked()
-                .view(theme),
-        );
+        .child(row("Light or dark", Some("Matching the system follows macOS as it changes through the day.")).control(modes).view(theme));
 
     div()
         .flex()
         .flex_col()
         .gap(px(18.))
-        .child(head("Appearance", "One look, in your colours. Every change shows at once.", None, theme))
+        .child(head("Appearance", "One look, in the theme you choose. Every change shows at once.", None, theme))
         .child(look)
         .child(backdrop(&data, theme))
         .when_some(data.notice.clone(), |page, notice| page.child(div().typography(Type::Ui).text_color(theme.danger).child(notice)))
 }
 
-/// A row of paint chips, then the hex field and a way back to the default.
-fn colours(
-    kind: &'static str,
-    swatches: &'static [&'static str],
-    current: &str,
-    default: &'static str,
-    field: Entity<TextField>,
-    theme_colour: bool,
-    theme: &Theme,
-) -> gpui::AnyElement {
-    let action = move |hex: Option<String>| -> Box<dyn gpui::Action> {
-        if theme_colour { Box::new(ChooseThemeColour { hex }) } else { Box::new(ChooseAccent { hex }) }
-    };
-    let chips = div().flex().gap(px(6.)).children(swatches.iter().enumerate().map(|(index, hex)| {
-        let chosen = hex.eq_ignore_ascii_case(current);
-        let choose = action(Some(hex.to_string()));
+/// A tile's small window.
+const TILE_WIDTH: f32 = 124.;
+const TILE_HEIGHT: f32 = 78.;
+
+/// The ten themes as tiles, the chosen one ringed.
+fn themes(chosen: ThemeName, theme: &Theme) -> impl IntoElement {
+    div().w_full().flex().flex_wrap().gap(px(12.)).children(ThemeName::ALL.into_iter().map(|name| {
+        let look = Theme::derive(ThemeInput { appearance: theme.appearance, theme: name, ground: None });
+        let picked = name == chosen;
         div()
-            .id((if theme_colour { "theme-chip" } else { "accent-chip" }, index))
-            .size(px(26.))
-            .p(px(3.))
-            .rounded(px(8.))
-            .border_2()
-            .border_color(if chosen { theme.text } else { Hsla::transparent_black() })
-            .hover(|chip| chip.border_color(if chosen { theme.text } else { theme.border_strong }))
-            .on_click(move |_, window, cx| window.dispatch_action(choose.boxed_clone(), cx))
-            // A hairline keeps a pale chip visible on a light ground.
-            .child(div().size_full().rounded(px(4.)).bg(theme::swatch(hex)).border_1().border_color(theme.border))
-    }));
-    let reset = action(None);
-    let is_default = current.eq_ignore_ascii_case(default);
+            .id(("theme", name as usize))
+            .flex_none()
+            .flex()
+            .flex_col()
+            .gap(px(7.))
+            .cursor_pointer()
+            .on_click(dispatch(ChooseTheme { theme: name }))
+            .child(
+                div()
+                    .p(px(3.))
+                    .rounded(px(15.))
+                    .border_2()
+                    .border_color(if picked { theme.text } else { gpui::transparent_black() })
+                    .when(!picked, |ring| ring.hover(|ring| ring.border_color(theme.border_strong)))
+                    .child(window(&look)),
+            )
+            .child(
+                div()
+                    .px(px(5.))
+                    .typography(if picked { Type::UiStrong } else { Type::Ui })
+                    .text_color(if picked { theme.text } else { theme.text_soft })
+                    .child(name.name()),
+            )
+            .tag(tag(name))
+    }))
+}
+
+/// A tile's tag, for tests: `theme-` and the theme's id.
+fn tag(name: ThemeName) -> &'static str {
+    match name {
+        ThemeName::WackCode => "theme-wackcode",
+        ThemeName::Midnight => "theme-midnight",
+        ThemeName::Lagoon => "theme-lagoon",
+        ThemeName::Verdant => "theme-verdant",
+        ThemeName::Grape => "theme-grape",
+        ThemeName::Nebula => "theme-nebula",
+        ThemeName::Rose => "theme-rose",
+        ThemeName::Solar => "theme-solar",
+        ThemeName::Ember => "theme-ember",
+        ThemeName::Mono => "theme-mono",
+    }
+}
+
+/// A window in `look`: the sidebar pane, two lines of a conversation, and the composer with its
+/// send button in the accent's fill.
+fn window(look: &Theme) -> impl IntoElement {
+    let line = |width: f32, colour| div().h(px(4.)).w(px(width)).rounded_full().bg(colour);
     div()
+        .w(px(TILE_WIDTH))
+        .h(px(TILE_HEIGHT))
+        .p(px(5.))
         .flex()
-        .items_center()
-        .gap(px(18.))
-        .child(chips)
+        .gap(px(5.))
+        .rounded(px(11.))
+        .bg(look.window)
+        .border_1()
+        .border_color(look.border)
         .child(
             div()
-                .flex_none()
-                .w(px(108.))
-                .px(px(8.))
-                .py(px(4.))
+                .w(px(30.))
+                .h_full()
+                .p(px(5.))
                 .flex()
-                .items_center()
-                .gap(px(7.))
+                .flex_col()
+                .gap(px(4.))
                 .rounded(px(7.))
-                .bg(theme.surface)
-                .border_1()
-                .border_color(theme.border)
-                .child(div().flex_none().size(px(12.)).rounded(px(3.)).bg(theme::swatch(current)))
-                .child(div().flex_1().min_w_0().child(field)),
+                .bg(look.sidebar)
+                .child(div().h(px(6.)).w_full().rounded_full().bg(look.accent_wash).border_1().border_color(look.accent_line))
+                .child(line(16., look.text_faint))
+                .child(line(12., look.border_strong)),
         )
-        .when(!is_default, |row| {
-            row.child(
-                div()
-                    .id(SharedString::from(format!("{kind}-default")))
-                    .typography(Type::Small)
-                    .text_color(theme.text_dim)
-                    .hover(|word| word.text_color(theme.text))
-                    .on_click(move |_, window, cx| window.dispatch_action(reset.boxed_clone(), cx))
-                    .child("Default"),
-            )
-        })
-        .into_any_element()
+        .child(
+            div()
+                .flex_1()
+                .h_full()
+                .px(px(6.))
+                .pt(px(9.))
+                .pb(px(4.))
+                .flex()
+                .flex_col()
+                .gap(px(5.))
+                .child(div().flex().justify_end().child(line(34., look.text_soft)))
+                .child(line(52., look.text_dim))
+                .child(line(40., look.border_strong))
+                .child(div().flex_1())
+                .child(
+                    div()
+                        .h(px(16.))
+                        .pl(px(6.))
+                        .pr(px(3.))
+                        .flex()
+                        .items_center()
+                        .justify_end()
+                        .rounded_full()
+                        .bg(look.surface)
+                        .border_1()
+                        .border_color(look.border_strong)
+                        .child(div().size(px(10.)).rounded_full().bg(look.accent_fill())),
+                ),
+        )
 }
 
 fn backdrop(data: &AppearanceData, theme: &Theme) -> gpui::Div {

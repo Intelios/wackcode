@@ -160,7 +160,7 @@ fn new_chat_pill(theme: &Theme) -> impl IntoElement {
                 .flex()
                 .items_center()
                 .justify_center()
-                .bg(theme.accent)
+                .bg(theme.accent_fill())
                 .child(Icon::Plus.view(px(12.), theme.on_accent)),
         )
         .child(div().flex_1().typography(Type::UiStrong).text_color(theme.text).child("New chat"))

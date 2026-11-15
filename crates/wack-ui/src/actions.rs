@@ -263,18 +263,11 @@ pub struct ChooseMode {
     pub mode: wack_core::Mode,
 }
 
-/// `None` goes back to the default.
+/// One of the fixed themes (Settings › Appearance).
 #[derive(Clone, Debug, PartialEq, Action)]
 #[action(namespace = wackcode, no_json)]
-pub struct ChooseThemeColour {
-    pub hex: Option<String>,
-}
-
-/// `None` goes back to the default.
-#[derive(Clone, Debug, PartialEq, Action)]
-#[action(namespace = wackcode, no_json)]
-pub struct ChooseAccent {
-    pub hex: Option<String>,
+pub struct ChooseTheme {
+    pub theme: wack_core::ThemeName,
 }
 
 /// How much the backdrop is dimmed, in percent.

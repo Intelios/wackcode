@@ -39,6 +39,19 @@ pub struct Connection {
     pub format: WireFormat,
     pub base_url: String,
     pub models: Vec<Model>,
+    /// Switched on in Settings › Providers. An off connection keeps its key and models but is
+    /// left out of the model menu and never chosen: a chat that used it falls back to another
+    /// until it is switched on again. Files saved before the switch existed load as on.
+    #[serde(default = "on", skip_serializing_if = "is_on")]
+    pub enabled: bool,
+}
+
+fn on() -> bool {
+    true
+}
+
+fn is_on(enabled: &bool) -> bool {
+    *enabled
 }
 
 pub struct NewConnection {
@@ -336,12 +349,36 @@ impl Store {
             format: new.format,
             base_url: base_url.to_string(),
             models,
+            enabled: true,
         };
         // The key first: a connection listed without its key would fail on first use.
         self.secrets.set(&connection.id, key)?;
         self.state.connections.push(connection.clone());
         self.save()?;
         Ok(connection)
+    }
+
+    /// Switches a connection on or off. Its key, its models and every chat's choice of it stay as
+    /// they are, so switching it back on restores them.
+    pub fn set_connection_enabled(&mut self, id: &str, enabled: bool) -> Result<(), String> {
+        let connection = self
+            .state
+            .connections
+            .iter_mut()
+            .find(|connection| connection.id == id)
+            .ok_or("That connection is no longer there.")?;
+        connection.enabled = enabled;
+        self.save()
+    }
+
+    /// The connections switched on: the ones a chat may use.
+    pub fn enabled_connections(&self) -> impl Iterator<Item = &Connection> {
+        self.state.connections.iter().filter(|connection| connection.enabled)
+    }
+
+    /// Whether a key is kept for the connection. The key itself never leaves the store.
+    pub fn has_key(&self, id: &str) -> bool {
+        self.secrets.get(id).is_some()
     }
 
     pub fn remove_connection(&mut self, id: &str) -> Result<(), String> {
@@ -594,20 +631,16 @@ impl Store {
         &self.state.defaults
     }
 
-    /// The connection and model a choice means today. A missing or removed connection falls back
-    /// to the default and then to the first connection; a missing model to the connection's first.
+    /// The connection and model a choice means today. A missing, removed or switched-off
+    /// connection falls back to the default and then to the first one switched on; a missing model
+    /// to the connection's first. With every connection off there is nothing to use.
     pub fn resolve(&self, choice: &ModelChoice) -> Option<Resolved> {
         let defaults = &self.state.defaults;
         let connection = [choice.connection.as_deref(), defaults.connection.as_deref()]
             .into_iter()
             .flatten()
-            .find_map(|id| {
-                self.state
-                    .connections
-                    .iter()
-                    .find(|connection| connection.id == id)
-            })
-            .or_else(|| self.state.connections.first())?;
+            .find_map(|id| self.enabled_connections().find(|connection| connection.id == id))
+            .or_else(|| self.enabled_connections().next())?;
         let model = [choice.model.as_deref(), defaults.model.as_deref()]
             .into_iter()
             .flatten()
@@ -804,6 +837,47 @@ mod tests {
             "a removed connection falls back to the default"
         );
         assert_eq!(resolved.model.id, "b");
+    }
+
+    #[test]
+    fn a_connection_switched_off_is_skipped_and_kept() {
+        let folder = tempfile::tempdir().unwrap();
+        let mut store = Store::open(folder.path()).unwrap();
+        let first = store.add_connection(new("First"), "k1").unwrap();
+        let second = store.add_connection(new("Second"), "k2").unwrap();
+        let project = tempfile::tempdir().unwrap();
+        let project = store.add_project(project.path()).unwrap();
+        let picked = ModelChoice {
+            connection: Some(first.id.clone()),
+            model: None,
+            effort: None,
+        };
+        let chat = store
+            .create_chat(&project.id, "Uses first", picked.clone(), AgentMode::Build)
+            .unwrap();
+
+        store.set_connection_enabled(&first.id, false).unwrap();
+        assert_eq!(store.resolve(&picked).unwrap().connection.id, second.id, "off falls back");
+        assert_eq!(store.enabled_connections().count(), 1);
+        assert!(store.has_key(&first.id), "off keeps the key");
+        assert_eq!(store.chat(&chat.id).unwrap().choice, picked, "the chat's choice is kept");
+
+        let reopened = Store::open(folder.path()).unwrap();
+        assert!(!reopened.connection("first").unwrap().enabled, "off is saved");
+
+        store.set_connection_enabled(&second.id, false).unwrap();
+        assert_eq!(store.resolve(&picked), None, "with every connection off, nothing to use");
+
+        store.set_connection_enabled(&first.id, true).unwrap();
+        assert_eq!(store.resolve(&picked).unwrap().connection.id, first.id, "on again, chosen again");
+    }
+
+    #[test]
+    fn a_connection_saved_before_the_switch_loads_as_on() {
+        let saved = r#"{"id":"c","name":"Old","format":"openai-chat","base_url":"https://x","models":[]}"#;
+        let connection: Connection = serde_json::from_str(saved).unwrap();
+        assert!(connection.enabled);
+        assert!(!serde_json::to_string(&connection).unwrap().contains("enabled"), "on is the default, not written");
     }
 
     #[test]

@@ -18,7 +18,7 @@ use std::{
 
 use args::Args;
 use wack_agent::{Agent, AgentMode, Control, Kit, Outcome, Profile, Registry, Session, Settings};
-use wack_core::{Model, NewConnection, Reasoning, Store};
+use wack_core::{Connection, Model, NewConnection, Reasoning, Store};
 use wack_llm::WireFormat;
 
 const HELP: &str = "wack: the WackCode agent without the app
@@ -139,7 +139,8 @@ fn connections(folder: &Path) -> Result<ExitCode, String> {
     }
     for connection in store.connections() {
         let models: Vec<&str> = connection.models.iter().map(|model| model.id.as_str()).collect();
-        println!("{}\n  {}  {}\n  models: {}", connection.name, format_name(connection.format), connection.base_url, models.join(", "));
+        let off = if connection.enabled { "" } else { "  (switched off)" };
+        println!("{}{off}\n  {}  {}\n  models: {}", connection.name, format_name(connection.format), connection.base_url, models.join(", "));
     }
     Ok(ExitCode::SUCCESS)
 }
@@ -176,11 +177,17 @@ async fn agent(args: &mut Args, folder: &Path) -> Result<ExitCode, String> {
     }
 
     let store = Store::open(folder)?;
+    let on: Vec<&Connection> = store.enabled_connections().collect();
     let connection = match &wanted {
-        Some(name) => store.connection(name).ok_or_else(|| format!("There is no connection named {name}."))?,
-        None => match store.connections() {
-            [] => return Err("No connections yet. Add one with: wack connect".to_string()),
-            [only] => only,
+        Some(name) => match store.connection(name) {
+            None => return Err(format!("There is no connection named {name}.")),
+            Some(connection) if !connection.enabled => return Err(format!("{} is switched off in Settings › Providers.", connection.name)),
+            Some(connection) => connection,
+        },
+        None => match on.as_slice() {
+            [] if store.connections().is_empty() => return Err("No connections yet. Add one with: wack connect".to_string()),
+            [] => return Err("Every connection is switched off. Switch one on in Settings › Providers.".to_string()),
+            [only] => *only,
             several => {
                 let names: Vec<&str> = several.iter().map(|connection| connection.name.as_str()).collect();
                 return Err(format!("Choose a connection with --connection: {}", names.join(", ")));

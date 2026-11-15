@@ -8,9 +8,10 @@
 //!   going while the user looks elsewhere. Removing it drops its run.
 //! - Nothing the user wrote is lost: a message that cannot be sent stays in its composer, and
 //!   queued or steering messages a run did not deliver go back into the composer.
-//! - `tabs` lists chats that exist, each once; a chat on screen is always one of them. Tabs, the
-//!   chat in front and whether the sidebar is hidden are saved as they change, and a chat's pane
-//!   layout shortly after it changes (a drag changes it on every frame).
+//! - `tabs` lists chats that exist, each once; a chat on screen is always one of them. They live
+//!   for this launch only: the app opens on a new chat, as version 2 did, rather than where the
+//!   last one was left. The sidebar's side and the project last worked in are saved, and a
+//!   chat's pane layout shortly after it changes (a drag changes it on every frame).
 
 use std::{
     collections::{HashMap, HashSet},
@@ -133,17 +134,16 @@ impl AppState {
             }));
         }
         let ui = store.ui().clone();
-        let mut tabs: Vec<String> = Vec::new();
-        for id in ui.tabs {
-            if store.chat(&id).is_some() && !tabs.contains(&id) {
-                tabs.push(id);
+        // A fresh app: no tabs, no chat in front, and a new chat in the project last worked in (as
+        // version 2 opened), rather than wherever the last one was left.
+        let selection = match store.projects() {
+            [] => Selection::Welcome,
+            projects => {
+                let id = ui.last_project.as_deref().and_then(|id| store.project(id)).or_else(|| projects.first()).unwrap().id.clone();
+                Selection::NewChat(id)
             }
-        }
-        let selection = match (ui.current.filter(|id| tabs.contains(id)), store.projects().first()) {
-            (Some(chat), _) => Selection::Chat(chat),
-            (None, Some(project)) => Selection::NewChat(project.id.clone()),
-            (None, None) => Selection::Welcome,
         };
+        let tabs: Vec<String> = Vec::new();
         let mut app = Self {
             store,
             before_settings: selection.clone(),
@@ -331,11 +331,12 @@ impl AppState {
     }
 
     fn save_ui(&mut self) {
-        let current = match &self.selection {
-            Selection::Chat(id) => Some(id.clone()),
-            _ => self.store.ui().current.clone().filter(|id| self.tabs.contains(id)),
-        };
-        let ui = Ui { sidebar_hidden: self.sidebar_hidden, tabs: self.tabs.clone(), current };
+        // Settings has no project of its own, so the one last worked in stays.
+        let last_project = self
+            .current_project()
+            .map(|project| project.id.clone())
+            .or_else(|| self.store.ui().last_project.clone().filter(|id| self.store.project(id).is_some()));
+        let ui = Ui { sidebar_hidden: self.sidebar_hidden, last_project };
         if let Err(message) = self.store.set_ui(ui) {
             self.notice = Some(message.into());
         }

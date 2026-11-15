@@ -150,17 +150,16 @@ pub struct Chat {
     pub layout: Option<serde_json::Value>,
 }
 
-/// How the window was left, so it opens the same way.
+/// How the window was left. The window itself opens on a fresh new chat, as version 2 did, so
+/// only what is not about a chat is kept: the sidebar's side, and the project that new chat is in.
 #[derive(Clone, Debug, Default, PartialEq, Serialize, Deserialize)]
 pub struct Ui {
     #[serde(default)]
     pub sidebar_hidden: bool,
-    /// Chats open as tabs, in order.
-    #[serde(default)]
-    pub tabs: Vec<String>,
-    /// The chat that was in front.
+    /// The project the user was last in, so the new chat on launch is in it. Opening Settings
+    /// leaves it as it was; a project that no longer exists falls back to the first one.
     #[serde(default, skip_serializing_if = "Option::is_none")]
-    pub current: Option<String>,
+    pub last_project: Option<String>,
 }
 
 #[derive(Default, Serialize, Deserialize)]

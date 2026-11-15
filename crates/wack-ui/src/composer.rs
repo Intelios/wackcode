@@ -199,8 +199,6 @@ impl RenderOnce for Composer {
 
         let ultra_plan = data.mode == AgentMode::UltraPlan;
         let field_height = if data.roomy { 64. } else { 22. };
-        // From a pill's top to just above the card: the field and the space around it.
-        let rise = CARD_TOP + field_height + CARD_GAP + 8.;
         let mut controls = div()
             .flex()
             .items_center()
@@ -215,7 +213,6 @@ impl RenderOnce for Composer {
                 ).child(Icon::ChevronDown.view(px(12.), theme.text_faint)),
                 menu_for(Menu::Model).map(|menu| menu_view(menu, &theme).into_any_element()),
                 true,
-                rise,
                 viewport,
             ));
         if let Some(effort) = data.effort.clone() {
@@ -236,7 +233,7 @@ impl RenderOnce for Composer {
                     div().typography(Type::Ui).text_color(theme.accent_text).child(effort).into_any_element()
                 });
             let slider = menu_for(Menu::Effort).map(|menu| effort_slider(menu, data.model.clone(), &theme).into_any_element());
-            controls = controls.child(picker("effort", button, slider, false, rise, viewport));
+            controls = controls.child(picker("effort", button, slider, false, viewport));
         }
         controls = controls.child(div().flex_1());
         if let Some(meter) = data.meter {
@@ -363,6 +360,8 @@ const CARD_TOP: f32 = 14.;
 const CARD_GAP: f32 = 10.;
 /// The least of the model's pill a narrow composer keeps.
 const MODEL_MIN: f32 = 64.;
+/// How far above its pill a picker's popover opens.
+const PICKER_GAP: f32 = 6.;
 /// A status pill's height.
 const STATUS_HEIGHT: f32 = 26.;
 
@@ -456,14 +455,13 @@ const WAITING_MAX_HEIGHT: f32 = 118.;
 const QUESTION_MIN_HEIGHT: f32 = 196.;
 
 /// A pill that opens a popover upwards from itself (the model's menu, the effort's slider), over
-/// everything, `rise` points above the pill's top so it clears the card; a click anywhere else
-/// closes it. `shrinks` lets it give way in a narrow composer.
+/// everything, its bottom [`PICKER_GAP`] above the pill's top so it opens where the click was; a
+/// click anywhere else closes it. `shrinks` lets it give way in a narrow composer.
 fn picker(
     tag: &'static str,
     button: gpui::Stateful<gpui::Div>,
     popover: Option<gpui::AnyElement>,
     shrinks: bool,
-    rise: f32,
     viewport: gpui::Size<gpui::Pixels>,
 ) -> impl IntoElement {
     let open = match tag {
@@ -478,11 +476,11 @@ fn picker(
                 window.dispatch_action(Box::new(CloseMenu), cx);
             }),
         );
-        // The card rises into place above the composer's card, kept inside the window.
+        // The card rises into place above the pill that opened it, kept inside the window.
         let card = div().absolute().top_0().left_0().child(
             anchored()
                 .anchor(gpui::Anchor::BottomLeft)
-                .offset(point(px(-4.), px(-rise)))
+                .offset(point(px(0.), px(-PICKER_GAP)))
                 .snap_to_window_with_margin(px(8.))
                 .child(crate::motion::enter(gpui::ElementId::Name(format!("arrive-{tag}-menu").into()), div().child(popover))),
         );

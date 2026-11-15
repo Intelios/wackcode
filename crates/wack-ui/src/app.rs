@@ -23,6 +23,7 @@ use gpui::{App, AppContext, Context, Entity, SharedString, Subscription, Task};
 use wack_core::{AgentMode, Appearance, Chat, Job, ModelChoice, Outcome, Project, Reasoning, Store, Ui, WireFormat, title_from};
 
 use crate::{
+    appearance_page::Thumbnail,
     backdrop::Picture,
     chat::{ChatEvent, ChatSession, now_millis},
     panes::Layout,
@@ -197,15 +198,8 @@ impl AppState {
             let _ = app.update(cx, |app, cx| {
                 app.importing = false;
                 match result {
-                    Ok(mut backdrop) => {
-                        // A new picture keeps the dim, blur and texture the old one had.
-                        if let Some(old) = &app.store.appearance().backdrop {
-                            backdrop.dim = old.dim;
-                            backdrop.blur = old.blur;
-                            backdrop.texture = old.texture;
-                        }
-                        app.set_appearance(|appearance| appearance.backdrop = Some(backdrop), cx);
-                    }
+                    // It joins the library and shows, keeping the look of the picture it replaces.
+                    Ok(backdrop) => app.set_appearance(|appearance| appearance.add(backdrop), cx),
                     Err(message) => {
                         app.appearance_notice = Some(message.into());
                         cx.notify();
@@ -218,8 +212,26 @@ impl AppState {
 
     /// The backdrop to draw, if there is one.
     pub fn backdrop(&self) -> Option<Picture> {
-        let backdrop = self.store.appearance().backdrop.as_ref()?;
-        Some(Picture {
+        self.store.appearance().backdrop().map(|backdrop| self.picture(backdrop))
+    }
+
+    /// Every picture in the library, for Settings › Appearance.
+    pub fn pictures(&self) -> Vec<Thumbnail> {
+        let appearance = self.store.appearance();
+        appearance
+            .pictures
+            .iter()
+            .map(|backdrop| Thumbnail {
+                file: backdrop.file.clone().into(),
+                shown: appearance.shown.as_deref() == Some(backdrop.file.as_str()),
+                theme: backdrop.theme,
+                picture: self.picture(backdrop),
+            })
+            .collect()
+    }
+
+    fn picture(&self, backdrop: &wack_core::Backdrop) -> Picture {
+        Picture {
             path: self.store.backdrop_path(backdrop).to_string_lossy().to_string().into(),
             soft_path: self.store.backdrop_soft_path(backdrop).to_string_lossy().to_string().into(),
             width: backdrop.width,
@@ -229,7 +241,7 @@ impl AppState {
             blur: backdrop.blur as f32,
             texture: backdrop.texture,
             shade: backdrop.shade.unwrap_or([0, 255]),
-        })
+        }
     }
 
     pub fn store(&self) -> &Store {

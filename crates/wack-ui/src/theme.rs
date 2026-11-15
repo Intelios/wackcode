@@ -673,7 +673,7 @@ pub fn input_for(choice: &wack_core::Appearance, system: Appearance) -> ThemeInp
             wack_core::Mode::Dark => Appearance::Dark,
         },
         theme: choice.theme,
-        ground: choice.backdrop.as_ref().map(Ground::of),
+        ground: choice.backdrop().map(Ground::of),
     }
 }
 

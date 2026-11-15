@@ -83,11 +83,25 @@ actions!(
         ToggleUnrestrictedPlanning,
         ConfirmUnrestrictedPlanning,
         CancelUnrestrictedPlanning,
-        /// Picks a picture for the backdrop.
+        /// Adds a picture to the backdrop's library, and shows it.
         ChooseBackdrop,
-        RemoveBackdrop,
     ]
 );
+
+/// Shows a picture from the library behind the window, or none, bringing back the theme it
+/// remembers.
+#[derive(Clone, Debug, PartialEq, Action)]
+#[action(namespace = wackcode, no_json)]
+pub struct ShowPicture {
+    pub file: Option<String>,
+}
+
+/// Takes a picture out of the library.
+#[derive(Clone, Debug, PartialEq, Action)]
+#[action(namespace = wackcode, no_json)]
+pub struct RemovePicture {
+    pub file: String,
+}
 
 #[derive(Clone, Debug, PartialEq, Action)]
 #[action(namespace = wackcode, no_json)]
@@ -263,7 +277,7 @@ pub struct ChooseMode {
     pub mode: wack_core::Mode,
 }
 
-/// One of the fixed themes (Settings › Appearance).
+/// One of the fixed themes (Settings › Appearance), remembered on the picture showing.
 #[derive(Clone, Debug, PartialEq, Action)]
 #[action(namespace = wackcode, no_json)]
 pub struct ChooseTheme {

@@ -541,12 +541,25 @@ fn dusk(u: f32, v: f32) -> image::Rgb<u8> {
     image::Rgb(colour.map(|channel| ((channel + grain).clamp(0., 1.) * 255.).round() as u8))
 }
 
-/// Settings › Appearance as first opened, in the theme the scene is drawn with, and `backdrop`
-/// if given.
+/// Settings › Appearance in the theme the scene is drawn with. With `backdrop`, the library holds
+/// it, shown, and the same picture again kept in view at its corner and remembering Solar.
 pub fn appearance(backdrop: Option<crate::backdrop::Picture>, cx: &mut gpui::App) -> crate::appearance_page::AppearanceData {
+    let theme = crate::theme::Theme::get(cx).input.theme;
+    let pictures = backdrop.iter().flat_map(|picture| {
+        [
+            crate::appearance_page::Thumbnail { file: "shown.jpg".into(), picture: picture.clone(), shown: true, theme: Some(theme) },
+            crate::appearance_page::Thumbnail {
+                file: "corner.jpg".into(),
+                picture: crate::backdrop::Picture { focus: (0., 0.), ..picture.clone() },
+                shown: false,
+                theme: Some(wack_core::ThemeName::Solar),
+            },
+        ]
+    });
     crate::appearance_page::AppearanceData {
         mode: wack_core::Mode::System,
-        theme: crate::theme::Theme::get(cx).input.theme,
+        theme,
+        pictures: pictures.collect(),
         backdrop,
         importing: false,
         notice: None,

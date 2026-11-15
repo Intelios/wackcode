@@ -270,21 +270,42 @@ impl Store {
             state,
             secrets: SecretStore::load(folder)?,
         };
-        store.measure_backdrop();
+        store.tend_pictures();
         Ok(store)
     }
 
-    /// A backdrop imported before pictures were measured is measured once, now. A picture that
-    /// cannot be read stays unmeasured, and the theme then allows for anything behind the text.
-    fn measure_backdrop(&mut self) {
-        let Some(backdrop) = &self.state.appearance.backdrop else { return };
-        if backdrop.shade.is_some() {
-            return;
+    /// Pictures whose copy has gone are let go of, and one imported before pictures were measured
+    /// is measured once, now. A picture that cannot be read stays unmeasured, and the theme then
+    /// allows for anything behind the text.
+    fn tend_pictures(&mut self) {
+        let before = self.state.appearance.clone();
+        let gone: Vec<String> = before
+            .pictures
+            .iter()
+            .filter(|picture| !self.backdrop_path(picture).exists())
+            .map(|picture| picture.file.clone())
+            .collect();
+        for file in gone {
+            self.state.appearance.remove(&file);
         }
-        let soft = self.backdrop_soft_path(backdrop);
-        let shade = crate::appearance::measure(&soft).or_else(|_| crate::appearance::measure(&self.backdrop_path(backdrop)));
-        if let (Ok(shade), Some(backdrop)) = (shade, &mut self.state.appearance.backdrop) {
-            backdrop.shade = Some(shade);
+        let unmeasured: Vec<(usize, Result<[u8; 2], String>)> = self
+            .state
+            .appearance
+            .pictures
+            .iter()
+            .enumerate()
+            .filter(|(_, picture)| picture.shade.is_none())
+            .map(|(index, picture)| {
+                let soft = self.backdrop_soft_path(picture);
+                (index, crate::appearance::measure(&soft).or_else(|_| crate::appearance::measure(&self.backdrop_path(picture))))
+            })
+            .collect();
+        for (index, shade) in unmeasured {
+            if let Ok(shade) = shade {
+                self.state.appearance.pictures[index].shade = Some(shade);
+            }
+        }
+        if self.state.appearance != before {
             let _ = self.save();
         }
     }
@@ -555,23 +576,21 @@ impl Store {
         &self.state.appearance
     }
 
-    /// Changes how the app looks. A backdrop must be one
+    /// Changes how the app looks. Every picture must be one
     /// [`crate::appearance::import_backdrop`] wrote into [`Store::backgrounds_folder`]. Copies no
-    /// longer used are deleted.
+    /// picture in the library uses are deleted.
     pub fn set_appearance(&mut self, appearance: Appearance) -> Result<(), String> {
         let appearance = appearance.checked()?;
-        if let Some(backdrop) = &appearance.backdrop
-            && !self.backdrop_path(backdrop).exists()
-        {
-            return Err("The backdrop’s picture is missing. Choose it again.".into());
+        if appearance.pictures.iter().any(|picture| !self.backdrop_path(picture).exists()) {
+            return Err("A backdrop’s picture is missing. Choose it again.".into());
         }
         if self.state.appearance == appearance {
             return Ok(());
         }
         self.state.appearance = appearance;
         self.save()?;
-        let keep = self.state.appearance.backdrop.as_ref().map(|backdrop| backdrop.file.clone());
-        crate::appearance::tidy_backgrounds(&self.backgrounds_folder(), keep.as_deref());
+        let keep: Vec<&str> = self.state.appearance.pictures.iter().map(|picture| picture.file.as_str()).collect();
+        crate::appearance::tidy_backgrounds(&self.backgrounds_folder(), &keep);
         Ok(())
     }
 
@@ -974,27 +993,38 @@ mod tests {
     fn appearance_is_kept_and_unused_pictures_are_deleted() {
         let folder = tempfile::tempdir().unwrap();
         let mut store = Store::open(folder.path()).unwrap();
-        let picture = folder.path().join("sky.png");
-        image::RgbImage::from_pixel(40, 20, image::Rgb([30, 90, 200])).save(&picture).unwrap();
-        let first = crate::appearance::import_backdrop(&picture, &store.backgrounds_folder()).unwrap();
-        let appearance = Appearance {
-            mode: crate::Mode::Dark,
-            theme: crate::ThemeName::Rose,
-            backdrop: Some(first.clone()),
-            ..Appearance::default()
+        let import = |name: &str, colour: [u8; 3], store: &Store| {
+            let picture = folder.path().join(name);
+            image::RgbImage::from_pixel(40, 20, image::Rgb(colour)).save(&picture).unwrap();
+            crate::appearance::import_backdrop(&picture, &store.backgrounds_folder()).unwrap()
         };
+        let first = import("sky.png", [30, 90, 200], &store);
+        let second = import("sand.png", [200, 170, 90], &store);
+        let mut appearance = Appearance { mode: crate::Mode::Dark, theme: crate::ThemeName::Rose, ..Appearance::default() };
+        appearance.add(first.clone());
+        appearance.add(second.clone());
         store.set_appearance(appearance).unwrap();
-        assert!(store.backdrop_path(&first).exists());
 
         let reopened = Store::open(folder.path()).unwrap();
-        assert_eq!(reopened.appearance().backdrop.as_ref(), Some(&first));
+        assert_eq!(reopened.appearance().backdrop().map(|picture| picture.file.as_str()), Some(second.file.as_str()));
         assert_eq!(reopened.appearance().theme, crate::ThemeName::Rose);
+        let mut hidden = store.appearance().clone();
+        hidden.show(None);
+        store.set_appearance(hidden).unwrap();
+        assert!(store.backdrop_path(&first).exists() && store.backdrop_path(&second).exists(), "a picture not shown is kept");
 
-        let without = Appearance { backdrop: None, ..store.appearance().clone() };
-        store.set_appearance(without).unwrap();
-        assert!(!store.backdrop_path(&first).exists(), "the copy goes with the setting");
-        let missing = Appearance { backdrop: Some(first), ..Appearance::default() };
+        let mut fewer = store.appearance().clone();
+        fewer.remove(&first.file);
+        store.set_appearance(fewer).unwrap();
+        assert!(!store.backdrop_path(&first).exists(), "the copy goes with the picture");
+        assert!(!store.backgrounds_folder().join(crate::appearance::soft_name(&first.file)).exists());
+        let mut missing = Appearance::default();
+        missing.add(first);
         assert!(store.set_appearance(missing).is_err(), "a picture that is gone is refused");
+
+        // A copy deleted behind WackCode's back is let go of when the store opens.
+        std::fs::remove_file(store.backdrop_path(&second)).unwrap();
+        assert!(Store::open(folder.path()).unwrap().appearance().pictures.is_empty());
     }
 
     #[test]
@@ -1005,12 +1035,14 @@ mod tests {
         image::RgbImage::from_pixel(40, 20, image::Rgb([119, 119, 119])).save(&picture).unwrap();
         let backdrop = crate::appearance::import_backdrop(&picture, &store.backgrounds_folder()).unwrap();
         let unmeasured = Backdrop { shade: None, ..backdrop };
-        store.set_appearance(Appearance { backdrop: Some(unmeasured), ..Appearance::default() }).unwrap();
+        let mut appearance = Appearance::default();
+        appearance.add(unmeasured);
+        store.set_appearance(appearance).unwrap();
 
         let reopened = Store::open(folder.path()).unwrap();
-        let [dark, light] = reopened.appearance().backdrop.as_ref().unwrap().shade.expect("measured on open");
+        let [dark, light] = reopened.appearance().backdrop().unwrap().shade.expect("measured on open");
         assert!(dark.abs_diff(119) <= 2 && light.abs_diff(119) <= 2, "{dark} to {light}");
         let again = Store::open(folder.path()).unwrap();
-        assert!(again.appearance().backdrop.as_ref().unwrap().shade.is_some(), "and the measure is saved");
+        assert!(again.appearance().backdrop().unwrap().shade.is_some(), "and the measure is saved");
     }
 }

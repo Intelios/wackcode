@@ -43,7 +43,7 @@ use crate::{
         ChooseBlur, ChooseDim, ChooseFormat, OpenConnectionForm, CloseConnectionForm, SwitchConnection, ChooseMode, ChooseModel, ChooseTexture, ChooseTheme, CloseChatTab, CloseMenu, ClosePane,
         ClosePaneId, CloseSettings, CloseTab, Compact, DeleteChat, EqualizeSplit, FocusNext, FocusPrevious, MovePane,
         NewChat, NewChatIn, NewTerminal, NewTerminalWith, NextTab, OpenEffortMenu, OpenModelMenu, OpenSettings,
-        OpenSettingsSection, PinProject, PreviousTab, RemoveBackdrop, RemoveConnection, RemoveProject, ResetDockSize,
+        OpenSettingsSection, PinProject, PreviousTab, RemoveConnection, RemovePicture, ShowPicture, RemoveProject, ResetDockSize,
         SelectChat, Send, Stop, ToggleChanges, ToggleProject, ToggleSidebar, ToggleTerminal, Unqueue,
     },
     app::{AppState, Menu, Selection, shown_path},
@@ -627,7 +627,7 @@ impl Shell {
         self.with_app(cx, |app, cx| {
             app.set_appearance(
                 |appearance| {
-                    if let Some(backdrop) = &mut appearance.backdrop {
+                    if let Some(backdrop) = appearance.backdrop_mut() {
                         change(backdrop);
                     }
                 },
@@ -993,11 +993,16 @@ impl Render for Shell {
                 }))
                 .on_action(cx.listener(|shell, action: &ChooseTheme, _, cx| {
                     let theme = action.theme;
-                    shell.with_app(cx, |app, cx| app.set_appearance(|appearance| appearance.theme = theme, cx));
+                    shell.with_app(cx, |app, cx| app.set_appearance(|appearance| appearance.choose_theme(theme), cx));
                 }))
                 .on_action(cx.listener(Self::choose_backdrop))
-                .on_action(cx.listener(|shell, _: &RemoveBackdrop, _, cx| {
-                    shell.with_app(cx, |app, cx| app.set_appearance(|appearance| appearance.backdrop = None, cx));
+                .on_action(cx.listener(|shell, action: &ShowPicture, _, cx| {
+                    let file = action.file.clone();
+                    shell.with_app(cx, |app, cx| app.set_appearance(|appearance| appearance.show(file.as_deref()), cx));
+                }))
+                .on_action(cx.listener(|shell, action: &RemovePicture, _, cx| {
+                    let file = action.file.clone();
+                    shell.with_app(cx, |app, cx| app.set_appearance(|appearance| appearance.remove(&file), cx));
                 }))
                 .on_action(cx.listener(|shell, action: &ChooseDim, _, cx| {
                     let dim = action.dim;
@@ -1169,6 +1174,7 @@ fn live_view(app: &AppState, cx: &App) -> (SidebarData, Screen, StripData) {
                     mode: appearance.mode,
                     theme: appearance.theme,
                     backdrop: app.backdrop(),
+                    pictures: app.pictures(),
                     importing: app.importing,
                     notice: app.appearance_notice.clone(),
                 },

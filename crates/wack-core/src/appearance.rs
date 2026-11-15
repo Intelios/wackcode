@@ -15,7 +15,14 @@
 //! - A backdrop carries how dark and light its softened copy gets ([`shade`]), measured on
 //!   import (or on the first launch after, for one imported before), so the theme can keep text
 //!   readable over it without opening the picture.
-//! - Copies no setting refers to are deleted when the setting changes.
+//! - Pictures are a library ([`Appearance::pictures`]), at most one of them shown. Each picture
+//!   remembers the theme last used with it (`docs/redesign.md`, phase 7): showing a picture brings
+//!   its theme back, and choosing a theme while it shows is remembered on it. Change both only
+//!   through [`Appearance::show`], [`Appearance::choose_theme`], [`Appearance::add`] and
+//!   [`Appearance::remove`], which keep that promise. A theme never shows a picture.
+//! - A settings file from before the library (one `backdrop`) opens as a library of that one,
+//!   shown.
+//! - Copies no picture in the library refers to are deleted when the setting changes.
 
 use std::{
     fs,
@@ -190,6 +197,10 @@ pub struct Backdrop {
     /// readable over all of it. Measured on import; `None` for a picture not yet measured.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub shade: Option<[u8; 2]>,
+    /// The theme last used with this picture, brought back when it is shown. `None` for one
+    /// that has not been shown since the library began.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub theme: Option<ThemeName>,
 }
 
 fn middle() -> f32 {
@@ -205,19 +216,107 @@ fn default_blur() -> u8 {
 }
 
 #[derive(Clone, Debug, Default, PartialEq, Serialize, Deserialize)]
+#[serde(from = "Stored")]
 pub struct Appearance {
-    #[serde(default)]
     pub mode: Mode,
-    #[serde(default)]
+    /// The theme in use.
     pub theme: ThemeName,
-    #[serde(default, skip_serializing_if = "Option::is_none")]
-    pub backdrop: Option<Backdrop>,
+    /// Every picture the user has added, in the order added.
+    #[serde(skip_serializing_if = "Vec::is_empty")]
+    pub pictures: Vec<Backdrop>,
+    /// The file of the picture behind the window; `None` for none.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub shown: Option<String>,
+}
+
+/// `Appearance` as written, including the single `backdrop` of the files before the library.
+#[derive(Deserialize)]
+struct Stored {
+    #[serde(default)]
+    mode: Mode,
+    #[serde(default)]
+    theme: ThemeName,
+    #[serde(default)]
+    pictures: Vec<Backdrop>,
+    #[serde(default)]
+    shown: Option<String>,
+    #[serde(default)]
+    backdrop: Option<Backdrop>,
+}
+
+impl From<Stored> for Appearance {
+    fn from(stored: Stored) -> Self {
+        let mut appearance = Appearance { mode: stored.mode, theme: stored.theme, pictures: stored.pictures, shown: stored.shown };
+        if let Some(backdrop) = stored.backdrop
+            && appearance.pictures.is_empty()
+        {
+            appearance.shown = Some(backdrop.file.clone());
+            appearance.pictures.push(Backdrop { theme: Some(appearance.theme), ..backdrop });
+        }
+        appearance
+    }
 }
 
 impl Appearance {
-    /// The same choices, checked: the backdrop's focus, dim and blur are kept in range.
+    /// The picture behind the window, if any.
+    pub fn backdrop(&self) -> Option<&Backdrop> {
+        let shown = self.shown.as_deref()?;
+        self.pictures.iter().find(|picture| picture.file == shown)
+    }
+
+    pub fn backdrop_mut(&mut self) -> Option<&mut Backdrop> {
+        let shown = self.shown.clone()?;
+        self.pictures.iter_mut().find(|picture| picture.file == shown)
+    }
+
+    /// Uses `theme`, and remembers it on the picture showing.
+    pub fn choose_theme(&mut self, theme: ThemeName) {
+        self.theme = theme;
+        if let Some(picture) = self.backdrop_mut() {
+            picture.theme = Some(theme);
+        }
+    }
+
+    /// Shows the picture `file` (none for `None`), bringing back the theme it remembers, or
+    /// remembering the one in use if it has none yet. A file not in the library shows nothing.
+    pub fn show(&mut self, file: Option<&str>) {
+        self.shown = file.filter(|file| self.pictures.iter().any(|picture| picture.file == *file)).map(str::to_string);
+        let theme = self.theme;
+        if let Some(picture) = self.backdrop_mut() {
+            let remembered = *picture.theme.get_or_insert(theme);
+            self.theme = remembered;
+        }
+    }
+
+    /// Adds a newly imported picture to the library and shows it, in the theme in use. It keeps
+    /// the dim, blur and texture of the picture it replaces on screen.
+    pub fn add(&mut self, mut picture: Backdrop) {
+        if let Some(old) = self.backdrop() {
+            (picture.dim, picture.blur, picture.texture) = (old.dim, old.blur, old.texture);
+        }
+        let file = picture.file.clone();
+        picture.theme = None;
+        self.pictures.retain(|kept| kept.file != file);
+        self.pictures.push(picture);
+        self.show(Some(&file));
+    }
+
+    /// Takes the picture `file` out of the library. If it was showing, none shows; the theme
+    /// stays as it is.
+    pub fn remove(&mut self, file: &str) {
+        self.pictures.retain(|picture| picture.file != file);
+        if self.shown.as_deref() == Some(file) {
+            self.shown = None;
+        }
+    }
+
+    /// The same choices, checked: each picture's focus, dim and blur are kept in range, and a
+    /// shown picture not in the library shows nothing.
     pub fn checked(mut self) -> Result<Self, String> {
-        if let Some(backdrop) = &mut self.backdrop {
+        if self.backdrop().is_none() {
+            self.shown = None;
+        }
+        for backdrop in &mut self.pictures {
             let unit = |value: f32| if value.is_finite() { value.clamp(0., 1.) } else { 0.5 };
             backdrop.focus_x = unit(backdrop.focus_x);
             backdrop.focus_y = unit(backdrop.focus_y);
@@ -344,18 +443,19 @@ pub fn import_backdrop(source: &Path, backgrounds: &Path) -> Result<Backdrop, St
         blur: DEFAULT_BLUR,
         texture: Texture::None,
         shade: Some(shade(&soft)),
+        theme: None,
     })
 }
 
-/// Deletes copies in `backgrounds` other than `keep` and its softened copy.
-pub fn tidy_backgrounds(backgrounds: &Path, keep: Option<&str>) {
+/// Deletes copies in `backgrounds` other than those named in `keep` and their softened copies.
+pub fn tidy_backgrounds(backgrounds: &Path, keep: &[&str]) {
     let Ok(entries) = fs::read_dir(backgrounds) else {
         return;
     };
-    let soft = keep.map(soft_name);
+    let soft: Vec<String> = keep.iter().map(|file| soft_name(file)).collect();
     for entry in entries.flatten() {
         let name = entry.file_name().to_string_lossy().to_string();
-        if Some(name.as_str()) != keep && Some(&name) != soft.as_ref() {
+        if !keep.contains(&name.as_str()) && !soft.contains(&name) {
             let _ = fs::remove_file(entry.path());
         }
     }
@@ -397,19 +497,80 @@ mod tests {
         assert_eq!((backdrop.dim, backdrop.blur), (DEFAULT_DIM, DEFAULT_BLUR));
 
         let wild = Appearance {
-            backdrop: Some(Backdrop { focus_x: 7., focus_y: f32::NAN, dim: 200, blur: 99, ..backdrop.clone() }),
+            pictures: vec![Backdrop { focus_x: 7., focus_y: f32::NAN, dim: 200, blur: 99, ..backdrop.clone() }],
+            shown: Some(backdrop.file.clone()),
             ..Appearance::default()
         }
         .checked()
         .unwrap();
-        let kept = wild.backdrop.unwrap();
+        let kept = wild.backdrop().unwrap();
         assert_eq!((kept.focus_x, kept.focus_y, kept.dim, kept.blur), (1., 0.5, MAX_DIM, MAX_BLUR));
 
         fs::write(backgrounds.join("old.jpg"), b"x").unwrap();
-        tidy_backgrounds(&backgrounds, Some(&backdrop.file));
+        tidy_backgrounds(&backgrounds, &[&backdrop.file]);
         assert!(!backgrounds.join("old.jpg").exists());
         assert!(backgrounds.join(&backdrop.file).exists());
         assert!(backgrounds.join(soft_name(&backdrop.file)).exists(), "the softened copy is kept with it");
+    }
+
+    fn picture(file: &str) -> Backdrop {
+        Backdrop {
+            file: file.into(),
+            width: 10,
+            height: 10,
+            focus_x: 0.5,
+            focus_y: 0.5,
+            dim: DEFAULT_DIM,
+            blur: DEFAULT_BLUR,
+            texture: Texture::None,
+            shade: None,
+            theme: None,
+        }
+    }
+
+    /// Showing a picture brings back the theme last used with it; choosing a theme while it
+    /// shows is remembered on it; a theme never shows a picture.
+    #[test]
+    fn a_picture_remembers_its_theme() {
+        let mut appearance = Appearance { theme: ThemeName::Lagoon, ..Appearance::default() };
+        appearance.add(Backdrop { dim: 40, ..picture("a.jpg") });
+        assert_eq!(appearance.backdrop().unwrap().theme, Some(ThemeName::Lagoon), "a new picture takes the theme in use");
+        appearance.choose_theme(ThemeName::Solar);
+        appearance.add(picture("b.jpg"));
+        assert_eq!(appearance.backdrop().unwrap().dim, 40, "a new picture keeps the dim of the one it replaces");
+        assert_eq!(appearance.theme, ThemeName::Solar);
+        appearance.choose_theme(ThemeName::Mono);
+
+        appearance.show(Some("a.jpg"));
+        assert_eq!(appearance.theme, ThemeName::Solar, "a's theme comes back");
+        appearance.show(Some("b.jpg"));
+        assert_eq!(appearance.theme, ThemeName::Mono, "and b's");
+        appearance.show(None);
+        appearance.choose_theme(ThemeName::Grape);
+        assert_eq!(appearance.shown, None, "a theme shows no picture");
+        appearance.show(Some("b.jpg"));
+        assert_eq!(appearance.theme, ThemeName::Mono, "choosing with no picture showing changes none");
+        appearance.show(Some("gone.jpg"));
+        assert_eq!((appearance.shown.as_deref(), appearance.theme), (None, ThemeName::Mono));
+
+        appearance.show(Some("a.jpg"));
+        appearance.remove("a.jpg");
+        assert_eq!((appearance.shown.as_deref(), appearance.theme), (None, ThemeName::Solar), "removing keeps the theme");
+        assert_eq!(appearance.pictures.iter().map(|picture| picture.file.as_str()).collect::<Vec<_>>(), ["b.jpg"]);
+    }
+
+    /// A file from before the library opens as a library of its one picture, shown, and is
+    /// written back in the new shape.
+    #[test]
+    fn a_single_backdrop_becomes_a_library_of_one() {
+        let earlier = r#"{"theme":"nebula","backdrop":{"file":"sky.jpg","width":10,"height":10,"dim":30}}"#;
+        let appearance: Appearance = serde_json::from_str(earlier).unwrap();
+        assert_eq!(appearance.shown.as_deref(), Some("sky.jpg"));
+        let shown = appearance.backdrop().unwrap();
+        assert_eq!((shown.dim, shown.theme), (30, Some(ThemeName::Nebula)));
+        let written = serde_json::to_string(&appearance).unwrap();
+        assert!(!written.contains("backdrop") && written.contains("pictures"), "{written}");
+        assert_eq!(serde_json::from_str::<Appearance>(&written).unwrap(), appearance);
     }
 
     #[test]

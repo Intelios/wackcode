@@ -4,16 +4,18 @@
 //! Everything applies the moment it is chosen, so the page itself is the preview: the Blur and
 //! Dim sliders save as they are dragged. A theme is chosen from WackCode 2's ten, never made
 //! (`docs/redesign.md`): each tile is a small window drawn in that theme's own tokens, in the
-//! appearance showing now, so it shows what choosing it gives. The page draws from plain data and
-//! dispatches actions, like every page.
+//! appearance showing now, so it shows what choosing it gives. Pictures are a library shown as a
+//! strip, each captioned with the theme it remembers (`docs/redesign.md`, phase 7): choosing one
+//! brings that theme back. The page draws from plain data and dispatches actions, like every page.
 
 use gpui::{ObjectFit, SharedString, div, img, prelude::*, px};
 use wack_core::{Mode, ThemeName};
 
 use crate::{
-    actions::{ChooseBackdrop, ChooseBlur, ChooseDim, ChooseFocus, ChooseMode, ChooseTexture, ChooseTheme, RemoveBackdrop},
+    actions::{ChooseBackdrop, ChooseBlur, ChooseDim, ChooseFocus, ChooseMode, ChooseTexture, ChooseTheme, RemovePicture, ShowPicture},
     backdrop::Picture,
-    settings_kit::{card, dispatch, head, pill, row, segmented, slider},
+    icon::Icon,
+    settings_kit::{card, dispatch, head, row, segmented, slider},
     tags::Tag,
     theme::{Theme, ThemeInput},
     typography::{Type, Typography},
@@ -28,7 +30,10 @@ pub const MOST_BLUR: u8 = 40;
 pub struct AppearanceData {
     pub mode: Mode,
     pub theme: ThemeName,
+    /// The picture showing, if any.
     pub backdrop: Option<Picture>,
+    /// Every picture in the library, in order.
+    pub pictures: Vec<Thumbnail>,
     /// A picture is being read.
     pub importing: bool,
     pub notice: Option<SharedString>,
@@ -62,6 +67,16 @@ pub fn page(data: AppearanceData, theme: &Theme) -> impl IntoElement {
         .when_some(data.notice.clone(), |page, notice| page.child(div().typography(Type::Ui).text_color(theme.danger).child(notice)))
 }
 
+/// One picture in the library.
+#[derive(Clone)]
+pub struct Thumbnail {
+    pub file: SharedString,
+    pub picture: Picture,
+    pub shown: bool,
+    /// The theme it remembers; none until it has been shown.
+    pub theme: Option<ThemeName>,
+}
+
 /// A tile's small window.
 const TILE_WIDTH: f32 = 124.;
 const TILE_HEIGHT: f32 = 78.;
@@ -71,30 +86,8 @@ fn themes(chosen: ThemeName, theme: &Theme) -> impl IntoElement {
     div().w_full().flex().flex_wrap().gap(px(12.)).children(ThemeName::ALL.into_iter().map(|name| {
         let look = Theme::derive(ThemeInput { appearance: theme.appearance, theme: name, ground: None });
         let picked = name == chosen;
-        div()
-            .id(("theme", name as usize))
-            .flex_none()
-            .flex()
-            .flex_col()
-            .gap(px(7.))
-            .cursor_pointer()
+        tile(("theme", name as usize), picked, name.name(), window(&look), theme)
             .on_click(dispatch(ChooseTheme { theme: name }))
-            .child(
-                div()
-                    .p(px(3.))
-                    .rounded(px(15.))
-                    .border_2()
-                    .border_color(if picked { theme.text } else { gpui::transparent_black() })
-                    .when(!picked, |ring| ring.hover(|ring| ring.border_color(theme.border_strong)))
-                    .child(window(&look)),
-            )
-            .child(
-                div()
-                    .px(px(5.))
-                    .typography(if picked { Type::UiStrong } else { Type::Ui })
-                    .text_color(if picked { theme.text } else { theme.text_soft })
-                    .child(name.name()),
-            )
             .tag(tag(name))
     }))
 }
@@ -175,76 +168,12 @@ fn window(look: &Theme) -> impl IntoElement {
 }
 
 fn backdrop(data: &AppearanceData, theme: &Theme) -> gpui::Div {
-    let about = "A picture behind the window: shown clear across a new chat, and under frosted glass once the chat begins. The glass keeps text readable on its own; blur and dim set how the picture looks around it.";
-    let card = card(Some("Backdrop"), None, None, theme);
+    let about = "Behind the window: clear across a new chat, under frosted glass once the chat begins. Each picture brings back the theme you last used with it.";
+    let card = card(Some("Backdrop"), None, None, theme)
+        .child(row("Pictures", Some(about)).control(strip(data, theme)).stacked().first().view(theme));
     let Some(picture) = data.backdrop.clone() else {
-        let choose = pill("choose-backdrop", if data.importing { "Reading the picture…" } else { "Choose a picture…" }, None, false, theme)
-            .on_click(dispatch(ChooseBackdrop))
-            .tag("choose-backdrop");
-        return card.child(row("Picture", Some(about)).control(choose).view(theme));
+        return card;
     };
-
-    // The picture small, with its focus marked where the window will keep it in view.
-    let (width, height) = (176., 110.);
-    let frame = crate::panes::Rect { x: 0., y: 0., width, height };
-    let drawn = crate::backdrop::cover(frame, (picture.width, picture.height), picture.focus);
-    let thumbnail = div()
-        .flex_none()
-        .relative()
-        .w(px(width))
-        .h(px(height))
-        .rounded(px(12.))
-        .overflow_hidden()
-        .border_1()
-        .border_color(theme.border_strong)
-        .child(
-            img(std::path::PathBuf::from(picture.path.as_ref()))
-                .absolute()
-                .left(px(drawn.x))
-                .top(px(drawn.y))
-                .w(px(drawn.width))
-                .h(px(drawn.height))
-                .object_fit(ObjectFit::Fill),
-        );
-    let buttons = div()
-        .flex()
-        .items_center()
-        .gap(px(8.))
-        .child(pill("replace-backdrop", if data.importing { "Reading…" } else { "Choose another…" }, None, false, theme).on_click(dispatch(ChooseBackdrop)))
-        .child(
-            div()
-                .id("remove-backdrop")
-                .h(px(32.))
-                .px(px(12.))
-                .rounded_full()
-                .flex()
-                .items_center()
-                .cursor_pointer()
-                .typography(Type::UiStrong)
-                .text_color(theme.text_dim)
-                .hover(|word| word.bg(theme.hover).text_color(theme.danger))
-                .on_click(dispatch(RemoveBackdrop))
-                .child("Remove")
-                .tag("remove-backdrop"),
-        );
-    let top = div()
-        .px(px(18.))
-        .pb(px(16.))
-        .flex()
-        .gap(px(18.))
-        .child(thumbnail)
-        .child(
-            div()
-                .flex_1()
-                .min_w_0()
-                .flex()
-                .flex_col()
-                .justify_between()
-                .gap(px(12.))
-                .child(div().typography(Type::Small).text_color(theme.text_dim).child(about))
-                .child(buttons),
-        );
-
     let textures: Vec<(wack_core::Texture, &'static str)> = wack_core::Texture::ALL.iter().map(|texture| (*texture, texture.name())).collect();
     let textures = segmented("texture", &textures, picture.texture, |texture| Box::new(ChooseTexture { texture }), theme);
     let blur = slider("blur-slider", picture.blur.round() as u8, MOST_BLUR, 2, " pt", |blur| Box::new(ChooseBlur { blur }), theme);
@@ -263,9 +192,115 @@ fn backdrop(data: &AppearanceData, theme: &Theme) -> gpui::Div {
                 .on_click(dispatch(ChooseFocus { across: column, down: row }))
         }))
     }));
-    card.child(top)
-        .child(row("Texture", Some("How the picture is drawn behind a new chat.")).control(textures).view(theme))
+    card.child(row("Texture", Some("How the picture is drawn behind a new chat.")).control(textures).view(theme))
         .child(row("Blur", Some("How soft the picture is behind a chat.")).control(blur).view(theme))
         .child(row("Dim", Some("How far the picture fades toward the window behind a chat.")).control(dim).view(theme))
         .child(row("Keep in view", Some("The part of the picture kept when the window crops it.")).control(focus).view(theme))
+}
+
+/// A picture tile's size: the shape of a laptop's window.
+const PICTURE_WIDTH: f32 = 128.;
+const PICTURE_HEIGHT: f32 = 82.;
+
+/// No picture, each picture in the library captioned with its theme, then a way to add one.
+fn strip(data: &AppearanceData, theme: &Theme) -> impl IntoElement {
+    let none_shown = data.backdrop.is_none();
+    let none = frame(none_shown, theme).bg(theme.window).flex().items_center().justify_center().child(Icon::Close.view(px(16.), theme.text_faint));
+    let none = tile("no-picture", none_shown, "No picture", none, theme).on_click(dispatch(ShowPicture { file: None })).tag("no-picture");
+    let pictures = data.pictures.iter().enumerate().map(|(index, thumbnail)| {
+        let picture = &thumbnail.picture;
+        let area = crate::panes::Rect { x: 0., y: 0., width: PICTURE_WIDTH, height: PICTURE_HEIGHT };
+        let drawn = crate::backdrop::cover(area, (picture.width, picture.height), picture.focus);
+        let group = SharedString::from(format!("picture-{index}"));
+        let file = thumbnail.file.to_string();
+        // Shown on hover; a press here removes the picture without showing it first.
+        let remove = div()
+            .id(("remove-picture", index))
+            .absolute()
+            .top(px(5.))
+            .right(px(5.))
+            .size(px(22.))
+            .rounded_full()
+            .flex()
+            .items_center()
+            .justify_center()
+            .bg(theme.raised)
+            .border_1()
+            .border_color(theme.border_strong)
+            .invisible()
+            .group_hover(group.clone(), |button| button.visible())
+            .hover(|button| button.bg(theme.hover))
+            .on_click({
+                let file = file.clone();
+                move |_, window, cx| {
+                    cx.stop_propagation();
+                    window.dispatch_action(Box::new(RemovePicture { file: file.clone() }), cx);
+                }
+            })
+            .child(Icon::Trash.view(px(12.), theme.danger));
+        let image = frame(thumbnail.shown, theme)
+            .relative()
+            .child(
+                img(std::path::PathBuf::from(picture.path.as_ref()))
+                    .absolute()
+                    .left(px(drawn.x))
+                    .top(px(drawn.y))
+                    .w(px(drawn.width))
+                    .h(px(drawn.height))
+                    .object_fit(ObjectFit::Fill),
+            )
+            .child(remove);
+        let caption = thumbnail.theme.map_or("No theme yet", ThemeName::name);
+        tile(("picture", index), thumbnail.shown, caption, image, theme)
+            .group(group)
+            .on_click(dispatch(ShowPicture { file: Some(file) }))
+    });
+    let add = frame(false, theme)
+        .flex()
+        .items_center()
+        .justify_center()
+        .border_1()
+        .border_color(theme.border_strong)
+        .child(Icon::Plus.view(px(18.), theme.text_soft));
+    let add = tile("choose-backdrop", false, if data.importing { "Reading…" } else { "Add a picture…" }, add, theme)
+        .on_click(dispatch(ChooseBackdrop))
+        .tag("choose-backdrop");
+    div().w_full().flex().flex_wrap().gap(px(12.)).child(none).children(pictures).child(add)
+}
+
+/// A tile in the strip: `content` ringed when chosen, its caption under it.
+fn tile(id: impl Into<gpui::ElementId>, chosen: bool, caption: &'static str, content: impl IntoElement, theme: &Theme) -> gpui::Stateful<gpui::Div> {
+    div()
+        .id(id)
+        .flex_none()
+        .flex()
+        .flex_col()
+        .gap(px(7.))
+        .cursor_pointer()
+        .child(
+            div()
+                .p(px(3.))
+                .rounded(px(15.))
+                .border_2()
+                .border_color(if chosen { theme.text } else { gpui::transparent_black() })
+                .when(!chosen, |ring| ring.hover(|ring| ring.border_color(theme.border_strong)))
+                .child(content),
+        )
+        .child(
+            div()
+                .px(px(5.))
+                .typography(if chosen { Type::UiStrong } else { Type::Ui })
+                .text_color(if chosen { theme.text } else { theme.text_soft })
+                .child(caption),
+        )
+}
+
+/// The rounded area a tile shows its picture in.
+fn frame(chosen: bool, theme: &Theme) -> gpui::Div {
+    div()
+        .w(px(PICTURE_WIDTH))
+        .h(px(PICTURE_HEIGHT))
+        .rounded(px(11.))
+        .overflow_hidden()
+        .when(!chosen, |frame| frame.border_1().border_color(theme.border))
 }

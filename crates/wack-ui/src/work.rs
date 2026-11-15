@@ -71,7 +71,7 @@ pub fn entry_items(
             Entry::Turn(turn) => {
                 let key = format!("turn-{index}");
                 if !turn.steps.is_empty() || turn.live {
-                    let rows = turn
+                    let rows: Vec<WorkRow> = turn
                         .steps
                         .iter()
                         .enumerate()
@@ -80,6 +80,7 @@ pub fn entry_items(
                     items.push(Item::Work(Work {
                         open: turn.live || open.contains(&key),
                         summary: summary(turn, now).into(),
+                        tally: tally(&rows).into(),
                         live: turn.live,
                         rows,
                         key: key.into(),
@@ -142,6 +143,26 @@ pub fn summary(turn: &Turn, now: u64) -> String {
         (Some(started), Some(ended)) if ended > started => format!("Worked for {}", duration(ended - started)),
         _ => "Worked".into(),
     }
+}
+
+/// What a log did, counted: "2 reads · 1 search · 1 edit · 1 command". Thoughts, notes and
+/// smaller tools are left out; empty when nothing counted.
+pub fn tally(rows: &[WorkRow]) -> String {
+    const KINDS: [(&[&str], &str, &str); 5] = [
+        (&["Read"], "read", "reads"),
+        (&["Searched", "Found", "Listed", "Looked for"], "search", "searches"),
+        (&["Edited", "Wrote"], "edit", "edits"),
+        (&["Ran"], "command", "commands"),
+        (&["Asked"], "question", "questions"),
+    ];
+    KINDS
+        .iter()
+        .filter_map(|(verbs, one, many)| {
+            let count = rows.iter().filter(|row| verbs.contains(&row.verb.as_ref())).count();
+            (count > 0).then(|| format!("{count} {}", if count == 1 { one } else { many }))
+        })
+        .collect::<Vec<_>>()
+        .join(" · ")
 }
 
 /// The facts under a finished turn: how long, how many tokens.
@@ -453,6 +474,21 @@ mod tests {
 
     use super::*;
     use crate::conversation::ToolResult;
+
+    #[test]
+    fn a_tally_counts_what_was_done_and_leaves_thoughts_out() {
+        let row = |verb: &str| WorkRow {
+            key: "k".into(),
+            verb: verb.to_string().into(),
+            target: Target::Words("".into()),
+            meta: Meta::None,
+            detail: None,
+            open: false,
+        };
+        let rows = [row("Thought"), row("Read"), row("Read"), row("Searched"), row("Found"), row("Edited"), row("Wrote"), row("Ran"), row("")];
+        assert_eq!(tally(&rows), "2 reads · 2 searches · 2 edits · 1 command");
+        assert_eq!(tally(&[row("Thought")]), "");
+    }
 
     fn tool(name: &str, input: Value, result: Option<(&str, bool)>) -> ToolStep {
         ToolStep {

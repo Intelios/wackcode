@@ -6849,6 +6849,7 @@ dependencies = [
  "serde_json",
  "tempfile",
  "tokio",
+ "url",
  "uuid",
  "wack-agent",
  "wack-llm",

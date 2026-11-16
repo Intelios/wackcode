@@ -23,6 +23,7 @@ pub mod terminal;
 pub mod title;
 pub mod usage;
 pub mod web;
+pub mod web_usage;
 
 pub use appearance::{Appearance, Backdrop, Mode, Texture, ThemeName};
 pub use run::{Job, RunEvent, RunSetup, discard_plan, run, save_plan};
@@ -36,7 +37,7 @@ pub use store::{
 // What the UI needs from the layers below, so it depends on the engine alone.
 pub use wack_agent::{AgentMode, Control, Event, HistoryEntry, Outcome, Recorder, TOOL_SEARCH, history};
 pub use wack_llm::{Message, RetryNotice, Role, Usage, WireFormat};
-pub use wack_web::WEB_FETCH;
+pub use wack_web::{WEB_FETCH, WEB_SEARCH};
 
 /// Asking the user: the questions a tool raises and the answers that go back.
 pub mod ask {

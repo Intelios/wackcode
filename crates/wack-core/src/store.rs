@@ -372,6 +372,7 @@ pub struct Store {
     folder: PathBuf,
     state: State,
     secrets: SecretStore,
+    web_usage: std::sync::Arc<crate::web_usage::WebUsage>,
     /// The usage ledger's writer, shared by every run and the title requests.
     usage: std::sync::Arc<UsageWriter>,
     /// Stands in for `$HOME` where skill folders are looked for, in tests.
@@ -412,6 +413,7 @@ impl Store {
             usage: std::sync::Arc::new(UsageWriter::new(&root_for(folder), state.record_usage)),
             state,
             secrets: SecretStore::load(folder)?,
+            web_usage: std::sync::Arc::new(crate::web_usage::WebUsage::load(folder)),
             home: None,
         };
         store.tend_pictures();
@@ -477,12 +479,29 @@ impl Store {
         self.save()
     }
 
-    pub(crate) fn web_config(&self) -> &crate::web::WebConfig {
+    pub(crate) fn web_state(&self) -> &crate::web::WebConfig {
         &self.state.web
     }
 
-    pub(crate) fn web_config_mut(&mut self) -> &mut crate::web::WebConfig {
+    pub(crate) fn web_state_mut(&mut self) -> &mut crate::web::WebConfig {
         &mut self.state.web
+    }
+
+    /// A stored secret, for the engine's own clients to hold (`web.rs`). Never handed out.
+    pub(crate) fn secret(&self, id: &str) -> Option<&str> {
+        self.secrets.get(id)
+    }
+
+    pub(crate) fn set_secret(&mut self, id: &str, value: &str) -> Result<(), String> {
+        self.secrets.set(id, value)
+    }
+
+    pub(crate) fn remove_secret(&mut self, id: &str) -> Result<(), String> {
+        self.secrets.remove(id)
+    }
+
+    pub(crate) fn web_usage_meter(&self) -> &std::sync::Arc<crate::web_usage::WebUsage> {
+        &self.web_usage
     }
 
     pub(crate) fn memory_config_mut(&mut self) -> &mut crate::memory::MemoryConfig {
@@ -638,6 +657,13 @@ impl Store {
     }
 
     pub fn remove_connection(&mut self, id: &str) -> Result<(), String> {
+        let borrowing = self.search_providers_borrowing(id);
+        if !borrowing.is_empty() {
+            return Err(format!(
+                "{} uses this connection's key for web search. Give it its own key in Settings › Web first.",
+                borrowing.join(", ")
+            ));
+        }
         self.state
             .connections
             .retain(|connection| connection.id != id);

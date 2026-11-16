@@ -67,7 +67,6 @@ pub fn check_url(raw: &str, policy: &Policy) -> Result<Url, String> {
 
 /// [`check_url`] plus the DNS check, without fetching: for a URL handed to someone else to read (a
 /// search provider's fetch endpoint), so a private address never leaves the Mac.
-#[allow(dead_code)] // Used by reading pages through a search provider (phase 2).
 pub async fn check_public_url(raw: &str, policy: &Policy) -> Result<Url, String> {
     let url = check_url(raw, policy)?;
     if let Some(Host::Domain(name)) = url.host() {

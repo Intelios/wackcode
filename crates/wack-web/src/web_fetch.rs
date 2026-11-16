@@ -8,6 +8,11 @@
 //!
 //! Long pages are cut to the usual tool-output size; `offset` (in characters) pages through the
 //! rest. Recent conversions are cached briefly so paging doesn't fetch the page again.
+//!
+//! With Settings › Web's "Read pages through <provider>" on, every page is read by that
+//! provider's fetch endpoint instead. The URL passes the same public-address checks first, so a
+//! private address never leaves the Mac, and a routed failure is the answer: it never falls back
+//! to reading the page here. Routed and local copies of a page are cached apart.
 
 use std::{
     collections::VecDeque,
@@ -22,6 +27,8 @@ use wack_agent::{Loading, Tool, ToolContext, ToolSpec};
 use crate::{
     convert::{Page, convert},
     fetch::{Fetcher, MAX_BODY_BYTES},
+    guard::check_public_url,
+    search::SearchClient,
 };
 
 pub const WEB_FETCH: &str = "web_fetch";
@@ -44,16 +51,50 @@ pub struct Entry {
 
 pub struct WebFetch {
     fetcher: Fetcher,
+    /// The search provider every page is read through, when the user routes reading through one.
+    reader: Option<Arc<SearchClient>>,
     cache: Mutex<VecDeque<(String, Instant, Arc<Entry>)>>,
 }
 
 impl WebFetch {
     pub fn new(fetcher: Fetcher) -> Self {
-        Self { fetcher, cache: Mutex::new(VecDeque::new()) }
+        Self { fetcher, reader: None, cache: Mutex::new(VecDeque::new()) }
+    }
+
+    /// Reads every page through `reader`'s fetch endpoint instead of from here.
+    pub fn through(mut self, reader: Arc<SearchClient>) -> Self {
+        self.reader = Some(reader);
+        self
+    }
+
+    async fn read(&self, url: &str) -> Result<Entry, String> {
+        if let Some(reader) = &self.reader {
+            let checked = check_public_url(url, self.fetcher.policy()).await?;
+            let page = reader.fetch(checked.as_str()).await?;
+            return Ok(Entry {
+                final_url: checked.to_string(),
+                content_type: "text/markdown".into(),
+                body_truncated: page.truncated,
+                page: Page { title: Some(page.title).filter(|title| !title.is_empty()), text: page.content },
+                via: Some(reader.name().to_string()),
+            });
+        }
+        let response = self.fetcher.get(url).await?;
+        let page = convert(&response.body, &response.content_type, &response.final_url)?;
+        Ok(Entry {
+            final_url: response.final_url.to_string(),
+            content_type: response.content_type,
+            body_truncated: response.truncated,
+            page,
+            via: None,
+        })
     }
 
     async fn load(&self, url: &str) -> Result<Arc<Entry>, String> {
-        let key = format!("local|{url}");
+        let key = match &self.reader {
+            Some(reader) => format!("via:{}|{url}", reader.name()),
+            None => format!("local|{url}"),
+        };
         {
             let mut cache = self.cache.lock().unwrap_or_else(|poisoned| poisoned.into_inner());
             cache.retain(|(_, at, _)| at.elapsed() < CACHE_TTL);
@@ -61,15 +102,7 @@ impl WebFetch {
                 return Ok(entry.clone());
             }
         }
-        let response = self.fetcher.get(url).await?;
-        let page = convert(&response.body, &response.content_type, &response.final_url)?;
-        let entry = Arc::new(Entry {
-            final_url: response.final_url.to_string(),
-            content_type: response.content_type,
-            body_truncated: response.truncated,
-            page,
-            via: None,
-        });
+        let entry = Arc::new(self.read(url).await?);
         let mut cache = self.cache.lock().unwrap_or_else(|poisoned| poisoned.into_inner());
         cache.push_back((key, Instant::now(), entry.clone()));
         while cache.len() > CACHE_ENTRIES {
@@ -243,5 +276,25 @@ mod tests {
         assert!(page.contains("Content-Type: text/html"));
         let image = tool.run(json!({ "url": format!("{base}/image") }), &context).await.unwrap_err();
         assert!(image.contains("image/png, which web_fetch can't read"), "{image}");
+    }
+
+    #[tokio::test]
+    async fn checks_a_url_before_a_provider_sees_it() {
+        use crate::search::{SearchKind, tests::provider};
+        let reader = Arc::new(crate::search::SearchClient::new(provider(SearchKind::Deepseek), Some("k".into()), None).unwrap());
+        let tool = WebFetch::new(Fetcher::new(Policy::public()).unwrap()).through(reader);
+        let context = ToolContext::detached("/");
+        for url in ["http://localhost/", "http://10.1.2.3/", "http://[::1]/", "https://user:pw@93.184.215.14/", "file:///etc/hosts", "http://printer.local/"] {
+            let error = tool.run(json!({ "url": url }), &context).await.unwrap_err();
+            assert!(error.contains("private network") || error.contains("credentials") || error.contains("Only http"), "{url}: {error}");
+        }
+    }
+
+    #[test]
+    fn a_routed_page_says_who_read_it() {
+        let mut routed = entry("# Docs".into());
+        routed.via = Some("DeepSeek".into());
+        routed.content_type = "text/markdown".into();
+        assert!(format_page(&routed, 0).contains("Read via: DeepSeek"));
     }
 }

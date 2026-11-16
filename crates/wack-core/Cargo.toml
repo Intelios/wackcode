@@ -17,6 +17,7 @@ alacritty_terminal.workspace = true
 image.workspace = true
 libc.workspace = true
 tokio.workspace = true
+url.workspace = true
 
 [dev-dependencies]
 tempfile.workspace = true

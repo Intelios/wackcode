@@ -863,6 +863,7 @@ impl AppState {
 
     pub fn close_settings(&mut self, cx: &mut Context<Self>) {
         if self.selection == Selection::Settings {
+            self.form.put_key_away(cx);
             let back = self.before_settings.clone();
             self.selection = Selection::Welcome;
             self.select(back, cx);
@@ -1914,6 +1915,30 @@ impl AppState {
         cx.notify();
     }
 
+    /// The eye at the key field: shows the saved key, hides it again, or unmasks what was typed.
+    pub fn toggle_connection_key(&mut self, cx: &mut Context<Self>) {
+        let (masked, empty) = {
+            let field = self.form.key.read(cx);
+            (field.is_masked(), field.text().trim().is_empty())
+        };
+        if masked && empty {
+            // Nothing typed: the key to look at is the saved one.
+            let Some(id) = self.form.editing.clone() else {
+                return;
+            };
+            match self.store.reveal_connection_key(&id) {
+                Ok(key) => self.form.show_saved_key(&key, cx),
+                Err(message) => {
+                    self.form.error = Some(message.into());
+                    self.form.notice = None;
+                }
+            }
+        } else {
+            self.form.toggle_key_reveal(cx);
+        }
+        cx.notify();
+    }
+
     /// Puts the saved connection's fields back, keeping the editor open.
     pub fn discard_connection_changes(&mut self, cx: &mut Context<Self>) {
         let Some(id) = self.form.editing.clone() else {
@@ -1972,7 +1997,7 @@ impl AppState {
                 self.form.editing = Some(connection.id.clone());
                 self.form.prune_blank_models(cx);
                 // Empties the field; the key now lives only in the store.
-                self.form.key.update(cx, |field, cx| field.set_text("", cx));
+                self.form.clear_key(cx);
                 self.form.error = None;
                 self.form.notice = Some(
                     if key.is_empty() { "Saved." } else { "Saved. The API key is stored on this Mac." }.into(),

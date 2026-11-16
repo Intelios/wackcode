@@ -42,6 +42,8 @@ actions!(
         CloseConnectionForm,
         /// Settings › Providers: adds a blank model row to the connection editor.
         AddModelRow,
+        /// Settings › Providers: shows the key in the editor's key field, or hides it again.
+        ToggleConnectionKey,
         OpenModelMenu,
         OpenEffortMenu,
         CloseMenu,

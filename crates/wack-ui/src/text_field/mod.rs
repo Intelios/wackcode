@@ -7,7 +7,8 @@
 //!
 //! The owner decides what Return means: the field emits [`TextFieldEvent::Enter`] and never
 //! inserts a line break for it. ⇧↩ and ⌥↩ insert one in a multi-line field. A masked field draws a
-//! bullet per character and never copies or hands its text to the platform.
+//! bullet per character and never copies or hands its text to the platform; its owner can show it
+//! plainly for a look and mask it again ([`TextField::set_masked`]).
 //!
 //! A list can borrow the field's keys while it is open over it (the composer's `/` menu): with
 //! [`TextField::set_completing`] on, ↑ ↓ ⇥ ↩ ⎋ become [`TextFieldEvent::Menu`] for the owner,
@@ -237,6 +238,21 @@ impl TextField {
     pub fn masked(mut self) -> Self {
         self.masked = true;
         self
+    }
+
+    /// Whether the text is drawn as bullets.
+    pub fn is_masked(&self) -> bool {
+        self.masked
+    }
+
+    /// Shows the text as bullets, or plainly again: the owner's choice, as at a key field's eye.
+    pub fn set_masked(&mut self, masked: bool, cx: &mut Context<Self>) {
+        if self.masked != masked {
+            self.masked = masked;
+            // Every glyph changes width, so the caret must be brought back into view.
+            self.reveal = true;
+            cx.notify();
+        }
     }
 
     pub fn text(&self) -> &str {

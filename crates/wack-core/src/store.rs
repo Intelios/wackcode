@@ -1,8 +1,8 @@
 //! The app's own data: where it lives, the provider connections, projects and chats.
 //!
 //! `state.json` describes a connection (name, address, models); its key is in `secrets.json`
-//! under the connection's id and is read only to build the provider that sends requests. No
-//! function here returns a key.
+//! under the connection's id. A key is read to build the provider that sends requests, and, only
+//! when the user asks to see it in Settings › Providers, by `Store::reveal_connection_key`.
 //!
 //! A chat's conversation is its session file (`sessions/<file>`); `state.json` holds only what
 //! the sidebar needs to list it. Every change is saved at once, written whole and renamed into
@@ -651,9 +651,25 @@ impl Store {
         self.state.connections.iter().filter(|connection| connection.enabled)
     }
 
-    /// Whether a key is kept for the connection. The key itself never leaves the store.
+    /// Whether a key is kept for the connection. The key itself is not handed out here.
     pub fn has_key(&self, id: &str) -> bool {
         self.secrets.get(id).is_some()
+    }
+
+    /// A connection's saved key, for the eye in Settings › Providers: the one deliberate way
+    /// a key leaves the store to be read. The page shows it until the field is masked again,
+    /// and only a connection's own key can be asked for; search providers have no such path.
+    pub fn reveal_connection_key(&self, id: &str) -> Result<String, String> {
+        let connection = self
+            .state
+            .connections
+            .iter()
+            .find(|connection| connection.id == id)
+            .ok_or("That connection is no longer there.")?;
+        self.secrets
+            .get(&connection.id)
+            .map(str::to_string)
+            .ok_or_else(|| format!("No key is saved for {}.", connection.name))
     }
 
     pub fn remove_connection(&mut self, id: &str) -> Result<(), String> {
@@ -1074,8 +1090,9 @@ impl Store {
         })
     }
 
-    /// The provider that sends this connection's requests. This is the one place a key leaves
-    /// the secret store, and it goes straight into the provider that needs it.
+    /// The provider that sends this connection's requests. A key comes out of the secret store
+    /// here and goes straight into the provider that needs it; `reveal_connection_key` is the
+    /// only way it comes out to be read.
     pub fn provider(&self, connection: &Connection) -> Result<HttpProvider, String> {
         let key = self.secrets.get(&connection.id).ok_or_else(|| {
             format!(
@@ -1424,6 +1441,28 @@ mod tests {
         assert!(store.provider(&with_new_key).is_ok());
         let secrets = fs::read_to_string(folder.path().join("secrets.json")).unwrap();
         assert!(secrets.contains("sk-new") && !secrets.contains("sk-first"));
+    }
+
+    #[test]
+    fn a_connection_key_is_revealed_only_when_asked_for() {
+        let folder = tempfile::tempdir().unwrap();
+        let mut store = Store::open(folder.path()).unwrap();
+        let added = store.add_connection(new("Testing"), "sk-reveal-me").unwrap();
+        assert_eq!(store.reveal_connection_key(&added.id).unwrap(), "sk-reveal-me");
+        assert_eq!(store.reveal_connection_key("missing").unwrap_err(), "That connection is no longer there.");
+
+        // A connection switched off keeps its key, so the eye still has something to show.
+        store.set_connection_enabled(&added.id, false).unwrap();
+        assert_eq!(store.reveal_connection_key(&added.id).unwrap(), "sk-reveal-me");
+
+        // Removing the connection forgets the key with it.
+        store.remove_connection(&added.id).unwrap();
+        assert!(store.reveal_connection_key(&added.id).is_err());
+
+        // A search provider's key is never reachable this way, whatever id it is given.
+        use crate::web::{SearchDraft, search::SearchKind};
+        let search = store.save_search_provider(&SearchDraft::new(SearchKind::Brave), Some("bk-search-key")).unwrap();
+        assert!(store.reveal_connection_key(&search).is_err());
     }
 
     #[test]

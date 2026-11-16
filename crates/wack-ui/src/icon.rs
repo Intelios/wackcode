@@ -28,6 +28,10 @@ pub enum Icon {
     /// The rubber duck: WackCode's mark, and the agent at work.
     Duck,
     Erase,
+    /// Shows a secret, as at a key field's eye.
+    Eye,
+    /// Hides a secret again.
+    EyeOff,
     File,
     Folder,
     /// Build mode.
@@ -64,6 +68,8 @@ const FILES: &[(&str, &[u8])] = &[
     ("icons/download.svg", include_bytes!("../assets/icons/download.svg")),
     ("icons/duck.svg", include_bytes!("../assets/icons/duck.svg")),
     ("icons/erase.svg", include_bytes!("../assets/icons/erase.svg")),
+    ("icons/eye.svg", include_bytes!("../assets/icons/eye.svg")),
+    ("icons/eye-off.svg", include_bytes!("../assets/icons/eye-off.svg")),
     ("icons/file.svg", include_bytes!("../assets/icons/file.svg")),
     ("icons/folder.svg", include_bytes!("../assets/icons/folder.svg")),
     ("icons/hammer.svg", include_bytes!("../assets/icons/hammer.svg")),
@@ -99,6 +105,8 @@ impl Icon {
             Icon::Bookmark => "icons/bookmark.svg",
             Icon::Duck => "icons/duck.svg",
             Icon::Erase => "icons/erase.svg",
+            Icon::Eye => "icons/eye.svg",
+            Icon::EyeOff => "icons/eye-off.svg",
             Icon::File => "icons/file.svg",
             Icon::Folder => "icons/folder.svg",
             Icon::Hammer => "icons/hammer.svg",
@@ -168,6 +176,8 @@ mod tests {
             Icon::Download,
             Icon::Duck,
             Icon::Erase,
+            Icon::Eye,
+            Icon::EyeOff,
             Icon::File,
             Icon::Folder,
             Icon::Hammer,

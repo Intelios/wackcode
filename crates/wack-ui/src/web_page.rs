@@ -10,8 +10,9 @@
 //!   search, which runs the draft as it stands.
 //!
 //! A key is typed into a masked field, handed to the store once and cleared, as in Settings ›
-//! Providers: blank keeps the saved key and nothing ever reads one back. The editor's fields live
-//! in [`WebState`], owned by the app, so leaving the page keeps what was typed.
+//! Providers: blank keeps the saved key and, unlike a connection's, nothing ever reads a search
+//! key back. The editor's fields live in [`WebState`], owned by the app, so leaving the page keeps
+//! what was typed.
 
 use gpui::{AnyElement, App, AppContext, Entity, SharedString, div, prelude::*, px};
 use wack_core::web::{

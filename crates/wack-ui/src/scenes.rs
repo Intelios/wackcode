@@ -515,6 +515,12 @@ pub fn all() -> Vec<Scene> {
             build: |_, cx| providers_scene(Providers::Editing, false, cx),
         },
         Scene {
+            name: "settings-providers-revealed",
+            description: "Settings › Providers with the saved key shown by the eye: plain in its field, and nothing to save.",
+            size: size(px(1180.), px(1000.)),
+            build: |_, cx| providers_scene(Providers::Revealed, false, cx),
+        },
+        Scene {
             name: "settings-providers-empty",
             description: "Settings › Providers with no connections yet: the first-run tile.",
             size: size(px(1180.), px(900.)),
@@ -1186,6 +1192,8 @@ enum Providers {
     Titles,
     Adding,
     Editing,
+    /// A saved key shown plainly by the eye.
+    Revealed,
     Empty,
 }
 
@@ -1207,6 +1215,10 @@ fn providers_scene(state: Providers, sidebar_hidden: bool, cx: &mut App) -> AnyV
             form.error = Some("The address must start with https:// or http://.".into());
         }
         Providers::Editing => form.edit(&connections[0].clone(), cx),
+        Providers::Revealed => {
+            form.edit(&connections[0].clone(), cx);
+            form.show_saved_key("sk-ant-api03-fixture-key-only-not-real-7f3a9c2e5b", cx);
+        }
         Providers::Empty => connections.clear(),
     }
     let data = SettingsData {

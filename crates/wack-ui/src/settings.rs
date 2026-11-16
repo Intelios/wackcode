@@ -15,7 +15,11 @@
 //!
 //! A key is typed into a masked field, handed to the store once, and the field is cleared: it is
 //! never drawn, copied or kept anywhere else (docs/security.md). Editing a connection with a saved
-//! key leaves the field empty: blank keeps the key, and the form never asks the store for it.
+//! key leaves the field empty: blank keeps the key, and the form never asks the store for it until
+//! the user asks to see it with the eye beside the field. The eye shows the saved key in place,
+//! plainly; until it is edited it is still the saved key, so saving keeps it rather than replacing
+//! it, and hiding it puts the field back to empty bullets. A key typed into the field can be
+//! looked at the same way. Leaving Settings puts the field away again.
 //! Adding or saving a connection sends nothing over the network.
 //!
 //! The form's fields live in [`ProviderForm`], owned by the app state, so leaving Settings
@@ -29,8 +33,8 @@ use wack_core::{Connection, Model, NewConnection, Reasoning, WireFormat};
 use crate::{
     actions::{
         AddModelRow, ChooseFormat, CloseConnectionForm, CloseSettings, DiscardConnection, EditConnection, OpenConnectionForm,
-        OpenSettingsSection, RemoveConnection, RemoveModelRow, SaveConnection, SwitchConnection, ToggleModelEffort,
-        ToggleModelReasoning,
+        OpenSettingsSection, RemoveConnection, RemoveModelRow, SaveConnection, SwitchConnection, ToggleConnectionKey,
+        ToggleModelEffort, ToggleModelReasoning,
     },
     appearance_page::{self, AppearanceData},
     button::{Button, Kind},
@@ -72,6 +76,9 @@ pub struct ProviderForm {
     pub name: Entity<TextField>,
     pub address: Entity<TextField>,
     pub key: Entity<TextField>,
+    /// The saved key the field is showing for a look. While it is what the field holds, the key
+    /// is unchanged: saving sends none, and the form is not dirty.
+    revealed_key: Option<String>,
     pub format: WireFormat,
     pub models: Vec<ModelField>,
     pub error: Option<SharedString>,
@@ -89,6 +96,7 @@ impl ProviderForm {
             name: cx.new(|cx| TextField::new(Type::Ui, "Work, Local, OpenRouter…", cx)),
             address: cx.new(|cx| TextField::new(Type::Ui, format_placeholder(WireFormat::OpenaiChat), cx)),
             key: cx.new(|cx| TextField::new(Type::Ui, "Paste the key", cx).masked()),
+            revealed_key: None,
             format: WireFormat::OpenaiChat,
             models: Vec::new(),
             error: None,
@@ -197,9 +205,10 @@ impl ProviderForm {
     }
 
     fn clear(&mut self, cx: &mut App) {
-        for field in [&self.name, &self.address, &self.key] {
+        for field in [&self.name, &self.address] {
             field.update(cx, |field, cx| field.set_text("", cx));
         }
+        self.clear_key(cx);
         self.models.clear();
         self.editing = None;
         self.format = WireFormat::OpenaiChat;
@@ -208,6 +217,53 @@ impl ProviderForm {
         self.notice = None;
         self.notice_serial = self.notice_serial.wrapping_add(1);
         self.open = false;
+    }
+
+    /// The field holds the saved key, only being looked at: neither a change nor a replacement.
+    fn key_is_saved(&self, cx: &App) -> bool {
+        let text = self.key.read(cx).text();
+        self.revealed_key.as_deref().is_some_and(|saved| saved == text.trim())
+    }
+
+    /// Puts a saved key in the field plainly, for the user to look at. Until it is edited it is
+    /// still the saved key: saving sends none and the form stays as it was.
+    pub fn show_saved_key(&mut self, key: &str, cx: &mut App) {
+        self.revealed_key = Some(key.to_string());
+        self.key.update(cx, |field, cx| {
+            field.set_text(key, cx);
+            field.set_masked(false, cx);
+        });
+    }
+
+    /// The eye at the key field: shows what is there, or hides it again. Hiding a saved key that
+    /// was only being looked at forgets it; a key the user typed stays, masked.
+    pub fn toggle_key_reveal(&mut self, cx: &mut App) {
+        if self.key.read(cx).is_masked() {
+            self.key.update(cx, |field, cx| field.set_masked(false, cx));
+        } else if self.key_is_saved(cx) {
+            self.clear_key(cx);
+        } else {
+            self.key.update(cx, |field, cx| field.set_masked(true, cx));
+        }
+    }
+
+    /// The key field empty and masked, with nothing remembered from a reveal.
+    pub fn clear_key(&mut self, cx: &mut App) {
+        self.revealed_key = None;
+        self.key.update(cx, |field, cx| {
+            field.set_text("", cx);
+            field.set_masked(true, cx);
+        });
+    }
+
+    /// Leaving Settings masks the field again. A saved key that was shown is forgotten; a key the
+    /// user typed stays, hidden, and is still there on the way back.
+    pub fn put_key_away(&mut self, cx: &mut App) {
+        if self.key_is_saved(cx) {
+            self.key.update(cx, |field, cx| field.set_text("", cx));
+        }
+        self.revealed_key = None;
+        self.key.update(cx, |field, cx| field.set_masked(true, cx));
     }
 
     fn model_field(cx: &mut App) -> ModelField {
@@ -273,7 +329,8 @@ impl ProviderForm {
         if models.is_empty() {
             return Err("Add at least one model.".to_string());
         }
-        if key_required && values.key.is_empty() {
+        let key = key_change(&values.key, self.revealed_key.as_deref()).unwrap_or_default().to_string();
+        if key_required && key.is_empty() {
             return Err("Enter the API key.".to_string());
         }
         Ok((
@@ -283,7 +340,7 @@ impl ProviderForm {
                 base_url: values.address,
                 models,
             },
-            values.key,
+            key,
         ))
     }
 
@@ -302,7 +359,7 @@ impl ProviderForm {
             return true;
         };
         let values = self.values(cx);
-        if !values.key.is_empty()
+        if key_change(&values.key, self.revealed_key.as_deref()).is_some()
             || values.format != saved.format
             || values.name != saved.name
             || values.address.trim_end_matches('/') != saved.base_url
@@ -334,6 +391,11 @@ struct ProviderValues {
     key: String,
     format: WireFormat,
     models: Vec<ModelValue>,
+}
+
+/// The key a save sends: what the user typed, except a saved key they only asked to see.
+fn key_change<'a>(typed: &'a str, shown_saved: Option<&str>) -> Option<&'a str> {
+    (!typed.is_empty() && Some(typed) != shown_saved).then_some(typed)
 }
 
 struct ModelValue {
@@ -406,7 +468,7 @@ fn tokens_text(tokens: u64) -> String {
 #[derive(Clone, Debug)]
 pub struct ConnectionRow {
     pub connection: Connection,
-    /// A key is kept for it. The key itself never reaches the page.
+    /// A key is kept for it. The key itself is not part of a row.
     pub has_key: bool,
 }
 
@@ -418,6 +480,14 @@ pub struct ProviderEditor {
     /// Whether a saved connection is switched on; `None` while adding one.
     pub enabled: Option<bool>,
     pub has_saved_key: bool,
+    /// The key field is showing its text instead of bullets.
+    pub key_revealed: bool,
+    /// What it shows is the saved key, only being looked at.
+    pub key_from_store: bool,
+    /// The key field holds something: what was typed, or the saved key.
+    pub key_has_text: bool,
+    /// There is a key to look at: a saved one, or one typed into the field.
+    pub key_present: bool,
     pub name: Entity<TextField>,
     pub address: Entity<TextField>,
     pub key: Entity<TextField>,
@@ -455,10 +525,17 @@ impl ProvidersData {
             let title: SharedString = if values.name.is_empty() { "New connection".into() } else { values.name.clone().into() };
             let host = host_of(&values.address);
             let host: SharedString = if host.is_empty() { "No address yet".into() } else { host.into() };
+            let key = form.key.read(cx);
+            let key_revealed = !key.is_masked();
+            let key_from_store = form.key_is_saved(cx);
             ProviderEditor {
                 editing: form.editing.clone(),
                 enabled: saved.as_ref().map(|row| row.connection.enabled),
                 has_saved_key: saved.as_ref().is_some_and(|row| row.has_key),
+                key_revealed,
+                key_from_store,
+                key_present: saved.as_ref().is_some_and(|row| row.has_key) || !values.key.is_empty(),
+                key_has_text: !values.key.is_empty(),
                 name: form.name.clone(),
                 address: form.address.clone(),
                 key: form.key.clone(),
@@ -1009,7 +1086,11 @@ fn connection_card(editor: &ProviderEditor, stack_form: bool, theme: &Theme) -> 
         .map(|format| (format, format_short(format)))
         .to_vec();
     let formats = segmented("format", &formats, editor.format, |format| Box::new(ChooseFormat { format }), theme);
-    let key_hint: SharedString = if editor.has_saved_key {
+    let key_hint: SharedString = if editor.key_from_store {
+        "The saved key. Change it to replace it.".into()
+    } else if editor.has_saved_key && editor.key_has_text {
+        "Typing a key replaces the saved one.".into()
+    } else if editor.has_saved_key {
         "Leave blank to keep the saved key.".into()
     } else {
         "Stored on this Mac. Sent only to the address above.".into()
@@ -1035,7 +1116,7 @@ fn connection_card(editor: &ProviderEditor, stack_form: bool, theme: &Theme) -> 
                 text_input(editor.address.clone(), "connection-address", theme),
                 theme,
             ))
-            .child(field("API key", Some(key_hint), text_input(editor.key.clone(), "connection-key", theme), theme)),
+            .child(field("API key", Some(key_hint), key_input(editor, theme), theme)),
     );
     if let Some(id) = editor.editing.clone() {
         card = card.child(
@@ -1216,6 +1297,48 @@ pub(crate) fn text_input(field: Entity<TextField>, tag: &'static str, theme: &Th
         .tag(tag)
 }
 
+/// The key's field: its ground, and the eye that shows or hides what it holds. The eye is there
+/// only when there is something to look at, as version 2 had it.
+fn key_input(editor: &ProviderEditor, theme: &Theme) -> impl IntoElement {
+    let eye = editor.key_present.then(|| {
+        let (icon, tip) = if editor.key_revealed {
+            (Icon::EyeOff, "Hide the API key")
+        } else if editor.has_saved_key && !editor.key_has_text {
+            (Icon::Eye, "Show the saved API key")
+        } else {
+            (Icon::Eye, "Show the API key")
+        };
+        div()
+            .id("reveal-key")
+            .flex_none()
+            .size(px(24.))
+            .rounded_full()
+            .flex()
+            .items_center()
+            .justify_center()
+            .cursor_pointer()
+            .hover(|button| button.bg(theme.hover))
+            .tooltip(crate::tooltip::tip(tip))
+            .on_click(dispatch(ToggleConnectionKey))
+            .child(icon.view(px(14.), if editor.key_revealed { theme.text_soft } else { theme.text_dim }))
+            .tag("reveal-key")
+    });
+    div()
+        .w_full()
+        .h(px(34.))
+        .pl(px(11.))
+        .pr(px(5.))
+        .rounded(px(9.))
+        .bg(theme.window)
+        .border_1()
+        .border_color(theme.border)
+        .flex()
+        .items_center()
+        .child(div().flex_1().min_w_0().child(editor.key.clone()))
+        .children(eye)
+        .tag("connection-key")
+}
+
 /// A tall field's ground (a description, a prompt): the whole box takes a click, not only the
 /// lines already written.
 pub(crate) fn text_area(field: Entity<TextField>, min_height: f32, theme: &Theme) -> gpui::Div {
@@ -1350,6 +1473,15 @@ mod tests {
         }
         assert_eq!(tokens_text(1_000_000), "1M");
         assert_eq!(tokens_text(128_000), "128k");
+    }
+
+    #[test]
+    fn a_saved_key_shown_for_a_look_is_not_a_typed_one() {
+        assert_eq!(key_change("sk-typed", None), Some("sk-typed"));
+        assert_eq!(key_change("", None), None);
+        assert_eq!(key_change("", Some("sk-saved")), None);
+        assert_eq!(key_change("sk-saved", Some("sk-saved")), None);
+        assert_eq!(key_change("sk-replacement", Some("sk-saved")), Some("sk-replacement"));
     }
 
     #[test]

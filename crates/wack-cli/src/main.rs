@@ -211,7 +211,7 @@ async fn agent(args: &mut Args, folder: &Path) -> Result<ExitCode, String> {
             Session::create(&store.sessions_folder().join(format!("{stamp:x}.jsonl")), &cwd)?
         }
     };
-    let kit = Kit::new(&session, mode, store.planning_unrestricted());
+    let kit = Kit::new(&session, mode, store.planning_unrestricted(), store.memory_for(session.cwd()));
     let mut tools = wack_tools::core_tools();
     tools.extend(kit.tools());
     let registry = Arc::new(Registry::new(tools)?);

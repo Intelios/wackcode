@@ -180,6 +180,9 @@ struct State {
     /// Settings › Tools: Plan and Ultra Plan may change things. Off unless the user lifts it.
     #[serde(default)]
     planning_unrestricted: bool,
+    /// Settings › Memory's switches.
+    #[serde(default)]
+    pub(crate) memory: crate::memory::MemoryConfig,
 }
 
 /// A connection and model resolved from a [`ModelChoice`], ready to build a run.
@@ -322,6 +325,22 @@ impl Store {
             .map_err(|error| format!("Could not save WackCode's settings: {error}"))?;
         fs::write(&temporary, json).map_err(failed)?;
         fs::rename(&temporary, &path).map_err(failed)
+    }
+
+    pub(crate) fn folder(&self) -> &Path {
+        &self.folder
+    }
+
+    pub(crate) fn save_state(&self) -> Result<(), String> {
+        self.save()
+    }
+
+    pub(crate) fn memory_config_mut(&mut self) -> &mut crate::memory::MemoryConfig {
+        &mut self.state.memory
+    }
+
+    pub(crate) fn memory_config(&self) -> &crate::memory::MemoryConfig {
+        &self.state.memory
     }
 
     pub fn sessions_folder(&self) -> PathBuf {

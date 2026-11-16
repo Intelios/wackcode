@@ -27,6 +27,14 @@ pub fn branch(folder: &Path) -> Option<String> {
     run(&["symbolic-ref", "--quiet", "--short", "HEAD"]).or_else(|| run(&["rev-parse", "--short", "HEAD"]))
 }
 
+/// The folder holding `folder`'s repository: the parent of its common `.git` folder, which every
+/// worktree and subfolder of one repository shares. `None` outside a repository.
+pub fn common_root(folder: &Path) -> Option<PathBuf> {
+    let common = git(folder, &["rev-parse", "--path-format=absolute", "--git-common-dir"]).ok()?;
+    let common = PathBuf::from(String::from_utf8_lossy(&common).trim_end());
+    common.parent().map(Path::to_path_buf)
+}
+
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub enum FileStatus {
     Added,

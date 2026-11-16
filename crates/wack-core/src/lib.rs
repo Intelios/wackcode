@@ -6,11 +6,12 @@
 //! `wack-ui`.
 //!
 //! So far: the data folder, the secret store, connections, projects, chats, running the agent for
-//! a chat (`run`), what changed in a project (`git`), terminals (`terminal`), and how the app looks
-//! (`appearance`).
+//! a chat (`run`), what changed in a project (`git`), terminals (`terminal`), how the app looks
+//! (`appearance`), and where each project's memory lives (`memory`).
 
 pub mod appearance;
 pub mod git;
+pub mod memory;
 pub mod run;
 pub mod secrets;
 pub mod store;

@@ -36,6 +36,7 @@ use crate::{
     agent::{Feature, Verdict},
     ask::ASK_USER_QUESTION,
     session::{Note, Session},
+    memory::MEMORY_TOOLS,
     todo::TODO,
     tool::{Loading, Tool, ToolContext, ToolSpec},
 };
@@ -235,8 +236,12 @@ impl Feature for Plan {
         if !self.mode().planning() {
             return if name == PLAN_MODE_COMPLETE { Verdict::Deny(ONLY_WHILE_PLANNING.to_string()) } else { Verdict::Allow };
         }
-        // Planning's own tools always pass. `todo` changes only its own list, never the project.
-        if self.unrestricted || [ASK_USER_QUESTION, PLAN_MODE_ENTER, PLAN_MODE_COMPLETE, TODO].contains(&name) {
+        // Planning's own tools always pass. `todo` changes only its own list and memory only its
+        // notes in the app's data, never the project.
+        if self.unrestricted
+            || [ASK_USER_QUESTION, PLAN_MODE_ENTER, PLAN_MODE_COMPLETE, TODO].contains(&name)
+            || MEMORY_TOOLS.contains(&name)
+        {
             return Verdict::Allow;
         }
         if name == "bash" {
@@ -397,6 +402,9 @@ mod tests {
         let plan = Plan::new(&session, Some(AgentMode::Plan), false);
         for (name, safe) in [("read", true), ("grep", true), (ASK_USER_QUESTION, false), (TODO, false), (PLAN_MODE_COMPLETE, false)] {
             assert_eq!(verdict(&plan, name, safe, json!({})), None, "{name}");
+        }
+        for name in MEMORY_TOOLS {
+            assert_eq!(verdict(&plan, name, false, json!({})), None, "{name}");
         }
         assert_eq!(verdict(&plan, "edit", false, json!({})).unwrap(), "Plan mode blocks the mutating tool 'edit'.");
         // A tool nobody vouched for is refused, whatever it is.

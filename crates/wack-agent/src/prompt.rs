@@ -3,8 +3,8 @@
 //!
 //! The three parts are built once when an agent starts and never change during its run, so the
 //! provider's prompt cache holds from the first request to the last. The core text is ported from
-//! version 2 with the features that have not been rebuilt yet (skills, memory) left out; each
-//! returns with its feature. Plan mode never changes this prompt: its rules arrive as a note in
+//! version 2 with the features that have not been rebuilt yet (skills) left out; each returns
+//! with its feature. Memory's index is not one of these parts: the kit adds it (`kit.rs`). Plan mode never changes this prompt: its rules arrive as a note in
 //! the conversation (`plan::contract`). Ultra is the one switch that does, and it is fixed for a
 //! run.
 
@@ -19,7 +19,7 @@ pub const CODE_PROMPT: &str = "You are a coding agent working inside WackCode, a
 # How WackCode works
 - The user reads your replies as Markdown in a chat transcript. Tool calls show as compact cards they can expand; your thinking and raw tool output are usually collapsed, so anything they need to know must be in your text.
 - Every file you change appears in the user's Changes panel. Nothing you do can be rewound by the app: editing files, running commands, using Git, and anything outside the project may not be reversible.
-- Later in this prompt you'll find a guide to this chat's tools, and possibly project instructions (AGENTS.md, CLAUDE.md). Project instructions override these defaults where they conflict; the user's own messages take precedence.
+- Later in this prompt you'll find a guide to this chat's tools, and possibly project instructions (AGENTS.md, CLAUDE.md) and saved memory. Project instructions override these defaults where they conflict; the user's own messages take precedence.
 - While Plan mode or Ultra Plan is on, the app adds a mode contract to the conversation. Follow it over these defaults until the mode ends.
 - Long chats are compacted automatically. Keep working; never wrap up early or hand off because a conversation feels long.
 
@@ -251,7 +251,7 @@ mod tests {
 
     #[test]
     fn the_core_prompt_names_nothing_that_version_3_dropped() {
-        for gone in ["checkpoint", "rewind project", "skills", "saved memory"] {
+        for gone in ["checkpoint", "rewind project", "skills"] {
             assert!(!CODE_PROMPT.contains(gone), "the prompt still mentions {gone}");
         }
         // The planning texts are version 2's, less what version 3 does not have yet.

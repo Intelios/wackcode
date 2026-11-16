@@ -284,6 +284,14 @@ impl Agent {
         Self { provider, registry, session, settings, features: Vec::new(), system, cwd }
     }
 
+    /// Adds a part to the system prompt after the project instructions and before Ultra's, for a
+    /// feature whose text is read when its run starts (memory's index).
+    pub fn with_system_part(mut self, text: String) -> Self {
+        let at = self.system.len() - usize::from(self.settings.ultra);
+        self.system.insert(at, SystemPart { text });
+        self
+    }
+
     pub fn with_feature(mut self, feature: Box<dyn Feature>) -> Self {
         self.features.push(feature);
         self
@@ -648,6 +656,39 @@ mod tests {
             guidelines: Vec::new(),
             ends_run: false,
         }
+    }
+
+    #[test]
+    fn memory_brings_its_tools_and_an_index_before_ultra() {
+        use crate::{kit::Kit, memory::store};
+
+        let folder = tempfile::tempdir().unwrap();
+        let memory = folder.path().join("memory");
+        store::write(&memory, "user_tabs", store::Kind::User, "Prefers tabs", "Indentation", "Tabs, width 4").unwrap();
+        let session = Session::create(&folder.path().join("chat.jsonl"), folder.path()).unwrap();
+        let build = |memory: Option<std::path::PathBuf>, ultra: bool| {
+            let kit = Kit::new(&session, None, false, memory);
+            let names: Vec<String> = kit.tools().iter().map(|tool| tool.spec().name).collect();
+            let settings = Settings { model: "m".into(), effort: None, max_output_tokens: None, context_window: None, ultra };
+            let registry = Arc::new(Registry::new(kit.tools()).unwrap());
+            let provider = Arc::new(ScriptedProvider::new(Vec::new()));
+            let session = Session::open(session.path()).unwrap();
+            (names, kit.attach(Agent::new(provider, registry, session, &Profile::code(), settings)).system)
+        };
+
+        let (names, system) = build(Some(memory.clone()), true);
+        assert!(crate::memory::MEMORY_TOOLS.iter().all(|tool| names.iter().any(|name| name == tool)));
+        let at = system.iter().position(|part| part.text.starts_with("## Project memory")).unwrap();
+        assert_eq!(at, system.len() - 2, "memory sits just before Ultra");
+        assert!(system[at].text.contains("(name: user_tabs)") && !system[at].text.contains("width 4"));
+        assert!(system.last().unwrap().text.starts_with("# Ultra"));
+
+        let (_, system) = build(Some(memory), false);
+        assert!(system.last().unwrap().text.starts_with("## Project memory"));
+
+        let (names, system) = build(None, false);
+        assert!(!names.iter().any(|name| name.starts_with("memory_")));
+        assert!(!system.iter().any(|part| part.text.contains("## Project memory")));
     }
 
     /// Returns its `text` input.
@@ -1318,7 +1359,7 @@ mod tests {
 
         let alone = Arc::new(Alone::default());
         let build = |session: Session, provider: &ScriptedProvider, mode: AgentMode, alone: Arc<Alone>| {
-            let kit = Kit::new(&session, Some(mode), false);
+            let kit = Kit::new(&session, Some(mode), false, None);
             let mut tools: Vec<Arc<dyn Tool>> = vec![alone, Arc::new(Echo("echo", Loading::Always))];
             tools.extend(kit.tools());
             let settings = Settings { model: "m".into(), effort: None, max_output_tokens: None, context_window: None, ultra: false };

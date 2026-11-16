@@ -36,6 +36,8 @@ pub struct RunSetup {
     pub mode: AgentMode,
     /// Settings › Tools: planning may change things.
     pub unrestricted_planning: bool,
+    /// The project's memory folder, or `None` when memory is off for it (Settings › Memory).
+    pub memory: Option<PathBuf>,
 }
 
 pub enum Job {
@@ -79,6 +81,7 @@ impl Store {
             },
             mode: chat.mode,
             unrestricted_planning: self.planning_unrestricted(),
+            memory: self.memory_for(&project.path),
         })
     }
 }
@@ -106,7 +109,7 @@ pub async fn run(
         Ok(session) => session,
         Err(message) => return finished(Err(message), None),
     };
-    let kit = Kit::new(&session, Some(setup.mode), setup.unrestricted_planning);
+    let kit = Kit::new(&session, Some(setup.mode), setup.unrestricted_planning, setup.memory);
     let mut tools = wack_tools::core_tools();
     tools.extend(kit.tools());
     let registry = match Registry::new(tools) {
@@ -175,6 +178,7 @@ mod tests {
             },
             mode: AgentMode::Build,
             unrestricted_planning: false,
+            memory: None,
         }
     }
 

@@ -112,6 +112,6 @@ Known gaps in identity:
 
 - The window's own controls follow macOS's light or dark, not the one chosen in Settings.
 
-The foundation (phases 0 to 4) is complete: the owner signed off its look on 2026-11-15. Features now return in this order, each with its own plan: Plan and Ultra Plan with the question dialog, todo list and Ultra reasoning (done); Memory (done); Build and Run (done); auto titles and renaming a chat (done); skills and slash commands (done); background shell jobs (done); the usage ledger writer (done); commit / push / PR; MCP and web tools; sub-agents and task suggestions; the browser pane, visual replies and canvas; the Chat area; computer use, the skill creator, signature motion and Liquid Glass.
+The foundation (phases 0 to 4) is complete: the owner signed off its look on 2026-11-15. Features now return in this order, each with its own plan: Plan and Ultra Plan with the question dialog, todo list and Ultra reasoning (done); Memory (done); Build and Run (done); auto titles and renaming a chat (done); skills and slash commands (done); background shell jobs (done); the usage ledger writer (done); git; MCP and web tools; sub-agents and task suggestions; the browser pane, visual replies and canvas; the Chat area; computer use, the skill creator, signature motion and Liquid Glass.
 
 Update this section as each piece lands.

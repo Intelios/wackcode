@@ -8,6 +8,11 @@
 //! The owner decides what Return means: the field emits [`TextFieldEvent::Enter`] and never
 //! inserts a line break for it. ⇧↩ and ⌥↩ insert one in a multi-line field. A masked field draws a
 //! bullet per character and never copies or hands its text to the platform.
+//!
+//! A list can borrow the field's keys while it is open over it (the composer's `/` menu): with
+//! [`TextField::set_completing`] on, ↑ ↓ ⇥ ↩ ⎋ become [`TextFieldEvent::Menu`] for the owner,
+//! through the `TextField && completing` key context. [`TextField::set_highlight`] draws a
+//! range in the accent colour (a recognised `/command`).
 
 pub mod edit;
 
@@ -63,10 +68,16 @@ actions!(
         NewLine,
         SendNow,
         CharacterPalette,
+        MenuUp,
+        MenuDown,
+        MenuPick,
+        MenuDismiss,
     ]
 );
 
 const CONTEXT: &str = "TextField";
+const COMPLETING: &str = "completing";
+const COMPLETING_PREDICATE: &str = "TextField && completing";
 const BULLET: char = '•';
 
 /// The field's key bindings. Called once at start.
@@ -118,6 +129,26 @@ pub fn init(cx: &mut App) {
         KeyBinding::new("cmd-enter", SendNow, context),
         KeyBinding::new("ctrl-cmd-space", CharacterPalette, context),
     ]);
+    // While a list is open over the field, these keys are the list's.
+    let completing = Some(COMPLETING_PREDICATE);
+    cx.bind_keys([
+        KeyBinding::new("up", MenuUp, completing),
+        KeyBinding::new("ctrl-p", MenuUp, completing),
+        KeyBinding::new("down", MenuDown, completing),
+        KeyBinding::new("ctrl-n", MenuDown, completing),
+        KeyBinding::new("tab", MenuPick, completing),
+        KeyBinding::new("enter", MenuPick, completing),
+        KeyBinding::new("escape", MenuDismiss, completing),
+    ]);
+}
+
+/// The key a list open over the field takes.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum MenuKey {
+    Up,
+    Down,
+    Pick,
+    Dismiss,
 }
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
@@ -127,6 +158,10 @@ pub enum TextFieldEvent {
     Enter,
     /// ⌘↩.
     SendNow,
+    /// The caret moved without the text changing.
+    Moved,
+    /// A list's key, while [`TextField::set_completing`] is on.
+    Menu(MenuKey),
 }
 
 /// What the last frame drew, for turning positions into offsets and back.
@@ -157,6 +192,10 @@ pub struct TextField {
     selecting: bool,
     /// The x the caret keeps while moving up and down through shorter rows.
     goal_x: Option<Pixels>,
+    /// A list open over the field has its keys.
+    completing: bool,
+    /// Drawn in the accent colour.
+    highlight: Option<Range<usize>>,
 }
 
 impl EventEmitter<TextFieldEvent> for TextField {}
@@ -182,6 +221,8 @@ impl TextField {
             reveal: false,
             selecting: false,
             goal_x: None,
+            completing: false,
+            highlight: None,
         }
     }
 
@@ -213,6 +254,35 @@ impl TextField {
     pub fn insert_line_break(&mut self, cx: &mut Context<Self>) {
         if self.multiline {
             self.insert("\n", EditKind::Typing, cx);
+        }
+    }
+
+    /// Where the caret is, as a byte offset into [`TextField::text`].
+    pub fn caret(&self) -> usize {
+        self.buffer.cursor()
+    }
+
+    /// Replaces the whole text as one undo step and puts the caret at `caret`.
+    pub fn replace_text(&mut self, text: &str, caret: usize, cx: &mut Context<Self>) {
+        let length = self.buffer.text().len();
+        self.buffer.replace(Some(0..length), text, EditKind::Other);
+        self.buffer.move_to(caret.min(text.len()), false);
+        self.changed(cx);
+    }
+
+    /// Lends ↑ ↓ ⇥ ↩ ⎋ to a list open over the field.
+    pub fn set_completing(&mut self, completing: bool, cx: &mut Context<Self>) {
+        if self.completing != completing {
+            self.completing = completing;
+            cx.notify();
+        }
+    }
+
+    /// Draws `range` of the text in the accent colour; `None` draws it all plain.
+    pub fn set_highlight(&mut self, range: Option<Range<usize>>, cx: &mut Context<Self>) {
+        if self.highlight != range {
+            self.highlight = range;
+            cx.notify();
         }
     }
 
@@ -313,6 +383,7 @@ impl TextField {
 
     fn moved(&mut self, cx: &mut Context<Self>) {
         self.reveal = true;
+        cx.emit(TextFieldEvent::Moved);
         cx.notify();
     }
 
@@ -540,6 +611,22 @@ impl TextField {
         cx.emit(TextFieldEvent::SendNow);
     }
 
+    fn menu_up(&mut self, _: &MenuUp, _: &mut Window, cx: &mut Context<Self>) {
+        cx.emit(TextFieldEvent::Menu(MenuKey::Up));
+    }
+
+    fn menu_down(&mut self, _: &MenuDown, _: &mut Window, cx: &mut Context<Self>) {
+        cx.emit(TextFieldEvent::Menu(MenuKey::Down));
+    }
+
+    fn menu_pick(&mut self, _: &MenuPick, _: &mut Window, cx: &mut Context<Self>) {
+        cx.emit(TextFieldEvent::Menu(MenuKey::Pick));
+    }
+
+    fn menu_dismiss(&mut self, _: &MenuDismiss, _: &mut Window, cx: &mut Context<Self>) {
+        cx.emit(TextFieldEvent::Menu(MenuKey::Dismiss));
+    }
+
     fn character_palette(&mut self, _: &CharacterPalette, window: &mut Window, _: &mut Context<Self>) {
         window.show_character_palette();
     }
@@ -662,9 +749,14 @@ impl EntityInputHandler for TextField {
 
 impl Render for TextField {
     fn render(&mut self, _: &mut Window, cx: &mut Context<Self>) -> impl IntoElement {
+        let mut context = gpui::KeyContext::new_with_defaults();
+        context.add(CONTEXT);
+        if self.completing {
+            context.add(COMPLETING);
+        }
         div()
             .id("text-field")
-            .key_context(CONTEXT)
+            .key_context(context)
             .track_focus(&self.focus)
             .cursor(CursorStyle::IBeam)
             .w_full()
@@ -703,6 +795,10 @@ impl Render for TextField {
             .on_action(cx.listener(Self::new_line))
             .on_action(cx.listener(Self::send_now))
             .on_action(cx.listener(Self::character_palette))
+            .on_action(cx.listener(Self::menu_up))
+            .on_action(cx.listener(Self::menu_down))
+            .on_action(cx.listener(Self::menu_pick))
+            .on_action(cx.listener(Self::menu_dismiss))
             .on_mouse_down(MouseButton::Left, cx.listener(Self::mouse_down))
             .on_mouse_move(cx.listener(Self::mouse_move))
             .on_mouse_up(MouseButton::Left, cx.listener(Self::mouse_up))
@@ -770,24 +866,39 @@ fn shaping(field: &TextField, theme: &Theme) -> Shaping {
     let placeholder = display.is_empty();
     let text: SharedString = if placeholder { field.placeholder.clone() } else { display.into() };
     let colour = if placeholder { theme.text_faint } else { theme.text };
-    let run = |len: usize, underline: bool| TextRun {
-        len,
-        font: font.clone(),
-        color: colour,
-        background_color: None,
-        underline: underline.then_some(UnderlineStyle { color: Some(colour), thickness: px(1.), wavy: false }),
-        strikethrough: None,
-    };
-    let runs = match field.buffer.marked().filter(|_| !placeholder) {
-        Some(marked) => {
-            let marked = field.display_offset(marked.start)..field.display_offset(marked.end);
-            [run(marked.start, false), run(marked.len(), true), run(text.len() - marked.end, false)]
-                .into_iter()
-                .filter(|run| run.len > 0)
-                .collect()
+    let run = |len: usize, underline: bool, lit: bool| {
+        let color = if lit { theme.accent_text } else { colour };
+        TextRun {
+            len,
+            font: font.clone(),
+            color,
+            background_color: None,
+            underline: underline.then_some(UnderlineStyle { color: Some(color), thickness: px(1.), wavy: false }),
+            strikethrough: None,
         }
-        None => vec![run(text.len(), false)],
     };
+    // Runs change wherever composing text (underlined) or the highlight (lit) starts or ends.
+    let marked = field.buffer.marked().filter(|_| !placeholder).map(|marked| field.display_offset(marked.start)..field.display_offset(marked.end));
+    let lit = field
+        .highlight
+        .clone()
+        .filter(|range| !placeholder && !field.masked && range.end <= field.buffer.text().len())
+        .map(|range| field.display_offset(range.start)..field.display_offset(range.end));
+    let mut edges = vec![0, text.len()];
+    for range in marked.iter().chain(lit.iter()) {
+        edges.extend([range.start.min(text.len()), range.end.min(text.len())]);
+    }
+    edges.sort_unstable();
+    edges.dedup();
+    let runs = edges
+        .windows(2)
+        .filter(|edge| edge[1] > edge[0])
+        .map(|edge| {
+            let within = |range: &Option<Range<usize>>| range.as_ref().is_some_and(|range| range.start <= edge[0] && edge[1] <= range.end);
+            run(edge[1] - edge[0], within(&marked), within(&lit))
+        })
+        .collect::<Vec<_>>();
+    let runs = if runs.is_empty() { vec![run(text.len(), false, false)] } else { runs };
     Shaping {
         text,
         runs,

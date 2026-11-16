@@ -12,6 +12,8 @@ use gpui::{AssetSource, Hsla, Pixels, SharedString, Styled, Svg, svg};
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub enum Icon {
     ArrowUp,
+    /// A skill.
+    Book,
     /// Memory: a note kept for later chats.
     Bookmark,
     /// Plan mode.
@@ -40,6 +42,8 @@ pub enum Icon {
     Search,
     Settings,
     Sidebar,
+    /// One of WackCode's own slash commands.
+    Slash,
     Stop,
     Terminal,
     Trash,
@@ -48,6 +52,7 @@ pub enum Icon {
 /// Every icon file, by asset path. One list, so a missing file fails the test below.
 const FILES: &[(&str, &[u8])] = &[
     ("icons/arrow-up.svg", include_bytes!("../assets/icons/arrow-up.svg")),
+    ("icons/book.svg", include_bytes!("../assets/icons/book.svg")),
     ("icons/bookmark.svg", include_bytes!("../assets/icons/bookmark.svg")),
     ("icons/brain.svg", include_bytes!("../assets/icons/brain.svg")),
     ("icons/branch.svg", include_bytes!("../assets/icons/branch.svg")),
@@ -72,6 +77,7 @@ const FILES: &[(&str, &[u8])] = &[
     ("icons/search.svg", include_bytes!("../assets/icons/search.svg")),
     ("icons/settings.svg", include_bytes!("../assets/icons/settings.svg")),
     ("icons/sidebar.svg", include_bytes!("../assets/icons/sidebar.svg")),
+    ("icons/slash.svg", include_bytes!("../assets/icons/slash.svg")),
     ("icons/stop.svg", include_bytes!("../assets/icons/stop.svg")),
     ("icons/terminal.svg", include_bytes!("../assets/icons/terminal.svg")),
     ("icons/trash.svg", include_bytes!("../assets/icons/trash.svg")),
@@ -81,6 +87,7 @@ impl Icon {
     pub fn path(self) -> &'static str {
         match self {
             Icon::ArrowUp => "icons/arrow-up.svg",
+            Icon::Book => "icons/book.svg",
             Icon::Brain => "icons/brain.svg",
             Icon::Branch => "icons/branch.svg",
             Icon::Check => "icons/check.svg",
@@ -105,6 +112,7 @@ impl Icon {
             Icon::Search => "icons/search.svg",
             Icon::Settings => "icons/settings.svg",
             Icon::Sidebar => "icons/sidebar.svg",
+            Icon::Slash => "icons/slash.svg",
             Icon::Stop => "icons/stop.svg",
             Icon::Terminal => "icons/terminal.svg",
             Icon::Trash => "icons/trash.svg",

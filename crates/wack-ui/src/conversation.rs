@@ -17,12 +17,15 @@ use wack_core::{
     AgentMode, Event, HistoryEntry, Message, Outcome, RetryNotice, Role, Usage,
     llm::Block,
     plan::{PLAN_STATE, PlanState},
+    skills::CommandUse,
     todo::{TODO_STATE, TodoList},
 };
 
 #[derive(Clone, Debug, PartialEq)]
 pub enum Entry {
-    Prompt { text: String, steered: bool },
+    /// What the user sent. For a slash command `text` is the expanded prompt the model got and
+    /// `command` what the user typed, which the transcript shows instead.
+    Prompt { text: String, steered: bool, command: Option<CommandUse> },
     Turn(Turn),
     /// The older conversation was summarised here.
     Compacted,
@@ -203,7 +206,7 @@ impl Conversation {
                     conversation.close_turn(None);
                     conversation.entries.push(Entry::Compacted);
                 }
-                HistoryEntry::Message { message, usage, at, .. } => conversation.replay(message, *usage, *at),
+                HistoryEntry::Message { message, usage, at, command } => conversation.replay(message, *usage, *at, command.clone()),
                 HistoryEntry::State { key, value } => conversation.apply_state(key, value),
                 HistoryEntry::Note { .. } => {}
             }
@@ -212,7 +215,7 @@ impl Conversation {
         conversation
     }
 
-    fn replay(&mut self, message: &Message, usage: Option<Usage>, at: Option<u64>) {
+    fn replay(&mut self, message: &Message, usage: Option<Usage>, at: Option<u64>, command: Option<CommandUse>) {
         match message.role {
             Role::User => {
                 let results: Vec<_> = message
@@ -225,7 +228,7 @@ impl Conversation {
                     .collect();
                 let text = message.text();
                 if results.is_empty() {
-                    self.begin(&text, false, at, false);
+                    self.begin(&text, false, at, false, command);
                     return;
                 }
                 if let Some(turn) = self.current() {
@@ -238,7 +241,7 @@ impl Conversation {
                 }
                 // Text beside tool results was sent while the agent worked.
                 if !text.trim().is_empty() {
-                    self.begin(&text, true, at, false);
+                    self.begin(&text, true, at, false, None);
                 }
             }
             Role::Assistant => {
@@ -338,20 +341,25 @@ impl Conversation {
         }
     }
 
-    fn begin(&mut self, text: &str, steered: bool, at: Option<u64>, live: bool) {
+    fn begin(&mut self, text: &str, steered: bool, at: Option<u64>, live: bool, command: Option<CommandUse>) {
         self.close_turn(if steered { at } else { None });
-        self.entries.push(Entry::Prompt { text: text.to_string(), steered });
+        self.entries.push(Entry::Prompt { text: text.to_string(), steered, command });
         self.entries.push(Entry::Turn(Turn::new(at, live)));
     }
 
     /// The user sent a message and a run is starting.
     pub fn send(&mut self, text: &str, now: u64) {
-        self.begin(text, false, Some(now), true);
+        self.begin(text, false, Some(now), true, None);
+    }
+
+    /// The user sent a slash command: `text` is what the model gets.
+    pub fn send_command(&mut self, text: &str, command: CommandUse, now: u64) {
+        self.begin(text, false, Some(now), true, Some(command));
     }
 
     pub fn apply(&mut self, event: &Event, now: u64) {
         if let Event::Steered(text) = event {
-            self.begin(text, true, Some(now), true);
+            self.begin(text, true, Some(now), true, None);
             return;
         }
         let Some(turn) = self.current() else {
@@ -525,7 +533,7 @@ mod tests {
             at(assistant(vec![Block::Text { text: "Done.".into() }]), 9_000, Some(usage)),
         ];
         let conversation = Conversation::from_history(&history);
-        assert!(matches!(&conversation.entries[0], Entry::Prompt { text, steered: false } if text == "fix it"));
+        assert!(matches!(&conversation.entries[0], Entry::Prompt { text, steered: false, .. } if text == "fix it"));
         let turn = turns(&conversation)[0];
         assert!(matches!(&turn.steps[0], Step::Thought(text) if text == "look first"));
         assert!(matches!(&turn.steps[1], Step::Note(text) if text == "I'll read the file."));
@@ -607,5 +615,13 @@ mod tests {
         conversation.begin_compaction();
         conversation.finish_compaction(&Err("There is nothing to compact yet.".into()));
         assert!(matches!(conversation.entries.last(), Some(Entry::Notice { failed: true, .. })));
+    }
+
+    #[test]
+    fn a_command_replays_as_typed() {
+        let command = CommandUse { name: "pdf".into(), args: "form.pdf".into(), kind: wack_core::skills::Kind::Skill };
+        let history = vec![HistoryEntry::Message { message: Message::user("<skill name=\"pdf\">…</skill>\n\nform.pdf"), usage: None, at: Some(1), command: Some(command.clone()) }];
+        let conversation = Conversation::from_history(&history);
+        assert!(matches!(&conversation.entries[0], Entry::Prompt { text, command: Some(used), .. } if text.starts_with("<skill") && *used == command));
     }
 }

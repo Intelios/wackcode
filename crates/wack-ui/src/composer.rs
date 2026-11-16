@@ -16,6 +16,9 @@
 //! all three. It is locked while the agent works: a run keeps the mode it started with, unless
 //! the agent itself asks to plan.
 //!
+//! A `/word` raises the `/` menu above the card (`crate::slash_menu`), as wide as the card; a
+//! bare `/command` that takes something after it says what under the field.
+//!
 //! Renders from plain data ([`ComposerData`]) and reports clicks as actions (`crate::actions`),
 //! which the shell handles; in a gallery scene nothing handles them.
 
@@ -75,6 +78,10 @@ pub struct ComposerData {
     pub roomy: bool,
     /// The model or effort menu, when open.
     pub menu: Option<MenuData>,
+    /// The `/` menu, when a `/word` is being typed.
+    pub slash: Option<crate::slash_menu::SlashData>,
+    /// Under a bare `/command`: what it takes after it.
+    pub hint: Option<SharedString>,
     /// The question the agent is waiting on, drawn above the waiting messages.
     pub question: Option<crate::question::QuestionData>,
     /// The agent's todo list, at the top of the column.
@@ -262,6 +269,9 @@ impl RenderOnce for Composer {
             .child(
                 field
                     .min_h(px(field_height))
+                    .when_some(data.hint.clone(), |field, hint| {
+                        field.child(div().pt(px(2.)).typography(Type::Small).text_color(theme.text_faint).child(hint).tag("command-hint"))
+                    })
                     .when_some(focus_target, |field, target| {
                         // The whole text area takes a click, not only the line of text.
                         field.on_mouse_down(MouseButton::Left, move |_, window, cx| {
@@ -273,6 +283,21 @@ impl RenderOnce for Composer {
             .child(controls)
             .tag("composer");
         let card = if ultra_plan { prism_edge(CARD_RADIUS, card, &theme).into_any_element() } else { card.into_any_element() };
+        // The `/` menu rises from the card's top edge, over whatever is above it.
+        let card = div().relative().child(card).when_some(data.slash.clone(), |card, slash| {
+            card.child(
+                deferred(
+                    div()
+                        .absolute()
+                        .left_0()
+                        .right_0()
+                        .bottom(gpui::relative(1.))
+                        .pb(px(PICKER_GAP))
+                        .child(crate::motion::enter(ElementId::Name(format!("arrive-slash-{}", data.key).into()), div().child(crate::slash_menu::menu(slash, &theme)))),
+                )
+                .with_priority(2),
+            )
+        });
 
         // Inside a capped column the card stays whole and the question gives way first.
         let mut column = div().w_full().min_h_0().flex().flex_col().gap(px(6.));

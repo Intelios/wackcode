@@ -8,7 +8,7 @@ use serde_json::Value;
 use crate::{
     conversation::{Conversation, Entry, Step, ToolStep, Turn, TurnEnd},
     markdown,
-    transcript::{Detail, Diff, DiffLine, Item, LineKind, Meta, Target, Work, WorkRow},
+    transcript::{CommandShown, Detail, Diff, DiffLine, Item, LineKind, Meta, Target, Work, WorkRow},
 };
 
 /// Diff and output details show at most this many lines.
@@ -65,7 +65,19 @@ pub fn entry_items(
     };
     {
         match entry {
-            Entry::Prompt { text, steered } => items.push(Item::Prompt { text: text.clone().into(), steered: *steered }),
+            Entry::Prompt { text, steered, command } => {
+                let key = format!("prompt-{index}");
+                items.push(Item::Prompt {
+                    text: text.clone().into(),
+                    steered: *steered,
+                    command: command.as_ref().map(|command| CommandShown {
+                        name: format!("/{}", command.name).into(),
+                        args: command.args.clone().into(),
+                        open: open.contains(&key),
+                        key: key.into(),
+                    }),
+                })
+            }
             Entry::Compacted => items.push(Item::Compacted),
             Entry::Notice { text, failed } => items.push(Item::Notice { text: text.clone().into(), failed: *failed }),
             Entry::Turn(turn) => {
@@ -148,7 +160,8 @@ pub fn summary(turn: &Turn, now: u64) -> String {
 /// What a log did, counted: "2 reads · 1 search · 1 edit · 1 command". Thoughts, notes and
 /// smaller tools are left out; empty when nothing counted.
 pub fn tally(rows: &[WorkRow]) -> String {
-    const KINDS: [(&[&str], &str, &str); 6] = [
+    const KINDS: [(&[&str], &str, &str); 7] = [
+        (&["Used skill"], "skill", "skills"),
         (&["Read"], "read", "reads"),
         (&["Searched", "Found", "Listed", "Looked for"], "search", "searches"),
         (&["Edited", "Wrote"], "edit", "edits"),
@@ -181,6 +194,7 @@ pub fn activity(rows: &[WorkRow]) -> Option<String> {
         "Listed" => "Listing",
         "Looked for" => "Looking for",
         "Asked" => "Asking",
+        "Used skill" => "Using skill",
         "Saved memory" => "Saving memory",
         "Updated memory" => "Updating memory",
         "Recalled memory" => "Recalling memory",
@@ -266,6 +280,12 @@ fn first_line(text: &str) -> String {
     text.trim().lines().next().unwrap_or("").trim().to_string()
 }
 
+/// The skill a `…/<skill>/SKILL.md` path loads.
+fn skill_folder(path: &str) -> Option<String> {
+    let path = Path::new(path);
+    (path.file_name()? == "SKILL.md").then(|| path.parent()?.file_name().map(|name| name.to_string_lossy().into_owned()))?
+}
+
 /// A path as the user thinks of it: relative to the project when inside it.
 fn shown_path(path: &str, cwd: &Path) -> String {
     Path::new(path).strip_prefix(cwd).map(|relative| relative.display().to_string()).unwrap_or_else(|_| path.to_string())
@@ -291,6 +311,15 @@ pub fn tool_row(tool: &ToolStep, cwd: &Path, live: bool) -> WorkRow {
     let ok = result.filter(|result| !result.is_error).map(|result| result.text.as_str());
 
     let (verb, target, success_meta, detail): (&str, Target, Option<String>, Option<Detail>) = match tool.name.as_str() {
+        // Loading a skill is the agent choosing to follow it, so it reads as that, named by its
+        // folder. The path's shape decides, not the skills on disk now, so an old chat still reads
+        // right after a skill is renamed or removed.
+        "read" if text_field(input, "path").and_then(skill_folder).is_some() => (
+            "Used skill",
+            Target::Words(text_field(input, "path").and_then(skill_folder).unwrap_or_default().into()),
+            None,
+            None,
+        ),
         "read" => (
             "Read",
             Target::Code(path("path").unwrap_or_default().into()),
@@ -652,6 +681,10 @@ mod tests {
     #[test]
     fn rows_say_what_each_tool_did() {
         let cwd = Path::new("/w");
+        let skill = tool_row(&tool("read", json!({ "path": "/Users/me/.agents/skills/pdf/SKILL.md" }), Some(("Fill it in.", false))), cwd, false);
+        assert_eq!(skill.verb.as_ref(), "Used skill");
+        assert!(matches!(&skill.target, Target::Words(name) if name.as_ref() == "pdf"));
+        assert_eq!(tally(std::slice::from_ref(&skill)), "1 skill");
         let read = tool_row(&tool("read", json!({ "path": "a.rs" }), Some(("1\n2\n3\n\n[Lines 1-3 of 9. Continue with offset=4.]", false))), cwd, false);
         assert!(matches!(&read.meta, Meta::Note(note) if note.as_ref() == "3 lines"));
         let running = tool_row(&tool("bash", json!({ "command": "cargo test\n--quiet" }), None), cwd, true);

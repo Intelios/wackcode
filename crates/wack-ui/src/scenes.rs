@@ -189,6 +189,36 @@ pub fn all() -> Vec<Scene> {
             },
         },
         Scene {
+            name: "slash-menu",
+            description: "The / menu over a chat's composer, following /re.",
+            size: WINDOW,
+            build: |_, cx| slash_scene(Some(fixtures::slash_rows()), "/re", None, cx),
+        },
+        Scene {
+            name: "slash-menu-empty",
+            description: "The / menu when nothing matches.",
+            size: WINDOW,
+            build: |_, cx| slash_scene(Some(Vec::new()), "/zz", None, cx),
+        },
+        Scene {
+            name: "composer-command-hint",
+            description: "A bare /command, with what it takes under the field.",
+            size: WINDOW,
+            build: |_, cx| slash_scene(None, "/pdf", Some("[file]  ·  added after the skill's instructions"), cx),
+        },
+        Scene {
+            name: "transcript-command",
+            description: "A chat opened with a skill: the /pdf bubble and the skill it used.",
+            size: WINDOW,
+            build: |_, cx| command_scene(false, cx),
+        },
+        Scene {
+            name: "transcript-command-prompt",
+            description: "The same chat with the prompt sent to the agent open under the bubble.",
+            size: WINDOW,
+            build: |_, cx| command_scene(true, cx),
+        },
+        Scene {
             name: "composer-modes",
             description: "The composer in Build, Plan and Ultra Plan, with Ultra effort, and locked by a run.",
             size: size(px(760.), px(700.)),
@@ -1275,6 +1305,37 @@ fn title_scene(state: TitleScene, cx: &mut App) -> AnyView {
             Some(picture) => shell.with_backdrop(picture),
             None => shell,
         }
+    })
+    .into()
+}
+
+/// A chat whose composer holds `text`, with the `/` menu showing `rows` (when some) or a hint.
+fn slash_scene(rows: Option<Vec<crate::slash_menu::SlashRow>>, text: &'static str, hint: Option<&'static str>, cx: &mut App) -> AnyView {
+    cx.new(|_| {
+        let composer = ComposerData {
+            slash: rows.map(|rows| crate::slash_menu::SlashData { rows, selected: 0, scroll: gpui::ScrollHandle::new() }),
+            hint: hint.map(Into::into),
+            ..fixtures::composer_after_turn(Input::Drawn { text: Some(text.into()), placeholder: crate::chat::FOLLOW_UP_PLACEHOLDER.into() })
+        };
+        Shell::showing(
+            fixtures::sidebar(Selected::Finished),
+            Screen::Chat { title: fixtures::FINISHED_TITLE.into(), project: fixtures::project(), body: Body::Items(fixtures::finished_turn()), composer },
+        )
+    })
+    .into()
+}
+
+fn command_scene(open: bool, cx: &mut App) -> AnyView {
+    cx.new(|_| {
+        Shell::showing(
+            fixtures::sidebar(Selected::Finished),
+            Screen::Chat {
+                title: "Fill in the W-9".into(),
+                project: fixtures::project(),
+                body: Body::Items(fixtures::skill_turn(open)),
+                composer: fixtures::composer_after_turn(Input::Drawn { text: None, placeholder: crate::chat::FOLLOW_UP_PLACEHOLDER.into() }),
+            },
+        )
     })
     .into()
 }

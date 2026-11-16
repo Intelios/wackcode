@@ -44,7 +44,7 @@ use crate::{
         ClosePaneId, CloseSettings, CloseTab, Compact, DeleteChat, DiscardConnection, EditConnection, EqualizeSplit, FocusNext, FocusPrevious, MovePane, AddModelRow, RemoveModelRow, SaveCommandEditor, SaveConnection,
         NewChat, NewChatIn, NewTerminal, NewTerminalWith, NextTab, OpenEffortMenu, OpenModelMenu, OpenSettings,
         OpenSettingsSection, PinProject, PreviousTab, RemoveConnection, RemovePicture, ShowCommandOutput, ShowPicture, RemoveProject, ResetDockSize,
-        SelectChat, Send, Stop, StopCommand, ToggleChanges, ToggleProject, ToggleSidebar, ToggleTerminal, TriggerProjectCommand, Unqueue,
+        PickCommand, SelectChat, Send, Stop, StopCommand, ToggleChanges, ToggleProject, ToggleSidebar, ToggleTerminal, TriggerProjectCommand, Unqueue,
         ToggleAutoTitles, ToggleTitleModels, ChooseTitleModel, RenameChat, RenameChatAt, CancelRename, ToggleModelReasoning,
         ToggleModelEffort,
     },
@@ -1204,6 +1204,10 @@ impl Render for Shell {
                     let (across, down) = (action.across.min(2) as f32 / 2., action.down.min(2) as f32 / 2.);
                     shell.change_backdrop(cx, |backdrop| (backdrop.focus_x, backdrop.focus_y) = (across, down));
                 }))
+                .on_action(cx.listener(|shell, action: &PickCommand, _, cx| {
+                    let index = action.index;
+                    shell.with_app(cx, |app, cx| app.pick_command(index, cx));
+                }))
                 .on_action(cx.listener(|shell, action: &Unqueue, _, cx| {
                     if let Some(chat) = shell.selected_chat(cx) {
                         let index = action.index;
@@ -1447,6 +1451,8 @@ fn live_view(app: &AppState, cx: &App) -> (SidebarData, Screen, StripData) {
                         waiting: Vec::new(),
                         roomy: true,
                         menu: menu_data(app, resolved.as_ref()),
+                        slash: app.slash_data(None),
+                        hint: app.command_hint(None, cx),
                         question: None,
                         todos: None,
                         activity: None,
@@ -1487,6 +1493,8 @@ fn live_view(app: &AppState, cx: &App) -> (SidebarData, Screen, StripData) {
                     waiting,
                     roomy: false,
                     menu: menu_data(app, resolved.as_ref()),
+                    slash: app.slash_data(Some(id)),
+                    hint: app.command_hint(Some(id), cx),
                     question: state.asking.as_ref().map(|asking| crate::question::QuestionData {
                         questions: asking.questions.clone(),
                         tab: asking.tab,

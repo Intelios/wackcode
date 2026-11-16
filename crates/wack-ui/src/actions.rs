@@ -352,6 +352,13 @@ pub struct DeleteChat {
     pub id: String,
 }
 
+/// Picks a row of the `/` menu.
+#[derive(Clone, Debug, PartialEq, Action)]
+#[action(namespace = wackcode, no_json)]
+pub struct PickCommand {
+    pub index: usize,
+}
+
 /// Takes a queued message back into the composer.
 #[derive(Clone, Debug, PartialEq, Action)]
 #[action(namespace = wackcode, no_json)]

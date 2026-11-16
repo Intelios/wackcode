@@ -247,7 +247,7 @@ impl ChatSession {
         let compacting = matches!(job, Job::Compact(_));
         match &job {
             Job::Prompt(text) => self.conversation.send(text, now_millis()),
-            Job::Command { command, .. } => self.conversation.send(&command.line(), now_millis()),
+            Job::Command { text, command } => self.conversation.send_command(text, command.clone(), now_millis()),
             Job::Compact(_) => self.conversation.begin_compaction(),
         }
 
@@ -329,6 +329,7 @@ impl ChatSession {
                 }
                 TextFieldEvent::Enter => chat.next_question(cx),
                 TextFieldEvent::SendNow => chat.submit_answers(cx),
+                TextFieldEvent::Moved | TextFieldEvent::Menu(_) => {}
             }));
             others.push(field);
         }
@@ -461,6 +462,19 @@ impl ChatSession {
     /// Tells the user something about the chat that is not a failure of its run, such as an
     /// automatic title that could not be had. It joins the latest turn's notices, so a turn still
     /// streaming stays the last entry; before any turn it stands on its own.
+    /// The project folder the chat works in.
+    pub fn cwd(&self) -> &std::path::Path {
+        &self.cwd
+    }
+
+    /// The text of the latest finished reply, for `/copy`.
+    pub fn last_reply(&self) -> Option<String> {
+        self.conversation.entries.iter().rev().find_map(|entry| match entry {
+            Entry::Turn(turn) if !turn.reply.trim().is_empty() => Some(turn.reply.clone()),
+            _ => None,
+        })
+    }
+
     pub fn note(&mut self, message: String, cx: &mut Context<Self>) {
         let last_turn = self.conversation.entries.iter().rposition(|entry| matches!(entry, Entry::Turn(_)));
         match last_turn {

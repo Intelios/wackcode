@@ -99,6 +99,8 @@ pub fn composer_empty(roomy: bool) -> ComposerData {
         waiting: Vec::new(),
         roomy,
         menu: None,
+        slash: None,
+        hint: None,
         question: None,
         todos: None,
         activity: None,
@@ -275,6 +277,43 @@ pub fn working_turn() -> Vec<Item> {
     call(&mut conversation, "bash-2", "bash", json!({ "command": "cargo test -p wack-llm retry" }), None, now);
     conversation.apply(&Event::Text("Retry-After is now read from both 429 and 503 responses. Running the retry tests to check the date form".into()), now);
     items(&conversation, &[], now)
+}
+
+/// A chat opened with a skill: the `/pdf` bubble, the skill loaded, the reply. `open` shows the
+/// prompt the agent got beneath the bubble.
+pub fn skill_turn(open: bool) -> Vec<Item> {
+    use wack_core::skills::{CommandUse, Kind};
+    let mut conversation = Conversation::default();
+    let skill = "/Users/me/.agents/skills/pdf/SKILL.md";
+    let expanded = format!(
+        "<skill name=\"pdf\" location=\"{skill}\">\nReferences are relative to /Users/me/.agents/skills/pdf.\n\n# Filling PDF forms\n\nList the form's fields with scripts/fields.py first, then fill them from the data the user gives. Never flatten a form unless asked.\n</skill>\n\nfill in the W-9 in forms/ from my details in notes.md"
+    );
+    conversation.send_command(&expanded, CommandUse { name: "pdf".into(), args: "fill in the W-9 in forms/ from my details in notes.md".into(), kind: Kind::Skill }, START);
+    call(&mut conversation, "read-s", "read", json!({ "path": skill }), Some("# Filling PDF forms"), START + 2_000);
+    call(&mut conversation, "read-n", "read", json!({ "path": "notes.md" }), Some(&"x\n".repeat(24)), START + 4_000);
+    call(&mut conversation, "bash-f", "bash", json!({ "command": "python3 ~/.agents/skills/pdf/scripts/fill.py forms/w9.pdf" }), Some("Filled 11 fields."), START + 9_000);
+    conversation.apply(&Event::Text("Filled the W-9's eleven fields from notes.md and saved it as `forms/w9-filled.pdf`. The signature line is left for you.".into()), START + 12_000);
+    conversation.finish(&Ok(Outcome::Done), START + 14_000);
+    items(&conversation, if open { &["prompt-0", "turn-1"] } else { &["turn-1"] }, START + 20_000)
+}
+
+/// The `/` menu's rows for `/re`, as a chat would offer them.
+pub fn slash_rows() -> Vec<crate::slash_menu::SlashRow> {
+    use crate::slash_menu::SlashRow;
+    use wack_core::skills::Kind;
+    let row = |name: &str, hint: Option<&str>, description: &str, source: &str, kind| SlashRow {
+        name: name.to_string().into(),
+        hint: hint.map(|hint| hint.to_string().into()),
+        description: description.to_string().into(),
+        source: source.to_string().into(),
+        kind,
+    };
+    vec![
+        row("/review", Some("<file>"), "Review a file the way the team does, before changing anything", "Your commands", Kind::Template),
+        row("/release-notes", Some("[since]"), "Draft release notes from the commits since a tag", "Your skills", Kind::Skill),
+        row("/reverse-engineer-anything", None, "Reverse engineer native, managed, Electron and packaged targets", "Your skills", Kind::Skill),
+        row("/compact", Some("[focus]"), "Summarise older conversation context", "WackCode", Kind::Builtin),
+    ]
 }
 
 /// A planning turn that asked a question and is waiting on the next.

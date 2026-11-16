@@ -24,7 +24,9 @@ use gpui::{App, AppContext, Context, Entity, FocusHandle, Focusable, SharedStrin
 use gpui_tokio::Tokio;
 use wack_core::{
     AgentMode, Appearance, Chat, CommandEvent, CommandKind, CommandStatus, Job, ModelChoice, Outcome,
-    AutoTitleConfig, Project, Reasoning, Runner, Store, Ui, WireFormat, title, title_from,
+    AutoTitleConfig, Project, Reasoning, Runner, Store, Ui, WireFormat,
+    skills::{Command, CommandUse, Outgoing, active_slash, find, matching, parse_line, pick, resolve_message},
+    title, title_from,
 };
 
 use crate::{
@@ -36,7 +38,8 @@ use crate::{
     panes::{ChatPanes, Layout, PaneKind},
     run_button::{CommandButtonData, CommandEditorData},
     settings::{ProviderForm, Section},
-    text_field::{TextField, TextFieldEvent},
+    slash_menu::{Slash, SlashData},
+    text_field::{MenuKey, TextField, TextFieldEvent},
     theme,
     typography::Type,
 };
@@ -155,6 +158,16 @@ pub struct AppState {
     pub title_error: Option<SharedString>,
     /// The chat being renamed in place, if any.
     pub renaming: Option<Renaming>,
+    /// The `/` menu, open over one composer.
+    pub slash: Option<Slash>,
+    /// Where ⎋ closed the menu (whose composer, the word's start): it stays shut for that word.
+    slash_dismissed: Option<(Option<String>, usize)>,
+    /// The commands as last read, for the menu and for lighting a typed `/command`. Read again
+    /// each time the menu opens.
+    commands: Vec<Command>,
+    /// A message refused as an unknown command (whose composer, its text): ↩ again with the text
+    /// unchanged sends it as written.
+    literal: Option<(Option<String>, String)>,
     _subscriptions: Vec<Subscription>,
 }
 
@@ -201,7 +214,10 @@ impl AppState {
                 if app.notice.take().is_some() {
                     cx.notify();
                 }
+                app.composer_changed(None, cx);
             }
+            TextFieldEvent::Moved => app.composer_changed(None, cx),
+            TextFieldEvent::Menu(key) => app.slash_key(None, *key, cx),
         });
         let form = ProviderForm::new(cx);
         let subscriptions = vec![draft_subscription];
@@ -247,6 +263,10 @@ impl AppState {
             open_projects: HashSet::new(),
             branches: HashMap::new(),
             draft,
+            slash: None,
+            slash_dismissed: None,
+            commands: Vec::new(),
+            literal: None,
             new_chat_mode: AgentMode::Build,
             notice: None,
             form,
@@ -666,7 +686,8 @@ impl AppState {
         self.tabs.retain(|tab| tab != chat);
     }
 
-    /// Sends the new-chat composer's text as the first message of a new chat.
+    /// Sends the new-chat composer's text as the first message of a new chat. A `/command` that
+    /// acts on a chat has none to act on yet; one the model gets starts the chat.
     pub fn start_chat(&mut self, cx: &mut Context<Self>) {
         let Selection::NewChat(project) = self.selection.clone() else {
             return;
@@ -675,13 +696,39 @@ impl AppState {
         if text.is_empty() {
             return;
         }
+        let cwd = self.store.project(&project).map(|project| project.path.clone()).unwrap_or_else(|| PathBuf::from("/"));
+        let (job, opening) = match self.outgoing(None, &text, &cwd) {
+            Err(message) => {
+                self.notice = Some(message.into());
+                cx.notify();
+                return;
+            }
+            Ok(Outgoing::Message(text)) => (Job::Prompt(text.clone()), text),
+            Ok(Outgoing::Prompt { text, command }) => {
+                let opening = self.command_opening(&command);
+                (Job::Command { text, command }, opening)
+            }
+            Ok(Outgoing::Builtin { name: "new", .. }) => {
+                self.draft.update(cx, |draft, cx| draft.set_text("", cx));
+                return;
+            }
+            Ok(Outgoing::Builtin { name, .. }) => {
+                self.notice = Some(format!("/{name} works in a chat. Send a message first to start one.").into());
+                cx.notify();
+                return;
+            }
+        };
         let choice: ModelChoice = self.store.defaults().clone();
         if self.store.resolve(&choice).is_none() {
             self.notice = Some("Add a connection in Settings › Providers to start chatting.".into());
             cx.notify();
             return;
         }
-        let chat = match self.store.create_chat(&project, &title_from(&text), choice, self.new_chat_mode) {
+        let title = match &job {
+            Job::Command { command, .. } => title_from(&command.line()),
+            _ => title_from(&text),
+        };
+        let chat = match self.store.create_chat(&project, &title, choice, self.new_chat_mode) {
             Ok(chat) => chat,
             Err(message) => {
                 self.notice = Some(message.into());
@@ -704,8 +751,31 @@ impl AppState {
             draft.set_placeholder(placeholder(AgentMode::Build, true), cx);
         });
         self.select(Selection::Chat(chat.id.clone()), cx);
-        self.run(&chat.id, Job::Prompt(text.clone()), cx);
-        self.start_title(&chat.id, &text, cx);
+        self.run(&chat.id, job, cx);
+        self.start_title(&chat.id, &opening, cx);
+    }
+
+    /// What a title is asked for when a chat opens with a command: what was typed and what the
+    /// command does, never the whole expanded skill.
+    fn command_opening(&self, command: &CommandUse) -> String {
+        let description = find(&self.commands, &command.name).map(|found| found.description.clone()).unwrap_or_default();
+        format!("{}\n{}", command.line(), description).trim().to_string()
+    }
+
+    /// What sending `text` from `owner`'s composer does, against the commands on disk now. An
+    /// unknown `/name` is refused once; sent again unchanged, it goes as written.
+    fn outgoing(&mut self, owner: Option<&str>, text: &str, cwd: &Path) -> Result<Outgoing, String> {
+        let owner = owner.map(str::to_string);
+        if self.literal.take().is_some_and(|(from, literal)| from == owner && literal == text) {
+            return Ok(Outgoing::Message(text.to_string()));
+        }
+        let Some((name, _)) = parse_line(text) else { return Ok(Outgoing::Message(text.to_string())) };
+        self.commands = self.store.command_catalog();
+        if find(&self.commands, name).is_none() {
+            self.literal = Some((owner, text.to_string()));
+            return Err(format!("There is no /{name} command. Press ↩ again to send it as a message."));
+        }
+        resolve_message(&self.commands, text, cwd)
     }
 
     /// Asks the title model for a name for a chat that has just started, alongside its first run.
@@ -1088,6 +1158,7 @@ impl AppState {
         let save_on_enter = move |app: &mut AppState, event: &TextFieldEvent, cx: &mut Context<AppState>| match event {
             TextFieldEvent::Enter | TextFieldEvent::SendNow => app.save_memory(cx),
             TextFieldEvent::Changed => changed(app, cx),
+            TextFieldEvent::Moved | TextFieldEvent::Menu(_) => {}
         };
         self.memory_subscriptions.push(cx.subscribe(&title, move |app, _, event: &TextFieldEvent, cx| {
             if matches!(event, TextFieldEvent::Changed) && app.memory.editor.as_ref().is_some_and(|editor| editor.name_follows) {
@@ -1116,6 +1187,7 @@ impl AppState {
             TextFieldEvent::Enter => field.update(cx, |field, cx| field.insert_line_break(cx)),
             TextFieldEvent::SendNow => app.save_memory(cx),
             TextFieldEvent::Changed => changed(app, cx),
+            TextFieldEvent::Moved | TextFieldEvent::Menu(_) => {}
         }));
     }
 
@@ -1186,7 +1258,9 @@ impl AppState {
     }
 
     /// ↩ in a chat's composer: send now, or queue behind the run. With `steer` (⌘↩) a message
-    /// written during a run goes to the agent at its next step instead.
+    /// written during a run goes to the agent at its next step instead. A `/command` is resolved
+    /// here: WackCode's own act at once, and one for the model runs (or waits in the queue, as
+    /// typed, to be resolved when it is sent; a command never steers).
     pub fn submit(&mut self, chat: &str, steer: bool, cx: &mut Context<Self>) {
         let Some(session) = self.sessions.get(chat).cloned() else {
             return;
@@ -1196,24 +1270,93 @@ impl AppState {
         if text.is_empty() {
             return;
         }
+        let cwd = session.read(cx).cwd().to_path_buf();
+        let outgoing = match self.outgoing(Some(chat), &text, &cwd) {
+            Ok(outgoing) => outgoing,
+            Err(message) => {
+                session.update(cx, |session, cx| session.note(message, cx));
+                return;
+            }
+        };
         let (running, compacting) = {
             let session = session.read(cx);
             (session.running(), session.compacting())
         };
-        if running {
-            session.update(cx, |session, cx| {
-                if steer && !compacting {
-                    session.steer(text, cx);
-                } else {
-                    session.queue.push(text);
-                    cx.notify();
+        let clear = |cx: &mut Context<Self>| composer.update(cx, |composer, cx| composer.set_text("", cx));
+        match outgoing {
+            Outgoing::Builtin { name, args } => {
+                if self.builtin(chat, name, &args, cx) {
+                    clear(cx);
                 }
-            });
-            composer.update(cx, |composer, cx| composer.set_text("", cx));
-            return;
+            }
+            outgoing if running => {
+                session.update(cx, |session, cx| {
+                    let plain = matches!(outgoing, Outgoing::Message(_));
+                    if steer && !compacting && plain {
+                        session.steer(text, cx);
+                    } else {
+                        session.queue.push(text);
+                        cx.notify();
+                    }
+                });
+                clear(cx);
+            }
+            Outgoing::Message(text) => {
+                if self.run(chat, Job::Prompt(text), cx) {
+                    clear(cx);
+                }
+            }
+            Outgoing::Prompt { text, command } => {
+                if self.run(chat, Job::Command { text, command }, cx) {
+                    clear(cx);
+                }
+            }
         }
-        if self.run(chat, Job::Prompt(text), cx) {
-            composer.update(cx, |composer, cx| composer.set_text("", cx));
+    }
+
+    /// Runs one of WackCode's own commands in `chat`. False, with the reason in the transcript,
+    /// when it could not.
+    fn builtin(&mut self, chat: &str, name: &str, args: &str, cx: &mut Context<Self>) -> bool {
+        let Some(session) = self.sessions.get(chat).cloned() else {
+            return false;
+        };
+        let refuse = |message: String, cx: &mut Context<Self>| {
+            session.update(cx, |session, cx| session.note(message, cx));
+            false
+        };
+        match name {
+            "new" => {
+                let project = self.store.chat(chat).map(|chat| chat.project.clone());
+                self.new_chat(project, cx);
+                true
+            }
+            "name" => {
+                self.titling.remove(chat);
+                self.rename_chat(chat, args, cx);
+                true
+            }
+            "copy" => match session.read(cx).last_reply() {
+                Some(reply) => {
+                    cx.write_to_clipboard(gpui::ClipboardItem::new_string(reply));
+                    true
+                }
+                None => refuse("There is no reply to copy yet.".into(), cx),
+            },
+            "compact" => {
+                let (running, empty) = {
+                    let session = session.read(cx);
+                    (session.running(), session.is_empty())
+                };
+                if running {
+                    return refuse("Wait for the agent to finish before compacting.".into(), cx);
+                }
+                if empty {
+                    return refuse("There is nothing to compact yet.".into(), cx);
+                }
+                let focus = Some(args.to_string()).filter(|focus| !focus.is_empty());
+                self.run(chat, Job::Compact(focus), cx)
+            }
+            other => refuse(format!("/{other} can't be used here."), cx),
         }
     }
 
@@ -1296,11 +1439,32 @@ impl AppState {
             restore(&session, unsent, cx);
         }
         if let Some(next) = next
-            && !self.run(chat, Job::Prompt(next.clone()), cx)
+            && !self.send_queued(chat, &next, cx)
         {
             restore(&session, vec![next], cx);
         }
         cx.notify();
+    }
+
+    /// Sends a message that waited for a run to end, resolving a `/command` in it now. False when
+    /// it could not be sent, the reason in the transcript.
+    fn send_queued(&mut self, chat: &str, text: &str, cx: &mut Context<Self>) -> bool {
+        let Some(cwd) = self.sessions.get(chat).map(|session| session.read(cx).cwd().to_path_buf()) else {
+            return false;
+        };
+        let refused = |app: &mut Self, message: String, cx: &mut Context<Self>| {
+            if let Some(session) = app.sessions.get(chat) {
+                session.update(cx, |session, cx| session.note(message, cx));
+            }
+            false
+        };
+        match parse_line(text).map(|_| resolve_message(&self.store.command_catalog(), text, &cwd)) {
+            None => self.run(chat, Job::Prompt(text.to_string()), cx),
+            Some(Ok(Outgoing::Message(text))) => self.run(chat, Job::Prompt(text), cx),
+            Some(Ok(Outgoing::Prompt { text, command })) => self.run(chat, Job::Command { text, command }, cx),
+            Some(Ok(Outgoing::Builtin { name, args })) => self.builtin(chat, name, &args, cx) || true,
+            Some(Err(message)) => refused(self, message, cx),
+        }
     }
 
     fn ensure_session(&mut self, chat: &Chat, cx: &mut Context<Self>) -> Entity<ChatSession> {
@@ -1336,7 +1500,8 @@ impl AppState {
                 move |app, _, event: &TextFieldEvent, cx| match event {
                     TextFieldEvent::Enter => app.submit(&id, false, cx),
                     TextFieldEvent::SendNow => app.submit(&id, true, cx),
-                    TextFieldEvent::Changed => {}
+                    TextFieldEvent::Changed | TextFieldEvent::Moved => app.composer_changed(Some(id.clone()), cx),
+                    TextFieldEvent::Menu(key) => app.slash_key(Some(id.clone()), *key, cx),
                 }
             }),
         ];
@@ -1485,6 +1650,7 @@ impl AppState {
             self.form_subscriptions.push(cx.subscribe(&field, |app, _, event: &TextFieldEvent, cx| match event {
                 TextFieldEvent::Enter | TextFieldEvent::SendNow => app.save_connection(cx),
                 TextFieldEvent::Changed => app.form_changed(cx),
+                TextFieldEvent::Moved | TextFieldEvent::Menu(_) => {}
             }));
         }
     }
@@ -1709,6 +1875,7 @@ impl AppState {
                     cx.notify();
                 }
             }
+            TextFieldEvent::Moved | TextFieldEvent::Menu(_) => {}
         });
         self.menu = None;
         self.command_editor = Some(CommandEditorState {
@@ -1977,6 +2144,139 @@ pub fn shown_path(path: &Path) -> String {
             Err(_) => path.display().to_string(),
         },
         None => path.display().to_string(),
+    }
+}
+
+// -------------------------------------------------------------------------------------------------
+// The `/` menu
+
+impl AppState {
+    /// The composer `owner` names: a chat's, or the new chat's for `None`.
+    fn composer_of(&self, owner: Option<&str>, cx: &App) -> Option<Entity<TextField>> {
+        match owner {
+            None => Some(self.draft.clone()),
+            Some(chat) => self.sessions.get(chat).map(|session| session.read(cx).composer.clone()),
+        }
+    }
+
+    /// The composer's text or caret changed: open, follow or close the menu, and light a typed
+    /// `/command` that exists.
+    pub fn composer_changed(&mut self, owner: Option<String>, cx: &mut Context<Self>) {
+        let Some(field) = self.composer_of(owner.as_deref(), cx) else {
+            return;
+        };
+        let (text, caret) = {
+            let field = field.read(cx);
+            (field.text().to_string(), field.caret())
+        };
+        let word = active_slash(&text, caret);
+        // ⎋ keeps the menu shut for its word only; another word opens it again.
+        if self.slash_dismissed.as_ref().is_some_and(|(from, start)| *from != owner || word.as_ref().is_none_or(|word| word.start != *start)) {
+            self.slash_dismissed = None;
+        }
+        let word = word.filter(|word| self.slash_dismissed.as_ref() != Some(&(owner.clone(), word.start)));
+        let previous = self.slash.take().filter(|slash| slash.owner == owner);
+        let other = previous.is_none() && self.slash.is_some();
+        match word {
+            Some(range) => {
+                let fresh = previous.as_ref().is_none_or(|slash| slash.range.start != range.start);
+                if fresh || self.commands.is_empty() {
+                    self.commands = self.store.command_catalog();
+                }
+                let query = text.get(range.start + 1..caret.max(range.start + 1)).unwrap_or("").to_string();
+                let matches: Vec<Command> = matching(&self.commands, &query).into_iter().cloned().collect();
+                let (selected, scroll) = match previous {
+                    Some(slash) if !fresh && slash.query == query => (slash.selected.min(matches.len().saturating_sub(1)), slash.scroll),
+                    Some(slash) => (0, slash.scroll),
+                    None => (0, gpui::ScrollHandle::new()),
+                };
+                if selected == 0 {
+                    scroll.scroll_to_item(0);
+                }
+                let completing = !matches.is_empty();
+                self.slash = Some(Slash { owner: owner.clone(), range, query, matches, selected, scroll });
+                field.update(cx, |field, cx| field.set_completing(completing, cx));
+            }
+            None if !other => field.update(cx, |field, cx| field.set_completing(false, cx)),
+            None => {}
+        }
+        if text.starts_with('/') && self.commands.is_empty() {
+            self.commands = self.store.command_catalog();
+        }
+        let lit = parse_line(&text).filter(|(name, _)| find(&self.commands, name).is_some()).map(|(name, _)| 0..1 + name.len());
+        field.update(cx, |field, cx| field.set_highlight(lit, cx));
+        cx.notify();
+    }
+
+    /// A key the menu borrowed from `owner`'s composer.
+    pub fn slash_key(&mut self, owner: Option<String>, key: MenuKey, cx: &mut Context<Self>) {
+        let Some(slash) = self.slash.as_mut().filter(|slash| slash.owner == owner) else {
+            return;
+        };
+        let count = slash.matches.len();
+        match key {
+            MenuKey::Up | MenuKey::Down if count > 0 => {
+                slash.selected = match key {
+                    MenuKey::Up => (slash.selected + count - 1) % count,
+                    _ => (slash.selected + 1) % count,
+                };
+                slash.scroll.scroll_to_item(slash.selected);
+                cx.notify();
+            }
+            MenuKey::Pick => {
+                let index = slash.selected;
+                self.pick_command(index, cx);
+            }
+            MenuKey::Dismiss => {
+                self.slash_dismissed = Some((owner.clone(), slash.range.start));
+                self.slash = None;
+                if let Some(field) = self.composer_of(owner.as_deref(), cx) {
+                    field.update(cx, |field, cx| field.set_completing(false, cx));
+                }
+                cx.notify();
+            }
+            _ => {}
+        }
+    }
+
+    /// Puts the menu's `index`th command at the front of its composer's message, the text that
+    /// was around the `/word` becoming its arguments.
+    pub fn pick_command(&mut self, index: usize, cx: &mut Context<Self>) {
+        let Some(slash) = self.slash.take() else {
+            return;
+        };
+        let (Some(command), Some(field)) = (slash.matches.get(index), self.composer_of(slash.owner.as_deref(), cx)) else {
+            return;
+        };
+        let text = field.read(cx).text().to_string();
+        if slash.range.end > text.len() {
+            return;
+        }
+        let (text, caret) = pick(&text, slash.range.clone(), &command.name);
+        field.update(cx, |field, cx| {
+            field.set_completing(false, cx);
+            field.replace_text(&text, caret, cx);
+        });
+        cx.notify();
+    }
+
+    /// The menu for `owner`'s composer, when it is open there.
+    pub fn slash_data(&self, owner: Option<&str>) -> Option<SlashData> {
+        self.slash.as_ref().filter(|slash| slash.owner.as_deref() == owner).map(Slash::data)
+    }
+
+    /// Under a bare `/command` in `owner`'s composer: what it takes after it.
+    pub fn command_hint(&self, owner: Option<&str>, cx: &App) -> Option<SharedString> {
+        if self.slash_data(owner).is_some() {
+            return None;
+        }
+        let field = self.composer_of(owner, cx)?;
+        let text = field.read(cx).text();
+        let (name, args) = parse_line(text.trim_start())?;
+        if !args.is_empty() {
+            return None;
+        }
+        crate::slash_menu::hint_note(find(&self.commands, name)?)
     }
 }
 

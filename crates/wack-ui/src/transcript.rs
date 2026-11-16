@@ -18,20 +18,23 @@
 use std::rc::Rc;
 
 use gpui::{
-    AnyElement, App, ClipboardItem, FontStyle, FontWeight, Hsla, InteractiveText, SharedString, StrikethroughStyle,
+    AnyElement, App, ClipboardItem, ElementId, FontStyle, FontWeight, Hsla, InteractiveText, SharedString, StrikethroughStyle,
     StyledText, TextRun, UnderlineStyle, Window, div, font, prelude::*, px, relative,
 };
 
 use crate::{
     icon::Icon,
     markdown::{self, Span},
+    tags::Tag,
     theme::Theme,
     typography::{MONO_FONT, Type, Typography, UI_FONT},
 };
 
 #[derive(Clone, Debug)]
 pub enum Item {
-    Prompt { text: SharedString, steered: bool },
+    /// What the user sent. A slash command shows as `command`, with `text` (the prompt the model
+    /// got) behind its name.
+    Prompt { text: SharedString, steered: bool, command: Option<CommandShown> },
     Work(Work),
     Reply(Rc<Vec<markdown::Block>>),
     /// Facts about a finished turn: time, tokens.
@@ -40,6 +43,17 @@ pub enum Item {
     Compacted,
     /// A proposed plan: the transcript's hero card.
     Plan(crate::plan_card::PlanCard),
+}
+
+/// A slash command as the user typed it.
+#[derive(Clone, Debug)]
+pub struct CommandShown {
+    /// `/pdf`.
+    pub name: SharedString,
+    pub args: SharedString,
+    /// Toggles the prompt sent to the agent open beneath the bubble.
+    pub key: SharedString,
+    pub open: bool,
 }
 
 #[derive(Clone, Debug)]
@@ -136,6 +150,79 @@ impl Handlers {
     }
 }
 
+/// A slash command's bubble: its name in the accent (a button that shows the prompt the agent
+/// got), then what was typed after it.
+fn command_bubble(bubble: gpui::Div, command: &CommandShown, theme: &Theme, handlers: &Handlers) -> gpui::Div {
+    let toggle = handlers.toggle.clone();
+    let key = command.key.clone();
+    bubble.flex().flex_wrap().items_baseline().gap(px(6.)).child(
+        div()
+            .id(ElementId::Name(format!("{}-name", command.key).into()))
+            .flex_none()
+            .typography(Type::Body)
+            .font_weight(FontWeight::SEMIBOLD)
+            .text_color(theme.accent_text)
+            .hover(|name| name.underline())
+            .cursor_pointer()
+            .tooltip(crate::tooltip::tip(if command.open { "Hide the prompt sent to the agent" } else { "Show the prompt sent to the agent" }))
+            .on_click(move |_, window, cx| toggle(key.clone(), window, cx))
+            .child(command.name.clone())
+            .tag("command-name"),
+    )
+    .when(!command.args.is_empty(), |bubble| {
+        bubble.child(div().flex_none().text_color(theme.text_faint).child("·")).child(command.args.clone())
+    })
+}
+
+/// The prompt a slash command sent, opened beneath its bubble.
+fn sent_prompt(key: &SharedString, text: &SharedString, theme: &Theme) -> impl IntoElement {
+    let copied = text.clone();
+    div()
+        .max_w(relative(BUBBLE_SHARE))
+        .w_full()
+        .flex()
+        .flex_col()
+        .gap(px(6.))
+        .p(px(12.))
+        .rounded(px(12.))
+        .bg(theme.surface)
+        .border_1()
+        .border_color(theme.border)
+        .child(
+            div()
+                .flex()
+                .items_center()
+                .child(div().flex_1().typography(Type::Label).text_color(theme.text_dim).child("Prompt sent to the agent"))
+                .child(
+                    div()
+                        .id(ElementId::Name(format!("{key}-copy").into()))
+                        .flex()
+                        .items_center()
+                        .gap(px(4.))
+                        .typography(Type::Small)
+                        .text_color(theme.text_dim)
+                        .hover(|button| button.text_color(theme.text))
+                        .cursor_pointer()
+                        .on_click(move |_, _, cx| cx.write_to_clipboard(ClipboardItem::new_string(copied.to_string())))
+                        .child(Icon::Copy.view(px(12.), theme.text_dim))
+                        .child("Copy prompt"),
+                ),
+        )
+        .child(
+            div()
+                .id(ElementId::Name(format!("{key}-text").into()))
+                .max_h(px(SENT_PROMPT_MAX))
+                .overflow_y_scroll()
+                .typography(Type::Mono)
+                .text_color(theme.text_soft)
+                .child(text.clone()),
+        )
+        .tag("command-prompt")
+}
+
+/// A long skill scrolls inside its box.
+const SENT_PROMPT_MAX: f32 = 320.;
+
 /// Space above `item`, given the item before it.
 fn gap_above(item: &Item, previous: Option<&Item>) -> f32 {
     match (previous, item) {
@@ -151,31 +238,38 @@ fn gap_above(item: &Item, previous: Option<&Item>) -> f32 {
 /// One transcript item, with the space it keeps from the one before.
 pub fn item(item: &Item, previous: Option<&Item>, theme: &Theme, handlers: &Handlers) -> AnyElement {
     let body = match item {
-        Item::Prompt { text, steered } => div()
-            .flex()
-            .flex_col()
-            .items_end()
-            .gap(px(4.))
-            .when(*steered, |prompt| {
-                prompt.child(div().pr(px(6.)).typography(Type::Small).text_color(theme.text_faint).child("Sent while working"))
-            })
-            .child(
-                div()
-                    .max_w(relative(BUBBLE_SHARE))
-                    .px(px(14.))
-                    .py(px(10.))
-                    .rounded_tl(px(BUBBLE_RADIUS))
-                    .rounded_tr(px(BUBBLE_RADIUS))
-                    .rounded_bl(px(BUBBLE_RADIUS))
-                    .rounded_br(px(6.))
-                    .bg(theme.hover)
-                    .border_1()
-                    .border_color(theme.border)
-                    .typography(Type::Body)
-                    .text_color(theme.text)
-                    .child(text.clone()),
-            )
-            .into_any_element(),
+        Item::Prompt { text, steered, command } => {
+            let bubble = div()
+                .max_w(relative(BUBBLE_SHARE))
+                .px(px(14.))
+                .py(px(10.))
+                .rounded_tl(px(BUBBLE_RADIUS))
+                .rounded_tr(px(BUBBLE_RADIUS))
+                .rounded_bl(px(BUBBLE_RADIUS))
+                .rounded_br(px(6.))
+                .bg(theme.hover)
+                .border_1()
+                .border_color(theme.border)
+                .typography(Type::Body)
+                .text_color(theme.text);
+            let bubble = match command {
+                None => bubble.child(text.clone()).into_any_element(),
+                Some(command) => command_bubble(bubble, command, theme, handlers).into_any_element(),
+            };
+            div()
+                .flex()
+                .flex_col()
+                .items_end()
+                .gap(px(4.))
+                .when(*steered, |prompt| {
+                    prompt.child(div().pr(px(6.)).typography(Type::Small).text_color(theme.text_faint).child("Sent while working"))
+                })
+                .child(bubble)
+                .when_some(command.as_ref().filter(|command| command.open), |prompt, command| {
+                    prompt.child(sent_prompt(&command.key, text, theme))
+                })
+                .into_any_element()
+        }
         Item::Work(work) => work_log(work, theme, handlers).into_any_element(),
         Item::Reply(blocks) => reply(blocks, theme, handlers).into_any_element(),
         Item::Plan(card) => crate::plan_card::plan_card(card, theme, handlers).into_any_element(),
@@ -283,6 +377,7 @@ fn row_icon(verb: &str, theme: &Theme) -> impl IntoElement {
         "Ran" => Some(Icon::Terminal),
         "Thought" => Some(Icon::Brain),
         "Asked" => Some(Icon::Question),
+        "Used skill" => Some(Icon::Book),
         "Saved memory" | "Updated memory" | "Recalled memory" | "Forgot memory" => Some(Icon::Bookmark),
         "" => None,
         _ => Some(Icon::Hammer),

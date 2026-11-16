@@ -7,8 +7,8 @@
 //!
 //! So far: the data folder, the secret store, connections, projects, chats, running the agent for
 //! a chat (`run`), what changed in a project (`git`), terminals (`terminal`), how the app looks
-//! (`appearance`), where each project's memory lives (`memory`), and automatic chat titles
-//! (`title`).
+//! (`appearance`), where each project's memory lives (`memory`), skills and slash commands
+//! (`skills`), and automatic chat titles (`title`).
 
 pub mod appearance;
 pub mod git;
@@ -16,6 +16,7 @@ pub mod memory;
 pub mod run;
 pub mod runner;
 pub mod secrets;
+pub mod skills;
 pub mod store;
 pub mod terminal;
 pub mod title;

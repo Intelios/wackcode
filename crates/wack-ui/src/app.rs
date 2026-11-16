@@ -1231,7 +1231,7 @@ impl AppState {
             !session.running() && !session.is_empty()
         });
         if idle {
-            self.run(chat, Job::Compact, cx);
+            self.run(chat, Job::Compact(None), cx);
         }
     }
 

@@ -303,6 +303,9 @@ struct State {
     /// Settings › Providers › Automatic titles.
     #[serde(default)]
     auto_title: crate::title::AutoTitleConfig,
+    /// Settings › Skills' and Settings › Commands' switches.
+    #[serde(default)]
+    skills: crate::skills::SkillsConfig,
 }
 
 /// A connection and model resolved from a [`ModelChoice`], ready to build a run.
@@ -357,6 +360,8 @@ pub struct Store {
     folder: PathBuf,
     state: State,
     secrets: SecretStore,
+    /// Stands in for `$HOME` where skill folders are looked for, in tests.
+    home: Option<PathBuf>,
 }
 
 impl Store {
@@ -392,6 +397,7 @@ impl Store {
             folder: folder.to_path_buf(),
             state,
             secrets: SecretStore::load(folder)?,
+            home: None,
         };
         store.tend_pictures();
         Ok(store)
@@ -462,6 +468,23 @@ impl Store {
 
     pub(crate) fn memory_config(&self) -> &crate::memory::MemoryConfig {
         &self.state.memory
+    }
+
+    pub(crate) fn skills_config_mut(&mut self) -> &mut crate::skills::SkillsConfig {
+        &mut self.state.skills
+    }
+
+    pub(crate) fn skills_config(&self) -> &crate::skills::SkillsConfig {
+        &self.state.skills
+    }
+
+    pub(crate) fn home_override(&self) -> Option<&PathBuf> {
+        self.home.as_ref()
+    }
+
+    /// Looks for skill folders under `home` instead of `$HOME`. For tests and scenes.
+    pub fn set_home_override(&mut self, home: PathBuf) {
+        self.home = Some(home);
     }
 
     pub fn sessions_folder(&self) -> PathBuf {

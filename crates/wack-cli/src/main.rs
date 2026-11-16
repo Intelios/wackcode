@@ -18,7 +18,10 @@ use std::{
 
 use args::Args;
 use wack_agent::{Agent, AgentMode, Control, Kit, Outcome, Profile, Registry, Session, Settings};
-use wack_core::{Connection, Model, NewConnection, Reasoning, Store};
+use wack_core::{
+    Connection, Model, NewConnection, Reasoning, Store,
+    skills::{self, Outgoing},
+};
 use wack_llm::WireFormat;
 
 const HELP: &str = "wack: the WackCode agent without the app
@@ -36,6 +39,9 @@ const HELP: &str = "wack: the WackCode agent without the app
                                A resumed run keeps its mode unless you give one.
       --cwd <folder>           Work in another folder.
       --resume <session file>  Continue an earlier run.
+                               A prompt starting with /name runs that skill or command, as in the app.
+  wack skills                  List the skills a run loads, and any that could not load.
+  wack commands                List the slash commands a run understands.
 
   --data-dir <folder>          Use another data folder (for tests).
 
@@ -63,6 +69,8 @@ async fn run(args: &mut Args) -> Result<ExitCode, String> {
         Some("connections") => connections(&folder),
         Some("disconnect") => disconnect(args, &folder),
         Some("run") => agent(args, &folder).await,
+        Some("skills") => list_skills(args, &folder),
+        Some("commands") => list_commands(args, &folder),
         None | Some("help" | "--help" | "-h") => {
             println!("{HELP}");
             Ok(ExitCode::SUCCESS)
@@ -155,6 +163,36 @@ fn disconnect(args: &mut Args, folder: &Path) -> Result<ExitCode, String> {
     Ok(ExitCode::SUCCESS)
 }
 
+fn list_skills(args: &mut Args, folder: &Path) -> Result<ExitCode, String> {
+    args.finish()?;
+    let store = Store::open(folder)?;
+    let catalog = store.skill_catalog();
+    if catalog.skills.is_empty() {
+        println!("No skills yet. Put one in {} (a folder with a SKILL.md).", store.skills_library().display());
+    }
+    for skill in &catalog.skills {
+        let manual = if skill.manual { "  (only as /name)" } else { "" };
+        println!("{}{manual}  ·  {}\n  {}\n  {}", skill.name, skill.source, skill.description.lines().next().unwrap_or(""), skill.file.display());
+    }
+    for lost in &catalog.shadowed {
+        println!("{}  ·  {}  (not loaded: {} has a skill with this name)\n  {}", lost.skill.name, lost.skill.source, lost.by, lost.skill.file.display());
+    }
+    for problem in &catalog.problems {
+        println!("{}\n  not loaded: {}", problem.file.display(), problem.message);
+    }
+    Ok(ExitCode::SUCCESS)
+}
+
+fn list_commands(args: &mut Args, folder: &Path) -> Result<ExitCode, String> {
+    args.finish()?;
+    let store = Store::open(folder)?;
+    for command in store.command_catalog() {
+        let hint = command.hint.as_deref().map(|hint| format!(" {hint}")).unwrap_or_default();
+        println!("/{}{hint}  ·  {}\n  {}", command.name, command.source, command.description.lines().next().unwrap_or(""));
+    }
+    Ok(ExitCode::SUCCESS)
+}
+
 async fn agent(args: &mut Args, folder: &Path) -> Result<ExitCode, String> {
     let wanted = args.value("--connection")?;
     let model = args.value("--model")?;
@@ -212,7 +250,14 @@ async fn agent(args: &mut Args, folder: &Path) -> Result<ExitCode, String> {
             Session::create(&store.sessions_folder().join(format!("{stamp:x}.jsonl")), &cwd)?
         }
     };
-    let kit = Kit::new(&session, mode, store.planning_unrestricted(), store.memory_for(session.cwd()));
+    // A leading /name expands as the app's would. The app's own commands have nothing to act on
+    // here, except /init, which is a prompt.
+    let (prompt, command) = match skills::resolve_message(&store.command_catalog(), prompt.trim(), session.cwd())? {
+        Outgoing::Message(_) => (prompt, None),
+        Outgoing::Prompt { text, command } => (text, Some(command)),
+        Outgoing::Builtin { name, .. } => return Err(format!("/{name} only works in the app.")),
+    };
+    let kit = Kit::new(&session, mode, store.planning_unrestricted(), store.memory_for(session.cwd())).with_skills(&store.skill_catalog());
     let mut tools = wack_tools::core_tools();
     tools.extend(kit.tools());
     let registry = Arc::new(Registry::new(tools)?);
@@ -269,7 +314,7 @@ async fn agent(args: &mut Args, folder: &Path) -> Result<ExitCode, String> {
     }
 
     let printer = print::Printer::new(asking);
-    let outcome = agent.run(&prompt, &control, &|event| printer.event(event)).await;
+    let outcome = agent.run_as(&prompt, command, &control, &|event| printer.event(event)).await;
     printer.finish();
     eprintln!("{}", print::dim(&format!("{}\nsession: {}", printer.usage_line(), agent.session().path().display())));
     // The steering thread is blocked reading the terminal, so the process is ended directly.

@@ -244,10 +244,11 @@ impl ChatSession {
             return;
         }
         let from = self.conversation.entries.len();
-        let compacting = matches!(job, Job::Compact);
+        let compacting = matches!(job, Job::Compact(_));
         match &job {
             Job::Prompt(text) => self.conversation.send(text, now_millis()),
-            Job::Compact => self.conversation.begin_compaction(),
+            Job::Command { command, .. } => self.conversation.send(&command.line(), now_millis()),
+            Job::Compact(_) => self.conversation.begin_compaction(),
         }
 
         // What was done before this run folds away.

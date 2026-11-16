@@ -13,13 +13,16 @@
 //! runs, discarding it and saving it as a file, are here too; both need the chat to be idle.
 
 use std::{
+    collections::HashSet,
     path::{Path, PathBuf},
     sync::Arc,
 };
 
 use wack_agent::{
     Agent, AgentMode, Control, Event, Kit, Outcome, Profile, Registry, Session, Settings,
+    commands::CommandUse,
     plan::{PLAN_STATE, PlanState},
+    skills::{self, Root},
 };
 use wack_llm::Provider;
 
@@ -38,13 +41,20 @@ pub struct RunSetup {
     pub unrestricted_planning: bool,
     /// The project's memory folder, or `None` when memory is off for it (Settings › Memory).
     pub memory: Option<PathBuf>,
+    /// The folders skills load from and the skills switched off (Settings › Skills). They are
+    /// read when the run starts, off the UI thread.
+    pub skill_roots: Vec<Root>,
+    pub disabled_skills: HashSet<PathBuf>,
 }
 
 pub enum Job {
     /// Send the user's message and work until the model is done.
     Prompt(String),
-    /// Summarise the older part of the conversation now.
-    Compact,
+    /// Send a message the user wrote as a slash command: `text` is what the model gets, already
+    /// expanded, and `command` what they typed, kept for the transcript.
+    Command { text: String, command: CommandUse },
+    /// Summarise the older part of the conversation now, with an optional focus (`/compact`'s).
+    Compact(Option<String>),
 }
 
 #[derive(Clone, Debug, PartialEq)]
@@ -82,6 +92,8 @@ impl Store {
             mode: chat.mode,
             unrestricted_planning: self.planning_unrestricted(),
             memory: self.memory_for(&project.path),
+            skill_roots: self.skill_roots(),
+            disabled_skills: self.disabled_skills(),
         })
     }
 }
@@ -109,7 +121,8 @@ pub async fn run(
         Ok(session) => session,
         Err(message) => return finished(Err(message), None),
     };
-    let kit = Kit::new(&session, Some(setup.mode), setup.unrestricted_planning, setup.memory);
+    let catalog = skills::load(&setup.skill_roots, &setup.disabled_skills);
+    let kit = Kit::new(&session, Some(setup.mode), setup.unrestricted_planning, setup.memory).with_skills(&catalog);
     let mut tools = wack_tools::core_tools();
     tools.extend(kit.tools());
     let registry = match Registry::new(tools) {
@@ -126,8 +139,9 @@ pub async fn run(
     let sink = |event: Event| events(RunEvent::Agent(event));
     let result = match job {
         Job::Prompt(prompt) => agent.run(&prompt, &control, &sink).await,
-        Job::Compact => agent
-            .compact(None, false, &control, &sink)
+        Job::Command { text, command } => agent.run_as(&text, Some(command), &control, &sink).await,
+        Job::Compact(focus) => agent
+            .compact(focus.as_deref().filter(|focus| !focus.trim().is_empty()), false, &control, &sink)
             .await
             .map(|()| Outcome::Done),
     };
@@ -157,7 +171,7 @@ pub fn save_plan(project: &Path, plan: &str) -> Result<PathBuf, String> {
 mod tests {
     use std::sync::Mutex;
 
-    use wack_agent::history;
+    use wack_agent::{HistoryEntry, history};
     use wack_llm::testing::{ScriptedProvider, say};
 
     use super::*;
@@ -179,6 +193,8 @@ mod tests {
             mode: AgentMode::Build,
             unrestricted_planning: false,
             memory: None,
+            skill_roots: Vec::new(),
+            disabled_skills: HashSet::new(),
         }
     }
 
@@ -240,13 +256,33 @@ mod tests {
     }
 
     #[tokio::test]
+    async fn a_command_keeps_what_the_user_typed_and_skills_reach_the_prompt() {
+        let folder = tempfile::tempdir().unwrap();
+        let skills = folder.path().join("skills/pdf");
+        std::fs::create_dir_all(&skills).unwrap();
+        std::fs::write(skills.join("SKILL.md"), "---\nname: pdf\ndescription: Fill PDF forms\n---\nBody").unwrap();
+        let provider = ScriptedProvider::new([say("done")]);
+        let mut setup = setup(provider.clone(), folder.path());
+        setup.skill_roots = vec![Root { path: folder.path().join("skills"), label: "Your skills".into() }];
+        let command = CommandUse { name: "review".into(), args: "main.rs".into(), kind: wack_agent::commands::Kind::Template };
+        let (_, sink) = collect();
+        run(setup, Job::Command { text: "Review main.rs.".into(), command: command.clone() }, Control::new(), sink).await;
+
+        let request = &provider.requests()[0];
+        assert!(request.system.iter().any(|part| part.text.contains("<name>pdf</name>")));
+        assert_eq!(request.messages[0].text(), "Review main.rs.");
+        let entries = history(&folder.path().join("sessions/chat.jsonl")).unwrap();
+        assert!(matches!(&entries[0], HistoryEntry::Message { command: Some(used), .. } if *used == command));
+    }
+
+    #[tokio::test]
     async fn a_failure_still_finishes() {
         let folder = tempfile::tempdir().unwrap();
         // Nothing to compact in an empty chat: the run reports why rather than hanging.
         let (seen, sink) = collect();
         run(
             setup(ScriptedProvider::new([]), folder.path()),
-            Job::Compact,
+            Job::Compact(None),
             Control::new(),
             sink,
         )

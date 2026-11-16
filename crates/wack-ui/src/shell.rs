@@ -1217,7 +1217,11 @@ impl Render for Shell {
                 .on_action(cx.listener(|shell, action: &ShowTask, _, cx| {
                     let id = action.id.to_string();
                     shell.change_layout(cx, |layout| layout.open(PaneKind::Tasks));
-                    shell.with_session(cx, |session, cx| session.panes.select_task(&id, cx));
+                    // The pane shows what the list did, so the list closes.
+                    shell.with_session(cx, |session, cx| {
+                        session.tasks_open = false;
+                        session.panes.select_task(&id, cx);
+                    });
                 }))
                 .on_action(cx.listener(|shell, _: &SaveConnection, _, cx| shell.with_app(cx, |app, cx| app.save_connection(cx))))
                 .on_action(cx.listener(|shell, _: &OpenConnectionForm, window, cx| {
@@ -1725,7 +1729,7 @@ pub fn effort_groups(choices: &[wack_core::Reasoning], current: wack_core::Reaso
 /// The commands running in a chat's background, then the three that ended last.
 pub(crate) fn task_lines(tasks: &wack_core::tasks::Tasks) -> Vec<crate::composer::TaskLine> {
     let now = wack_core::tasks::now_millis();
-    let list = tasks.list();
+    let list: Vec<_> = tasks.list().into_iter().filter(|info| info.in_background()).collect();
     let line = |info: &wack_core::tasks::TaskInfo| crate::composer::TaskLine {
         id: info.id.clone().into(),
         label: info.label().to_string().into(),

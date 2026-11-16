@@ -1467,7 +1467,7 @@ impl AppState {
         let may = {
             let session = session.read(cx);
             !session.running()
-                && session.tasks.has_news()
+                && session.tasks.wakes()
                 && session.awaiting_plan().is_none()
                 && session.queue.is_empty()
                 && session.asking.is_none()

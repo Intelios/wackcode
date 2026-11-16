@@ -541,7 +541,8 @@ fn task_row(task: TaskLine, theme: &Theme) -> impl IntoElement {
                 .cursor_pointer()
                 .hover(|button| button.text_color(theme.text))
                 .on_click(move |_, window, cx| window.dispatch_action(Box::new(ShowTask { id: show.clone() }), cx))
-                .child("Output"),
+                .child("Output")
+                .tag("task-output"),
         )
         .when(running, |row| {
             row.child(
@@ -558,7 +559,8 @@ fn task_row(task: TaskLine, theme: &Theme) -> impl IntoElement {
                     .hover(|button| button.bg(Hsla { a: 0.24, ..theme.danger }))
                     .tooltip(tip("Stop it; the agent is told"))
                     .on_click(move |_, window, cx| window.dispatch_action(Box::new(StopTask { id: stop.clone() }), cx))
-                    .child(Icon::Stop.view(px(9.), theme.danger)),
+                    .child(Icon::Stop.view(px(9.), theme.danger))
+                    .tag("task-stop"),
             )
         })
 }

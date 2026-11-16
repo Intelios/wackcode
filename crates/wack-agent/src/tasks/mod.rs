@@ -15,6 +15,8 @@
 //! - Whether a task finished in the foreground or the background is decided under one lock, so
 //!   its end reaches the model exactly once: as the `bash` result, or as a notice.
 //! - A notice leaves the inbox only when something takes it to hand to the model.
+//! - A notice about something the user did (they stopped a task) is quiet: it rides along with
+//!   the next request but never wakes the agent ([`Tasks::wakes`]).
 //! - Provider keys (`SECRET_ENV`) are removed from every command's environment.
 //! - Dropping the last handle kills every task still running; quitting calls
 //!   [`Tasks::terminate_all`] first, which asks them to stop before killing them.
@@ -153,6 +155,12 @@ impl TaskInfo {
     pub fn label(&self) -> &str {
         if self.description.trim().is_empty() { first_line(&self.command) } else { self.description.trim() }
     }
+
+    /// Whether it ever ran in the background (watches always do). A command the agent waited for
+    /// to the end belongs to its transcript row, not to the lists of background commands.
+    pub fn in_background(&self) -> bool {
+        self.background.is_some()
+    }
 }
 
 /// What a registry tells whoever watches it.
@@ -175,7 +183,8 @@ pub struct Tasks {
 struct Inner {
     folder: PathBuf,
     tasks: Mutex<Vec<Arc<Task>>>,
-    inbox: Mutex<VecDeque<Note>>,
+    /// Each notice, and whether it should wake the agent.
+    inbox: Mutex<VecDeque<(Note, bool)>>,
     news: Notify,
     observer: Mutex<Option<Observer>>,
     /// A scratch registry deletes its folder when it goes.
@@ -417,7 +426,17 @@ impl Tasks {
 
     /// Leaves a notice for the model.
     pub fn tell(&self, note: Note) {
-        self.inner.inbox.lock().unwrap_or_else(|e| e.into_inner()).push_back(note);
+        self.leave(note, true);
+    }
+
+    /// Leaves a notice that waits for the next request without waking the agent: news of
+    /// something the user did themselves.
+    pub fn tell_quietly(&self, note: Note) {
+        self.leave(note, false);
+    }
+
+    fn leave(&self, note: Note, wakes: bool) {
+        self.inner.inbox.lock().unwrap_or_else(|e| e.into_inner()).push_back((note, wakes));
         self.inner.news.notify_waiters();
         self.inner.news.notify_one();
         self.signal(Signal::News);
@@ -427,9 +446,15 @@ impl Tasks {
         !self.inner.inbox.lock().unwrap_or_else(|e| e.into_inner()).is_empty()
     }
 
+    /// Whether a notice is waiting that should start a request of its own: wake an idle chat, or
+    /// keep a reply going that was about to end.
+    pub fn wakes(&self) -> bool {
+        self.inner.inbox.lock().unwrap_or_else(|e| e.into_inner()).iter().any(|(_, wakes)| *wakes)
+    }
+
     /// Takes every notice waiting, oldest first.
     pub fn take_news(&self) -> Vec<Note> {
-        self.inner.inbox.lock().unwrap_or_else(|e| e.into_inner()).drain(..).collect()
+        self.inner.inbox.lock().unwrap_or_else(|e| e.into_inner()).drain(..).map(|(note, _)| note).collect()
     }
 
     /// Resolves once a notice is waiting.
@@ -556,7 +581,11 @@ impl Tasks {
                 let tasks = Tasks { inner };
                 if notify {
                     let lines = if waiter.kind == Kind::Watch { waiter.take_lines(true) } else { Vec::new() };
-                    tasks.tell(Note { tag: format!("{NOTE_PREFIX}{}:end", waiter.id), text: end_notice(&waiter, &lines) });
+                    let note = Note { tag: format!("{NOTE_PREFIX}{}:end", waiter.id), text: end_notice(&waiter, &lines) };
+                    match waiter.info().status {
+                        Status::Stopped { by: StoppedBy::User } => tasks.tell_quietly(note),
+                        _ => tasks.tell(note),
+                    }
                 }
                 tasks.signal(Signal::Changed);
             }
@@ -911,6 +940,24 @@ mod tests {
         tokio::time::sleep(Duration::from_millis(50)).await;
         assert!(!tasks.has_news(), "the agent stopped it, so it already knows");
         assert!(tasks.stop("nope", StoppedBy::Agent).await.is_none());
+    }
+
+    #[tokio::test]
+    async fn a_stop_the_user_makes_is_told_without_waking() {
+        let folder = tempfile::tempdir().unwrap();
+        let tasks = Tasks::new(folder.path());
+        let task = tasks.start(folder.path(), "sleep 60", "", Kind::Shell, Some(Why::Asked)).unwrap();
+        tasks.stop(&task.id, StoppedBy::User).await.unwrap();
+        tasks.news().await;
+        assert!(!tasks.wakes(), "the user did it, so nothing needs saying now");
+        let finished = tasks.start(folder.path(), "true", "", Kind::Shell, Some(Why::Asked)).unwrap();
+        finished.ended().await;
+        while !tasks.wakes() {
+            tokio::time::sleep(Duration::from_millis(10)).await;
+        }
+        let news = tasks.take_news();
+        assert_eq!(news.len(), 2, "the quiet notice still reaches the model");
+        assert!(news[0].text.contains("stopped by the user"), "{}", news[0].text);
     }
 
     #[tokio::test]

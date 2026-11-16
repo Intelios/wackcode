@@ -40,7 +40,7 @@ impl TasksPane {
 
     /// How many are running, for the tab's dot.
     pub fn running(&self) -> usize {
-        self.tasks.running().len()
+        self.tasks.list().iter().filter(|info| info.in_background() && info.status.running()).count()
     }
 }
 
@@ -111,11 +111,12 @@ impl Render for TasksPane {
     fn render(&mut self, _window: &mut Window, cx: &mut Context<Self>) -> impl IntoElement {
         let theme = Theme::get(cx).clone();
         let now = wack_core::tasks::now_millis();
-        let list = self.tasks.list();
+        let list: Vec<_> = self.tasks.list().into_iter().filter(|info| info.in_background()).collect();
         let selected = self
             .selected
             .as_ref()
             .and_then(|id| list.iter().find(|info| &info.id == id))
+            .or_else(|| list.iter().rev().find(|info| info.status.running()))
             .or_else(|| list.last())
             .cloned();
 
@@ -141,7 +142,9 @@ impl Render for TasksPane {
         }
 
         let mut rows = div().id("tasks-list").flex_none().w(px(LIST_WIDTH)).h_full().overflow_y_scroll().border_r_1().border_color(theme.border).py(px(4.));
-        for info in list.iter().rev() {
+        // Running first, then the rest newest first.
+        let ordered = list.iter().rev().filter(|info| info.status.running()).chain(list.iter().rev().filter(|info| !info.status.running()));
+        for info in ordered {
             let picked = selected.as_ref().is_some_and(|selected| selected.id == info.id);
             let id = info.id.clone();
             let pane = cx.entity();

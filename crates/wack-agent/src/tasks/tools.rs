@@ -329,7 +329,7 @@ impl Feature for TasksFeature {
     }
 
     fn pending(&self) -> bool {
-        self.tasks.has_news()
+        self.tasks.wakes()
     }
 
     fn after_turn(&self, _reply: &wack_llm::Message) {

@@ -225,6 +225,12 @@ impl TextField {
         window.focus(&self.focus, cx);
     }
 
+    /// Selects the whole text, so typing replaces it (a rename field opening on the old name).
+    pub fn select_all_text(&mut self, cx: &mut Context<Self>) {
+        self.buffer.select_all();
+        self.moved(cx);
+    }
+
     // What is shown, which differs from the text only when masked.
 
     fn display_text(&self) -> String {

@@ -45,8 +45,9 @@ use crate::{
         NewChat, NewChatIn, NewTerminal, NewTerminalWith, NextTab, OpenEffortMenu, OpenModelMenu, OpenSettings,
         OpenSettingsSection, PinProject, PreviousTab, RemoveConnection, RemovePicture, ShowCommandOutput, ShowPicture, RemoveProject, ResetDockSize,
         SelectChat, Send, Stop, StopCommand, ToggleChanges, ToggleProject, ToggleSidebar, ToggleTerminal, TriggerProjectCommand, Unqueue,
+        ToggleAutoTitles, ToggleTitleModels, ChooseTitleModel, RenameChat, RenameChatAt, CancelRename,
     },
-    app::{AppState, Menu, Selection, shown_path},
+    app::{AppState, Menu, RenamePlace, Selection, shown_path},
     appearance_page::AppearanceData,
     backdrop::{self, Picture},
     edge_fade::faded,
@@ -62,7 +63,7 @@ use crate::{
     run_button::{self, CommandButtonData, CommandEditorData},
     settings::{self, ProvidersData, Section, SettingsData},
     icon::Icon,
-    sidebar::{ChatRow, ChatState, ProjectRow, SIDEBAR_WIDTH, Sidebar, SidebarData},
+    sidebar::{ChatRow, ChatState, ProjectRow, SIDEBAR_WIDTH, Sidebar, SidebarData, TitleLook, rename_field},
     tags::{self, Tag},
     theme::Theme,
     transcript::{self, Handlers, Item, Transcript},
@@ -131,7 +132,8 @@ pub enum Screen {
     Welcome { notice: Option<SharedString> },
     NewChat { project: ProjectInfo, composer: ComposerData, notice: Option<SharedString> },
     Chat { title: SharedString, project: ProjectInfo, body: Body, composer: ComposerData },
-    Settings(SettingsData),
+    /// Boxed: the page's data is far larger than any other screen's.
+    Settings(Box<SettingsData>),
     /// The data folder could not be opened.
     Failed(SharedString),
 }
@@ -257,6 +259,17 @@ impl Shell {
     fn with_app(&mut self, cx: &mut Context<Self>, f: impl FnOnce(&mut AppState, &mut Context<AppState>)) {
         if let Some(app) = self.app() {
             app.update(cx, f);
+        }
+    }
+
+    fn begin_rename(&mut self, chat: &str, place: RenamePlace, window: &mut Window, cx: &mut Context<Self>) {
+        self.with_app(cx, |app, cx| app.begin_rename(chat, place, window, cx));
+    }
+
+    /// File › Rename Chat…: the chat on screen, on its tab.
+    fn rename_on_screen(&mut self, window: &mut Window, cx: &mut Context<Self>) {
+        if let Some(chat) = self.selected_chat(cx) {
+            self.begin_rename(&chat, RenamePlace::Tab, window, cx);
         }
     }
 
@@ -714,6 +727,11 @@ impl Render for Shell {
             Source::Failed(message) => (SidebarData::default(), Screen::Failed(message.clone()), StripData::default()),
         };
         self.paddle(&sidebar_data, cx);
+        if let Source::Live(app) = &self.source
+            && app.read(cx).title_swaps.values().any(motion::TitleSwap::live)
+        {
+            window.request_animation_frame();
+        }
         let sidebar_hidden = match &self.source {
             Source::Live(app) => app.read(cx).sidebar_hidden(),
             _ => self.scene_sidebar_hidden,
@@ -871,7 +889,7 @@ impl Render for Shell {
                         .key_context(actions::FORM_CONTEXT)
                         .on_action(|_: &FocusNext, window, cx| window.focus_next(cx))
                         .on_action(|_: &FocusPrevious, window, cx| window.focus_prev(cx))
-                        .child(arrive(id, settings::page(data, !solution.sidebar, narrow, solution.transcript.width < settings::FORM_STACK_BELOW, &theme).into_any_element()))
+                        .child(arrive(id, settings::page(*data, !solution.sidebar, narrow, solution.transcript.width < settings::FORM_STACK_BELOW, &theme).into_any_element()))
                         .into_any_element(),
                 )
             }
@@ -1000,6 +1018,20 @@ impl Render for Shell {
                     })
                 }))
                 .on_action(cx.listener(|shell, _: &ToggleMemory, _, cx| shell.with_app(cx, |app, cx| app.toggle_memory(cx))))
+                .on_action(cx.listener(|shell, _: &ToggleAutoTitles, _, cx| shell.with_app(cx, |app, cx| app.toggle_auto_titles(cx))))
+                .on_action(cx.listener(|shell, _: &ToggleTitleModels, _, cx| shell.with_app(cx, |app, cx| app.toggle_title_models(cx))))
+                .on_action(cx.listener(|shell, action: &ChooseTitleModel, _, cx| {
+                    let (connection, model) = (action.connection.clone(), action.model.clone());
+                    shell.with_app(cx, |app, cx| app.choose_title_model(&connection, &model, cx));
+                }))
+                .on_action(cx.listener(|shell, _: &RenameChat, window, cx| shell.rename_on_screen(window, cx)))
+                .on_action(cx.listener(|shell, action: &RenameChatAt, window, cx| {
+                    let (chat, place) = (action.chat.clone(), if action.sidebar { RenamePlace::Sidebar } else { RenamePlace::Tab });
+                    shell.begin_rename(&chat, place, window, cx);
+                }))
+                .on_action(cx.listener(|shell, _: &CancelRename, window, cx| {
+                    shell.with_app(cx, |app, cx| app.finish_rename(None, None, Some(window), cx));
+                }))
                 .on_action(cx.listener(|shell, action: &SwitchProjectMemory, _, cx| {
                     let (key, on) = (action.key.clone(), action.on);
                     shell.with_app(cx, |app, cx| app.switch_project_memory(&key, on, cx));
@@ -1297,6 +1329,7 @@ impl PaneWords {
 pub struct TabData {
     pub id: SharedString,
     pub title: SharedString,
+    pub look: TitleLook,
     pub active: bool,
     pub state: ChatState,
 }
@@ -1313,6 +1346,13 @@ pub struct StripData {
 /// The sidebar, screen and title strip for the app's current state.
 fn live_view(app: &AppState, cx: &App) -> (SidebarData, Screen, StripData) {
     let store = app.store();
+    let still = cx.reduce_motion();
+    // How a chat's title is drawn in `place`: the rename field where it is being renamed, the
+    // model's title arriving, or plain.
+    let look = |chat: &str, place: RenamePlace| match &app.renaming {
+        Some(renaming) if renaming.chat == chat && renaming.place == place => TitleLook::Editing(renaming.field.clone()),
+        _ => app.title_swaps.get(chat).and_then(|swap| swap.look(still)).map_or(TitleLook::Plain, TitleLook::Swap),
+    };
     let mut sidebar = SidebarData::default();
     for project in store.projects() {
         let chats = store
@@ -1323,6 +1363,7 @@ fn live_view(app: &AppState, cx: &App) -> (SidebarData, Screen, StripData) {
                 ChatRow {
                     id: chat.id.clone().into(),
                     title: chat.title.clone().into(),
+                    look: look(&chat.id, RenamePlace::Sidebar),
                     age: AppState::age(chat.updated).into(),
                     state: match session {
                         Some(session) if session.running() => ChatState::Working,
@@ -1358,9 +1399,11 @@ fn live_view(app: &AppState, cx: &App) -> (SidebarData, Screen, StripData) {
         Selection::Welcome => Screen::Welcome { notice: app.notice.clone() },
         Selection::Settings => {
             let appearance = store.appearance();
-            Screen::Settings(SettingsData {
+            Screen::Settings(Box::new(SettingsData {
                 section: app.settings_section,
-                providers: ProvidersData::new(store.connections(), |id| store.has_key(id), &app.form, cx),
+                providers: ProvidersData::new(store.connections(), |id| store.has_key(id), &app.form, cx).with_titles(
+                    crate::titles_card::TitlesData::new(store.auto_title(), store.connections(), app.title_models_open, app.title_error.clone()),
+                ),
                 appearance: AppearanceData {
                     mode: appearance.mode,
                     theme: appearance.theme,
@@ -1374,7 +1417,7 @@ fn live_view(app: &AppState, cx: &App) -> (SidebarData, Screen, StripData) {
                     confirming: app.confirming_unrestricted,
                 },
                 memory: app.memory.data(cx),
-            })
+            }))
         }
         Selection::NewChat(project) => match info(project) {
             Some(project) => {
@@ -1465,6 +1508,7 @@ fn live_view(app: &AppState, cx: &App) -> (SidebarData, Screen, StripData) {
                 Some(TabData {
                     id: id.clone().into(),
                     title: chat.title.clone().into(),
+                    look: look(id, RenamePlace::Tab),
                     active: *app.selection() == Selection::Chat(id.clone()),
                     state: match session {
                         Some(session) if session.running() => ChatState::Working,
@@ -1827,7 +1871,7 @@ fn tab_strip(
     ground: Option<Hsla>,
     theme: &Theme,
 ) -> gpui::Div {
-    let tab = |id: Option<SharedString>, title: SharedString, active: bool, state: ChatState| {
+    let tab = |id: Option<SharedString>, title: SharedString, look: TitleLook, active: bool, state: ChatState| {
         let group: SharedString = format!("chat-tab-{}", id.as_deref().unwrap_or("new")).into();
         let close = match &id {
             Some(id) => Box::new(CloseChatTab { id: id.to_string() }) as Box<dyn gpui::Action>,
@@ -1852,7 +1896,16 @@ fn tab_strip(
             .when_some(ground, |tab, ground| tab.bg(ground))
             .when(active, |tab| tab.bg(ground.unwrap_or(theme.window)).border_1().border_color(theme.border_strong))
             .when(!active, |tab| tab.hover(|tab| tab.bg(theme.hover)))
-            .when_some(select, |tab, select| tab.on_click(move |_, window, cx| window.dispatch_action(Box::new(select.clone()), cx)))
+            .when_some(select, |tab, select| {
+                tab.on_click(move |event, window, cx| {
+                    let action: Box<dyn gpui::Action> = if event.click_count() == 2 {
+                        Box::new(RenameChatAt { chat: select.id.clone(), sidebar: false })
+                    } else {
+                        Box::new(select.clone())
+                    };
+                    window.dispatch_action(action, cx);
+                })
+            })
             // The same marks as the sidebar: the paddling duck while it works, a dot once it has
             // finished unseen.
             .map(|tab| match state {
@@ -1860,15 +1913,47 @@ fn tab_strip(
                 ChatState::Unread => tab.child(div().flex_none().size(px(6.)).rounded_full().bg(theme.accent_text)),
                 ChatState::Idle => tab,
             })
-            .child(
-                div()
-                    .min_w_0()
-                    .truncate()
-                    .typography(if active { Type::UiStrong } else { Type::Ui })
-                    .text_color(if active { theme.text } else { theme.text_dim })
-                    .when(!active, |title| title.group_hover(group.clone(), |title| title.text_color(theme.text_soft)))
-                    .child(title),
-            )
+            .child({
+                let colour = if active { theme.text } else { theme.text_dim };
+                let words = |text: gpui::AnyElement| {
+                    div()
+                        .min_w_0()
+                        .truncate()
+                        .typography(if active { Type::UiStrong } else { Type::Ui })
+                        .text_color(colour)
+                        .when(!active, |title| title.group_hover(group.clone(), |title| title.text_color(theme.text_soft)))
+                        .child(text)
+                };
+                match look {
+                    TitleLook::Editing(field) => rename_field(field, theme).into_any_element(),
+                    // The model's title: the old one leaves to the left as the new one arrives from
+                    // the right, then the accent glints across it.
+                    TitleLook::Swap(swap) => {
+                        let (offset, opacity) = swap.tab.new;
+                        let arriving = match swap.tab.glint {
+                            Some(head) => motion::glint_text(title, head, colour, theme.accent).into_any_element(),
+                            None => title.into_any_element(),
+                        };
+                        div()
+                            .min_w_0()
+                            .relative()
+                            .overflow_hidden()
+                            .child(words(arriving).relative().left(px(offset)).opacity(opacity))
+                            .when_some(swap.tab.old, |slot, (offset, opacity)| {
+                                slot.child(
+                                    div()
+                                        .absolute()
+                                        .top_0()
+                                        .left(px(offset))
+                                        .w(px(220.))
+                                        .child(words(swap.from.into_any_element()).opacity(opacity)),
+                                )
+                            })
+                            .into_any_element()
+                    }
+                    TitleLook::Plain => words(title.into_any_element()).into_any_element(),
+                }
+            })
             .child(
                 div()
                     .id(SharedString::from(format!("close-{}", id.as_deref().unwrap_or("new"))))
@@ -1888,9 +1973,10 @@ fn tab_strip(
             )
             .tag(if active { "chat-tab-active" } else { "chat-tab" })
     };
-    let mut tabs: Vec<_> = strip.tabs.iter().map(|data| tab(Some(data.id.clone()), data.title.clone(), data.active, data.state)).collect();
+    let mut tabs: Vec<_> =
+        strip.tabs.iter().map(|data| tab(Some(data.id.clone()), data.title.clone(), data.look.clone(), data.active, data.state)).collect();
     if strip.new_chat {
-        tabs.push(tab(None, "New chat".into(), true, ChatState::Idle));
+        tabs.push(tab(None, "New chat".into(), TitleLook::Plain, true, ChatState::Idle));
     }
     // While a new chat is open its own tab stands for this. Outside the clipped row, so it shows
     // however many tabs there are.

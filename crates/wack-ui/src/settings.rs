@@ -384,6 +384,8 @@ pub struct ProvidersData {
     pub editor: Option<ProviderEditor>,
     /// A failure from the overview: switching or removing a connection.
     pub error: Option<SharedString>,
+    /// The Automatic titles card.
+    pub titles: crate::titles_card::TitlesData,
 }
 
 impl ProvidersData {
@@ -420,7 +422,13 @@ impl ProvidersData {
             connections: rows,
             editor,
             error: form.error.clone().filter(|_| !form.open),
+            titles: Default::default(),
         }
+    }
+
+    pub fn with_titles(mut self, titles: crate::titles_card::TitlesData) -> Self {
+        self.titles = titles;
+        self
     }
 }
 
@@ -642,6 +650,7 @@ fn overview(data: ProvidersData, theme: &Theme) -> impl IntoElement {
         .when_some(data.error, |page, error| page.child(div().typography(Type::Ui).text_color(theme.danger).child(error)))
         .children(list)
         .child(add_connection(empty, theme))
+        .when(!empty, |page| page.child(crate::titles_card::card_view(data.titles, theme)))
 }
 
 fn add_connection(empty: bool, theme: &Theme) -> impl IntoElement {

@@ -85,13 +85,13 @@ Known gaps in the agent core, to close as the features that need them arrive:
 - Only the Chat Completions format has run against a live endpoint (the Testing connection: multi-tool tasks, resume across models, stop mid-command, a message sent mid-run). The Anthropic and OpenAI Responses formats are tested against recorded streams only.
 - Tool results are text only: `read` refuses images.
 - `bash` inherits the environment of the process that started it. Resolving the user's login-shell environment (for an app launched from the Dock) comes with the app.
-- Nothing writes the usage ledger yet.
+- Nothing writes the usage ledger yet. Automatic titles return their request's usage for it (`purpose: "title"`) but nothing records it.
 - Settings › Prompts (editing the built-in prompts, as version 2 allowed) is deferred; the prompt builders are written so overrides can slot in.
 - Planning's shell-job and sub-agent gates return with those features.
 
 Known gaps in the harness:
 
-- Renaming a chat and searching chats are not built.
+- Searching chats is not built.
 - A stopped turn reads "Stopped." only until the app restarts: the session file does not record it.
 - Panes are only on chat screens: the new-chat screen has none until the first message is sent.
 - A terminal saved in a layout comes back as a fresh shell after a relaunch; its scrollback is not kept.
@@ -103,6 +103,6 @@ Known gaps in identity:
 
 - The window's own controls follow macOS's light or dark, not the one chosen in Settings.
 
-The foundation (phases 0 to 4) is complete: the owner signed off its look on 2026-11-15. Features now return in this order, each with its own plan: Plan and Ultra Plan with the question dialog, todo list and Ultra reasoning (done); Memory (done); Build and Run, auto titles, skills and slash commands, background shell jobs, commit / push / PR, the usage ledger writer; MCP and web tools; sub-agents and task suggestions; the browser pane, visual replies and canvas; the Chat area; computer use, the skill creator, signature motion and Liquid Glass.
+The foundation (phases 0 to 4) is complete: the owner signed off its look on 2026-11-15. Features now return in this order, each with its own plan: Plan and Ultra Plan with the question dialog, todo list and Ultra reasoning (done); Memory (done); Build and Run (done); auto titles and renaming a chat (done); skills and slash commands, background shell jobs, commit / push / PR, the usage ledger writer; MCP and web tools; sub-agents and task suggestions; the browser pane, visual replies and canvas; the Chat area; computer use, the skill creator, signature motion and Liquid Glass.
 
 Update this section as each piece lands.

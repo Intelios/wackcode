@@ -101,8 +101,36 @@ actions!(
         CancelMemoryDelete,
         /// Dismisses the Build/Run command configuration popover.
         CloseCommandEditor,
+        /// Settings › Providers › Automatic titles: the switch.
+        ToggleAutoTitles,
+        /// Settings › Providers › Automatic titles: opens or closes the model list.
+        ToggleTitleModels,
+        /// Renames the chat on screen, on its tab (File › Rename Chat…).
+        RenameChat,
+        /// Esc in a rename field: the chat keeps its name.
+        CancelRename,
     ]
 );
+
+/// Settings › Providers › Automatic titles: the model that writes titles.
+#[derive(Clone, Debug, PartialEq, Action)]
+#[action(namespace = wackcode, no_json)]
+pub struct ChooseTitleModel {
+    pub connection: String,
+    pub model: String,
+}
+
+/// Opens a rename field over a chat's title where it was double-clicked.
+#[derive(Clone, Debug, PartialEq, Action)]
+#[action(namespace = wackcode, no_json)]
+pub struct RenameChatAt {
+    pub chat: String,
+    /// On its sidebar row rather than its tab.
+    pub sidebar: bool,
+}
+
+/// The key context of a rename field, where Esc cancels instead of stepping back.
+pub const RENAME_CONTEXT: &str = "RenameField";
 
 /// Starts, stops, or asks to configure a project Build/Run command.
 #[derive(Clone, Debug, PartialEq, Action)]
@@ -446,6 +474,7 @@ pub fn init(cx: &mut App) {
         KeyBinding::new("cmd-o", AddFolder, Some(CONTEXT)),
         KeyBinding::new("cmd-,", OpenSettings, Some(CONTEXT)),
         KeyBinding::new("escape", Back, Some(CONTEXT)),
+        KeyBinding::new("escape", CancelRename, Some(RENAME_CONTEXT)),
         KeyBinding::new("tab", FocusNext, Some(FORM_CONTEXT)),
         KeyBinding::new("shift-tab", FocusPrevious, Some(FORM_CONTEXT)),
         KeyBinding::new("ctrl-cmd-s", ToggleSidebar, Some(CONTEXT)),

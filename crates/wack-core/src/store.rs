@@ -220,6 +220,9 @@ struct State {
     /// Settings › Memory's switches.
     #[serde(default)]
     pub(crate) memory: crate::memory::MemoryConfig,
+    /// Settings › Providers › Automatic titles.
+    #[serde(default)]
+    auto_title: crate::title::AutoTitleConfig,
 }
 
 /// A connection and model resolved from a [`ModelChoice`], ready to build a run.
@@ -712,6 +715,54 @@ impl Store {
         }
         self.state.planning_unrestricted = unrestricted;
         self.save()
+    }
+
+    /// Settings › Providers › Automatic titles, as saved.
+    pub fn auto_title(&self) -> &crate::title::AutoTitleConfig {
+        &self.state.auto_title
+    }
+
+    /// Saves the automatic-title setting. Switching titles on needs a model that can be used now;
+    /// switching them off, or picking a model while off, always works.
+    pub fn set_auto_title(&mut self, config: crate::title::AutoTitleConfig) -> Result<(), String> {
+        if config.enabled {
+            self.title_model(&config)?;
+        }
+        if self.state.auto_title == config {
+            return Ok(());
+        }
+        self.state.auto_title = config;
+        self.save()
+    }
+
+    /// The connection and model a title setting names, if both still exist and the connection is
+    /// on.
+    fn title_model(&self, config: &crate::title::AutoTitleConfig) -> Result<(Connection, String), String> {
+        let (Some(connection), Some(model)) = (config.connection.as_deref(), config.model.as_deref()) else {
+            return Err("Choose a model for automatic titles.".into());
+        };
+        let connection = self
+            .connections()
+            .iter()
+            .find(|listed| listed.id == connection)
+            .ok_or("The title model's connection is gone. Choose another model.")?;
+        if !connection.enabled {
+            return Err(format!("Switch on {} before using it for automatic titles.", connection.name));
+        }
+        if !connection.models.iter().any(|listed| listed.id == model) {
+            return Err(format!("{} no longer lists {model}. Choose another model.", connection.name));
+        }
+        Ok((connection.clone(), model.to_string()))
+    }
+
+    /// What a new chat's title request needs: `None` while titles are off, an error when their
+    /// model can no longer be used, else the provider and the model to ask.
+    pub fn title_setup(&self) -> Option<Result<(HttpProvider, String), String>> {
+        let config = &self.state.auto_title;
+        if !config.enabled {
+            return None;
+        }
+        Some(self.title_model(config).and_then(|(connection, model)| Ok((self.provider(&connection)?, model))))
     }
 
     pub fn set_layout(&mut self, id: &str, layout: Option<serde_json::Value>) -> Result<(), String> {
@@ -1295,5 +1346,39 @@ mod tests {
         let persisted = reopened.project(&project.id).unwrap();
         assert_eq!(persisted.command(CommandKind::Build), None);
         assert_eq!(persisted.command(CommandKind::Run), Some("cargo run"));
+    }
+
+    #[test]
+    fn automatic_titles_are_off_until_a_usable_model_is_chosen() {
+        use crate::title::AutoTitleConfig;
+        let folder = tempfile::tempdir().unwrap();
+        let mut store = Store::open(folder.path()).unwrap();
+        assert_eq!(store.auto_title(), &AutoTitleConfig::default());
+        assert!(store.title_setup().is_none(), "off: no request");
+
+        let on_without_model = AutoTitleConfig { enabled: true, ..AutoTitleConfig::default() };
+        assert_eq!(store.set_auto_title(on_without_model).unwrap_err(), "Choose a model for automatic titles.");
+
+        let connection = store.add_connection(new("Small"), "key").unwrap();
+        let model = connection.models[0].id.clone();
+        let wrong = AutoTitleConfig { enabled: true, connection: Some(connection.id.clone()), model: Some("missing".into()) };
+        assert!(store.set_auto_title(wrong).is_err());
+
+        let chosen = AutoTitleConfig { enabled: true, connection: Some(connection.id.clone()), model: Some(model.clone()) };
+        store.set_auto_title(chosen.clone()).unwrap();
+        let (_, asked) = store.title_setup().unwrap().unwrap();
+        assert_eq!(asked, model);
+        let reopened = Store::open(folder.path()).unwrap();
+        assert_eq!(reopened.auto_title(), &chosen, "saved");
+
+        store.set_connection_enabled(&connection.id, false).unwrap();
+        assert!(store.title_setup().unwrap().is_err(), "an off connection can't title");
+        store.set_connection_enabled(&connection.id, true).unwrap();
+        store.remove_connection(&connection.id).unwrap();
+        assert!(store.title_setup().unwrap().is_err(), "a removed connection can't either");
+
+        let off = AutoTitleConfig { enabled: false, ..chosen };
+        store.set_auto_title(off).unwrap();
+        assert!(store.title_setup().is_none());
     }
 }

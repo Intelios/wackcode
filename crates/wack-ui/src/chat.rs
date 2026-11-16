@@ -457,6 +457,27 @@ impl ChatSession {
         cx.notify();
     }
 
+    /// Tells the user something about the chat that is not a failure of its run, such as an
+    /// automatic title that could not be had. It joins the latest turn's notices, so a turn still
+    /// streaming stays the last entry; before any turn it stands on its own.
+    pub fn note(&mut self, message: String, cx: &mut Context<Self>) {
+        let last_turn = self.conversation.entries.iter().rposition(|entry| matches!(entry, Entry::Turn(_)));
+        match last_turn {
+            Some(index) => {
+                if let Some(Entry::Turn(turn)) = self.conversation.entries.get_mut(index) {
+                    turn.notices.push(message);
+                }
+                self.refresh_entry(index);
+            }
+            None => {
+                let from = self.conversation.entries.len();
+                self.conversation.entries.push(Entry::Notice { text: message, failed: false });
+                self.refresh_from(from);
+            }
+        }
+        cx.notify();
+    }
+
     /// Opens or closes a work log or one of its rows.
     pub fn toggle(&mut self, key: SharedString, cx: &mut Context<Self>) {
         let key = key.to_string();

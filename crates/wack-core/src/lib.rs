@@ -7,7 +7,8 @@
 //!
 //! So far: the data folder, the secret store, connections, projects, chats, running the agent for
 //! a chat (`run`), what changed in a project (`git`), terminals (`terminal`), how the app looks
-//! (`appearance`), and where each project's memory lives (`memory`).
+//! (`appearance`), where each project's memory lives (`memory`), and automatic chat titles
+//! (`title`).
 
 pub mod appearance;
 pub mod git;
@@ -17,9 +18,11 @@ pub mod runner;
 pub mod secrets;
 pub mod store;
 pub mod terminal;
+pub mod title;
 
 pub use appearance::{Appearance, Backdrop, Mode, Texture, ThemeName};
 pub use run::{Job, RunEvent, RunSetup, discard_plan, run, save_plan};
+pub use title::AutoTitleConfig;
 pub use runner::{CommandEvent, CommandInfo, CommandSession, CommandStatus, Runner};
 pub use store::{
     Chat, CommandKind, Connection, Model, ModelChoice, NewConnection, Project, Reasoning, Resolved, Store, Ui, title_from,

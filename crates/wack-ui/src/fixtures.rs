@@ -27,6 +27,7 @@ pub fn sidebar(selected: Selected) -> SidebarData {
     let chat = |title: &'static str, age: &'static str, state, this: Selected| ChatRow {
         id: title.into(),
         title: title.into(),
+        look: Default::default(),
         age: age.into(),
         state,
         selected: selected == this && this != Selected::None,
@@ -383,6 +384,7 @@ pub fn strip(active: Option<&'static str>) -> crate::shell::StripData {
     let tab = |title: &'static str, state| crate::shell::TabData {
         id: title.into(),
         title: title.into(),
+        look: Default::default(),
         active: active == Some(title),
         state,
     };

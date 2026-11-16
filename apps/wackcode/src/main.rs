@@ -7,7 +7,7 @@ use gpui::{
     WindowOptions, actions, point, prelude::*, px, size,
 };
 use wack_ui::{
-    actions::{AddFolder, CloseTab, NewChat, NewTerminal, NextTab, OpenSettings, PreviousTab, ToggleChanges, ToggleSidebar, ToggleTerminal},
+    actions::{AddFolder, CloseTab, NewChat, NewTerminal, NextTab, OpenSettings, PreviousTab, RenameChat, ToggleChanges, ToggleSidebar, ToggleTerminal},
     panes::solve::{CONTENT_MIN_HEIGHT, WINDOW_MIN_WIDTH},
     shell::{FRAME_GUTTER, Shell, TITLE_STRIP_HEIGHT, TRAFFIC_LIGHTS},
     text_field,
@@ -45,6 +45,8 @@ fn main() {
             Menu::new("File").items([
                 MenuItem::action("New Chat", NewChat),
                 MenuItem::action("Add Folder…", AddFolder),
+                MenuItem::separator(),
+                MenuItem::action("Rename Chat…", RenameChat),
                 MenuItem::separator(),
                 MenuItem::action("Close Tab", CloseTab),
             ]),

@@ -20,10 +20,11 @@ use std::{
 };
 
 use futures::{StreamExt, channel::mpsc};
-use gpui::{App, AppContext, Context, Entity, SharedString, Subscription, Task};
+use gpui::{App, AppContext, Context, Entity, FocusHandle, Focusable, SharedString, Subscription, Task, Window};
+use gpui_tokio::Tokio;
 use wack_core::{
     AgentMode, Appearance, Chat, CommandEvent, CommandKind, CommandStatus, Job, ModelChoice, Outcome,
-    Project, Reasoning, Runner, Store, Ui, WireFormat, title_from,
+    AutoTitleConfig, Project, Reasoning, Runner, Store, Ui, WireFormat, title, title_from,
 };
 
 use crate::{
@@ -31,6 +32,7 @@ use crate::{
     backdrop::Picture,
     chat::{ChatEvent, ChatSession, now_millis},
     memory_page::{MemoryConfirm, MemoryEditor, MemoryState},
+    motion::TitleSwap,
     panes::{ChatPanes, Layout, PaneKind},
     run_button::{CommandButtonData, CommandEditorData},
     settings::{ProviderForm, Section},
@@ -139,7 +141,38 @@ pub struct AppState {
     saving_layouts: Option<Task<()>>,
     /// The connection editor's fields, re-subscribed whenever its model rows change.
     form_subscriptions: Vec<Subscription>,
+    /// Automatic titles being asked for, by chat: the attempt and the request. Only the current
+    /// attempt's answer is used, and dropping the task cancels the request, so a rename, a stop or
+    /// a delete simply removes the entry.
+    titling: HashMap<String, (u64, Task<()>)>,
+    title_attempts: u64,
+    /// Chats whose title the model just changed, for the swap animation. Old entries are left to
+    /// be replaced: [`TitleSwap::live`] tells the views when one is over.
+    pub title_swaps: HashMap<String, TitleSwap>,
+    /// Settings › Providers › Automatic titles: the model list is open, and why the last change
+    /// could not be made.
+    pub title_models_open: bool,
+    pub title_error: Option<SharedString>,
+    /// The chat being renamed in place, if any.
+    pub renaming: Option<Renaming>,
     _subscriptions: Vec<Subscription>,
+}
+
+/// A chat's title being edited where it is shown: on its tab or its sidebar row.
+pub struct Renaming {
+    pub chat: String,
+    /// Where the field is drawn: the sidebar row or the tab.
+    pub place: RenamePlace,
+    pub field: Entity<TextField>,
+    /// What had focus before, to give it back.
+    back: Option<FocusHandle>,
+    _subscriptions: Vec<Subscription>,
+}
+
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum RenamePlace {
+    Tab,
+    Sidebar,
 }
 
 impl Drop for AppState {
@@ -233,6 +266,12 @@ impl AppState {
             unsaved_layouts: HashSet::new(),
             saving_layouts: None,
             form_subscriptions: Vec::new(),
+            titling: HashMap::new(),
+            title_attempts: 0,
+            title_swaps: HashMap::new(),
+            title_models_open: false,
+            title_error: None,
+            renaming: None,
             _subscriptions: subscriptions,
         };
         app.watch_form(cx);
@@ -616,6 +655,11 @@ impl AppState {
     }
 
     fn drop_session(&mut self, chat: &str) {
+        self.titling.remove(chat);
+        self.title_swaps.remove(chat);
+        if self.renaming.as_ref().is_some_and(|renaming| renaming.chat == chat) {
+            self.renaming = None;
+        }
         self.sessions.remove(chat);
         self.session_subscriptions.remove(chat);
         self.unsaved_layouts.remove(chat);
@@ -660,7 +704,155 @@ impl AppState {
             draft.set_placeholder(placeholder(AgentMode::Build, true), cx);
         });
         self.select(Selection::Chat(chat.id.clone()), cx);
-        self.run(&chat.id, Job::Prompt(text), cx);
+        self.run(&chat.id, Job::Prompt(text.clone()), cx);
+        self.start_title(&chat.id, &text, cx);
+    }
+
+    /// Asks the title model for a name for a chat that has just started, alongside its first run.
+    /// The opening-line title stays until the answer comes, and after a failure.
+    fn start_title(&mut self, chat: &str, opening: &str, cx: &mut Context<Self>) {
+        let (provider, model) = match self.store.title_setup() {
+            None => return,
+            Some(Ok(setup)) => setup,
+            Some(Err(_)) => {
+                self.note(chat, title::UNUSABLE, cx);
+                return;
+            }
+        };
+        let request = title::request(&model, opening);
+        self.title_attempts += 1;
+        let attempt = self.title_attempts;
+        let id = chat.to_string();
+        let work = Tokio::spawn(cx, async move { title::generate(&provider, &request).await });
+        let task = cx.spawn(async move |app, cx| {
+            let result = work.await.unwrap_or_else(|_| Err("The title request stopped.".into()));
+            let _ = app.update(cx, |app, cx| app.title_arrived(&id, attempt, result, cx));
+        });
+        self.titling.insert(chat.to_string(), (attempt, task));
+    }
+
+    fn title_arrived(
+        &mut self,
+        chat: &str,
+        attempt: u64,
+        result: Result<(Option<String>, Option<wack_core::Usage>), String>,
+        cx: &mut Context<Self>,
+    ) {
+        // A rename, stop or delete since: the answer is no longer wanted.
+        if self.titling.get(chat).map(|(current, _)| *current) != Some(attempt) {
+            return;
+        }
+        self.titling.remove(chat);
+        // The usage ledger records this request (`purpose: "title"`) once its writer exists.
+        let Ok((Some(name), _usage)) = result else {
+            self.note(chat, title::FAILED, cx);
+            return;
+        };
+        let Some(old) = self.store.chat(chat).map(|listed| listed.title.clone()) else {
+            return;
+        };
+        if old == name {
+            return;
+        }
+        if self.store.rename_chat(chat, &name).is_ok() {
+            self.title_swaps.insert(chat.to_string(), TitleSwap::new(old.into()));
+            cx.notify();
+        }
+    }
+
+    /// A word to the user in a chat's transcript.
+    fn note(&mut self, chat: &str, message: &str, cx: &mut Context<Self>) {
+        if let Some(session) = self.sessions.get(chat) {
+            session.update(cx, |session, cx| session.note(message.to_string(), cx));
+        }
+    }
+
+    /// Names a chat as the user typed it. It wins over an automatic title still on its way.
+    pub fn rename_chat(&mut self, chat: &str, name: &str, cx: &mut Context<Self>) {
+        let name = name.split_whitespace().collect::<Vec<_>>().join(" ");
+        if name.is_empty() || self.store.chat(chat).is_none_or(|listed| listed.title == name) {
+            return;
+        }
+        self.titling.remove(chat);
+        self.title_swaps.remove(chat);
+        if self.store.rename_chat(chat, &name).is_ok() {
+            cx.notify();
+        }
+    }
+
+    /// Opens a field over a chat's title, where it is shown, holding the title selected. Return
+    /// or clicking away names the chat; Esc leaves it as it was.
+    pub fn begin_rename(&mut self, chat: &str, place: RenamePlace, window: &mut Window, cx: &mut Context<Self>) {
+        let Some(title) = self.store.chat(chat).map(|listed| listed.title.clone()) else {
+            return;
+        };
+        let field = cx.new(|cx| {
+            let mut field = TextField::new(Type::Ui, "Chat name", cx);
+            field.set_text(&title, cx);
+            field.select_all_text(cx);
+            field
+        });
+        let id = chat.to_string();
+        let entered = cx.subscribe_in(&field, window, move |app, field, event, window, cx| {
+            if *event == TextFieldEvent::Enter {
+                let name = field.read(cx).text().to_string();
+                app.finish_rename(Some(&id), Some(name), Some(window), cx);
+            }
+        });
+        let focus: FocusHandle = field.read(cx).focus_handle(cx);
+        let id = chat.to_string();
+        let blurred = cx.on_blur(&focus, window, move |app, _, cx| {
+            let name = app.renaming.as_ref().filter(|renaming| renaming.chat == id).map(|renaming| renaming.field.read(cx).text().to_string());
+            app.finish_rename(Some(&id), name, None, cx);
+        });
+        window.defer(cx, move |window, cx| window.focus(&focus, cx));
+        let back = window.focused(cx);
+        self.renaming = Some(Renaming { chat: chat.to_string(), place, field, back, _subscriptions: vec![entered, blurred] });
+        cx.notify();
+    }
+
+    /// Closes the rename field: with a name, the chat takes it; without, it is left as it was.
+    /// `chat` guards against a late blur from a field already replaced. Given the window, focus
+    /// goes back to where it was before the field opened.
+    pub fn finish_rename(&mut self, chat: Option<&str>, name: Option<String>, window: Option<&mut Window>, cx: &mut Context<Self>) {
+        let Some(renaming) = self.renaming.take_if(|renaming| chat.is_none_or(|chat| chat == renaming.chat)) else {
+            return;
+        };
+        if let Some(name) = name {
+            self.rename_chat(&renaming.chat, &name, cx);
+        }
+        if let (Some(window), Some(back)) = (window, renaming.back) {
+            window.defer(cx, move |window, cx| window.focus(&back, cx));
+        }
+        cx.notify();
+    }
+
+    /// Settings › Providers › Automatic titles' switch. It cannot go on without a usable model.
+    pub fn toggle_auto_titles(&mut self, cx: &mut Context<Self>) {
+        let mut config = self.store.auto_title().clone();
+        config.enabled = !config.enabled;
+        self.set_auto_title(config, cx);
+    }
+
+    /// Picks the model that writes titles, and closes the list. Titles that are on stay on.
+    pub fn choose_title_model(&mut self, connection: &str, model: &str, cx: &mut Context<Self>) {
+        let config = AutoTitleConfig {
+            enabled: self.store.auto_title().enabled,
+            connection: Some(connection.to_string()),
+            model: Some(model.to_string()),
+        };
+        self.title_models_open = false;
+        self.set_auto_title(config, cx);
+    }
+
+    pub fn toggle_title_models(&mut self, cx: &mut Context<Self>) {
+        self.title_models_open = !self.title_models_open;
+        cx.notify();
+    }
+
+    fn set_auto_title(&mut self, config: AutoTitleConfig, cx: &mut Context<Self>) {
+        self.title_error = self.store.set_auto_title(config).err().map(Into::into);
+        cx.notify();
     }
 
     /// The mode of the composer on screen, and whether it is locked by a run.
@@ -1026,6 +1218,8 @@ impl AppState {
     }
 
     pub fn stop(&mut self, chat: &str, cx: &mut Context<Self>) {
+        // Stopping the first turn stops its title request too, as version 2 did.
+        self.titling.remove(chat);
         if let Some(session) = self.sessions.get(chat) {
             session.update(cx, |session, cx| session.stop(cx));
         }

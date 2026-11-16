@@ -437,6 +437,42 @@ pub fn all() -> Vec<Scene> {
             build: |_, cx| providers_scene(Providers::Listed, false, cx),
         },
         Scene {
+            name: "settings-providers-titles",
+            description: "Settings › Providers › Automatic titles: on, with the title model list open.",
+            size: size(px(1180.), px(1100.)),
+            build: |_, cx| providers_scene(Providers::Titles, false, cx),
+        },
+        Scene {
+            name: "chat-title-arriving",
+            description: "The model's title arriving: the stand-in leaves the tab to the left, the new one comes in from the right; the sidebar row crossfades.",
+            size: WINDOW,
+            build: |_, cx| title_scene(TitleScene::Swap(90), cx),
+        },
+        Scene {
+            name: "chat-title-glint",
+            description: "The model's title settled on its tab, the accent glint passing over it.",
+            size: WINDOW,
+            build: |_, cx| title_scene(TitleScene::Swap(620), cx),
+        },
+        Scene {
+            name: "chat-title-glint-backdrop",
+            description: "The title glint over a backdrop.",
+            size: WINDOW,
+            build: |_, cx| title_scene(TitleScene::Backdrop, cx),
+        },
+        Scene {
+            name: "chat-rename-tab",
+            description: "Renaming a chat on its tab (double-click, or File › Rename Chat…).",
+            size: WINDOW,
+            build: |_, cx| title_scene(TitleScene::RenameTab, cx),
+        },
+        Scene {
+            name: "chat-rename-sidebar",
+            description: "Renaming a chat on its sidebar row (double-click).",
+            size: WINDOW,
+            build: |_, cx| title_scene(TitleScene::RenameSidebar, cx),
+        },
+        Scene {
             name: "settings-providers-form",
             description: "Settings › Providers' new-connection editor, with two models and a problem to fix.",
             size: size(px(1180.), px(1080.)),
@@ -479,7 +515,7 @@ pub fn all() -> Vec<Scene> {
                     tools: crate::tools_page::ToolsData { unrestricted_planning: false, confirming: true },
                     memory: Default::default(),
                 };
-                cx.new(|_| Shell::showing(fixtures::sidebar(Selected::None), Screen::Settings(data))).into()
+                cx.new(|_| Shell::showing(fixtures::sidebar(Selected::None), Screen::Settings(Box::new(data)))).into()
             },
         },
         Scene {
@@ -937,6 +973,8 @@ fn over(picture: crate::backdrop::Picture, cx: &mut App) -> crate::backdrop::Pic
 #[derive(Clone, Copy, PartialEq)]
 enum Providers {
     Listed,
+    /// Automatic titles on, with the model list open.
+    Titles,
     Adding,
     Editing,
     Empty,
@@ -948,7 +986,7 @@ fn providers_scene(state: Providers, sidebar_hidden: bool, cx: &mut App) -> AnyV
     let mut connections = fixtures::connections();
     connections[1].enabled = false;
     match state {
-        Providers::Listed => {}
+        Providers::Listed | Providers::Titles => {}
         Providers::Adding => {
             form.open_new(cx);
             form.name.update(cx, |field, cx| field.set_text("OpenRouter", cx));
@@ -964,13 +1002,19 @@ fn providers_scene(state: Providers, sidebar_hidden: bool, cx: &mut App) -> AnyV
     }
     let data = SettingsData {
         section: Section::Providers,
-        providers: ProvidersData::new(&connections, |id| id != "c2", &form, cx),
+        providers: ProvidersData::new(&connections, |id| id != "c2", &form, cx).with_titles(match state {
+            Providers::Titles => {
+                let config = wack_core::AutoTitleConfig { enabled: true, connection: Some("c1".into()), model: Some("claude-sonnet-5-5".into()) };
+                crate::titles_card::TitlesData::new(&config, &connections, true, None)
+            }
+            _ => crate::titles_card::TitlesData::new(&Default::default(), &connections, false, None),
+        }),
         appearance: fixtures::appearance(None, cx),
         tools: Default::default(),
         memory: Default::default(),
     };
     cx.new(|_| {
-        let shell = Shell::showing(fixtures::sidebar(Selected::None), Screen::Settings(data));
+        let shell = Shell::showing(fixtures::sidebar(Selected::None), Screen::Settings(Box::new(data)));
         if sidebar_hidden { shell.without_sidebar() } else { shell }
     })
     .into()
@@ -987,7 +1031,7 @@ fn settings_scene(backdrop: Option<crate::backdrop::Picture>, cx: &mut App) -> A
         memory: Default::default(),
     };
     cx.new(|_| {
-        let shell = Shell::showing(fixtures::sidebar(Selected::None), Screen::Settings(data));
+        let shell = Shell::showing(fixtures::sidebar(Selected::None), Screen::Settings(Box::new(data)));
         match backdrop {
             Some(picture) => shell.with_backdrop(picture),
             None => shell,
@@ -1160,7 +1204,73 @@ fn memory_scene(scene: MemoryScene, backdrop: Option<crate::backdrop::Picture>, 
         memory: state.data(cx),
     };
     cx.new(|_| {
-        let shell = Shell::showing(fixtures::sidebar(Selected::None), Screen::Settings(data));
+        let shell = Shell::showing(fixtures::sidebar(Selected::None), Screen::Settings(Box::new(data)));
+        match backdrop {
+            Some(picture) => shell.with_backdrop(picture),
+            None => shell,
+        }
+    })
+    .into()
+}
+
+enum TitleScene {
+    /// The swap this many milliseconds after the model's title landed.
+    Swap(u64),
+    Backdrop,
+    RenameTab,
+    RenameSidebar,
+}
+
+/// The finished chat with its title changing: arriving from the model, or being renamed.
+fn title_scene(state: TitleScene, cx: &mut App) -> AnyView {
+    use crate::{motion::SwapLook, sidebar::TitleLook};
+    let stand_in = "Can you look at why the SSE decoder drops the last event when…";
+    let mut sidebar = fixtures::sidebar(Selected::Finished);
+    let mut strip = fixtures::strip(Some(fixtures::FINISHED_TITLE));
+    let row = sidebar.projects.iter_mut().chain(sidebar.pinned.iter_mut()).flat_map(|project| project.chats.iter_mut()).find(|row| row.selected);
+    let tab = strip.tabs.iter_mut().find(|tab| tab.active);
+    let swap = |ms: u64| SwapLook::at(stand_in.into(), std::time::Duration::from_millis(ms), false);
+    let mut backdrop = None;
+    match state {
+        TitleScene::Swap(ms) => {
+            if let Some(row) = row {
+                row.look = TitleLook::Swap(swap(ms));
+            }
+            if let Some(tab) = tab {
+                tab.look = TitleLook::Swap(swap(ms));
+            }
+        }
+        TitleScene::Backdrop => {
+            backdrop = Some(over(fixtures::backdrop(wack_core::Texture::None), cx));
+            if let Some(tab) = tab {
+                tab.look = TitleLook::Swap(swap(620));
+            }
+        }
+        TitleScene::RenameTab | TitleScene::RenameSidebar => {
+            let field = cx.new(|cx| {
+                let mut field = TextField::new(Type::Ui, "Chat name", cx);
+                field.set_text(fixtures::FINISHED_TITLE, cx);
+                field.select_all_text(cx);
+                field
+            });
+            match (state, row, tab) {
+                (TitleScene::RenameSidebar, Some(row), _) => row.look = TitleLook::Editing(field),
+                (_, _, Some(tab)) => tab.look = TitleLook::Editing(field),
+                _ => {}
+            }
+        }
+    }
+    cx.new(|_| {
+        let shell = Shell::showing_tabs(
+            sidebar,
+            Screen::Chat {
+                title: fixtures::FINISHED_TITLE.into(),
+                project: fixtures::project(),
+                body: Body::Items(fixtures::finished_turn()),
+                composer: fixtures::composer_after_turn(Input::Drawn { text: None, placeholder: crate::chat::FOLLOW_UP_PLACEHOLDER.into() }),
+            },
+            strip,
+        );
         match backdrop {
             Some(picture) => shell.with_backdrop(picture),
             None => shell,

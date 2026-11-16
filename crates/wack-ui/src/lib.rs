@@ -35,6 +35,7 @@ pub mod specimen;
 pub mod tags;
 pub mod text_field;
 pub mod theme;
+pub mod titles_card;
 pub mod todo_panel;
 pub mod tools_page;
 pub mod tooltip;

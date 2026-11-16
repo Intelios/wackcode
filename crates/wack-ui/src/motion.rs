@@ -6,6 +6,9 @@
 //! - **Between states** ([`Ease`]): the picture clears on a new chat and frosts over once the
 //!   first message is sent.
 //! - **At work** ([`paddling`]): the duck paddles while the agent works.
+//! - **A new name** ([`TitleSwap`]): a title the model wrote swipes in on its tab, the old one
+//!   leaving to the left, and an accent glint passes over it; its sidebar row crossfades. Only the
+//!   model's title gets this beat: a typed name or the opening-line stand-in just changes.
 //!
 //! Arrivals move on a [`spring`]: critically damped, so they start quickly and settle without
 //! overshooting. Nothing winds up or bounces, so nothing gets in the way of reading.
@@ -27,7 +30,7 @@ use std::{
     time::{Duration, Instant},
 };
 
-use gpui::{Animation, AnimationExt, App, ElementId, IntoElement, Styled, px};
+use gpui::{Animation, AnimationExt, App, ElementId, HighlightStyle, Hsla, IntoElement, SharedString, Styled, StyledText, px};
 
 /// How long an arrival takes.
 pub const ARRIVE: Duration = Duration::from_millis(260);
@@ -181,5 +184,155 @@ mod tests {
         ease.toward(1., true);
         assert_eq!(ease.value(), 1.);
         assert!(!ease.moving(), "Reduce Motion lands at once");
+    }
+}
+
+/// How long the old title takes to leave its tab.
+const TITLE_OUT: Duration = Duration::from_millis(180);
+/// How long the new title takes to settle on its tab.
+const TITLE_IN: Duration = Duration::from_millis(360);
+/// How far the titles travel on a tab, in points.
+const TITLE_SHIFT: f32 = 16.;
+/// The glint waits for the new title to arrive, then sweeps across it.
+const GLINT_DELAY: Duration = Duration::from_millis(250);
+const GLINT: Duration = Duration::from_millis(800);
+/// A sidebar row's crossfade.
+const ROW_FADE: Duration = Duration::from_millis(280);
+/// How wide the glint's bright band is, as a share of the title.
+const GLINT_BAND: f32 = 0.14;
+
+/// A title the model just wrote, from the moment it landed: what the chat was called before,
+/// for the old title to leave with. The app keeps one per chat until another replaces it.
+#[derive(Clone, Debug)]
+pub struct TitleSwap {
+    pub from: SharedString,
+    at: Instant,
+}
+
+/// One frame of a tab's title swap. Offsets are in points; a title at rest has 0 and 1.
+#[derive(Clone, Copy, Debug, PartialEq)]
+pub struct TabFrame {
+    /// The old title's offset and opacity while it is still leaving.
+    pub old: Option<(f32, f32)>,
+    pub new: (f32, f32),
+    /// Where the glint's band is across the new title, 0 at its start and 1 at its end (it runs
+    /// a little past both), while it is passing.
+    pub glint: Option<f32>,
+}
+
+impl TitleSwap {
+    pub fn new(from: SharedString) -> Self {
+        Self { from, at: Instant::now() }
+    }
+
+    /// Still moving: the views ask for another frame while this is true.
+    pub fn live(&self) -> bool {
+        self.at.elapsed() < GLINT_DELAY + GLINT
+    }
+
+    /// This frame of the swap, for the views; `None` once it is over.
+    pub fn look(&self, still: bool) -> Option<SwapLook> {
+        self.live().then(|| SwapLook::at(self.from.clone(), self.at.elapsed(), still))
+    }
+}
+
+/// What a title looks like partway through its swap: on its tab, and on its sidebar row, where
+/// `row` is how far the crossfade has come (0 to 1).
+#[derive(Clone, Debug, PartialEq)]
+pub struct SwapLook {
+    pub from: SharedString,
+    pub tab: TabFrame,
+    pub row: f32,
+}
+
+impl SwapLook {
+    /// The swap `elapsed` after the title landed: the gallery draws chosen moments with this.
+    pub fn at(from: SharedString, elapsed: Duration, still: bool) -> Self {
+        Self { from, tab: tab_frame(elapsed, still), row: (elapsed.as_secs_f32() / ROW_FADE.as_secs_f32()).min(1.) }
+    }
+}
+
+/// A tab's swap `elapsed` after the title landed. With Reduce Motion the titles only crossfade,
+/// in place, and nothing glints.
+fn tab_frame(elapsed: Duration, still: bool) -> TabFrame {
+    let t = elapsed.as_secs_f32();
+    let out = (t / TITLE_OUT.as_secs_f32()).min(1.);
+    let old = (out < 1.).then(|| {
+        let eased = out * (2. - out);
+        (if still { 0. } else { -TITLE_SHIFT * eased }, 1. - out)
+    });
+    let new = if still {
+        (0., (t / ARRIVE.as_secs_f32()).min(1.))
+    } else {
+        // It shows only as fast as the old title goes, so the two never read on top of each other.
+        let arrive = spring((t / TITLE_IN.as_secs_f32()).min(1.));
+        (TITLE_SHIFT * (1. - arrive), arrive.min(1.) * out)
+    };
+    let since_glint = t - GLINT_DELAY.as_secs_f32();
+    let glint = (!still && since_glint >= 0. && since_glint < GLINT.as_secs_f32()).then(|| {
+        let g = since_glint / GLINT.as_secs_f32();
+        let eased = if g < 0.5 { 2. * g * g } else { 1. - (-2. * g + 2.).powi(2) / 2. };
+        -GLINT_BAND + (1. + 2. * GLINT_BAND) * eased
+    });
+    TabFrame { old, new: (new.0, new.1.clamp(0., 1.)), glint }
+}
+
+/// `text` with the glint's band at `head`: each letter takes on the accent the nearer it is to
+/// the band's middle.
+pub fn glint_text(text: SharedString, head: f32, colour: Hsla, accent: Hsla) -> StyledText {
+    let count = text.chars().count().max(1) as f32;
+    let highlights: Vec<_> = text
+        .char_indices()
+        .enumerate()
+        .filter_map(|(index, (at, letter))| {
+            let place = (index as f32 + 0.5) / count;
+            let weight = 1. - ((place - head).abs() / GLINT_BAND);
+            (weight > 0.).then(|| {
+                let lit = colour.blend(Hsla { a: accent.a * weight, ..accent });
+                (at..at + letter.len_utf8(), HighlightStyle { color: Some(lit), ..Default::default() })
+            })
+        })
+        .collect();
+    StyledText::new(text).with_highlights(highlights)
+}
+
+#[cfg(test)]
+mod title_swap_tests {
+    use super::*;
+
+    #[test]
+    fn the_old_title_leaves_left_and_the_new_one_settles() {
+        let start = tab_frame(Duration::ZERO, false);
+        assert_eq!(start.old, Some((0., 1.)));
+        assert!(start.new.0 > 15. && start.new.1 < 0.1, "the new title starts to the right, unseen");
+        let middle = tab_frame(Duration::from_millis(90), false);
+        let (offset, opacity) = middle.old.unwrap();
+        assert!(offset < -8. && opacity < 1.);
+        let end = tab_frame(GLINT_DELAY + GLINT + Duration::from_millis(1), false);
+        assert_eq!(end.old, None);
+        assert!(end.new.0.abs() < 0.5 && end.new.1 > 0.99);
+        assert_eq!(end.glint, None);
+    }
+
+    #[test]
+    fn the_glint_sweeps_left_to_right_after_the_title_arrives() {
+        assert_eq!(tab_frame(Duration::from_millis(100), false).glint, None);
+        let early = tab_frame(GLINT_DELAY + Duration::from_millis(100), false).glint.unwrap();
+        let late = tab_frame(GLINT_DELAY + Duration::from_millis(700), false).glint.unwrap();
+        assert!(early < late);
+    }
+
+    #[test]
+    fn reduce_motion_only_crossfades() {
+        for ms in [0, 90, 200, 500, 900] {
+            let frame = tab_frame(Duration::from_millis(ms), true);
+            assert_eq!(frame.new.0, 0.);
+            assert_eq!(frame.glint, None);
+            if let Some((offset, _)) = frame.old {
+                assert_eq!(offset, 0.);
+            }
+        }
+        let end = tab_frame(ARRIVE, true);
+        assert_eq!(end.new, (0., 1.));
     }
 }

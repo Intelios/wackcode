@@ -10,10 +10,11 @@
 //! Renders from plain data ([`SidebarData`]) and reports clicks as actions (`crate::actions`); it
 //! holds no state of its own.
 
-use gpui::{App, FontWeight, Hsla, SharedString, Window, div, prelude::*, px};
+use gpui::{App, Entity, FontWeight, Hsla, MouseButton, SharedString, Window, div, prelude::*, px};
 
 use crate::{
-    actions::{AddFolder, DeleteChat, NewChat, NewChatIn, OpenSettings, PinProject, RemoveProject, SelectChat, ToggleProject},
+    actions::{AddFolder, DeleteChat, NewChat, NewChatIn, OpenSettings, PinProject, RemoveProject, RenameChatAt, SelectChat, ToggleProject},
+    text_field::TextField,
     icon::Icon,
     tags::Tag,
     theme::Theme,
@@ -41,10 +42,44 @@ pub struct ProjectRow {
     pub pinned: bool,
 }
 
+/// How a chat's title is drawn, on its tab and its sidebar row.
+#[derive(Clone, Debug, Default)]
+pub enum TitleLook {
+    #[default]
+    Plain,
+    /// The model's title arriving.
+    Swap(crate::motion::SwapLook),
+    /// The user is renaming the chat here.
+    Editing(Entity<TextField>),
+}
+
+/// The rename field in place of a title: Esc cancels inside it, and clicks stay in it rather
+/// than selecting or dragging what it sits on.
+pub fn rename_field(field: Entity<TextField>, theme: &Theme) -> impl IntoElement {
+    div()
+        .key_context(crate::actions::RENAME_CONTEXT)
+        .flex_1()
+        .min_w(px(96.))
+        .h(px(22.))
+        .px(px(6.))
+        .rounded(px(6.))
+        .bg(theme.surface)
+        .border_1()
+        .border_color(theme.accent_text)
+        .flex()
+        .items_center()
+        .overflow_hidden()
+        .on_mouse_down(MouseButton::Left, |_, _, cx| cx.stop_propagation())
+        .on_mouse_up(MouseButton::Left, |_, _, cx| cx.stop_propagation())
+        .child(field)
+        .tag("rename-field")
+}
+
 #[derive(Clone, Debug)]
 pub struct ChatRow {
     pub id: SharedString,
     pub title: SharedString,
+    pub look: TitleLook,
     /// "now", "2h", "3d".
     pub age: SharedString,
     pub state: ChatState,
@@ -324,6 +359,7 @@ fn chat_row(chat: ChatRow, theme: &Theme) -> impl IntoElement {
     let title_colour = if chat.selected || chat.state == ChatState::Unread { theme.text } else { theme.text_soft };
     let group: SharedString = format!("chat-{}", chat.id).into();
     let id = chat.id.to_string();
+    let editing = matches!(chat.look, TitleLook::Editing(_));
     let marker = div().flex_none().w(px(14.)).flex().justify_center().map(|marker| match chat.state {
         ChatState::Working => marker.child(crate::motion::paddling(div().child(Icon::Duck.view(px(12.), theme.accent_text)))),
         ChatState::Unread => marker.child(div().size(px(6.)).rounded_full().bg(theme.accent_text)),
@@ -341,19 +377,44 @@ fn chat_row(chat: ChatRow, theme: &Theme) -> impl IntoElement {
         .items_center()
         .gap(px(6.))
         .map(|row| if chat.selected { row.bg(theme.accent_wash) } else { row.hover(|row| row.bg(theme.hover)) })
-        .on_click(dispatch(SelectChat { id: id.clone() }))
+        .on_click({
+            let id = id.clone();
+            move |event, window, cx| {
+                let action: Box<dyn gpui::Action> = if event.click_count() == 2 {
+                    Box::new(RenameChatAt { chat: id.clone(), sidebar: true })
+                } else {
+                    Box::new(SelectChat { id: id.clone() })
+                };
+                window.dispatch_action(action, cx);
+            }
+        })
         .child(marker)
-        .child(
-            div()
-                .flex_1()
-                .min_w_0()
-                .truncate()
-                .typography(Type::Ui)
-                .when(chat.state == ChatState::Unread, |text| text.font_weight(FontWeight::MEDIUM))
-                .text_color(title_colour)
-                .child(chat.title),
-        )
-        .child(
+        .child(match chat.look {
+            TitleLook::Editing(field) => rename_field(field, theme).into_any_element(),
+            look => {
+                let words = |text: SharedString| {
+                    div()
+                        .min_w_0()
+                        .truncate()
+                        .typography(Type::Ui)
+                        .when(chat.state == ChatState::Unread, |text| text.font_weight(FontWeight::MEDIUM))
+                        .text_color(title_colour)
+                        .child(text)
+                };
+                // The model's title crossfades in over the old one.
+                match look {
+                    TitleLook::Swap(swap) => div()
+                        .flex_1()
+                        .min_w_0()
+                        .relative()
+                        .child(words(chat.title).opacity(swap.row))
+                        .child(div().absolute().top_0().left_0().right_0().child(words(swap.from).opacity(1. - swap.row)))
+                        .into_any_element(),
+                    _ => words(chat.title).flex_1().into_any_element(),
+                }
+            }
+        })
+        .when(!editing, |row| row.child(
             div()
                 .flex_none()
                 .pr(px(6.))
@@ -361,8 +422,8 @@ fn chat_row(chat: ChatRow, theme: &Theme) -> impl IntoElement {
                 .typography(Type::Small)
                 .text_color(if chat.state == ChatState::Working { theme.accent_text } else { theme.text_faint })
                 .child(chat.age),
-        )
-        .child(
+        ))
+        .when(!editing, |row| row.child(
             // Over the age, in its place, while the row is hovered.
             div()
                 .absolute()
@@ -377,5 +438,5 @@ fn chat_row(chat: ChatRow, theme: &Theme) -> impl IntoElement {
                 small_button(SharedString::from(format!("{id}-delete")), Icon::Close, theme.text_dim, theme)
                     .on_click(dispatch(DeleteChat { id })),
             ),
-        )
+        ))
 }

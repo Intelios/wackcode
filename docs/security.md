@@ -6,7 +6,7 @@ These are product guarantees, not implementation details. Don't weaken any of th
 
 No telemetry, account, backend, updater, or traffic on launch or on a timer. The app contacts only:
 
-- provider endpoints the user configured, when a chat or a settings test asks for it;
+- provider endpoints the user configured, when a chat or a settings test asks for it, and the title model's connection (Settings › Providers › Automatic titles) once when a chat starts, while titles are on;
 - the user's Git remote, only when they push.
 
 Never add a network origin silently. Call it out explicitly, and list it here.

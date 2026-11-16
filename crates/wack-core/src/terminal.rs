@@ -30,7 +30,7 @@ use alacritty_terminal::{
     sync::FairMutex,
     term::{Config, Term, TermMode, cell::Flags},
     tty,
-    vte::ansi::{Color, CursorShape, NamedColor, Processor, StdSyncHandler},
+    vte::ansi::{ClearMode, Color, CursorShape, Handler, NamedColor, Processor, StdSyncHandler},
 };
 
 /// Lines kept above the screen.
@@ -164,19 +164,21 @@ impl Size {
     }
 }
 
+type ReplyFn = Arc<dyn Fn(Vec<u8>) + Send + Sync>;
+
 /// Hands the emulator's events on, answering the ones that need a reply to the shell itself.
 #[derive(Clone)]
-struct Listener {
+pub(crate) struct Listener {
     sink: Arc<dyn Fn(TerminalEvent) + Send + Sync>,
-    /// Set once the event loop exists; replies written before that are dropped.
-    pty: Arc<Mutex<Option<EventLoopSender>>>,
+    /// Set once the PTY exists; replies written before that are dropped.
+    reply: Arc<Mutex<Option<ReplyFn>>>,
     size: Arc<Mutex<WindowSize>>,
 }
 
 impl Listener {
     fn reply(&self, text: String) {
-        if let Some(pty) = self.pty.lock().ok().and_then(|pty| pty.clone()) {
-            let _ = pty.send(Msg::Input(Cow::Owned(text.into_bytes())));
+        if let Some(reply) = self.reply.lock().ok().and_then(|slot| slot.clone()) {
+            reply(text.into_bytes());
         }
     }
 }
@@ -203,64 +205,59 @@ impl EventListener for Listener {
     }
 }
 
-pub struct Terminal {
+/// Pure PTY-agnostic terminal screen buffer & VT emulator, shared by interactive shells and
+/// Build/Run command outputs.
+pub struct Screen {
     term: Arc<FairMutex<Term<Listener>>>,
-    pty: Option<EventLoopSender>,
+    parser: Mutex<Processor<StdSyncHandler>>,
     size: Size,
     listener: Listener,
 }
 
-impl Terminal {
-    /// Starts the user's login shell in `folder`, sized `columns` × `rows`. `events` is called
-    /// from the PTY's thread.
-    pub fn spawn(
-        folder: &Path,
+impl Screen {
+    pub fn new(
         columns: usize,
         rows: usize,
         cell: (u16, u16),
         events: impl Fn(TerminalEvent) + Send + Sync + 'static,
-    ) -> Result<Self, String> {
+    ) -> Self {
         let size = Size { columns: columns.max(2), rows: rows.max(1), cell_width: cell.0, cell_height: cell.1 };
         let listener = Listener {
             sink: Arc::new(events),
-            pty: Arc::new(Mutex::new(None)),
+            reply: Arc::new(Mutex::new(None)),
             size: Arc::new(Mutex::new(size.window())),
         };
         let term = Arc::new(FairMutex::new(Term::new(config(), &size, listener.clone())));
-        let env = HashMap::from([
-            ("TERM".to_string(), "xterm-256color".to_string()),
-            ("COLORTERM".to_string(), "truecolor".to_string()),
-            ("TERM_PROGRAM".to_string(), "WackCode".to_string()),
-        ]);
-        let options = tty::Options {
-            shell: None,
-            working_directory: Some(folder.to_path_buf()),
-            drain_on_exit: true,
-            env,
-        };
-        let pty = tty::new(&options, size.window(), 0).map_err(|error| format!("Could not start a shell: {error}."))?;
-        let event_loop = EventLoop::new(term.clone(), listener.clone(), pty, true, false)
-            .map_err(|error| format!("Could not start the terminal: {error}."))?;
-        let sender = event_loop.channel();
-        if let Ok(mut slot) = listener.pty.lock() {
-            *slot = Some(sender.clone());
+        Self {
+            term,
+            parser: Mutex::new(Processor::new()),
+            size,
+            listener,
         }
-        event_loop.spawn();
-        Ok(Self { term, pty: Some(sender), size, listener })
     }
 
-    /// A terminal with no shell that has been sent `bytes`: for tests and gallery scenes.
     pub fn replay(columns: usize, rows: usize, bytes: &[u8]) -> Self {
-        let size = Size { columns: columns.max(2), rows: rows.max(1), cell_width: 8, cell_height: 16 };
-        let listener = Listener {
-            sink: Arc::new(|_| {}),
-            pty: Arc::new(Mutex::new(None)),
-            size: Arc::new(Mutex::new(size.window())),
-        };
-        let mut term = Term::new(config(), &size, listener.clone());
-        let mut processor: Processor<StdSyncHandler> = Processor::new();
-        processor.advance(&mut term, bytes);
-        Self { term: Arc::new(FairMutex::new(term)), pty: None, size, listener }
+        let screen = Self::new(columns, rows, (8, 16), |_| {});
+        screen.advance(bytes);
+        screen
+    }
+
+    pub(crate) fn set_reply(&self, reply: Option<ReplyFn>) {
+        if let Ok(mut slot) = self.listener.reply.lock() {
+            *slot = reply;
+        }
+    }
+
+    pub(crate) fn term(&self) -> &Arc<FairMutex<Term<Listener>>> {
+        &self.term
+    }
+
+    pub(crate) fn listener(&self) -> Listener {
+        self.listener.clone()
+    }
+
+    pub(crate) fn window_size(&self) -> WindowSize {
+        self.size.window()
     }
 
     pub fn columns(&self) -> usize {
@@ -271,44 +268,44 @@ impl Terminal {
         self.size.rows
     }
 
-    /// Sends bytes to the shell, as if typed. Typing also brings the view back to the bottom.
-    pub fn write(&self, bytes: Vec<u8>) {
+    /// Feeds bytes from a PTY or fixture into the emulator. Returns true if the screen should redraw.
+    pub fn advance(&self, bytes: &[u8]) -> bool {
         if bytes.is_empty() {
-            return;
+            return false;
         }
+        let mut parser = self.parser.lock().unwrap_or_else(|e| e.into_inner());
+        let mut term = self.term.lock();
+        parser.advance(&mut *term, bytes);
+        parser.sync_bytes_count() < bytes.len()
+    }
+
+    /// Clears the viewport, scrollback history, and selection, and homes the cursor without
+    /// touching the underlying process.
+    pub fn clear(&self) {
+        let mut term = self.term.lock();
+        term.selection = None;
+        term.scroll_display(Scroll::Bottom);
+        Handler::clear_screen(&mut *term, ClearMode::All);
+        Handler::clear_screen(&mut *term, ClearMode::Saved);
+        Handler::goto(&mut *term, 0, 0);
+    }
+
+    pub fn scroll_to_bottom(&self) {
         self.term.lock().scroll_display(Scroll::Bottom);
-        if let Some(pty) = &self.pty {
-            let _ = pty.send(Msg::Input(Cow::Owned(bytes)));
-        }
     }
 
-    /// Pastes text: line endings become returns, and a program that asked for bracketed paste
-    /// gets it bracketed, so a pasted command is not run before the user presses return.
-    pub fn paste(&self, text: &str) {
-        let text = text.replace("\r\n", "\r").replace('\n', "\r");
-        if self.modes().bracketed_paste {
-            // A paste must not be able to end the bracket early.
-            let text = text.replace("\x1b[201~", "");
-            self.write(format!("\x1b[200~{text}\x1b[201~").into_bytes());
-        } else {
-            self.write(text.into_bytes());
-        }
-    }
-
-    /// Fits the terminal to a new size. A no-op when nothing changed.
-    pub fn resize(&mut self, columns: usize, rows: usize, cell: (u16, u16)) {
+    /// Fits the screen to a new size. Returns `true` when the size actually changed.
+    pub fn resize(&mut self, columns: usize, rows: usize, cell: (u16, u16)) -> bool {
         let size = Size { columns: columns.max(2), rows: rows.max(1), cell_width: cell.0, cell_height: cell.1 };
         if size.columns == self.size.columns && size.rows == self.size.rows {
-            return;
+            return false;
         }
         self.size = size;
         if let Ok(mut window) = self.listener.size.lock() {
             *window = size.window();
         }
         self.term.lock().resize(size);
-        if let Some(pty) = &self.pty {
-            let _ = pty.send(Msg::Resize(size.window()));
-        }
+        true
     }
 
     /// Scrolls the view through the scrollback: positive is up.
@@ -358,6 +355,133 @@ impl Terminal {
     /// What is on screen now.
     pub fn snapshot(&self) -> Snapshot {
         let term = self.term.lock();
+        snapshot_from_term(&term)
+    }
+}
+
+pub struct Terminal {
+    screen: Screen,
+    pty: Option<EventLoopSender>,
+}
+
+impl Terminal {
+    /// Starts the user's login shell in `folder`, sized `columns` × `rows`. `events` is called
+    /// from the PTY's thread.
+    pub fn spawn(
+        folder: &Path,
+        columns: usize,
+        rows: usize,
+        cell: (u16, u16),
+        events: impl Fn(TerminalEvent) + Send + Sync + 'static,
+    ) -> Result<Self, String> {
+        let screen = Screen::new(columns, rows, cell, events);
+        let env = HashMap::from([
+            ("TERM".to_string(), "xterm-256color".to_string()),
+            ("COLORTERM".to_string(), "truecolor".to_string()),
+            ("TERM_PROGRAM".to_string(), "WackCode".to_string()),
+        ]);
+        let options = tty::Options {
+            shell: None,
+            working_directory: Some(folder.to_path_buf()),
+            drain_on_exit: true,
+            env,
+        };
+        let pty = tty::new(&options, screen.window_size(), 0).map_err(|error| format!("Could not start a shell: {error}."))?;
+        let event_loop = EventLoop::new(screen.term().clone(), screen.listener(), pty, true, false)
+            .map_err(|error| format!("Could not start the terminal: {error}."))?;
+        let sender = event_loop.channel();
+        let reply_sender = sender.clone();
+        screen.set_reply(Some(Arc::new(move |bytes| {
+            let _ = reply_sender.send(Msg::Input(Cow::Owned(bytes)));
+        })));
+        event_loop.spawn();
+        Ok(Self { screen, pty: Some(sender) })
+    }
+
+    /// A terminal with no shell that has been sent `bytes`: for tests and gallery scenes.
+    pub fn replay(columns: usize, rows: usize, bytes: &[u8]) -> Self {
+        Self {
+            screen: Screen::replay(columns, rows, bytes),
+            pty: None,
+        }
+    }
+
+    pub fn columns(&self) -> usize {
+        self.screen.columns()
+    }
+
+    pub fn rows(&self) -> usize {
+        self.screen.rows()
+    }
+
+    /// Sends bytes to the shell, as if typed. Typing also brings the view back to the bottom.
+    pub fn write(&self, bytes: Vec<u8>) {
+        if bytes.is_empty() {
+            return;
+        }
+        self.screen.scroll_to_bottom();
+        if let Some(pty) = &self.pty {
+            let _ = pty.send(Msg::Input(Cow::Owned(bytes)));
+        }
+    }
+
+    /// Pastes text: line endings become returns, and a program that asked for bracketed paste
+    /// gets it bracketed, so a pasted command is not run before the user presses return.
+    pub fn paste(&self, text: &str) {
+        let text = text.replace("\r\n", "\r").replace('\n', "\r");
+        if self.modes().bracketed_paste {
+            // A paste must not be able to end the bracket early.
+            let text = text.replace("\x1b[201~", "");
+            self.write(format!("\x1b[200~{text}\x1b[201~").into_bytes());
+        } else {
+            self.write(text.into_bytes());
+        }
+    }
+
+    /// Fits the terminal to a new size. A no-op when nothing changed.
+    pub fn resize(&mut self, columns: usize, rows: usize, cell: (u16, u16)) {
+        if !self.screen.resize(columns, rows, cell) {
+            return;
+        }
+        if let Some(pty) = &self.pty {
+            let _ = pty.send(Msg::Resize(self.screen.window_size()));
+        }
+    }
+
+    /// Scrolls the view through the scrollback: positive is up.
+    pub fn scroll(&self, lines: i32) {
+        self.screen.scroll(lines);
+    }
+
+    pub fn modes(&self) -> Modes {
+        self.screen.modes()
+    }
+
+    /// Starts a selection at a cell on screen; `right_half` is which half of the cell was hit.
+    pub fn select_from(&self, row: usize, column: usize, right_half: bool, kind: SelectionKind) {
+        self.screen.select_from(row, column, right_half, kind);
+    }
+
+    pub fn select_to(&self, row: usize, column: usize, right_half: bool) {
+        self.screen.select_to(row, column, right_half);
+    }
+
+    pub fn clear_selection(&self) {
+        self.screen.clear_selection();
+    }
+
+    /// The selected text, if anything non-empty is selected.
+    pub fn selected_text(&self) -> Option<String> {
+        self.screen.selected_text()
+    }
+
+    /// What is on screen now.
+    pub fn snapshot(&self) -> Snapshot {
+        self.screen.snapshot()
+    }
+}
+
+fn snapshot_from_term(term: &Term<Listener>) -> Snapshot {
         let content = term.renderable_content();
         let (columns, rows) = (term.columns(), term.screen_lines());
         let scrolled = content.display_offset;
@@ -427,7 +551,6 @@ impl Terminal {
             }),
         };
         Snapshot { columns, rows, lines, cursor, scrolled }
-    }
 }
 
 impl Drop for Terminal {
@@ -582,5 +705,25 @@ mod tests {
             }
             assert!(Instant::now() < deadline, "the shell never answered: {screen:#?}");
         }
+    }
+
+    #[test]
+    fn clear_wipes_viewport_and_scrollback() {
+        let mut bytes = Vec::new();
+        for number in 0..20 {
+            bytes.extend(format!("line {number}\r\n").as_bytes());
+        }
+        let screen = Screen::replay(20, 4, &bytes);
+        screen.scroll(5);
+        assert_eq!(screen.snapshot().scrolled, 5);
+
+        screen.clear();
+        let after = screen.snapshot();
+        assert_eq!(after.scrolled, 0);
+        for row in 0..after.rows {
+            assert_eq!(text(&after, row), "", "row {row} must be blank after clear");
+        }
+        screen.advance(b"fresh");
+        assert_eq!(text(&screen.snapshot(), 0), "fresh");
     }
 }

@@ -226,6 +226,12 @@ fn stack_view(place: &StackPlace, stack: &Stack, panes: &ChatPanes, theme: &Them
         let selected = pane.id == active.id;
         let title = panes.title(*pane, cx);
         let badge = panes.badge(*pane, cx);
+        let status_dot = panes.command_status(*pane, cx).and_then(|status| match status {
+            wack_core::CommandStatus::Running => Some(theme.accent_text),
+            wack_core::CommandStatus::Finished => Some(theme.success),
+            wack_core::CommandStatus::Failed { .. } => Some(theme.danger),
+            _ => None,
+        });
         let group: SharedString = format!("pane-tab-{}", pane.id).into();
         let (id, dragged) = (pane.id, DraggedTab { pane: pane.id, title: title.clone() });
         div()
@@ -242,6 +248,9 @@ fn stack_view(place: &StackPlace, stack: &Stack, panes: &ChatPanes, theme: &Them
             .gap(px(6.))
             .on_click(move |_, window, cx| window.dispatch_action(Box::new(ActivatePane { pane: id }), cx))
             .on_drag(dragged, |tab, _, _, cx| cx.new(|_| tab.clone()))
+            .when_some(status_dot, |tab, dot| {
+                tab.child(div().flex_none().size(px(6.)).rounded_full().bg(dot))
+            })
             .child(
                 div()
                     .min_w_0()
@@ -280,6 +289,8 @@ fn stack_view(place: &StackPlace, stack: &Stack, panes: &ChatPanes, theme: &Them
             .tag(match pane.kind {
                 PaneKind::Changes => "pane-tab-changes",
                 PaneKind::Terminal => "pane-tab-terminal",
+                PaneKind::Build => "pane-tab-build",
+                PaneKind::Run => "pane-tab-run",
             })
     });
     let add_terminal = (active.kind == PaneKind::Terminal).then(|| {
@@ -309,6 +320,7 @@ fn stack_view(place: &StackPlace, stack: &Stack, panes: &ChatPanes, theme: &Them
     let content = match panes.model(active.id) {
         Some(PaneModel::Changes(model)) => changes::view(model, place.rect.width, theme, cx),
         Some(PaneModel::Terminal(model)) => model.clone().into_any_element(),
+        Some(PaneModel::Build(model)) | Some(PaneModel::Run(model)) => model.clone().into_any_element(),
         None => div().into_any_element(),
     };
     // The pane in front arrives from the side its dock opens on.

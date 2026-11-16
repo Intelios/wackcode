@@ -33,18 +33,18 @@ use std::rc::Rc;
 
 use gpui::{
     App, Context, DragMoveEvent, ElementId, Entity, FocusHandle, Focusable, Hsla, ListState, MouseButton, PathPromptOptions, Pixels,
-    PromptLevel, SharedString, Subscription, Window, WindowControlArea, div, list,
+    PromptLevel, SharedString, Size, Subscription, Window, WindowControlArea, div, list,
     point, prelude::*, px, relative,
 };
 
 use crate::{
     actions::{
-        self, ActivatePane, AddFolder, Back, ChooseBackdrop, ChooseEffort, SlideEffort, ToggleTodos, ToggleWaiting, ChooseFocus, CycleAgentMode, SetAgentMode, PickOption, ShowQuestion, NextQuestion, PreviousQuestion, SubmitAnswers, CancelQuestion, WrapUpQuestion, ShowDoneTodos, DiscardPlan, KeepPlan, ConfirmDiscardPlan, ApprovePlan, SavePlan, CopyPlan, ToggleUnrestrictedPlanning, ConfirmUnrestrictedPlanning, CancelUnrestrictedPlanning, ToggleMemory, SwitchProjectMemory, NewMemory, EditMemory, ChooseMemoryKind, SaveMemory, CloseMemoryEditor, AskDeleteMemory, AskRemoveMemoryFolder, ConfirmMemoryDelete, CancelMemoryDelete, RevealMemory,
-        ChooseBlur, ChooseDim, ChooseFormat, OpenConnectionForm, CloseConnectionForm, SwitchConnection, ChooseMode, ChooseModel, ChooseTexture, ChooseTheme, CloseChatTab, CloseMenu, ClosePane,
-        ClosePaneId, CloseSettings, CloseTab, Compact, DeleteChat, DiscardConnection, EditConnection, EqualizeSplit, FocusNext, FocusPrevious, MovePane, AddModelRow, RemoveModelRow, SaveConnection,
+        self, ActivatePane, AddFolder, Back, ChooseBackdrop, ChooseEffort, SlideEffort, ToggleTodos, ToggleWaiting, ChooseFocus, ClearCommandOutput, CloseCommandEditor, CycleAgentMode, SetAgentMode, PickOption, ShowQuestion, NextQuestion, PreviousQuestion, SubmitAnswers, CancelQuestion, WrapUpQuestion, ShowDoneTodos, DiscardPlan, KeepPlan, ConfirmDiscardPlan, ApprovePlan, SavePlan, CopyPlan, ToggleUnrestrictedPlanning, ConfirmUnrestrictedPlanning, CancelUnrestrictedPlanning, ToggleMemory, SwitchProjectMemory, NewMemory, EditMemory, ChooseMemoryKind, SaveMemory, CloseMemoryEditor, AskDeleteMemory, AskRemoveMemoryFolder, ConfirmMemoryDelete, CancelMemoryDelete, RevealMemory,
+        ChooseBlur, ChooseDim, ChooseFormat, OpenCommandEditor, OpenConnectionForm, CloseConnectionForm, SwitchConnection, ChooseMode, ChooseModel, ChooseTexture, ChooseTheme, CloseChatTab, CloseMenu, ClosePane,
+        ClosePaneId, CloseSettings, CloseTab, Compact, DeleteChat, DiscardConnection, EditConnection, EqualizeSplit, FocusNext, FocusPrevious, MovePane, AddModelRow, RemoveModelRow, SaveCommandEditor, SaveConnection,
         NewChat, NewChatIn, NewTerminal, NewTerminalWith, NextTab, OpenEffortMenu, OpenModelMenu, OpenSettings,
-        OpenSettingsSection, PinProject, PreviousTab, RemoveConnection, RemovePicture, ShowPicture, RemoveProject, ResetDockSize,
-        SelectChat, Send, Stop, ToggleChanges, ToggleProject, ToggleSidebar, ToggleTerminal, Unqueue,
+        OpenSettingsSection, PinProject, PreviousTab, RemoveConnection, RemovePicture, ShowCommandOutput, ShowPicture, RemoveProject, ResetDockSize,
+        SelectChat, Send, Stop, StopCommand, ToggleChanges, ToggleProject, ToggleSidebar, ToggleTerminal, TriggerProjectCommand, Unqueue,
     },
     app::{AppState, Menu, Selection, shown_path},
     appearance_page::AppearanceData,
@@ -59,6 +59,7 @@ use crate::{
         dock::{self, DraggedTab, Resizing},
         solve::{self, DOCK_MIN_HEIGHT, DOCK_MIN_WIDTH, STACK_MIN_HEIGHT, STACK_MIN_WIDTH, TRANSCRIPT_MIN_WIDTH, solve},
     },
+    run_button::{self, CommandButtonData, CommandEditorData},
     settings::{self, ProvidersData, Section, SettingsData},
     icon::Icon,
     sidebar::{ChatRow, ChatState, ProjectRow, SIDEBAR_WIDTH, Sidebar, SidebarData},
@@ -99,6 +100,8 @@ const NARROW_TRANSCRIPT: f32 = 600.;
 const NARROW_INSET: Pixels = px(32.);
 /// The main column's width from which the title strip also names the chat's project.
 const ROOMY_STRIP: f32 = 980.;
+/// Below this main-column width the Build/Run split buttons collapse to icons in the title strip.
+const COMPACT_COMMANDS_BELOW: f32 = 640.;
 /// The widest the centred new-chat and welcome blocks get.
 const NEW_CHAT_WIDTH: f32 = 680.;
 const WELCOME_WIDTH: f32 = 560.;
@@ -160,6 +163,8 @@ pub struct Shell {
     /// How clear the picture on the stage is: 1 on the new-chat and welcome screens, easing to 0
     /// (the glass) once a chat opens. `None` until the first frame.
     clear: Option<motion::Ease>,
+    /// Whether the Build/Run command editor popover was open on the last frame.
+    had_command_editor: bool,
 }
 
 impl Shell {
@@ -190,6 +195,7 @@ impl Shell {
             focus: Some(cx.focus_handle()),
             paddling: false,
             clear: None,
+            had_command_editor: false,
         }
     }
 
@@ -210,6 +216,14 @@ impl Shell {
             focus: None,
             paddling: false,
             clear: None,
+            had_command_editor: false,
+        }
+    }
+
+    /// Terminates active Build/Run process groups before the window or application closes.
+    pub fn shutdown(&self, cx: &App) {
+        if let Some(app) = self.app() {
+            app.read(cx).shutdown_runs();
         }
     }
 
@@ -371,6 +385,11 @@ impl Shell {
         let Some(app) = self.app() else {
             return;
         };
+        if app.read(cx).command_editor.is_some() {
+            app.update(cx, |app, cx| app.close_command_editor(cx));
+            self.focus_composer(window, cx);
+            return;
+        }
         if app.read(cx).menu.is_some() {
             app.update(cx, |app, cx| app.close_menu(cx));
             return;
@@ -401,17 +420,34 @@ impl Shell {
         self.app()?.read(cx).current_chat().cloned()
     }
 
-    /// Changes the layout of the chat on screen.
+    /// The panes on the active screen (`Chat` or `NewChat`).
+    fn current_panes<'a>(&self, cx: &'a App) -> Option<&'a ChatPanes> {
+        let app = self.app()?.read(cx);
+        match app.selection() {
+            Selection::Chat(id) => app.session(id).map(|session| &session.read(cx).panes),
+            Selection::NewChat(_) => app.current_new_chat_panes(),
+            Selection::Welcome | Selection::Settings => None,
+        }
+    }
+
+    /// Changes the layout of the chat or new-chat screen on view.
     fn change_layout<R>(&mut self, cx: &mut Context<Self>, change: impl FnOnce(&mut Layout) -> R) -> Option<R> {
-        let session = self.current_session(cx)?;
-        Some(session.update(cx, |session, cx| session.change_layout(cx, change)))
+        let app = self.app()?;
+        match app.read(cx).selection().clone() {
+            Selection::Chat(id) => {
+                let session = app.read(cx).session(&id).cloned()?;
+                Some(session.update(cx, |session, cx| session.change_layout(cx, change)))
+            }
+            Selection::NewChat(_) => app.update(cx, |app, cx| app.change_new_chat_layout(cx, change)),
+            Selection::Welcome | Selection::Settings => None,
+        }
     }
 
     fn focus_pane(&mut self, pane: PaneId, window: &mut Window, cx: &mut Context<Self>) {
-        let Some(session) = self.current_session(cx) else {
-            return;
-        };
-        let handle = session.read(cx).panes.model(pane).map(|model| model.focus_handle(cx));
+        let handle = self
+            .current_panes(cx)
+            .and_then(|panes| panes.model(pane))
+            .map(|model| model.focus_handle(cx));
         if let Some(handle) = handle {
             window.focus(&handle, cx);
         }
@@ -426,8 +462,7 @@ impl Shell {
 
     /// The pane holding focus, if one does.
     fn focused_pane(&self, window: &Window, cx: &App) -> Option<PaneId> {
-        let session = self.current_session(cx)?;
-        let panes = &session.read(cx).panes;
+        let panes = self.current_panes(cx)?;
         panes.layout.visible().into_iter().map(|pane| pane.id).find(|id| {
             panes.model(*id).is_some_and(|model| model.focus_handle(cx).contains_focused(window, cx))
         })
@@ -496,9 +531,8 @@ impl Shell {
         let viewport = window.viewport_size();
         let (width, height) = solver_space(f32::from(viewport.width), f32::from(viewport.height));
         let stepped_aside = !app.read(cx).sidebar_hidden()
-            && self.current_session(cx).is_some_and(|session| {
-                matches!(app.read(cx).selection(), Selection::Chat(_))
-                    && solve(width, height, true, &session.read(cx).panes.layout).sidebar_stepped_aside
+            && self.current_panes(cx).is_some_and(|panes| {
+                solve(width, height, true, &panes.layout).sidebar_stepped_aside
             });
         if stepped_aside {
             let room = width - f32::from(SIDEBAR_WIDTH) - TRANSCRIPT_MIN_WIDTH;
@@ -660,6 +694,11 @@ impl Render for Shell {
     fn render(&mut self, window: &mut Window, cx: &mut Context<Self>) -> impl IntoElement {
         let theme = Theme::get(cx).clone();
         self.focus_field(window, cx);
+        let command_editor_open = self.app().is_some_and(|app| app.read(cx).command_editor.is_some());
+        if self.had_command_editor && !command_editor_open {
+            self.focus_composer(window, cx);
+        }
+        self.had_command_editor = command_editor_open;
         // A question card takes focus as it arrives, and gives it back to the composer as it goes.
         if let Some(session) = self.current_session(cx)
             && let Some(handle) = session.update(cx, |session, _| session.focus_request.take())
@@ -692,7 +731,8 @@ impl Render for Shell {
                     Some(session) => &session.read(cx).panes,
                     None => &empty,
                 },
-                (Screen::Chat { .. }, Source::Fixed(_)) => self.scene_panes.as_ref().unwrap_or(&empty),
+                (Screen::NewChat { .. }, Source::Live(app)) => app.read(cx).current_new_chat_panes().unwrap_or(&empty),
+                (Screen::Chat { .. } | Screen::NewChat { .. }, Source::Fixed(_)) => self.scene_panes.as_ref().unwrap_or(&empty),
                 _ => &empty,
             };
             let solution = solve(width, height, !sidebar_hidden, &panes.layout);
@@ -716,7 +756,9 @@ impl Render for Shell {
         let narrow = solution.transcript.width < NARROW_TRANSCRIPT;
         let transcript_height = solution.transcript.height;
         // The project's name yields to the tabs when the strip is short of room.
-        let roomy_strip = width - f32::from(left) >= ROOMY_STRIP;
+        let main_width = width - f32::from(left);
+        let roomy_strip = main_width >= ROOMY_STRIP;
+        let compact_commands = main_width < COMPACT_COMMANDS_BELOW;
         let inset = if narrow { NARROW_INSET } else { CONTENT_INSET };
 
         // The picture, when there is one: blurred and dimmed behind everything, and clear across
@@ -806,11 +848,18 @@ impl Render for Shell {
             Screen::NewChat { project, composer, notice } => {
                 let id = format!("arrive-new-chat-{}", project.path);
                 let ground = (clearness > 0.).then_some(Hsla { a: theme.cover(), ..theme.window });
-                let body = new_chat(project, composer, notice, ground, &theme).into_any_element();
-                (tab_strip(&strip, None, strip_ground, &theme), arrive(id, body))
+                let body = new_chat(project, composer, &strip, viewport, notice, ground, &theme).into_any_element();
+                (tab_strip(&strip, None, compact_commands, viewport, strip_ground, &theme), arrive(id, body))
             }
             Screen::Chat { project, body, composer, .. } => (
-                tab_strip(&strip, Some((roomy_strip.then_some(project), words.unwrap_or_default())), strip_ground, &theme),
+                tab_strip(
+                    &strip,
+                    Some((roomy_strip.then_some(project), words.unwrap_or_default())),
+                    compact_commands,
+                    viewport,
+                    strip_ground,
+                    &theme,
+                ),
                 chat(body, composer, narrow, transcript_height).into_any_element(),
             ),
             Screen::Settings(data) => {
@@ -852,6 +901,7 @@ impl Render for Shell {
                     .top(px(transcript.y))
                     .w(px(transcript.width))
                     .h(px(transcript.height))
+                    .overflow_hidden()
                     .child(body),
             )
             .children(dock_elements);
@@ -1151,6 +1201,52 @@ impl Render for Shell {
                 }))
                 .on_action(cx.listener(|shell, _: &NextTab, _, cx| shell.with_app(cx, |app, cx| app.step_tab(true, cx))))
                 .on_action(cx.listener(|shell, _: &PreviousTab, _, cx| shell.with_app(cx, |app, cx| app.step_tab(false, cx))))
+                .on_action(cx.listener(|shell, action: &TriggerProjectCommand, window, cx| {
+                    let kind = action.kind;
+                    if let Some(app) = shell.app()
+                        && let Some(input) = app.update(cx, |app, cx| app.trigger_command(kind, cx))
+                    {
+                        let handle = input.read(cx).focus_handle(cx);
+                        window.defer(cx, move |window, cx| window.focus(&handle, cx));
+                    }
+                }))
+                .on_action(cx.listener(|shell, action: &OpenCommandEditor, window, cx| {
+                    let kind = action.kind;
+                    if let Some(app) = shell.app() {
+                        match app.update(cx, |app, cx| app.open_command_editor(kind, cx)) {
+                            Some(input) => {
+                                let handle = input.read(cx).focus_handle(cx);
+                                window.defer(cx, move |window, cx| window.focus(&handle, cx));
+                            }
+                            None => shell.focus_composer(window, cx),
+                        }
+                    }
+                }))
+                .on_action(cx.listener(|shell, _: &CloseCommandEditor, window, cx| {
+                    shell.with_app(cx, |app, cx| app.close_command_editor(cx));
+                    shell.focus_composer(window, cx);
+                }))
+                .on_action(cx.listener(|shell, action: &SaveCommandEditor, window, cx| {
+                    let run_after = action.run_after;
+                    if let Some(app) = shell.app()
+                        && app.update(cx, |app, cx| app.save_command_editor(run_after, cx))
+                    {
+                        shell.focus_composer(window, cx);
+                    }
+                }))
+                .on_action(cx.listener(|shell, action: &ShowCommandOutput, window, cx| {
+                    let kind = action.kind;
+                    shell.with_app(cx, |app, cx| app.show_command_output(kind, cx));
+                    shell.focus_composer(window, cx);
+                }))
+                .on_action(cx.listener(|shell, action: &ClearCommandOutput, _, cx| {
+                    let kind = action.kind;
+                    shell.with_app(cx, |app, cx| app.clear_command_output(kind, cx));
+                }))
+                .on_action(cx.listener(|shell, action: &StopCommand, _, cx| {
+                    let kind = action.kind;
+                    shell.with_app(cx, |app, cx| app.stop_command(kind, cx));
+                }))
                 .on_drag_move(cx.listener(Self::resize))
                 .on_drag_move(cx.listener(|shell, event: &DragMoveEvent<DraggedTab>, _, cx| {
                     let pane = event.drag(cx).pane;
@@ -1206,10 +1302,12 @@ pub struct TabData {
 }
 
 /// What the title strip shows: the open chats as tabs, and a "New chat" tab while writing one.
-#[derive(Clone, Debug, Default)]
+#[derive(Clone, Default)]
 pub struct StripData {
     pub tabs: Vec<TabData>,
     pub new_chat: bool,
+    pub commands: Option<[CommandButtonData; 2]>,
+    pub command_editor: Option<CommandEditorData>,
 }
 
 /// The sidebar, screen and title strip for the app's current state.
@@ -1377,6 +1475,8 @@ fn live_view(app: &AppState, cx: &App) -> (SidebarData, Screen, StripData) {
             })
             .collect(),
         new_chat: matches!(app.selection(), Selection::NewChat(_)),
+        commands: app.command_buttons(),
+        command_editor: app.command_editor_data(cx),
     };
     (sidebar, screen, strip)
 }
@@ -1629,6 +1729,8 @@ fn welcome(notice: Option<SharedString>, ground: Option<Hsla>, theme: &Theme) ->
 fn new_chat(
     project: ProjectInfo,
     composer: ComposerData,
+    strip: &StripData,
+    viewport: Size<Pixels>,
     notice: Option<SharedString>,
     ground: Option<Hsla>,
     theme: &Theme,
@@ -1652,7 +1754,20 @@ fn new_chat(
             .child(div().pt(px(6.)).child(display_line(project.name.clone(), false, theme)))
             // Held to the block's width, so a long path ends in an ellipsis instead of spilling out.
             .child(div().max_w_full().pt(px(8.)).child(on_ground(project_line(&project, theme).max_w_full(), ground, theme)))
-            .child(div().w_full().pt(px(30.)).child(Composer::new(composer)))
+            .when_some(strip.commands.as_ref(), |block, commands| {
+                block.child(
+                    div()
+                        .pt(px(12.))
+                        .flex()
+                        .items_center()
+                        .justify_center()
+                        .gap(px(8.))
+                        .children(commands.iter().map(|button| {
+                            run_button::split_button(button, strip.command_editor.as_ref(), false, ground, viewport, theme)
+                        })),
+                )
+            })
+            .child(div().w_full().pt(px(22.)).child(Composer::new(composer)))
             .child(
                 div().pt(px(12.)).child(on_ground(
                     div().flex().gap(px(20.)).typography(Type::Small).child(hint("↩", "send")).child(hint("⇧↩", "new line")),
@@ -1704,7 +1819,14 @@ fn sidebar_toggle(theme: &Theme) -> impl IntoElement {
 /// then a round button for a new chat. On a chat, its project and the
 /// pane words sit at the right. Over a picture everything sits on `ground`, the panes' glass, so
 /// it reads on the frame.
-fn tab_strip(strip: &StripData, chat: Option<(Option<ProjectInfo>, PaneWords)>, ground: Option<Hsla>, theme: &Theme) -> gpui::Div {
+fn tab_strip(
+    strip: &StripData,
+    chat: Option<(Option<ProjectInfo>, PaneWords)>,
+    compact_commands: bool,
+    viewport: Size<Pixels>,
+    ground: Option<Hsla>,
+    theme: &Theme,
+) -> gpui::Div {
     let tab = |id: Option<SharedString>, title: SharedString, active: bool, state: ChatState| {
         let group: SharedString = format!("chat-tab-{}", id.as_deref().unwrap_or("new")).into();
         let close = match &id {
@@ -1813,7 +1935,7 @@ fn tab_strip(strip: &StripData, chat: Option<(Option<ProjectInfo>, PaneWords)>, 
     };
     let right = chat.map(|(project, words)| {
         div()
-            .min_w_0()
+            .flex_none()
             .h(px(28.))
             .rounded_full()
             .flex()
@@ -1824,7 +1946,7 @@ fn tab_strip(strip: &StripData, chat: Option<(Option<ProjectInfo>, PaneWords)>, 
             .when_some(project, |right, project| {
                 right.child(
                     div()
-                        .min_w_0()
+                        .max_w(px(200.))
                         .pr(px(10.))
                         .truncate()
                         .typography(Type::Small)
@@ -1834,6 +1956,20 @@ fn tab_strip(strip: &StripData, chat: Option<(Option<ProjectInfo>, PaneWords)>, 
                             None => project.name.to_string(),
                         }),
                 )
+            })
+            .when_some(strip.commands.as_ref(), |right, commands| {
+                right
+                    .child(
+                        div()
+                            .flex_none()
+                            .flex()
+                            .items_center()
+                            .gap(px(4.))
+                            .children(commands.iter().map(|button| {
+                                run_button::split_button(button, strip.command_editor.as_ref(), compact_commands, None, viewport, theme)
+                            })),
+                    )
+                    .child(div().flex_none().w(px(1.)).h(px(12.)).mx(px(4.)).bg(theme.border))
             })
             .child(word("toggle-changes", "Changes", words.changed_files, words.changes, Box::new(ToggleChanges)))
             .child(word("toggle-terminal", "Terminal", None, words.terminal, Box::new(ToggleTerminal)))

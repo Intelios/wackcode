@@ -29,7 +29,7 @@ use futures::{StreamExt, channel::mpsc};
 use gpui::{AppContext, Context, Entity, EventEmitter, FocusHandle, Focusable, ListAlignment, ListState, SharedString, Subscription, Task, px};
 use gpui_tokio::Tokio;
 use wack_core::{
-    Control, Event, HistoryEntry, Job, Outcome, RunEvent, RunSetup,
+    Control, Event, HistoryEntry, Job, Outcome, RunEvent, RunSetup, Runner,
     ask::{Answer, Question},
 };
 
@@ -140,7 +140,15 @@ pub fn now_millis() -> u64 {
 
 impl ChatSession {
     /// A chat as saved in `session_path`, or an empty one when it has never run.
-    pub fn load(id: &str, cwd: PathBuf, session_path: &std::path::Path, layout: Layout, cx: &mut Context<Self>) -> Self {
+    pub fn load(
+        id: &str,
+        cwd: PathBuf,
+        session_path: &std::path::Path,
+        layout: Layout,
+        runner: Runner,
+        commands: (Option<String>, Option<String>),
+        cx: &mut Context<Self>,
+    ) -> Self {
         let mut context_tokens = None;
         let conversation = if session_path.exists() {
             match wack_core::history(session_path) {
@@ -157,10 +165,13 @@ impl ChatSession {
         } else {
             Conversation::default()
         };
+        let mut panes = ChatPanes::new(layout, cwd.clone());
+        panes.set_runner(runner);
+        panes.set_commands(commands.0, commands.1, cx);
         let composer = cx.new(|cx| TextField::new(Type::Body, FOLLOW_UP_PLACEHOLDER, cx).multiline(12));
         let mut chat = Self {
             id: id.to_string(),
-            cwd: cwd.clone(),
+            cwd,
             session_path: session_path.to_path_buf(),
             conversation,
             open: HashSet::new(),
@@ -169,7 +180,7 @@ impl ChatSession {
             spans: Vec::new(),
             list: ListState::new(0, ListAlignment::Bottom, px(800.)),
             composer,
-            panes: ChatPanes::new(layout, cwd.clone()),
+            panes,
             queue: Vec::new(),
             steering: Vec::new(),
             run: None,

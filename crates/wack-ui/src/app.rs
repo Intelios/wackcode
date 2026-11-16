@@ -16,22 +16,26 @@
 use std::{
     collections::{HashMap, HashSet},
     path::{Path, PathBuf},
+    time::Duration,
 };
 
-use std::time::Duration;
-
+use futures::{StreamExt, channel::mpsc};
 use gpui::{App, AppContext, Context, Entity, SharedString, Subscription, Task};
-use wack_core::{AgentMode, Appearance, Chat, Job, ModelChoice, Outcome, Project, Reasoning, Store, Ui, WireFormat, title_from};
+use wack_core::{
+    AgentMode, Appearance, Chat, CommandEvent, CommandKind, CommandStatus, Job, ModelChoice, Outcome,
+    Project, Reasoning, Runner, Store, Ui, WireFormat, title_from,
+};
 
 use crate::{
     appearance_page::Thumbnail,
     backdrop::Picture,
     chat::{ChatEvent, ChatSession, now_millis},
-    panes::Layout,
     memory_page::{MemoryConfirm, MemoryEditor, MemoryState},
+    panes::{ChatPanes, Layout, PaneKind},
+    run_button::{CommandButtonData, CommandEditorData},
     settings::{ProviderForm, Section},
-    theme,
     text_field::{TextField, TextFieldEvent},
+    theme,
     typography::Type,
 };
 
@@ -66,6 +70,29 @@ pub enum Selection {
     Settings,
 }
 
+/// The command configuration popover currently open on screen.
+pub struct CommandEditorState {
+    pub project_id: String,
+    pub kind: CommandKind,
+    pub input: Entity<TextField>,
+    pub error: Option<SharedString>,
+    _subscription: Subscription,
+}
+
+fn command_placeholder(kind: CommandKind) -> &'static str {
+    match kind {
+        CommandKind::Build => "cargo build",
+        CommandKind::Run => "cargo run",
+    }
+}
+
+fn command_pane_kind(kind: CommandKind) -> PaneKind {
+    match kind {
+        CommandKind::Build => PaneKind::Build,
+        CommandKind::Run => PaneKind::Run,
+    }
+}
+
 pub struct AppState {
     store: Store,
     selection: Selection,
@@ -97,6 +124,13 @@ pub struct AppState {
     /// Settings › Memory: the overview as last read, the note editor and a pending delete.
     pub memory: MemoryState,
     memory_subscriptions: Vec<Subscription>,
+    /// Long-lived Build and Run PTY commands keyed by `(canonical_cwd, kind)`.
+    runs: Runner,
+    command_event_tx: mpsc::UnboundedSender<CommandEvent>,
+    /// Draft panes (for example Build / Run output) open on `Screen::NewChat` before a chat starts.
+    new_chat_panes: HashMap<String, ChatPanes>,
+    /// The open Build/Run command editor popover, if any.
+    pub command_editor: Option<CommandEditorState>,
     /// Chats open as tabs, in order.
     tabs: Vec<String>,
     sidebar_hidden: bool,
@@ -106,6 +140,12 @@ pub struct AppState {
     /// The connection editor's fields, re-subscribed whenever its model rows change.
     form_subscriptions: Vec<Subscription>,
     _subscriptions: Vec<Subscription>,
+}
+
+impl Drop for AppState {
+    fn drop(&mut self) {
+        self.runs.terminate_all();
+    }
 }
 
 /// How long a layout must stay still before it is saved.
@@ -151,6 +191,20 @@ impl AppState {
             }
         };
         let tabs: Vec<String> = Vec::new();
+        let runs = Runner::new();
+        let (command_event_tx, mut command_event_rx) = mpsc::unbounded::<CommandEvent>();
+        cx.spawn(async move |app, cx| {
+            while let Some(first) = command_event_rx.next().await {
+                let mut batch = vec![first];
+                while let Ok(next) = command_event_rx.try_recv() {
+                    batch.push(next);
+                }
+                if app.update(cx, |app, cx| app.handle_command_events(batch, cx)).is_err() {
+                    break;
+                }
+            }
+        })
+        .detach();
         let mut app = Self {
             store,
             before_settings: selection.clone(),
@@ -168,6 +222,10 @@ impl AppState {
             confirming_unrestricted: false,
             memory: MemoryState::default(),
             memory_subscriptions: Vec::new(),
+            runs,
+            command_event_tx,
+            new_chat_panes: HashMap::new(),
+            command_editor: None,
             appearance_notice: None,
             importing: false,
             tabs,
@@ -392,6 +450,9 @@ impl AppState {
 
     /// The text field that should have focus on the current screen.
     pub fn active_field(&self, cx: &App) -> Option<Entity<TextField>> {
+        if let Some(editor) = &self.command_editor {
+            return Some(editor.input.clone());
+        }
         match &self.selection {
             Selection::NewChat(_) => Some(self.draft.clone()),
             Selection::Chat(chat) => self.sessions.get(chat).map(|session| session.read(cx).composer.clone()),
@@ -446,6 +507,7 @@ impl AppState {
         }
         self.notice = None;
         self.menu = None;
+        self.command_editor = None;
         self.selection = selection;
         self.save_ui();
         cx.notify();
@@ -499,11 +561,19 @@ impl AppState {
 
     /// Takes the project out of WackCode, with its chats. The folder itself is not touched.
     pub fn remove_project(&mut self, id: &str, cx: &mut Context<Self>) {
+        let project_path = self.store.project(id).map(|project| project.path.clone());
         let chats: Vec<String> = self.store.chats(id).iter().map(|chat| chat.id.clone()).collect();
         if let Err(message) = self.store.remove_project(id) {
             self.notice = Some(message.into());
             cx.notify();
             return;
+        }
+        self.new_chat_panes.remove(id);
+        if self.command_editor.as_ref().is_some_and(|editor| editor.project_id == id) {
+            self.command_editor = None;
+        }
+        if let Some(path) = project_path {
+            self.runs.stop_project(&path);
         }
         for chat in chats {
             self.drop_session(&chat);
@@ -575,6 +645,14 @@ impl AppState {
                 return;
             }
         };
+        // Preserve any Build/Run output panes opened on NewChat into the new chat's layout so
+        // live command output stays visible seamlessly after the first message sends.
+        if let Some(draft_panes) = self.new_chat_panes.remove(&project)
+            && !draft_panes.layout.panes().is_empty()
+            && let Some(value) = serde_json::to_value(&draft_panes.layout).ok()
+        {
+            let _ = self.store.set_layout(&chat.id, Some(value));
+        }
         // The next new chat starts in Build again: a chat's mode is its own.
         self.new_chat_mode = AgentMode::Build;
         self.draft.update(cx, |draft, cx| {
@@ -1035,10 +1113,16 @@ impl AppState {
         if let Some(session) = self.sessions.get(&chat.id) {
             return session.clone();
         }
-        let cwd = self.store.project(&chat.project).map(|project| project.path.clone()).unwrap_or_else(|| PathBuf::from("/"));
+        let project = self.store.project(&chat.project);
+        let cwd = project.map(|project| project.path.clone()).unwrap_or_else(|| PathBuf::from("/"));
+        let commands = (
+            project.and_then(|project| project.command(CommandKind::Build)).map(str::to_string),
+            project.and_then(|project| project.command(CommandKind::Run)).map(str::to_string),
+        );
         let path = self.store.session_path(chat);
         let layout = Layout::from_saved(chat.layout.as_ref());
-        let session = cx.new(|cx| ChatSession::load(&chat.id, cwd, &path, layout, cx));
+        let runner = self.runs.clone();
+        let session = cx.new(|cx| ChatSession::load(&chat.id, cwd, &path, layout, runner, commands, cx));
         let id = chat.id.clone();
         let composer = session.read(cx).composer.clone();
         let mode = chat.mode;
@@ -1279,6 +1363,365 @@ impl AppState {
             3_600..86_400 => format!("{}h", seconds / 3_600),
             86_400..1_209_600 => format!("{}d", seconds / 86_400),
             _ => format!("{}w", seconds / 604_800),
+        }
+    }
+
+    /// The draft panes for `NewChat`, if any have been opened for the current project.
+    pub fn current_new_chat_panes(&self) -> Option<&ChatPanes> {
+        let Selection::NewChat(project) = &self.selection else {
+            return None;
+        };
+        self.new_chat_panes.get(project)
+    }
+
+    /// Changes the panes on `Screen::NewChat` for the selected project.
+    pub fn change_new_chat_layout<R>(
+        &mut self,
+        cx: &mut Context<Self>,
+        change: impl FnOnce(&mut Layout) -> R,
+    ) -> Option<R> {
+        let Selection::NewChat(project_id) = self.selection.clone() else {
+            return None;
+        };
+        if !self.new_chat_panes.contains_key(&project_id) {
+            let project = self.store.project(&project_id)?;
+            let mut panes = ChatPanes::new(Layout::default(), project.path.clone());
+            panes.set_runner(self.runs.clone());
+            panes.set_commands(
+                project.command(CommandKind::Build).map(str::to_string),
+                project.command(CommandKind::Run).map(str::to_string),
+                cx,
+            );
+            self.new_chat_panes.insert(project_id.clone(), panes);
+        }
+        let panes = self.new_chat_panes.get_mut(&project_id)?;
+        let result = change(&mut panes.layout);
+        panes.sync(cx, |_, cx| cx.notify());
+        cx.notify();
+        Some(result)
+    }
+
+    /// View data for the `Build` and `Run` split buttons on the current project screen.
+    pub fn command_buttons(&self) -> Option<[CommandButtonData; 2]> {
+        let project = self.current_project()?;
+        let data = |kind: CommandKind| CommandButtonData {
+            kind,
+            command: project.command(kind).map(Into::into),
+            status: self
+                .runs
+                .session(&project.path, kind)
+                .map_or(CommandStatus::Idle, |session| session.info().status),
+            editor_open: self
+                .command_editor
+                .as_ref()
+                .is_some_and(|editor| editor.project_id == project.id && editor.kind == kind),
+        };
+        Some([data(CommandKind::Build), data(CommandKind::Run)])
+    }
+
+    /// View data for the currently open command editor popover, if any.
+    pub fn command_editor_data(&self, cx: &App) -> Option<CommandEditorData> {
+        let editor = self.command_editor.as_ref()?;
+        let project = self.store.project(&editor.project_id)?;
+        let session = self.runs.session(&project.path, editor.kind);
+        let active = session.as_ref().is_some_and(|session| session.is_active());
+        let can_run = !editor.input.read(cx).text().trim().is_empty();
+        Some(CommandEditorData {
+            kind: editor.kind,
+            project_name: project.name.clone().into(),
+            project_path: shown_path(&project.path).into(),
+            input: editor.input.clone(),
+            has_session: session.is_some(),
+            active,
+            can_run,
+            error: editor.error.clone(),
+        })
+    }
+
+    /// Triggers `Build` or `Run`: stops an active session, starts an idle configured one, or opens
+    /// the command editor when unconfigured. Returns the input field when the editor opened.
+    pub fn trigger_command(&mut self, kind: CommandKind, cx: &mut Context<Self>) -> Option<Entity<TextField>> {
+        let project = self.current_project()?;
+        let project_id = project.id.clone();
+        let cwd = project.path.clone();
+        let configured = project.command(kind).map(str::to_string);
+        self.menu = None;
+        self.command_editor = None;
+
+        if let Some(session) = self.runs.session(&cwd, kind)
+            && session.is_active()
+        {
+            if session.info().status == CommandStatus::Running {
+                self.runs.stop(&cwd, kind);
+            }
+            cx.notify();
+            return None;
+        }
+
+        if let Some(command) = configured {
+            self.start_project_command(&project_id, kind, command, cx);
+            None
+        } else {
+            self.open_command_editor(kind, cx)
+        }
+    }
+
+    /// Opens (or toggles closed) the command editor popover for `kind`, returning the focused field
+    /// when opened.
+    pub fn open_command_editor(&mut self, kind: CommandKind, cx: &mut Context<Self>) -> Option<Entity<TextField>> {
+        let project = self.current_project()?;
+        let project_id = project.id.clone();
+        if self
+            .command_editor
+            .as_ref()
+            .is_some_and(|editor| editor.project_id == project_id && editor.kind == kind)
+        {
+            self.command_editor = None;
+            cx.notify();
+            return None;
+        }
+        let initial = project.command(kind).unwrap_or("").to_string();
+        let input = cx.new(|cx| TextField::new(Type::Mono, command_placeholder(kind), cx));
+        input.update(cx, |field, cx| field.set_text(&initial, cx));
+        let subscription = cx.subscribe(&input, |app, _, event, cx| match event {
+            TextFieldEvent::Enter => {
+                let run_after = app.command_editor.as_ref().is_some_and(|editor| {
+                    let active = app
+                        .store
+                        .project(&editor.project_id)
+                        .and_then(|project| app.runs.session(&project.path, editor.kind))
+                        .is_some_and(|session| session.is_active());
+                    !active && !editor.input.read(cx).text().trim().is_empty()
+                });
+                let _ = app.save_command_editor(run_after, cx);
+            }
+            TextFieldEvent::SendNow => {
+                let _ = app.save_command_editor(false, cx);
+            }
+            TextFieldEvent::Changed => {
+                if let Some(editor) = app.command_editor.as_mut()
+                    && editor.error.take().is_some()
+                {
+                    cx.notify();
+                }
+            }
+        });
+        self.menu = None;
+        self.command_editor = Some(CommandEditorState {
+            project_id,
+            kind,
+            input: input.clone(),
+            error: None,
+            _subscription: subscription,
+        });
+        cx.notify();
+        Some(input)
+    }
+
+    pub fn close_command_editor(&mut self, cx: &mut Context<Self>) {
+        if self.command_editor.take().is_some() {
+            cx.notify();
+        }
+    }
+
+    /// Saves the command editor's text, optionally starting the command immediately when idle.
+    pub fn save_command_editor(&mut self, run_after: bool, cx: &mut Context<Self>) -> bool {
+        let Some((project_id, kind, raw)) = self
+            .command_editor
+            .as_ref()
+            .map(|editor| (editor.project_id.clone(), editor.kind, editor.input.read(cx).text().to_string()))
+        else {
+            return false;
+        };
+        if let Err(message) = self.store.set_project_command(&project_id, kind, Some(&raw)) {
+            if let Some(editor) = self.command_editor.as_mut() {
+                editor.error = Some(message.into());
+            }
+            cx.notify();
+            return false;
+        }
+        self.command_editor = None;
+        self.sync_project_commands(&project_id, cx);
+
+        if run_after
+            && let Some(project) = self.store.project(&project_id)
+            && let Some(command) = project.command(kind).map(str::to_string)
+        {
+            let active = self
+                .runs
+                .session(&project.path, kind)
+                .is_some_and(|session| session.is_active());
+            if !active {
+                self.start_project_command(&project_id, kind, command, cx);
+                return true;
+            }
+        }
+        cx.notify();
+        true
+    }
+
+    /// Brings up the `Build` or `Run` output pane on the current screen without stopping a run.
+    pub fn show_command_output(&mut self, kind: CommandKind, cx: &mut Context<Self>) {
+        self.command_editor = None;
+        self.open_command_pane(kind, cx);
+        cx.notify();
+    }
+
+    pub fn clear_command_output(&mut self, kind: CommandKind, cx: &mut Context<Self>) {
+        let Some(cwd) = self.current_project().map(|project| project.path.clone()) else {
+            return;
+        };
+        if let Some(session) = self.runs.session(&cwd, kind) {
+            session.clear_output();
+            self.wake_command_for_cwd(&cwd, kind, cx);
+            cx.notify();
+        }
+    }
+
+    pub fn stop_command(&mut self, kind: CommandKind, cx: &mut Context<Self>) {
+        let Some(cwd) = self.current_project().map(|project| project.path.clone()) else {
+            return;
+        };
+        self.runs.stop(&cwd, kind);
+        cx.notify();
+    }
+
+    /// Terminates every active Build/Run process group cleanly when WackCode quits.
+    pub fn shutdown_runs(&self) {
+        self.runs.terminate_all();
+    }
+
+    fn open_command_pane(&mut self, kind: CommandKind, cx: &mut Context<Self>) {
+        let pane_kind = command_pane_kind(kind);
+        match self.selection.clone() {
+            Selection::Chat(chat_id) => {
+                if let Some(session) = self.sessions.get(&chat_id).cloned() {
+                    session.update(cx, |session, cx| {
+                        session.change_layout(cx, |layout| layout.open(pane_kind));
+                    });
+                }
+            }
+            Selection::NewChat(_) => {
+                self.change_new_chat_layout(cx, |layout| layout.open(pane_kind));
+            }
+            Selection::Welcome | Selection::Settings => {}
+        }
+    }
+
+    fn start_project_command(&mut self, project_id: &str, kind: CommandKind, command: String, cx: &mut Context<Self>) {
+        let Some(cwd) = self.store.project(project_id).map(|project| project.path.clone()) else {
+            return;
+        };
+        self.open_command_pane(kind, cx);
+        let tx = self.command_event_tx.clone();
+        match self
+            .runs
+            .start(&cwd, kind, &command, wack_core::runner::PtySize::default(), move |event| {
+                let _ = tx.unbounded_send(event);
+            }) {
+            Ok(_) => {
+                self.notice = None;
+                self.sync_command_for_cwd(&cwd, kind, cx);
+            }
+            Err(message) => {
+                self.notice = Some(message.clone().into());
+                if !matches!(self.selection, Selection::NewChat(_)) {
+                    let _ = self.open_command_editor(kind, cx);
+                    if let Some(editor) = self.command_editor.as_mut() {
+                        editor.error = Some(message.into());
+                    }
+                }
+            }
+        }
+        cx.notify();
+    }
+
+    fn handle_command_events(&mut self, events: Vec<CommandEvent>, cx: &mut Context<Self>) {
+        let mut wake_targets: Vec<(PathBuf, CommandKind)> = Vec::new();
+        let mut state_targets: Vec<(PathBuf, CommandKind)> = Vec::new();
+        for event in events {
+            match event {
+                CommandEvent::Wakeup { kind, cwd, .. } => {
+                    if !wake_targets.contains(&(cwd.clone(), kind)) {
+                        wake_targets.push((cwd, kind));
+                    }
+                }
+                CommandEvent::StateChanged(info) => {
+                    if !state_targets.contains(&(info.cwd.clone(), info.kind)) {
+                        state_targets.push((info.cwd, info.kind));
+                    }
+                }
+            }
+        }
+        for (cwd, kind) in wake_targets {
+            self.wake_command_for_cwd(&cwd, kind, cx);
+        }
+        if !state_targets.is_empty() {
+            for (cwd, kind) in state_targets {
+                self.sync_command_for_cwd(&cwd, kind, cx);
+            }
+            cx.notify();
+        }
+    }
+
+    fn wake_command_for_cwd(&self, cwd: &Path, kind: CommandKind, cx: &mut App) {
+        let canonical = Runner::canonical_cwd(cwd);
+        for chat in self.sessions.values().cloned().collect::<Vec<_>>() {
+            chat.update(cx, |chat, cx| {
+                if Runner::canonical_cwd(chat.panes.folder()) == canonical {
+                    chat.panes.wake_command(kind, cx);
+                }
+            });
+        }
+        for panes in self.new_chat_panes.values() {
+            if Runner::canonical_cwd(panes.folder()) == canonical {
+                panes.wake_command(kind, cx);
+            }
+        }
+    }
+
+    fn sync_command_for_cwd(&self, cwd: &Path, kind: CommandKind, cx: &mut App) {
+        let canonical = Runner::canonical_cwd(cwd);
+        let session = self.runs.session(&canonical, kind);
+        let configured = self
+            .store
+            .projects()
+            .iter()
+            .find(|project| Runner::canonical_cwd(&project.path) == canonical)
+            .and_then(|project| project.command(kind))
+            .map(str::to_string);
+        for chat in self.sessions.values().cloned().collect::<Vec<_>>() {
+            chat.update(cx, |chat, cx| {
+                if Runner::canonical_cwd(chat.panes.folder()) == canonical {
+                    chat.panes.sync_command_session(kind, session.clone(), configured.clone(), cx);
+                }
+            });
+        }
+        for panes in self.new_chat_panes.values() {
+            if Runner::canonical_cwd(panes.folder()) == canonical {
+                panes.sync_command_session(kind, session.clone(), configured.clone(), cx);
+            }
+        }
+    }
+
+    fn sync_project_commands(&mut self, project_id: &str, cx: &mut App) {
+        let Some(project) = self.store.project(project_id) else {
+            return;
+        };
+        let canonical = Runner::canonical_cwd(&project.path);
+        let build = project.command(CommandKind::Build).map(str::to_string);
+        let run = project.command(CommandKind::Run).map(str::to_string);
+        for chat in self.sessions.values().cloned().collect::<Vec<_>>() {
+            chat.update(cx, |chat, cx| {
+                if Runner::canonical_cwd(chat.panes.folder()) == canonical {
+                    chat.panes.set_commands(build.clone(), run.clone(), cx);
+                }
+            });
+        }
+        for panes in self.new_chat_panes.values_mut() {
+            if Runner::canonical_cwd(panes.folder()) == canonical {
+                panes.set_commands(build.clone(), run.clone(), cx);
+            }
         }
     }
 }

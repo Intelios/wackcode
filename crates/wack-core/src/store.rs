@@ -61,6 +61,30 @@ pub struct NewConnection {
     pub models: Vec<Model>,
 }
 
+/// Which project-level shell command is configured or running.
+#[derive(Clone, Copy, Debug, PartialEq, Eq, Hash, Serialize, Deserialize)]
+#[serde(rename_all = "kebab-case")]
+pub enum CommandKind {
+    Build,
+    Run,
+}
+
+impl CommandKind {
+    pub fn name(self) -> &'static str {
+        match self {
+            CommandKind::Build => "build",
+            CommandKind::Run => "run",
+        }
+    }
+
+    pub fn title(self) -> &'static str {
+        match self {
+            CommandKind::Build => "Build",
+            CommandKind::Run => "Run",
+        }
+    }
+}
+
 /// A folder the user works in.
 #[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
 pub struct Project {
@@ -70,6 +94,19 @@ pub struct Project {
     pub name: String,
     #[serde(default)]
     pub pinned: bool,
+    #[serde(default)]
+    pub build_command: Option<String>,
+    #[serde(default)]
+    pub run_command: Option<String>,
+}
+
+impl Project {
+    pub fn command(&self, kind: CommandKind) -> Option<&str> {
+        match kind {
+            CommandKind::Build => self.build_command.as_deref(),
+            CommandKind::Run => self.run_command.as_deref(),
+        }
+    }
 }
 
 /// How hard the model should think: one of the provider's own effort levels, or Ultra.
@@ -511,6 +548,8 @@ impl Store {
             path,
             name,
             pinned: false,
+            build_command: None,
+            run_command: None,
         };
         self.state.projects.push(project.clone());
         self.save()?;
@@ -533,6 +572,40 @@ impl Store {
             .ok_or("That project is gone.")?;
         project.pinned = pinned;
         self.save()
+    }
+
+    /// Saves or clears a project's Build or Run command. Trims whitespace and rejects null bytes.
+    pub fn set_project_command(
+        &mut self,
+        id: &str,
+        kind: CommandKind,
+        command: Option<&str>,
+    ) -> Result<Project, String> {
+        let cleaned = match command {
+            Some(raw) => {
+                if raw.contains('\0') {
+                    return Err("The command cannot contain null characters.".into());
+                }
+                let trimmed = raw.trim();
+                (!trimmed.is_empty()).then(|| trimmed.to_string())
+            }
+            None => None,
+        };
+        let updated = {
+            let project = self
+                .state
+                .projects
+                .iter_mut()
+                .find(|project| project.id == id)
+                .ok_or("That project is gone.")?;
+            match kind {
+                CommandKind::Build => project.build_command = cleaned,
+                CommandKind::Run => project.run_command = cleaned,
+            }
+            project.clone()
+        };
+        self.save()?;
+        Ok(updated)
     }
 
     /// A project's chats, most recently used first.
@@ -1185,5 +1258,42 @@ mod tests {
         assert!(dark.abs_diff(119) <= 2 && light.abs_diff(119) <= 2, "{dark} to {light}");
         let again = Store::open(folder.path()).unwrap();
         assert!(again.appearance().backdrop().unwrap().shade.is_some(), "and the measure is saved");
+    }
+
+    #[test]
+    fn project_commands_are_trimmed_validated_and_persisted() {
+        let folder = tempfile::tempdir().unwrap();
+        let work = tempfile::tempdir().unwrap();
+        let mut store = Store::open(folder.path()).unwrap();
+        let project = store.add_project(work.path()).unwrap();
+        assert_eq!(project.build_command, None);
+        assert_eq!(project.run_command, None);
+
+        let updated = store
+            .set_project_command(&project.id, CommandKind::Build, Some("  cargo test --workspace  "))
+            .unwrap();
+        assert_eq!(updated.command(CommandKind::Build), Some("cargo test --workspace"));
+        assert_eq!(updated.command(CommandKind::Run), None);
+
+        let updated = store
+            .set_project_command(&project.id, CommandKind::Run, Some("cargo run\n"))
+            .unwrap();
+        assert_eq!(updated.command(CommandKind::Run), Some("cargo run"));
+
+        assert!(
+            store
+                .set_project_command(&project.id, CommandKind::Build, Some("bad\0cmd"))
+                .is_err()
+        );
+
+        let cleared = store
+            .set_project_command(&project.id, CommandKind::Build, Some("   "))
+            .unwrap();
+        assert_eq!(cleared.command(CommandKind::Build), None);
+
+        let reopened = Store::open(folder.path()).unwrap();
+        let persisted = reopened.project(&project.id).unwrap();
+        assert_eq!(persisted.command(CommandKind::Build), None);
+        assert_eq!(persisted.command(CommandKind::Run), Some("cargo run"));
     }
 }

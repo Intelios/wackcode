@@ -12,16 +12,20 @@
 
 pub mod changes;
 pub mod dock;
+pub mod grid;
 pub mod layout;
+pub mod run;
 pub mod solve;
 pub mod terminal;
 
 use std::{collections::HashMap, path::PathBuf};
 
 use gpui::{App, AppContext, Entity, FocusHandle, SharedString, Subscription};
+use wack_core::{CommandKind, CommandSession, CommandStatus, Runner};
 
 pub use changes::ChangesPane;
 pub use layout::{Axis, Dock, Edge, Layout, Node, Pane, PaneId, PaneKind, Stack, Target};
+pub use run::RunPane;
 pub use solve::{Rect, Solution, solve};
 pub use terminal::TerminalPane;
 
@@ -29,6 +33,8 @@ pub use terminal::TerminalPane;
 pub enum PaneModel {
     Changes(Entity<ChangesPane>),
     Terminal(Entity<TerminalPane>),
+    Build(Entity<RunPane>),
+    Run(Entity<RunPane>),
 }
 
 impl PaneModel {
@@ -36,6 +42,7 @@ impl PaneModel {
         match self {
             PaneModel::Changes(pane) => pane.read(cx).focus.clone(),
             PaneModel::Terminal(pane) => pane.read(cx).focus.clone(),
+            PaneModel::Build(pane) | PaneModel::Run(pane) => pane.read(cx).focus.clone(),
         }
     }
 }
@@ -43,12 +50,42 @@ impl PaneModel {
 pub struct ChatPanes {
     pub layout: Layout,
     folder: PathBuf,
+    runner: Runner,
+    build_command: Option<String>,
+    run_command: Option<String>,
     models: HashMap<PaneId, (PaneModel, Subscription)>,
 }
 
 impl ChatPanes {
     pub fn new(layout: Layout, folder: PathBuf) -> Self {
-        Self { layout, folder, models: HashMap::new() }
+        Self {
+            layout,
+            folder,
+            runner: Runner::new(),
+            build_command: None,
+            run_command: None,
+            models: HashMap::new(),
+        }
+    }
+
+    pub fn set_runner(&mut self, runner: Runner) {
+        self.runner = runner;
+    }
+
+    pub fn set_commands(&mut self, build_command: Option<String>, run_command: Option<String>, cx: &mut App) {
+        self.build_command = build_command.clone();
+        self.run_command = run_command.clone();
+        for (model, _) in self.models.values() {
+            match model {
+                PaneModel::Build(pane) => pane.update(cx, |pane, cx| pane.set_configured_command(build_command.clone(), cx)),
+                PaneModel::Run(pane) => pane.update(cx, |pane, cx| pane.set_configured_command(run_command.clone(), cx)),
+                _ => {}
+            }
+        }
+    }
+
+    pub fn folder(&self) -> &PathBuf {
+        &self.folder
     }
 
     pub fn model(&self, id: PaneId) -> Option<&PaneModel> {
@@ -73,6 +110,16 @@ impl ChatPanes {
             let model = match pane.kind {
                 PaneKind::Changes => PaneModel::Changes(cx.new(|cx| ChangesPane::new(folder, cx))),
                 PaneKind::Terminal => PaneModel::Terminal(cx.new(|cx| TerminalPane::new(folder, cx))),
+                PaneKind::Build => {
+                    let configured = self.build_command.clone();
+                    let runner = self.runner.clone();
+                    PaneModel::Build(cx.new(|cx| RunPane::new(CommandKind::Build, folder, &runner, configured, cx)))
+                }
+                PaneKind::Run => {
+                    let configured = self.run_command.clone();
+                    let runner = self.runner.clone();
+                    PaneModel::Run(cx.new(|cx| RunPane::new(CommandKind::Run, folder, &runner, configured, cx)))
+                }
             };
             let subscription = match &model {
                 PaneModel::Changes(entity) => {
@@ -83,6 +130,10 @@ impl ChatPanes {
                     let on_change = on_change.clone();
                     cx.observe(entity, move |owner, _, cx| on_change(owner, cx))
                 }
+                PaneModel::Build(entity) | PaneModel::Run(entity) => {
+                    let on_change = on_change.clone();
+                    cx.observe(entity, move |owner, _, cx| on_change(owner, cx))
+                }
             };
             self.models.insert(pane.id, (model, subscription));
             made.push(pane.id);
@@ -90,11 +141,41 @@ impl ChatPanes {
         made
     }
 
+    pub fn sync_command_session(
+        &self,
+        kind: CommandKind,
+        session: Option<CommandSession>,
+        configured: Option<String>,
+        cx: &mut App,
+    ) {
+        for (model, _) in self.models.values() {
+            match (kind, model) {
+                (CommandKind::Build, PaneModel::Build(pane)) | (CommandKind::Run, PaneModel::Run(pane)) => {
+                    pane.update(cx, |pane, cx| pane.sync(session.clone(), configured.clone(), cx));
+                }
+                _ => {}
+            }
+        }
+    }
+
+    pub fn wake_command(&self, kind: CommandKind, cx: &mut App) {
+        for pane in self.layout.visible() {
+            match (kind, self.model(pane.id)) {
+                (CommandKind::Build, Some(PaneModel::Build(model)))
+                | (CommandKind::Run, Some(PaneModel::Run(model))) => {
+                    model.update(cx, |model, cx| model.wake(cx));
+                }
+                _ => {}
+            }
+        }
+    }
+
     /// Puts a model in for a pane, for gallery scenes.
     pub fn insert<T: 'static>(&mut self, id: PaneId, model: PaneModel, cx: &mut gpui::Context<T>) {
         let subscription = match &model {
             PaneModel::Changes(entity) => cx.observe(entity, |_, _, cx| cx.notify()),
             PaneModel::Terminal(entity) => cx.observe(entity, |_, _, cx| cx.notify()),
+            PaneModel::Build(entity) | PaneModel::Run(entity) => cx.observe(entity, |_, _, cx| cx.notify()),
         };
         self.models.insert(id, (model, subscription));
     }
@@ -123,6 +204,8 @@ impl ChatPanes {
                 }
             }
             (PaneKind::Changes, _) => "Changes".into(),
+            (PaneKind::Build, _) => "Build".into(),
+            (PaneKind::Run, _) => "Run".into(),
         }
     }
 
@@ -130,6 +213,14 @@ impl ChatPanes {
     pub fn badge(&self, pane: Pane, cx: &App) -> Option<SharedString> {
         match self.model(pane.id) {
             Some(PaneModel::Changes(changes)) => changes.read(cx).count().filter(|count| *count > 0).map(|count| count.to_string().into()),
+            _ => None,
+        }
+    }
+
+    /// Status indicator for Build/Run tabs.
+    pub fn command_status(&self, pane: Pane, cx: &App) -> Option<CommandStatus> {
+        match self.model(pane.id) {
+            Some(PaneModel::Build(model)) | Some(PaneModel::Run(model)) => Some(model.read(cx).status()),
             _ => None,
         }
     }

@@ -393,8 +393,28 @@ pub fn strip(active: Option<&'static str>) -> crate::shell::StripData {
             tab("Tool search for other hosts", ChatState::Unread),
         ],
         new_chat: active.is_none(),
+        commands: Some([
+            crate::run_button::CommandButtonData::idle(wack_core::CommandKind::Build, None),
+            crate::run_button::CommandButtonData::idle(wack_core::CommandKind::Run, None),
+        ]),
+        command_editor: None,
     }
 }
+
+pub const BUILD_SESSION: &str = "\x1b[1;32m    Checking\x1b[0m wack-core v3.0.0-dev.0 (/Users/you/Code/wackcode/crates/wack-core)\r\n\
+\x1b[1;32m    Checking\x1b[0m wack-ui v3.0.0-dev.0 (/Users/you/Code/wackcode/crates/wack-ui)\r\n\
+\x1b[1;31merror[E0308]\x1b[0m\x1b[1m: mismatched types\x1b[0m\r\n\
+  \x1b[1;34m-->\x1b[0m crates/wack-ui/src/app.rs:142:9\r\n\
+   \x1b[1;34m|\x1b[0m\r\n\
+\x1b[1;34m142|\x1b[0m         self.store.set_project_command(id, kind, &raw)\r\n\
+   \x1b[1;34m|\x1b[0m                                                  \x1b[1;31m^^^^ expected `Option<&str>`, found `&String`\x1b[0m\r\n\
+\x1b[1;31merror\x1b[0m: could not compile `wack-ui` (lib) due to 1 previous error\r\n";
+
+pub const RUN_SESSION: &str = "\x1b[1;32m    Finished\x1b[0m `dev` profile [unoptimized + debuginfo] target(s) in 1.18s\r\n\
+\x1b[1;32m     Running\x1b[0m `target/debug/dev-server --port 4190`\r\n\
+\x1b[36m[server]\x1b[0m listening on \x1b[1mhttp://127.0.0.1:4190\x1b[0m\r\n\
+\x1b[36m[watch]\x1b[0m  watching crates/ for changes...\r\n\
+\x1b[32m  ready\x1b[0m  200 OK GET /api/health (1.2ms)\r\n";
 
 /// What the Changes pane lists after the SSE fix.
 pub fn changed_files() -> Vec<wack_core::git::ChangedFile> {

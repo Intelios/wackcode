@@ -4,10 +4,12 @@
 //! launching the app. Add a scene for every component state worth looking at.
 
 use gpui::{AnyView, App, Context, Pixels, Size, Window, prelude::*, px, size};
+use wack_core::{CommandKind, CommandSession, CommandStatus};
 
 use crate::{
     composer::{ComposerData, Input},
-    panes::{ChangesPane, ChatPanes, Dock, Edge, Layout, PaneKind, PaneModel, Target, TerminalPane},
+    panes::{ChangesPane, ChatPanes, Dock, Edge, Layout, PaneKind, PaneModel, RunPane, Target, TerminalPane},
+    run_button::{CommandButtonData, CommandEditorData},
     settings::{ProviderForm, ProvidersData, Section, SettingsData},
     fixtures::{self, Selected},
     shell::{Body, Screen, Shell},
@@ -609,6 +611,269 @@ pub fn all() -> Vec<Scene> {
             description: "Every text style and colour token in the current theme.",
             size: size(px(1180.), px(960.)),
             build: |_, cx| cx.new(|_| Specimen).into(),
+        },
+        Scene {
+            name: "build-run-buttons",
+            description: "A chat's title strip with configured Build and active Run split buttons.",
+            size: WINDOW,
+            build: |_, cx| {
+                let mut strip = fixtures::strip(Some(fixtures::FINISHED_TITLE));
+                strip.commands = Some([
+                    CommandButtonData::idle(CommandKind::Build, Some("cargo check --workspace")),
+                    CommandButtonData {
+                        kind: CommandKind::Run,
+                        command: Some("cargo run --bin dev-server".into()),
+                        status: CommandStatus::Running,
+                        editor_open: false,
+                    },
+                ]);
+                cx.new(|_| {
+                    Shell::showing_tabs(
+                        fixtures::sidebar(Selected::Finished),
+                        Screen::Chat {
+                            title: fixtures::FINISHED_TITLE.into(),
+                            project: fixtures::project(),
+                            body: Body::Items(fixtures::finished_turn()),
+                            composer: fixtures::composer_after_turn(Input::Drawn {
+                                text: None,
+                                placeholder: crate::chat::FOLLOW_UP_PLACEHOLDER.into(),
+                            }),
+                        },
+                        strip,
+                    )
+                })
+                .into()
+            },
+        },
+        Scene {
+            name: "build-run-new-chat",
+            description: "New chat screen with centered Build/Run pills and an open Run output dock.",
+            size: WINDOW,
+            build: |_, cx| {
+                let mut strip = fixtures::strip(None);
+                strip.commands = Some([
+                    CommandButtonData::idle(CommandKind::Build, Some("cargo check --workspace")),
+                    CommandButtonData {
+                        kind: CommandKind::Run,
+                        command: Some("cargo run --bin dev-server".into()),
+                        status: CommandStatus::Running,
+                        editor_open: false,
+                    },
+                ]);
+                cx.new(|cx| {
+                    let mut layout = Layout::default();
+                    let run_id = layout.open(PaneKind::Run);
+                    let mut panes = ChatPanes::new(layout, "/Users/you/Code/wackcode".into());
+                    let session = CommandSession::fixture(
+                        CommandKind::Run,
+                        "/Users/you/Code/wackcode",
+                        "cargo run --bin dev-server",
+                        CommandStatus::Running,
+                        120,
+                        18,
+                        fixtures::RUN_SESSION.as_bytes(),
+                    );
+                    let model = PaneModel::Run(cx.new(|cx| {
+                        RunPane::fixture(
+                            CommandKind::Run,
+                            "/Users/you/Code/wackcode",
+                            Some("cargo run --bin dev-server"),
+                            Some(session),
+                            cx,
+                        )
+                    }));
+                    panes.insert(run_id, model, cx);
+                    Shell::showing_tabs(
+                        fixtures::sidebar(Selected::None),
+                        Screen::NewChat {
+                            project: fixtures::project(),
+                            composer: fixtures::composer_empty(true),
+                            notice: None,
+                        },
+                        strip,
+                    )
+                    .with_panes(panes, false)
+                })
+                .into()
+            },
+        },
+        Scene {
+            name: "build-run-editor",
+            description: "The Build command configuration popover anchored below the Build split pill.",
+            size: WINDOW,
+            build: |_, cx| {
+                let input = cx.new(|cx| {
+                    let mut field = TextField::new(Type::Mono, "cargo build", cx);
+                    field.set_text("cargo build --workspace", cx);
+                    field
+                });
+                let mut strip = fixtures::strip(Some(fixtures::FINISHED_TITLE));
+                strip.commands = Some([
+                    CommandButtonData {
+                        kind: CommandKind::Build,
+                        command: Some("cargo check --workspace".into()),
+                        status: CommandStatus::Failed { exit_code: Some(101), signal: None },
+                        editor_open: true,
+                    },
+                    CommandButtonData::idle(CommandKind::Run, None),
+                ]);
+                strip.command_editor = Some(CommandEditorData {
+                    kind: CommandKind::Build,
+                    project_name: fixtures::project().name,
+                    project_path: fixtures::project().path,
+                    input,
+                    has_session: true,
+                    active: false,
+                    can_run: true,
+                    error: None,
+                });
+                cx.new(|_| {
+                    Shell::showing_tabs(
+                        fixtures::sidebar(Selected::Finished),
+                        Screen::Chat {
+                            title: fixtures::FINISHED_TITLE.into(),
+                            project: fixtures::project(),
+                            body: Body::Items(fixtures::finished_turn()),
+                            composer: fixtures::composer_after_turn(Input::Drawn {
+                                text: None,
+                                placeholder: crate::chat::FOLLOW_UP_PLACEHOLDER.into(),
+                            }),
+                        },
+                        strip,
+                    )
+                })
+                .into()
+            },
+        },
+        Scene {
+            name: "build-run-panes",
+            description: "Failed Build and active Run panes stacked in the bottom dock beside Changes.",
+            size: size(px(1480.), px(940.)),
+            build: |_, cx| {
+                let mut strip = fixtures::strip(Some(fixtures::FINISHED_TITLE));
+                strip.commands = Some([
+                    CommandButtonData {
+                        kind: CommandKind::Build,
+                        command: Some("cargo check --workspace".into()),
+                        status: CommandStatus::Failed { exit_code: Some(101), signal: None },
+                        editor_open: false,
+                    },
+                    CommandButtonData {
+                        kind: CommandKind::Run,
+                        command: Some("cargo run --bin dev-server".into()),
+                        status: CommandStatus::Running,
+                        editor_open: false,
+                    },
+                ]);
+                cx.new(|cx| {
+                    let mut layout = Layout::default();
+                    let changes_id = layout.open(PaneKind::Changes);
+                    let run_id = layout.open(PaneKind::Run);
+                    let build_id = layout.open(PaneKind::Build);
+                    layout.right_width = Some(520.);
+                    layout.bottom_height = Some(280.);
+                    let mut panes = ChatPanes::new(layout, "/Users/you/Code/wackcode".into());
+                    panes.insert(
+                        changes_id,
+                        PaneModel::Changes(cx.new(|cx| {
+                            ChangesPane::fixture(fixtures::changed_files(), fixtures::CHANGES_SELECTED, fixtures::CHANGES_DIFF, cx)
+                        })),
+                        cx,
+                    );
+                    let run_session = CommandSession::fixture(
+                        CommandKind::Run,
+                        "/Users/you/Code/wackcode",
+                        "cargo run --bin dev-server",
+                        CommandStatus::Running,
+                        120,
+                        18,
+                        fixtures::RUN_SESSION.as_bytes(),
+                    );
+                    panes.insert(
+                        run_id,
+                        PaneModel::Run(cx.new(|cx| {
+                            RunPane::fixture(
+                                CommandKind::Run,
+                                "/Users/you/Code/wackcode",
+                                Some("cargo run --bin dev-server"),
+                                Some(run_session),
+                                cx,
+                            )
+                        })),
+                        cx,
+                    );
+                    let build_session = CommandSession::fixture(
+                        CommandKind::Build,
+                        "/Users/you/Code/wackcode",
+                        "cargo check --workspace",
+                        CommandStatus::Failed { exit_code: Some(101), signal: None },
+                        120,
+                        18,
+                        fixtures::BUILD_SESSION.as_bytes(),
+                    );
+                    panes.insert(
+                        build_id,
+                        PaneModel::Build(cx.new(|cx| {
+                            RunPane::fixture(
+                                CommandKind::Build,
+                                "/Users/you/Code/wackcode",
+                                Some("cargo check --workspace"),
+                                Some(build_session),
+                                cx,
+                            )
+                        })),
+                        cx,
+                    );
+                    Shell::showing_tabs(
+                        fixtures::sidebar(Selected::Finished),
+                        Screen::Chat {
+                            title: fixtures::FINISHED_TITLE.into(),
+                            project: fixtures::project(),
+                            body: Body::Items(fixtures::finished_turn()),
+                            composer: fixtures::composer_after_turn(Input::Drawn {
+                                text: None,
+                                placeholder: crate::chat::FOLLOW_UP_PLACEHOLDER.into(),
+                            }),
+                        },
+                        strip,
+                    )
+                    .with_panes(panes, false)
+                })
+                .into()
+            },
+        },
+        Scene {
+            name: "build-run-narrow",
+            description: "Smallest window (716pt): compact icon-only Build and Run strip buttons.",
+            size: size(px(716.), px(720.)),
+            build: |_, cx| {
+                let mut strip = fixtures::strip(Some(fixtures::FINISHED_TITLE));
+                strip.commands = Some([
+                    CommandButtonData::idle(CommandKind::Build, Some("cargo check")),
+                    CommandButtonData {
+                        kind: CommandKind::Run,
+                        command: Some("cargo run".into()),
+                        status: CommandStatus::Running,
+                        editor_open: false,
+                    },
+                ]);
+                cx.new(|_| {
+                    Shell::showing_tabs(
+                        fixtures::sidebar(Selected::Finished),
+                        Screen::Chat {
+                            title: fixtures::FINISHED_TITLE.into(),
+                            project: fixtures::project(),
+                            body: Body::Items(fixtures::finished_turn()),
+                            composer: fixtures::composer_after_turn(Input::Drawn {
+                                text: None,
+                                placeholder: crate::chat::FOLLOW_UP_PLACEHOLDER.into(),
+                            }),
+                        },
+                        strip,
+                    )
+                })
+                .into()
+            },
         },
     ]
 }

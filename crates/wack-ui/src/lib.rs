@@ -24,6 +24,7 @@ pub mod motion;
 pub mod panes;
 pub mod plan_card;
 pub mod question;
+pub mod run_button;
 pub mod scenes;
 pub mod settings;
 pub mod settings_kit;

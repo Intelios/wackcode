@@ -24,6 +24,8 @@ pub type PaneId = u32;
 pub enum PaneKind {
     Changes,
     Terminal,
+    Build,
+    Run,
 }
 
 impl PaneKind {
@@ -31,19 +33,21 @@ impl PaneKind {
         match self {
             PaneKind::Changes => "Changes",
             PaneKind::Terminal => "Terminal",
+            PaneKind::Build => "Build",
+            PaneKind::Run => "Run",
         }
     }
 
     /// One per chat: opening it again shows the one there is.
     pub fn single(self) -> bool {
-        matches!(self, PaneKind::Changes)
+        matches!(self, PaneKind::Changes | PaneKind::Build | PaneKind::Run)
     }
 
     /// Where a new pane of this kind opens.
     pub fn home(self) -> Dock {
         match self {
             PaneKind::Changes => Dock::Right,
-            PaneKind::Terminal => Dock::Bottom,
+            PaneKind::Terminal | PaneKind::Build | PaneKind::Run => Dock::Bottom,
         }
     }
 }
@@ -634,10 +638,10 @@ pub(crate) mod tests {
                 layout.add(PaneKind::Terminal);
             }
             1 => {
-                layout.open(PaneKind::Changes);
+                layout.open([PaneKind::Changes, PaneKind::Build, PaneKind::Run][random.below(3)]);
             }
             2 => {
-                layout.toggle([PaneKind::Changes, PaneKind::Terminal][random.below(2)]);
+                layout.toggle([PaneKind::Changes, PaneKind::Terminal, PaneKind::Build, PaneKind::Run][random.below(4)]);
             }
             3 => {
                 if let Some(id) = any(random) {
@@ -781,5 +785,20 @@ pub(crate) mod tests {
         layout.resize_split(Dock::Bottom, &[], 0, 300., 100.);
         let Some(Node::Split { children, .. }) = &layout.bottom else { panic!() };
         assert!((children[0].weight - 1.5).abs() < 1e-4 && (children[1].weight - 0.5).abs() < 1e-4);
+    }
+
+    #[test]
+    fn build_and_run_are_singletons_in_bottom_dock() {
+        let mut layout = Layout::default();
+        let build = layout.open(PaneKind::Build);
+        let run = layout.open(PaneKind::Run);
+        assert_ne!(build, run);
+        assert_eq!(layout.open(PaneKind::Build), build);
+        assert_eq!(layout.open(PaneKind::Run), run);
+        assert_eq!(layout.find(build).map(|(dock, _)| dock), Some(Dock::Bottom));
+        assert_eq!(layout.find(run).map(|(dock, _)| dock), Some(Dock::Bottom));
+
+        let saved = serde_json::to_value(&layout).unwrap();
+        assert_eq!(Layout::from_saved(Some(&saved)), layout);
     }
 }

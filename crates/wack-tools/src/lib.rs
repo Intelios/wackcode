@@ -18,7 +18,7 @@ use std::sync::Arc;
 
 use wack_agent::Tool;
 
-pub use bash::Bash;
+pub use bash::{Bash, SECRET_ENV};
 pub use edit::Edit;
 pub use find::Find;
 pub use grep::Grep;

@@ -1,7 +1,9 @@
 //! The WackCode app: opens the window and hands it to `wack-ui`.
 
+use std::{cell::RefCell, rc::Rc};
+
 use gpui::{
-    App, Bounds, KeyBinding, Menu, MenuItem, SystemMenuType, TitlebarOptions, WindowBounds,
+    App, Bounds, KeyBinding, Menu, MenuItem, SystemMenuType, TitlebarOptions, WeakEntity, WindowBounds,
     WindowOptions, actions, point, prelude::*, px, size,
 };
 use wack_ui::{
@@ -17,7 +19,20 @@ fn main() {
     gpui_platform::application().with_assets(wack_ui::icon::Assets).run(|cx: &mut App| {
         wack_ui::init(cx);
 
-        cx.on_action(|_: &Quit, cx| cx.quit());
+        let shell_ref: Rc<RefCell<Option<WeakEntity<Shell>>>> = Rc::new(RefCell::new(None));
+        let shutdown_shell = |shell_ref: &Rc<RefCell<Option<WeakEntity<Shell>>>>, cx: &App| {
+            if let Some(shell) = shell_ref.borrow().as_ref().and_then(WeakEntity::upgrade) {
+                shell.read_with(cx, |shell, cx| shell.shutdown(cx));
+            }
+        };
+
+        cx.on_action({
+            let shell_ref = shell_ref.clone();
+            move |_: &Quit, cx| {
+                shutdown_shell(&shell_ref, cx);
+                cx.quit();
+            }
+        });
         cx.bind_keys([KeyBinding::new("cmd-q", Quit, None)]);
         cx.set_menus([
             Menu::new("WackCode").items([
@@ -52,9 +67,13 @@ fn main() {
                 MenuItem::action("Previous Tab", PreviousTab),
             ]),
         ]);
-        cx.on_window_closed(|cx, _| {
-            if cx.windows().is_empty() {
-                cx.quit();
+        cx.on_window_closed({
+            let shell_ref = shell_ref.clone();
+            move |cx, _| {
+                if cx.windows().is_empty() {
+                    shutdown_shell(&shell_ref, cx);
+                    cx.quit();
+                }
             }
         })
         .detach();
@@ -82,7 +101,9 @@ fn main() {
         };
         if let Err(error) = cx.open_window(options, |window, cx| {
             wack_ui::theme::follow_system_appearance(window);
-            cx.new(|cx| Shell::new(window, cx))
+            let shell = cx.new(|cx| Shell::new(window, cx));
+            *shell_ref.borrow_mut() = Some(shell.downgrade());
+            shell
         }) {
             eprintln!("WackCode could not open its window: {error}");
             cx.quit();

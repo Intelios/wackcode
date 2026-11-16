@@ -5,7 +5,7 @@
 //! where nothing handles them, clicks simply do nothing.
 
 use gpui::{Action, App, KeyBinding, actions};
-use wack_core::{Reasoning, WireFormat};
+use wack_core::{CommandKind, Reasoning, WireFormat};
 
 use crate::panes::{Dock, PaneId, Target, dock::PANE_CONTEXT, terminal::TERMINAL_CONTEXT};
 
@@ -99,8 +99,52 @@ actions!(
         /// Settings › Memory: moves the note or folder waiting for confirmation to the Trash.
         ConfirmMemoryDelete,
         CancelMemoryDelete,
+        /// Dismisses the Build/Run command configuration popover.
+        CloseCommandEditor,
     ]
 );
+
+/// Starts, stops, or asks to configure a project Build/Run command.
+#[derive(Clone, Debug, PartialEq, Action)]
+#[action(namespace = wackcode, no_json)]
+pub struct TriggerProjectCommand {
+    pub kind: CommandKind,
+}
+
+/// Opens or toggles the command configuration popover for Build or Run.
+#[derive(Clone, Debug, PartialEq, Action)]
+#[action(namespace = wackcode, no_json)]
+pub struct OpenCommandEditor {
+    pub kind: CommandKind,
+}
+
+/// Saves the command editor's text, optionally starting the command immediately.
+#[derive(Clone, Debug, PartialEq, Action)]
+#[action(namespace = wackcode, no_json)]
+pub struct SaveCommandEditor {
+    pub run_after: bool,
+}
+
+/// Opens the output pane for Build or Run and brings it in front.
+#[derive(Clone, Debug, PartialEq, Action)]
+#[action(namespace = wackcode, no_json)]
+pub struct ShowCommandOutput {
+    pub kind: CommandKind,
+}
+
+/// Clears a Build or Run pane's screen without stopping the process.
+#[derive(Clone, Debug, PartialEq, Action)]
+#[action(namespace = wackcode, no_json)]
+pub struct ClearCommandOutput {
+    pub kind: CommandKind,
+}
+
+/// Requests an escalating stop on a running Build or Run command.
+#[derive(Clone, Debug, PartialEq, Action)]
+#[action(namespace = wackcode, no_json)]
+pub struct StopCommand {
+    pub kind: CommandKind,
+}
 
 /// Settings › Memory: switches one project's memory on or off.
 #[derive(Clone, Debug, PartialEq, Action)]

@@ -13,14 +13,16 @@ pub mod appearance;
 pub mod git;
 pub mod memory;
 pub mod run;
+pub mod runner;
 pub mod secrets;
 pub mod store;
 pub mod terminal;
 
 pub use appearance::{Appearance, Backdrop, Mode, Texture, ThemeName};
 pub use run::{Job, RunEvent, RunSetup, discard_plan, run, save_plan};
+pub use runner::{CommandEvent, CommandInfo, CommandSession, CommandStatus, Runner};
 pub use store::{
-    Chat, Connection, Model, ModelChoice, NewConnection, Project, Reasoning, Resolved, Store, Ui, title_from,
+    Chat, CommandKind, Connection, Model, ModelChoice, NewConnection, Project, Reasoning, Resolved, Store, Ui, title_from,
 };
 
 // What the UI needs from the layers below, so it depends on the engine alone.

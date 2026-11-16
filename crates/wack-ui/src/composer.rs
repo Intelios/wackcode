@@ -645,7 +645,8 @@ impl RenderOnce for EffortSlider {
         let count = items.len();
         let current = items.iter().position(|item| item.selected).unwrap_or(0);
         let ultra = choices.get(current).copied().flatten() == Some(Reasoning::Ultra);
-        let on = current > 0;
+        // Off is no reasoning: the track stays unlit there, wherever it sits.
+        let on = choices.get(current).copied().flatten().is_some_and(|effort| effort != Reasoning::Off);
         let width = SLIDER_WIDTH - 2. * SLIDER_PAD;
         let (tone, wash) = if ultra { (theme.ultra, Hsla { a: 0.14, ..theme.ultra }) } else { (theme.accent, theme.accent_wash) };
         let selected = &items[current.min(count.saturating_sub(1))];

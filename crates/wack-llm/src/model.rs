@@ -95,6 +95,7 @@ pub enum Block {
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(rename_all = "lowercase")]
 pub enum Effort {
+    Minimal,
     Low,
     Medium,
     High,
@@ -105,6 +106,7 @@ pub enum Effort {
 impl Effort {
     pub fn as_str(self) -> &'static str {
         match self {
+            Self::Minimal => "minimal",
             Self::Low => "low",
             Self::Medium => "medium",
             Self::High => "high",
@@ -115,6 +117,7 @@ impl Effort {
 
     pub fn parse(text: &str) -> Option<Self> {
         Some(match text {
+            "minimal" => Self::Minimal,
             "low" => Self::Low,
             "medium" => Self::Medium,
             "high" => Self::High,

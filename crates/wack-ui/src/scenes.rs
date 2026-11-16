@@ -215,7 +215,7 @@ pub fn all() -> Vec<Scene> {
                         effort: Some("High".into()),
                         menu: Some(crate::composer::MenuData {
                             kind: crate::app::Menu::Effort,
-                            groups: crate::shell::effort_groups(Some(wack_core::Reasoning::High)),
+                            groups: crate::shell::effort_groups(&fixtures::reasoning_model().choices(), wack_core::Reasoning::High),
                         }),
                         ..fixtures::composer_after_turn(Input::Drawn { text: None, placeholder: crate::chat::FOLLOW_UP_PLACEHOLDER.into() })
                     };
@@ -242,7 +242,7 @@ pub fn all() -> Vec<Scene> {
                         effort: Some("Default effort".into()),
                         menu: Some(crate::composer::MenuData {
                             kind: crate::app::Menu::Effort,
-                            groups: crate::shell::effort_groups(None),
+                            groups: crate::shell::effort_groups(&fixtures::reasoning_model().choices(), wack_core::Reasoning::Off),
                         }),
                         ..fixtures::composer_after_turn(Input::Drawn { text: None, placeholder: crate::chat::FOLLOW_UP_PLACEHOLDER.into() })
                     };
@@ -273,7 +273,7 @@ pub fn all() -> Vec<Scene> {
                         ultra_effort: true,
                         menu: Some(crate::composer::MenuData {
                             kind: crate::app::Menu::Effort,
-                            groups: crate::shell::effort_groups(Some(wack_core::Reasoning::Ultra)),
+                            groups: crate::shell::effort_groups(&fixtures::reasoning_model().choices(), wack_core::Reasoning::Ultra),
                         }),
                         ..fixtures::composer_after_turn(drawn)
                     };

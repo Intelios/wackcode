@@ -1411,6 +1411,16 @@ impl AppState {
         self.form_changed(cx);
     }
 
+    pub fn toggle_model_reasoning(&mut self, index: usize, cx: &mut Context<Self>) {
+        self.form.toggle_reasoning(index);
+        self.form_changed(cx);
+    }
+
+    pub fn toggle_model_effort(&mut self, index: usize, effort: Reasoning, cx: &mut Context<Self>) {
+        self.form.toggle_effort(index, effort);
+        self.form_changed(cx);
+    }
+
     pub fn remove_model_row(&mut self, index: usize, cx: &mut Context<Self>) {
         self.form.remove_model(index);
         self.watch_form(cx);
@@ -1535,7 +1545,7 @@ impl AppState {
     pub fn choose(&mut self, connection: Option<String>, model: Option<String>, effort: Option<Option<Reasoning>>, cx: &mut Context<Self>) {
         let (chat, choice) = self.current_choice();
         let resolved = self.store.resolve(&choice);
-        let current_effort = resolved.as_ref().and_then(|resolved| resolved.effort);
+        let current_effort = resolved.as_ref().map(|resolved| resolved.effort);
         let choice = ModelChoice {
             connection: connection.or_else(|| resolved.as_ref().map(|resolved| resolved.connection.id.clone())),
             model: model.or_else(|| resolved.as_ref().map(|resolved| resolved.model.id.clone())),

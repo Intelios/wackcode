@@ -45,7 +45,8 @@ use crate::{
         NewChat, NewChatIn, NewTerminal, NewTerminalWith, NextTab, OpenEffortMenu, OpenModelMenu, OpenSettings,
         OpenSettingsSection, PinProject, PreviousTab, RemoveConnection, RemovePicture, ShowCommandOutput, ShowPicture, RemoveProject, ResetDockSize,
         SelectChat, Send, Stop, StopCommand, ToggleChanges, ToggleProject, ToggleSidebar, ToggleTerminal, TriggerProjectCommand, Unqueue,
-        ToggleAutoTitles, ToggleTitleModels, ChooseTitleModel, RenameChat, RenameChatAt, CancelRename,
+        ToggleAutoTitles, ToggleTitleModels, ChooseTitleModel, RenameChat, RenameChatAt, CancelRename, ToggleModelReasoning,
+        ToggleModelEffort,
     },
     app::{AppState, Menu, RenamePlace, Selection, shown_path},
     appearance_page::AppearanceData,
@@ -1148,6 +1149,14 @@ impl Render for Shell {
                         window.defer(cx, move |window, cx| window.focus(&handle, cx));
                     }
                 }))
+                .on_action(cx.listener(|shell, action: &ToggleModelReasoning, _, cx| {
+                    let index = action.index;
+                    shell.with_app(cx, |app, cx| app.toggle_model_reasoning(index, cx));
+                }))
+                .on_action(cx.listener(|shell, action: &ToggleModelEffort, _, cx| {
+                    let (index, effort) = (action.index, action.effort);
+                    shell.with_app(cx, |app, cx| app.toggle_model_effort(index, effort, cx));
+                }))
                 .on_action(cx.listener(|shell, action: &RemoveModelRow, _, cx| {
                     let index = action.index;
                     shell.with_app(cx, |app, cx| app.remove_model_row(index, cx));
@@ -1548,31 +1557,34 @@ fn menu_data(app: &AppState, resolved: Option<&wack_core::Resolved>) -> Option<M
                     .collect(),
             })
             .collect(),
-        Menu::Effort => effort_groups(resolved.and_then(|resolved| resolved.effort)),
+        Menu::Effort => match resolved {
+            Some(resolved) => effort_groups(&resolved.model.choices(), resolved.effort),
+            None => effort_groups(&[wack_core::Reasoning::Off], wack_core::Reasoning::Off),
+        },
     };
     Some(MenuData { kind, groups })
 }
 
-/// The effort menu, with `current` ticked.
-pub fn effort_groups(current: Option<wack_core::Reasoning>) -> Vec<MenuGroup> {
+/// The effort menu: the levels the model lists in Settings › Providers (and Ultra above them),
+/// with `current` ticked.
+pub fn effort_groups(choices: &[wack_core::Reasoning], current: wack_core::Reasoning) -> Vec<MenuGroup> {
     use wack_core::Reasoning;
-    let item = |effort: Option<Reasoning>, label: &'static str, detail: Option<&'static str>| MenuItem {
-        label: label.into(),
-        detail: detail.map(Into::into),
-        selected: current == effort,
-        choice: Choice::Effort(effort),
+    let detail = |effort: Reasoning| match effort {
+        Reasoning::Off => Some("no reasoning"),
+        Reasoning::Ultra => Some("the most thorough work"),
+        _ => None,
     };
     vec![MenuGroup {
         title: Some("Reasoning effort".into()),
-        items: vec![
-            item(None, "Default", Some("the provider’s")),
-            item(Some(Reasoning::Low), "Low", None),
-            item(Some(Reasoning::Medium), "Medium", None),
-            item(Some(Reasoning::High), "High", None),
-            item(Some(Reasoning::Xhigh), "Xhigh", None),
-            item(Some(Reasoning::Max), "Max", None),
-            item(Some(Reasoning::Ultra), "Ultra", Some("the most thorough work")),
-        ],
+        items: choices
+            .iter()
+            .map(|&effort| MenuItem {
+                label: effort.label().into(),
+                detail: detail(effort).map(Into::into),
+                selected: current == effort,
+                choice: Choice::Effort(Some(effort)),
+            })
+            .collect(),
     }]
 }
 
@@ -1585,25 +1597,14 @@ fn model_words(resolved: Option<&wack_core::Resolved>) -> (SharedString, Option<
     match resolved {
         Some(resolved) => (
             model_name(&resolved.model.id).into(),
-            Some(
-                match resolved.effort {
-                    None => "Default effort",
-                    Some(wack_core::Reasoning::Low) => "Low",
-                    Some(wack_core::Reasoning::Medium) => "Medium",
-                    Some(wack_core::Reasoning::High) => "High",
-                    Some(wack_core::Reasoning::Xhigh) => "Xhigh",
-                    Some(wack_core::Reasoning::Max) => "Max",
-                    Some(wack_core::Reasoning::Ultra) => "Ultra",
-                }
-                .into(),
-            ),
+            Some(resolved.effort.label().into()),
         ),
         None => ("No model".into(), None),
     }
 }
 
 fn is_ultra(resolved: Option<&wack_core::Resolved>) -> bool {
-    resolved.and_then(|resolved| resolved.effort).is_some_and(|effort| effort.is_ultra())
+    resolved.is_some_and(|resolved| resolved.effort.is_ultra())
 }
 
 /// `zai-org/GLM-5.3-Flash` reads as `GLM-5.3-Flash`.

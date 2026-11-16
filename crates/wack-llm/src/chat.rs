@@ -24,6 +24,7 @@ pub fn body(request: &Request, is_openai: bool) -> Value {
     }
     if let Some(effort) = request.effort {
         let level = match effort {
+            Effort::Minimal => "minimal",
             Effort::Low => "low",
             Effort::Medium => "medium",
             Effort::High | Effort::Xhigh | Effort::Max => "high",

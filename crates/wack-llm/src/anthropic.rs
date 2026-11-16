@@ -6,7 +6,7 @@
 use serde_json::{Map, Value, json};
 
 use crate::{
-    Block, Delta, DeltaSink, LlmError, Message, Request, Response, Role, StopReason, Usage, WireFormat,
+    Block, Delta, DeltaSink, Effort, LlmError, Message, Request, Response, Role, StopReason, Usage, WireFormat,
     error::ErrorKind,
 };
 
@@ -61,6 +61,8 @@ pub fn body(request: &Request, first_party: bool) -> Value {
     }
 
     if let Some(effort) = request.effort {
+        // Messages has no minimal effort: its lowest is low.
+        let effort = if effort == Effort::Minimal { Effort::Low } else { effort };
         body.insert("thinking".into(), json!({ "type": "adaptive", "display": "summarized" }));
         body.insert("output_config".into(), json!({ "effort": effort.as_str() }));
     }
@@ -270,7 +272,7 @@ fn text(value: &Value) -> String {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::{Effort, SystemPart, ToolDef, testing};
+    use crate::{SystemPart, ToolDef, testing};
 
     fn request() -> Request {
         Request {

@@ -126,10 +126,16 @@ pub fn composer_working() -> ComposerData {
     }
 }
 
+/// A model that reasons, listing what current Anthropic models accept.
+pub fn reasoning_model() -> wack_core::Model {
+    use wack_core::Reasoning::*;
+    wack_core::Model { efforts: vec![Off, Low, Medium, High, Xhigh, Max], ..wack_core::Model::new("claude-opus-5-5", Some(1_000_000)) }
+}
+
 /// Two connections, as Settings › Providers lists them.
 pub fn connections() -> Vec<wack_core::Connection> {
     use wack_core::{Connection, Model, WireFormat};
-    let model = |id: &str, window: Option<u64>| Model { id: id.into(), context_window: window };
+    let model = |id: &str, window: Option<u64>| Model { efforts: reasoning_model().efforts, ..Model::new(id, window) };
     vec![
         Connection {
             id: "c1".into(),

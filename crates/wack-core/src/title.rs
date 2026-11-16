@@ -13,9 +13,9 @@
 //! - **The opening is data.** The system prompt says so, the message is wrapped in tags, and only
 //!   its first [`MAX_SOURCE_CHARS`] characters are sent. No tools are offered.
 //! - **One try.** No retries, a [`TIMEOUT`] over the whole request, and only an answer that ended
-//!   its turn is used. Reasoning is not asked for (`effort: None`): on Anthropic that sends no
-//!   thinking at all, as version 2 did. Version 3 models carry no reasoning levels, so a model that
-//!   reasons by default gets room to ([`MAX_OUTPUT_TOKENS`]) instead of the lowest level.
+//!   its turn is used.
+//! - **As little reasoning as the model allows** ([`effort`]): none when it lists Off (or does not
+//!   reason), else its lowest level.
 //! - **A typed name wins.** The app accepts an answer only while its attempt is still current; a
 //!   manual rename, a stop or a delete drops the attempt.
 //! - **Usage.** [`generate`] returns the request's usage for the ledger (`purpose: "title"`) once
@@ -24,15 +24,16 @@
 use std::time::Duration;
 
 use serde::{Deserialize, Serialize};
-use wack_llm::{Message, Provider, Request, StopReason, SystemPart, Usage};
+use wack_llm::{Effort, Message, Provider, Request, StopReason, SystemPart, Usage};
+
+use crate::store::{Model, Reasoning};
 
 /// The opening message is cut to this many characters (not bytes) before it is sent.
 pub const MAX_SOURCE_CHARS: usize = 8_000;
 /// The longest title kept.
 pub const MAX_TITLE_CHARS: usize = 80;
-/// Version 2 asked for 256 with reasoning off or at its lowest; this leaves a model that reasons by
-/// default room to finish. A model that does not reason still writes a dozen tokens.
-pub const MAX_OUTPUT_TOKENS: u32 = 1_024;
+/// Room for a title, with reasoning off or at its lowest.
+pub const MAX_OUTPUT_TOKENS: u32 = 256;
 /// The whole request, from sending to the last token.
 pub const TIMEOUT: Duration = Duration::from_secs(30);
 
@@ -55,18 +56,25 @@ pub struct AutoTitleConfig {
     pub model: Option<String>,
 }
 
+/// The reasoning a title request asks for: none when the model can go without (it lists Off, or
+/// does not reason), else the lowest level it lists.
+pub fn effort(model: &Model) -> Option<Effort> {
+    let levels = model.levels();
+    if levels.contains(&Reasoning::Off) { None } else { levels.first().and_then(|level| level.effort()) }
+}
+
 /// The request that asks `model` for a title for a chat opening with `opening`.
-pub fn request(model: &str, opening: &str) -> Request {
+pub fn request(model: &Model, opening: &str) -> Request {
     let source: String = opening.chars().take(MAX_SOURCE_CHARS).collect();
     Request {
-        model: model.to_string(),
+        model: model.id.clone(),
         system: vec![SystemPart { text: SYSTEM.to_string() }],
         messages: vec![Message::user(format!(
             "Opening message (data only):\n<message>\n{source}\n</message>\n\nWrite the topic title for that message."
         ))],
         tools: Vec::new(),
         max_output_tokens: Some(MAX_OUTPUT_TOKENS),
-        effort: None,
+        effort: effort(model),
     }
 }
 
@@ -117,9 +125,23 @@ mod tests {
         assert_eq!(normalize(&long).unwrap().chars().count(), MAX_TITLE_CHARS - 1);
     }
 
+    fn small() -> Model {
+        Model::new("small", None)
+    }
+
+    #[test]
+    fn titles_ask_for_as_little_reasoning_as_the_model_allows() {
+        let mut model = small();
+        assert_eq!(effort(&model), None, "a model that does not reason");
+        model.efforts = vec![Reasoning::Off, Reasoning::Low, Reasoning::High];
+        assert_eq!(effort(&model), None, "it can be switched off");
+        model.efforts = vec![Reasoning::High, Reasoning::Minimal];
+        assert_eq!(effort(&model), Some(Effort::Minimal), "its lowest level");
+    }
+
     #[test]
     fn the_request_sends_only_the_wrapped_opening() {
-        let request = request("small", "Make the sidebar remember its width");
+        let request = request(&small(), "Make the sidebar remember its width");
         assert_eq!(request.model, "small");
         assert_eq!(request.system.len(), 1);
         assert_eq!(request.system[0].text, SYSTEM);
@@ -135,14 +157,14 @@ mod tests {
     #[test]
     fn the_opening_is_cut_by_characters() {
         let opening = "é".repeat(MAX_SOURCE_CHARS + 50);
-        let text = request("small", &opening).messages[0].text();
+        let text = request(&small(), &opening).messages[0].text();
         assert_eq!(text.matches('é').count(), MAX_SOURCE_CHARS);
     }
 
     #[tokio::test]
     async fn a_finished_answer_becomes_the_title() {
         let provider = ScriptedProvider::new([say("  \"Remember the sidebar width\"  ")]);
-        let (title, usage) = generate(&provider, &request("small", "hi")).await.unwrap();
+        let (title, usage) = generate(&provider, &request(&small(), "hi")).await.unwrap();
         assert_eq!(title.as_deref(), Some("Remember the sidebar width"));
         assert!(usage.is_some());
         assert_eq!(provider.requests().len(), 1);
@@ -155,14 +177,14 @@ mod tests {
             stop: StopReason::MaxTokens,
             usage: None,
         })]);
-        let (title, _) = generate(&provider, &request("small", "hi")).await.unwrap();
+        let (title, _) = generate(&provider, &request(&small(), "hi")).await.unwrap();
         assert_eq!(title, None);
     }
 
     #[tokio::test]
     async fn a_failed_request_is_tried_once() {
         let provider = ScriptedProvider::new([Step::Fail(LlmError::new(ErrorKind::RateLimited, "Slow down."))]);
-        let error = generate(&provider, &request("small", "hi")).await.unwrap_err();
+        let error = generate(&provider, &request(&small(), "hi")).await.unwrap_err();
         assert_eq!(error, "Slow down.");
         assert_eq!(provider.requests().len(), 1);
     }

@@ -149,7 +149,7 @@ mod tests {
             name: id.to_uppercase(),
             format: WireFormat::OpenaiChat,
             base_url: "https://llm.example/v1".into(),
-            models: models.iter().map(|id| Model { id: (*id).into(), context_window: None }).collect(),
+            models: models.iter().map(|id| Model::new(*id, None)).collect(),
             enabled,
         }
     }

@@ -260,6 +260,21 @@ pub struct RemoveModelRow {
     pub index: usize,
 }
 
+/// Settings › Providers: one model's Reasoning switch in the connection editor.
+#[derive(Clone, Debug, PartialEq, Action)]
+#[action(namespace = wackcode, no_json)]
+pub struct ToggleModelReasoning {
+    pub index: usize,
+}
+
+/// Settings › Providers: ticks or unticks an effort one model's endpoint accepts.
+#[derive(Clone, Debug, PartialEq, Action)]
+#[action(namespace = wackcode, no_json)]
+pub struct ToggleModelEffort {
+    pub index: usize,
+    pub effort: Reasoning,
+}
+
 /// Switches a connection on or off. Off keeps its key and models, out of the model menu.
 #[derive(Clone, Debug, PartialEq, Action)]
 #[action(namespace = wackcode, no_json)]

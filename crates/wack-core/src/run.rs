@@ -74,10 +74,10 @@ impl Store {
             cwd: project.path.clone(),
             settings: Settings {
                 model: resolved.model.id.clone(),
-                effort: resolved.effort.map(|reasoning| reasoning.effort()),
+                effort: resolved.model.effort_for(resolved.effort),
                 max_output_tokens: None,
                 context_window: resolved.model.context_window,
-                ultra: resolved.effort.is_some_and(|reasoning| reasoning.is_ultra()),
+                ultra: resolved.effort.is_ultra(),
             },
             mode: chat.mode,
             unrestricted_planning: self.planning_unrestricted(),

@@ -23,6 +23,7 @@ pub fn body(request: &Request) -> Value {
     }
     if let Some(effort) = request.effort {
         let level = match effort {
+            Effort::Minimal => "minimal",
             Effort::Low => "low",
             Effort::Medium => "medium",
             Effort::High => "high",

@@ -30,6 +30,61 @@ pub struct Model {
     /// The model's context size in tokens, if the user gave one. It decides when chats compact.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub context_window: Option<u64>,
+    /// The reasoning efforts the model's endpoint accepts (Settings › Providers, as version 2's
+    /// "Supported efforts"). None listed means it does not reason, so it only has Off: models
+    /// saved before the list existed load that way until the user picks theirs.
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub efforts: Vec<Reasoning>,
+}
+
+impl Model {
+    /// A model that does not reason, as a new model row starts.
+    pub fn new(id: impl Into<String>, context_window: Option<u64>) -> Self {
+        Self { id: id.into(), context_window, efforts: Vec::new() }
+    }
+
+    /// The efforts the model accepts, low to high, never Ultra. Without a list, only Off.
+    pub fn levels(&self) -> Vec<Reasoning> {
+        let mut levels: Vec<Reasoning> = self.efforts.iter().copied().filter(|level| !level.is_ultra()).collect();
+        levels.sort();
+        levels.dedup();
+        if levels.is_empty() {
+            levels.push(Reasoning::Off);
+        }
+        levels
+    }
+
+    /// It can reason at all: it lists an effort above Off.
+    pub fn reasons(&self) -> bool {
+        self.levels().iter().any(|level| *level != Reasoning::Off)
+    }
+
+    /// What a chat may choose for this model: its levels, then Ultra whenever it can reason.
+    pub fn choices(&self) -> Vec<Reasoning> {
+        let mut choices = self.levels();
+        if self.reasons() {
+            choices.push(Reasoning::Ultra);
+        }
+        choices
+    }
+
+    /// The effort a chat runs with: `wanted` when the model offers it, else Medium when it lists
+    /// Medium, else its lowest level (version 2's rule).
+    pub fn pick(&self, wanted: Option<Reasoning>) -> Reasoning {
+        let choices = self.choices();
+        match wanted {
+            Some(wanted) if choices.contains(&wanted) => wanted,
+            _ if choices.contains(&Reasoning::Medium) => Reasoning::Medium,
+            _ => choices[0],
+        }
+    }
+
+    /// What is sent to the provider for `level`. Off sends no reasoning setting at all; Ultra
+    /// sends the model's highest level.
+    pub fn effort_for(&self, level: Reasoning) -> Option<Effort> {
+        let level = if level.is_ultra() { self.levels().last().copied().unwrap_or(Reasoning::Off) } else { level };
+        level.effort()
+    }
 }
 
 #[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
@@ -111,11 +166,14 @@ impl Project {
 
 /// How hard the model should think: one of the provider's own effort levels, or Ultra.
 ///
-/// Ultra is WackCode's, never a provider's: it sends the top effort and adds an instruction to
-/// the system prompt. It is kept out of `wack_llm::Effort` so no wire format can ever send it.
-#[derive(Clone, Copy, Debug, PartialEq, Eq, Serialize, Deserialize)]
+/// Off sends no reasoning setting at all. Ultra is WackCode's, never a provider's: it sends the
+/// model's highest level and adds an instruction to the system prompt. It is kept out of
+/// `wack_llm::Effort` so no wire format can ever send it. The order is low to high.
+#[derive(Clone, Copy, Debug, PartialEq, Eq, PartialOrd, Ord, Hash, Serialize, Deserialize)]
 #[serde(rename_all = "lowercase")]
 pub enum Reasoning {
+    Off,
+    Minimal,
     Low,
     Medium,
     High,
@@ -125,32 +183,54 @@ pub enum Reasoning {
 }
 
 impl Reasoning {
-    /// The effort the provider is asked for. Each wire format lowers it to what it supports.
-    pub fn effort(self) -> Effort {
-        match self {
+    /// Every level a model can list, low to high (Ultra is offered on top, never listed).
+    pub const LEVELS: [Reasoning; 7] =
+        [Self::Off, Self::Minimal, Self::Low, Self::Medium, Self::High, Self::Xhigh, Self::Max];
+
+    /// The effort the provider is asked for; `None` for Off. Each wire format lowers it to what
+    /// it supports. Ultra alone asks for Max: [`Model::effort_for`] gives the model's highest.
+    pub fn effort(self) -> Option<Effort> {
+        Some(match self {
+            Self::Off => return None,
+            Self::Minimal => Effort::Minimal,
             Self::Low => Effort::Low,
             Self::Medium => Effort::Medium,
             Self::High => Effort::High,
             Self::Xhigh => Effort::Xhigh,
             Self::Max | Self::Ultra => Effort::Max,
-        }
+        })
     }
 
     pub fn is_ultra(self) -> bool {
         self == Self::Ultra
     }
 
-    pub fn parse(text: &str) -> Option<Self> {
-        if text == "ultra" {
-            return Some(Self::Ultra);
+    pub fn label(self) -> &'static str {
+        match self {
+            Self::Off => "Off",
+            Self::Minimal => "Minimal",
+            Self::Low => "Low",
+            Self::Medium => "Medium",
+            Self::High => "High",
+            Self::Xhigh => "Xhigh",
+            Self::Max => "Max",
+            Self::Ultra => "Ultra",
         }
-        Some(match Effort::parse(text)? {
-            Effort::Low => Self::Low,
-            Effort::Medium => Self::Medium,
-            Effort::High => Self::High,
-            Effort::Xhigh => Self::Xhigh,
-            Effort::Max => Self::Max,
-        })
+    }
+
+    pub fn parse(text: &str) -> Option<Self> {
+        match text {
+            "off" => Some(Self::Off),
+            "ultra" => Some(Self::Ultra),
+            _ => Some(match Effort::parse(text)? {
+                Effort::Minimal => Self::Minimal,
+                Effort::Low => Self::Low,
+                Effort::Medium => Self::Medium,
+                Effort::High => Self::High,
+                Effort::Xhigh => Self::Xhigh,
+                Effort::Max => Self::Max,
+            }),
+        }
     }
 }
 
@@ -230,7 +310,8 @@ struct State {
 pub struct Resolved {
     pub connection: Connection,
     pub model: Model,
-    pub effort: Option<Reasoning>,
+    /// Always one of the model's choices ([`Model::pick`]).
+    pub effort: Reasoning,
 }
 
 fn now_millis() -> u64 {
@@ -737,7 +818,7 @@ impl Store {
 
     /// The connection and model a title setting names, if both still exist and the connection is
     /// on.
-    fn title_model(&self, config: &crate::title::AutoTitleConfig) -> Result<(Connection, String), String> {
+    fn title_model(&self, config: &crate::title::AutoTitleConfig) -> Result<(Connection, Model), String> {
         let (Some(connection), Some(model)) = (config.connection.as_deref(), config.model.as_deref()) else {
             return Err("Choose a model for automatic titles.".into());
         };
@@ -749,15 +830,17 @@ impl Store {
         if !connection.enabled {
             return Err(format!("Switch on {} before using it for automatic titles.", connection.name));
         }
-        if !connection.models.iter().any(|listed| listed.id == model) {
-            return Err(format!("{} no longer lists {model}. Choose another model.", connection.name));
-        }
-        Ok((connection.clone(), model.to_string()))
+        let listed = connection
+            .models
+            .iter()
+            .find(|listed| listed.id == model)
+            .ok_or_else(|| format!("{} no longer lists {model}. Choose another model.", connection.name))?;
+        Ok((connection.clone(), listed.clone()))
     }
 
     /// What a new chat's title request needs: `None` while titles are off, an error when their
     /// model can no longer be used, else the provider and the model to ask.
-    pub fn title_setup(&self) -> Option<Result<(HttpProvider, String), String>> {
+    pub fn title_setup(&self) -> Option<Result<(HttpProvider, Model), String>> {
         let config = &self.state.auto_title;
         if !config.enabled {
             return None;
@@ -879,8 +962,8 @@ impl Store {
         };
         Some(Resolved {
             connection: connection.clone(),
+            effort: model.pick(effort),
             model: model.clone(),
-            effort,
         })
     }
 
@@ -907,14 +990,8 @@ mod tests {
             format: WireFormat::OpenaiChat,
             base_url: "https://llm.example/v1/".into(),
             models: vec![
-                Model {
-                    id: " big-model ".into(),
-                    context_window: Some(200_000),
-                },
-                Model {
-                    id: "".into(),
-                    context_window: None,
-                },
+                Model::new(" big-model ", Some(200_000)),
+                Model::new("", None),
             ],
         }
     }
@@ -929,10 +1006,7 @@ mod tests {
         assert_eq!(added.base_url, "https://llm.example/v1");
         assert_eq!(
             added.models,
-            [Model {
-                id: "big-model".into(),
-                context_window: Some(200_000)
-            }]
+            [Model::new("big-model", Some(200_000))]
         );
 
         let state = fs::read_to_string(folder.path().join("state.json")).unwrap();
@@ -1020,14 +1094,8 @@ mod tests {
         let first = store.add_connection(new("First"), "k1").unwrap();
         let mut two_models = new("Second");
         two_models.models = vec![
-            Model {
-                id: "a".into(),
-                context_window: None,
-            },
-            Model {
-                id: "b".into(),
-                context_window: Some(64_000),
-            },
+            Model::new("a", None),
+            Model { efforts: vec![Reasoning::Off, Reasoning::Medium, Reasoning::High], ..Model::new("b", Some(64_000)) },
         ];
         let second = store.add_connection(two_models, "k2").unwrap();
 
@@ -1050,7 +1118,7 @@ mod tests {
                 resolved.model.context_window,
                 resolved.effort
             ),
-            ("b", Some(64_000), Some(Reasoning::High))
+            ("b", Some(64_000), Reasoning::High)
         );
 
         let gone = ModelChoice {
@@ -1125,7 +1193,10 @@ mod tests {
         assert!(store.planning_unrestricted());
 
         // Ultra is the top effort plus an instruction; the provider never hears the word.
-        assert_eq!(Reasoning::Ultra.effort(), Effort::Max);
+        assert_eq!(Reasoning::Ultra.effort(), Some(Effort::Max));
+        assert_eq!(Reasoning::Off.effort(), None);
+        assert_eq!(Reasoning::parse("off"), Some(Reasoning::Off));
+        assert_eq!(Reasoning::parse("minimal"), Some(Reasoning::Minimal));
         assert_eq!(Reasoning::parse("ultra"), Some(Reasoning::Ultra));
         assert_eq!(Reasoning::parse("xhigh"), Some(Reasoning::Xhigh));
         assert_eq!(serde_json::to_string(&Reasoning::Xhigh).unwrap(), "\"xhigh\"");
@@ -1211,10 +1282,7 @@ mod tests {
                     name: "Testing renamed".into(),
                     format: WireFormat::AnthropicMessages,
                     base_url: "https://other.example/v1/".into(),
-                    models: vec![Model {
-                        id: " new-model ".into(),
-                        context_window: Some(64_000),
-                    }],
+                    models: vec![Model::new(" new-model ", Some(64_000))],
                 },
                 None,
             )
@@ -1367,7 +1435,7 @@ mod tests {
         let chosen = AutoTitleConfig { enabled: true, connection: Some(connection.id.clone()), model: Some(model.clone()) };
         store.set_auto_title(chosen.clone()).unwrap();
         let (_, asked) = store.title_setup().unwrap().unwrap();
-        assert_eq!(asked, model);
+        assert_eq!(asked.id, model);
         let reopened = Store::open(folder.path()).unwrap();
         assert_eq!(reopened.auto_title(), &chosen, "saved");
 
@@ -1380,5 +1448,28 @@ mod tests {
         let off = AutoTitleConfig { enabled: false, ..chosen };
         store.set_auto_title(off).unwrap();
         assert!(store.title_setup().is_none());
+    }
+
+    #[test]
+    fn a_model_offers_only_the_efforts_it_lists() {
+        let plain = Model::new("plain", None);
+        assert_eq!(plain.choices(), vec![Reasoning::Off], "listing nothing, it does not reason");
+        assert_eq!(plain.pick(Some(Reasoning::High)), Reasoning::Off);
+        assert_eq!(plain.effort_for(Reasoning::Off), None);
+
+        let thinking = Model { efforts: vec![Reasoning::High, Reasoning::Off, Reasoning::Low, Reasoning::Ultra], ..Model::new("t", None) };
+        assert_eq!(thinking.levels(), vec![Reasoning::Off, Reasoning::Low, Reasoning::High], "sorted, never Ultra");
+        assert_eq!(thinking.choices().last(), Some(&Reasoning::Ultra), "Ultra sits on top of a model that reasons");
+        assert_eq!(thinking.pick(Some(Reasoning::Low)), Reasoning::Low);
+        assert_eq!(thinking.pick(Some(Reasoning::Max)), Reasoning::Off, "no Medium: its lowest");
+        assert_eq!(thinking.effort_for(Reasoning::Ultra), Some(Effort::High), "Ultra sends its highest level");
+
+        let medium = Model { efforts: vec![Reasoning::Low, Reasoning::Medium], ..Model::new("m", None) };
+        assert_eq!(medium.pick(None), Reasoning::Medium, "Medium when it lists it");
+
+        // Saved before the list existed: no reasoning.
+        let old: Model = serde_json::from_str(r#"{"id":"old"}"#).unwrap();
+        assert_eq!(old.choices(), vec![Reasoning::Off]);
+        assert_eq!(serde_json::to_string(&old).unwrap(), r#"{"id":"old"}"#);
     }
 }

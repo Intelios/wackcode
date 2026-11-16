@@ -8,7 +8,10 @@
 //! each with an on / off switch (off keeps the key and models, out of the model menu), and a page
 //! per connection that edits its address, its key and its models. A new connection opens the same
 //! page, and a bar at the foot saves or discards what changed. The model catalog is not here yet,
-//! so a model is its id and, if the user knows it, its context window.
+//! so a model is its id, its context window if the user knows it, and, as in version 2, a
+//! Reasoning switch with the efforts its endpoint accepts (the chat's effort menu offers only
+//! those). A new model does not reason; switching Reasoning on starts it at Off, Low, Medium and
+//! High, version 2's default.
 //!
 //! A key is typed into a masked field, handed to the store once, and the field is cleared: it is
 //! never drawn, copied or kept anywhere else (docs/security.md). Editing a connection with a saved
@@ -21,12 +24,13 @@
 use std::{collections::HashSet, f32::consts::PI};
 
 use gpui::{AnyElement, App, AppContext, Entity, Pixels, SharedString, Transformation, div, prelude::*, px, radians};
-use wack_core::{Connection, Model, NewConnection, WireFormat};
+use wack_core::{Connection, Model, NewConnection, Reasoning, WireFormat};
 
 use crate::{
     actions::{
         AddModelRow, ChooseFormat, CloseConnectionForm, CloseSettings, DiscardConnection, EditConnection, OpenConnectionForm,
-        OpenSettingsSection, RemoveConnection, RemoveModelRow, SaveConnection, SwitchConnection,
+        OpenSettingsSection, RemoveConnection, RemoveModelRow, SaveConnection, SwitchConnection, ToggleModelEffort,
+        ToggleModelReasoning,
     },
     appearance_page::{self, AppearanceData},
     button::{Button, Kind},
@@ -39,11 +43,26 @@ use crate::{
     typography::{Type, Typography},
 };
 
-/// One model's two fields in the editor.
+/// One model in the editor: its two fields, and what reasoning its endpoint accepts.
 #[derive(Clone)]
 pub struct ModelField {
     pub id: Entity<TextField>,
     pub context: Entity<TextField>,
+    /// The Reasoning switch. Off saves no efforts: the model does not reason.
+    pub reasoning: bool,
+    /// The efforts ticked while Reasoning is on, low to high.
+    pub efforts: Vec<Reasoning>,
+}
+
+/// What switching Reasoning on starts a model with, as version 2 did.
+const REASONING_DEFAULT: [Reasoning; 4] = [Reasoning::Off, Reasoning::Low, Reasoning::Medium, Reasoning::High];
+
+/// A list of efforts as saved: sorted, and empty when it reasons at nothing above Off.
+fn saved_efforts(efforts: &[Reasoning]) -> Vec<Reasoning> {
+    let mut efforts: Vec<Reasoning> = efforts.iter().copied().filter(|effort| !effort.is_ultra()).collect();
+    efforts.sort();
+    efforts.dedup();
+    if efforts.iter().all(|effort| *effort == Reasoning::Off) { Vec::new() } else { efforts }
 }
 
 /// The new or edited connection, kept while the user looks elsewhere.
@@ -108,6 +127,12 @@ impl ProviderForm {
         for model in &connection.models {
             let context = model.context_window.map(tokens_text);
             self.add_model(&model.id, context.as_deref(), cx);
+            if let Some(row) = self.models.last_mut()
+                && model.reasons()
+            {
+                row.reasoning = true;
+                row.efforts = model.levels();
+            }
         }
         if self.models.is_empty() {
             self.models.push(Self::model_field(cx));
@@ -129,6 +154,30 @@ impl ProviderForm {
             field.context.update(cx, |field, cx| field.set_text(context, cx));
         }
         self.models.push(field);
+    }
+
+    /// The Reasoning switch of one model: on starts at version 2's default efforts.
+    pub fn toggle_reasoning(&mut self, index: usize) {
+        if let Some(row) = self.models.get_mut(index) {
+            row.reasoning = !row.reasoning;
+            row.efforts = if row.reasoning { REASONING_DEFAULT.to_vec() } else { Vec::new() };
+        }
+    }
+
+    /// Ticks or unticks one effort. Unticking the last leaves Off.
+    pub fn toggle_effort(&mut self, index: usize, effort: Reasoning) {
+        if let Some(row) = self.models.get_mut(index) {
+            match row.efforts.iter().position(|listed| *listed == effort) {
+                Some(at) => {
+                    row.efforts.remove(at);
+                }
+                None => row.efforts.push(effort),
+            }
+            row.efforts.sort();
+            if row.efforts.is_empty() {
+                row.efforts.push(Reasoning::Off);
+            }
+        }
     }
 
     pub fn remove_model(&mut self, index: usize) {
@@ -165,6 +214,8 @@ impl ProviderForm {
         ModelField {
             id: cx.new(|cx| TextField::new(Type::Mono, "model-id", cx)),
             context: cx.new(|cx| TextField::new(Type::Ui, "200k", cx)),
+            reasoning: false,
+            efforts: Vec::new(),
         }
     }
 
@@ -181,6 +232,7 @@ impl ProviderForm {
                 .map(|row| ModelValue {
                     id: text(&row.id),
                     context: text(&row.context),
+                    efforts: if row.reasoning { saved_efforts(&row.efforts) } else { Vec::new() },
                 })
                 .filter(|model| !model.id.is_empty() || !model.context.is_empty())
                 .collect(),
@@ -215,6 +267,7 @@ impl ProviderForm {
             models.push(Model {
                 id: row.id.clone(),
                 context_window,
+                efforts: row.efforts.clone(),
             });
         }
         if models.is_empty() {
@@ -265,6 +318,7 @@ impl ProviderForm {
         }
         models.iter().zip(&saved.models).any(|(row, saved)| {
             row.id != saved.id
+                || row.efforts != saved_efforts(&saved.efforts)
                 || match (row.context.as_str(), saved.context_window) {
                     ("", None) => false,
                     (text, Some(window)) => parse_tokens(text) != Some(window),
@@ -285,6 +339,7 @@ struct ProviderValues {
 struct ModelValue {
     id: String,
     context: String,
+    efforts: Vec<Reasoning>,
 }
 
 /// "200000", "200k", "1M", "1.5m" in tokens.
@@ -1009,6 +1064,66 @@ fn model_row(index: usize, row: &ModelField, theme: &Theme) -> impl IntoElement 
         .py(px(8.))
         .border_t_1()
         .border_color(theme.border)
+        .flex()
+        .flex_col()
+        .gap(px(8.))
+        .child(model_fields(index, row, theme))
+        .child(reasoning_line(index, row, theme))
+}
+
+/// Tags for the automation socket, which takes only fixed names.
+const REASONING_TAGS: [&str; 4] = ["model-reasoning-0", "model-reasoning-1", "model-reasoning-2", "model-reasoning-3"];
+
+/// The Reasoning switch and, while it is on, the efforts the endpoint accepts.
+fn reasoning_line(index: usize, row: &ModelField, theme: &Theme) -> impl IntoElement {
+    let toggle = div()
+        .id(("model-reasoning", index))
+        .flex()
+        .items_center()
+        .gap(px(8.))
+        .cursor_pointer()
+        .on_click(dispatch(ToggleModelReasoning { index }))
+        .child(switch(row.reasoning, theme))
+        .child(div().typography(Type::Ui).text_color(if row.reasoning { theme.text_soft } else { theme.text_dim }).child("Reasoning"))
+        .tag(REASONING_TAGS.get(index).copied().unwrap_or("model-reasoning"));
+    let chips = row.reasoning.then(|| {
+        div().flex().flex_wrap().items_center().gap(px(6.)).children(Reasoning::LEVELS.iter().map(|&effort| {
+            let on = row.efforts.contains(&effort);
+            div()
+                .id(SharedString::from(format!("effort-{index}-{}", effort.label())))
+                .h(px(24.))
+                .px(px(10.))
+                .rounded_full()
+                .flex()
+                .items_center()
+                .cursor_pointer()
+                .typography(Type::Small)
+                .when(on, |chip| chip.bg(theme.accent_wash).text_color(theme.accent_text))
+                .when(!on, |chip| chip.border_1().border_color(theme.border_strong).text_color(theme.text_dim).hover(|chip| chip.bg(theme.hover)))
+                .on_click(dispatch(ToggleModelEffort { index, effort }))
+                .child(effort.label().to_lowercase())
+        }))
+    });
+    let only_off = row.reasoning && row.efforts.iter().all(|effort| *effort == Reasoning::Off);
+    div()
+        .flex()
+        .flex_col()
+        .gap(px(8.))
+        .child(
+            div()
+                .flex()
+                .items_center()
+                .gap(px(14.))
+                .child(toggle)
+                .when_some(chips, |line, chips| line.child(div().h(px(16.)).w(px(1.)).bg(theme.border)).child(chips)),
+        )
+        .when(only_off, |line| {
+            line.child(div().typography(Type::Small).text_color(theme.text_faint).child("Only off is ticked. Tick the efforts this endpoint accepts."))
+        })
+}
+
+fn model_fields(index: usize, row: &ModelField, theme: &Theme) -> impl IntoElement {
+    div()
         .flex()
         .items_center()
         .gap(px(10.))

@@ -31,7 +31,7 @@ const HELP: &str = "wack: the WackCode agent without the app
   wack run [options] <prompt>  Run the agent in the current folder.
       --connection <name>      Which connection to use (needed when there are several).
       --model <id>             Defaults to the connection's first model.
-      --effort low|medium|high|xhigh|max|ultra
+      --effort off|minimal|low|medium|high|xhigh|max|ultra
       --mode build|plan|ultraplan   Plan and Ultra Plan only read, ask, and end with a plan.
                                A resumed run keeps its mode unless you give one.
       --cwd <folder>           Work in another folder.
@@ -126,7 +126,8 @@ fn connect(args: &mut Args, folder: &Path) -> Result<ExitCode, String> {
 
     let key = terminal::ask_hidden("API key (hidden)")?;
     let mut store = Store::open(folder)?;
-    let models = models.into_iter().map(|id| Model { id, context_window }).collect();
+    // Reasoning efforts are picked in Settings › Providers; a model added here does not reason.
+    let models = models.into_iter().map(|id| Model::new(id, context_window)).collect();
     let added = store.add_connection(NewConnection { name, format, base_url, models }, &key)?;
     println!("Added {} ({}, {}).", added.name, format_name(added.format), added.base_url);
     Ok(ExitCode::SUCCESS)
@@ -158,7 +159,7 @@ async fn agent(args: &mut Args, folder: &Path) -> Result<ExitCode, String> {
     let wanted = args.value("--connection")?;
     let model = args.value("--model")?;
     let effort = match args.value("--effort")? {
-        Some(effort) => Some(Reasoning::parse(&effort).ok_or("The effort must be low, medium, high, xhigh, max or ultra.")?),
+        Some(effort) => Some(Reasoning::parse(&effort).ok_or("The effort must be off, minimal, low, medium, high, xhigh, max or ultra.")?),
         None => None,
     };
     let mode = match args.value("--mode")? {
@@ -195,7 +196,7 @@ async fn agent(args: &mut Args, folder: &Path) -> Result<ExitCode, String> {
         },
     };
     let model = match model {
-        Some(id) => connection.models.iter().find(|model| model.id == id).cloned().unwrap_or(Model { id, context_window: None }),
+        Some(id) => connection.models.iter().find(|model| model.id == id).cloned().unwrap_or(Model::new(id, None)),
         None => connection.models.first().cloned().ok_or("This connection has no models.")?,
     };
 
@@ -215,19 +216,28 @@ async fn agent(args: &mut Args, folder: &Path) -> Result<ExitCode, String> {
     let mut tools = wack_tools::core_tools();
     tools.extend(kit.tools());
     let registry = Arc::new(Registry::new(tools)?);
+    // The effort must be one the model lists in Settings › Providers; without --effort, the
+    // app's default for it.
+    if let Some(wanted) = effort
+        && !model.choices().contains(&wanted)
+    {
+        let offered: Vec<&str> = model.choices().iter().map(|level| level.label()).collect();
+        return Err(format!("{} does not list {} reasoning. It offers: {}.", model.id, wanted.label(), offered.join(", ")));
+    }
+    let effort = model.pick(effort);
     let settings = Settings {
         model: model.id.clone(),
-        effort: effort.map(Reasoning::effort),
+        effort: model.effort_for(effort),
         max_output_tokens: None,
         context_window: model.context_window,
-        ultra: effort.is_some_and(Reasoning::is_ultra),
+        ultra: effort.is_ultra(),
     };
     let mut agent = kit.attach(Agent::new(Arc::new(store.provider(connection)?), registry, session, &Profile::code(), settings));
     let mut header = format!("{} · {} · {}", connection.name, model.id, agent.session().cwd().display());
     if kit.plan.mode().planning() {
         header.push_str(&format!(" · {}", kit.plan.mode().label()));
     }
-    if effort.is_some_and(Reasoning::is_ultra) {
+    if effort.is_ultra() {
         header.push_str(" · Ultra");
     }
     eprintln!("{}", print::dim(&header));

@@ -39,7 +39,7 @@ use gpui::{
 
 use crate::{
     actions::{
-        self, ActivatePane, AddFolder, Back, ChooseBackdrop, ChooseEffort, SlideEffort, ToggleTodos, ToggleWaiting, ChooseFocus, ClearCommandOutput, CloseCommandEditor, CycleAgentMode, SetAgentMode, PickOption, ShowQuestion, NextQuestion, PreviousQuestion, SubmitAnswers, CancelQuestion, WrapUpQuestion, ShowDoneTodos, DiscardPlan, KeepPlan, ConfirmDiscardPlan, ApprovePlan, SavePlan, CopyPlan, ToggleUnrestrictedPlanning, ToggleWebFetch, ConfirmUnrestrictedPlanning, CancelUnrestrictedPlanning, ToggleMemory, SwitchProjectMemory, NewMemory, EditMemory, ChooseMemoryKind, SaveMemory, CloseMemoryEditor, AskDeleteMemory, AskRemoveMemoryFolder, ConfirmMemoryDelete, CancelMemoryDelete, RevealMemory, ToggleUsageRecording, RevealUsageFolder,
+        self, ActivatePane, AddFolder, Back, ChooseBackdrop, ChooseEffort, SlideEffort, ToggleTodos, ToggleWaiting, ChooseFocus, ClearCommandOutput, CloseCommandEditor, CycleAgentMode, SetAgentMode, PickOption, ShowQuestion, NextQuestion, PreviousQuestion, SubmitAnswers, CancelQuestion, WrapUpQuestion, ShowDoneTodos, DiscardPlan, KeepPlan, ConfirmDiscardPlan, ApprovePlan, SavePlan, CopyPlan, ToggleUnrestrictedPlanning, ToggleWebFetch, ToggleWebSearch, ToggleRouteFetch, CloseSearchEditor, SaveSearchProvider, TestSearchProvider, AskDeleteSearchProvider, ConfirmDeleteSearchProvider, CancelDeleteSearchProvider, ResetWebUsage, ChooseSearchProvider, AddSearchProvider, EditSearchProvider, ChooseSearchKey, ChooseSearchMethod, ConfirmUnrestrictedPlanning, CancelUnrestrictedPlanning, ToggleMemory, SwitchProjectMemory, NewMemory, EditMemory, ChooseMemoryKind, SaveMemory, CloseMemoryEditor, AskDeleteMemory, AskRemoveMemoryFolder, ConfirmMemoryDelete, CancelMemoryDelete, RevealMemory, ToggleUsageRecording, RevealUsageFolder,
         ChooseBlur, ChooseDim, ChooseFormat, OpenCommandEditor, OpenConnectionForm, CloseConnectionForm, SwitchConnection, ChooseMode, ChooseModel, ChooseTexture, ChooseTheme, CloseChatTab, CloseMenu, ClosePane,
         ClosePaneId, CloseSettings, CloseTab, Compact, DeleteChat, DiscardConnection, EditConnection, EqualizeSplit, FocusNext, FocusPrevious, MovePane, AddModelRow, RemoveModelRow, SaveCommandEditor, SaveConnection,
         NewChat, NewChatIn, NewTerminal, NewTerminalWith, NextTab, OpenEffortMenu, OpenModelMenu, OpenSettings,
@@ -1100,6 +1100,37 @@ impl Render for Shell {
                 .on_action(cx.listener(|shell, _: &ToggleWebFetch, _, cx| {
                     shell.with_app(cx, |app, cx| app.toggle_web_fetch(cx))
                 }))
+                .on_action(cx.listener(|shell, _: &ToggleWebSearch, _, cx| shell.with_app(cx, |app, cx| app.toggle_web_search(cx))))
+                .on_action(cx.listener(|shell, _: &ToggleRouteFetch, _, cx| shell.with_app(cx, |app, cx| app.toggle_route_fetch(cx))))
+                .on_action(cx.listener(|shell, action: &ChooseSearchProvider, _, cx| {
+                    let id = action.id.clone();
+                    shell.with_app(cx, |app, cx| app.choose_search_provider(&id, cx));
+                }))
+                .on_action(cx.listener(|shell, action: &AddSearchProvider, window, cx| {
+                    let kind = action.kind;
+                    let field = shell.app().map(|app| app.update(cx, |app, cx| app.add_search_provider(kind, cx)));
+                    shell.focus_new_field(field, window, cx);
+                }))
+                .on_action(cx.listener(|shell, action: &EditSearchProvider, window, cx| {
+                    let id = action.id.clone();
+                    let field = shell.app().and_then(|app| app.update(cx, |app, cx| app.edit_search_provider(&id, cx)));
+                    shell.focus_new_field(field, window, cx);
+                }))
+                .on_action(cx.listener(|shell, _: &CloseSearchEditor, _, cx| shell.with_app(cx, |app, cx| app.close_search_editor(cx))))
+                .on_action(cx.listener(|shell, action: &ChooseSearchKey, _, cx| {
+                    let connection = action.connection.clone();
+                    shell.with_app(cx, |app, cx| app.choose_search_key(connection, cx));
+                }))
+                .on_action(cx.listener(|shell, action: &ChooseSearchMethod, _, cx| {
+                    let method = action.method;
+                    shell.with_app(cx, |app, cx| app.choose_search_method(method, cx));
+                }))
+                .on_action(cx.listener(|shell, _: &SaveSearchProvider, _, cx| shell.with_app(cx, |app, cx| app.save_search_provider(cx))))
+                .on_action(cx.listener(|shell, _: &TestSearchProvider, _, cx| shell.with_app(cx, |app, cx| app.test_search_provider(cx))))
+                .on_action(cx.listener(|shell, _: &AskDeleteSearchProvider, _, cx| shell.with_app(cx, |app, cx| app.ask_delete_search_provider(true, cx))))
+                .on_action(cx.listener(|shell, _: &CancelDeleteSearchProvider, _, cx| shell.with_app(cx, |app, cx| app.ask_delete_search_provider(false, cx))))
+                .on_action(cx.listener(|shell, _: &ConfirmDeleteSearchProvider, _, cx| shell.with_app(cx, |app, cx| app.confirm_delete_search_provider(cx))))
+                .on_action(cx.listener(|shell, _: &ResetWebUsage, _, cx| shell.with_app(cx, |app, cx| app.reset_web_usage(cx))))
                 .on_action(cx.listener(|shell, _: &ToggleUsageRecording, _, cx| {
                     shell.with_app(cx, |app, cx| app.toggle_usage_recording(cx))
                 }))
@@ -1563,6 +1594,7 @@ fn live_view(app: &AppState, cx: &App) -> (SidebarData, Screen, StripData) {
                 skills: app.skills.data(cx),
                 commands: app.templates.data(cx),
                 integrations: crate::integrations_page::IntegrationsData { status: store.usage().status() },
+                web: app.web_data(cx),
             }))
         }
         Selection::NewChat(project) => match info(project) {

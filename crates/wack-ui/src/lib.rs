@@ -46,6 +46,7 @@ pub mod tooltip;
 pub mod transcript;
 pub mod typography;
 pub mod ultra;
+pub mod web_page;
 pub mod work;
 
 use gpui::App;

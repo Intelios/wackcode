@@ -34,6 +34,7 @@ use crate::{
     backdrop::Picture,
     chat::{ChatEvent, ChatSession, now_millis},
     memory_page::{MemoryConfirm, MemoryEditor, MemoryState},
+    web_page::{EditorData as WebEditorData, TestOutcome, WebData, WebEditor, WebState},
     skills_page::{SkillEditor, SkillsState, Viewing},
     commands_page::{CommandEditor, CommandsState},
     motion::TitleSwap,
@@ -133,6 +134,9 @@ pub struct AppState {
     /// Settings › Memory: the overview as last read, the note editor and a pending delete.
     pub memory: MemoryState,
     memory_subscriptions: Vec<Subscription>,
+    /// Settings › Web: the provider editor and the overview's last failure.
+    pub web: WebState,
+    web_subscriptions: Vec<Subscription>,
     /// Settings › Skills: the folders as last read, the editor, a skill on view.
     pub skills: SkillsState,
     skill_subscriptions: Vec<Subscription>,
@@ -289,6 +293,8 @@ impl AppState {
             confirming_unrestricted: false,
             memory: MemoryState::default(),
             memory_subscriptions: Vec::new(),
+            web: WebState::default(),
+            web_subscriptions: Vec::new(),
             skills: SkillsState::default(),
             skill_subscriptions: Vec::new(),
             templates: CommandsState::default(),
@@ -355,6 +361,215 @@ impl AppState {
             self.notice = Some(message.into());
         }
         cx.notify();
+    }
+
+    fn web_result(&mut self, result: Result<(), String>, cx: &mut Context<Self>) {
+        self.web.error = result.err().map(Into::into);
+        cx.notify();
+    }
+
+    pub fn toggle_web_search(&mut self, cx: &mut Context<Self>) {
+        let result = self.store.set_web_search(!self.store.web_config().search);
+        self.web_result(result, cx);
+    }
+
+    pub fn toggle_route_fetch(&mut self, cx: &mut Context<Self>) {
+        let result = self.store.set_route_fetch(!self.store.web_config().route_fetch);
+        self.web_result(result, cx);
+    }
+
+    pub fn choose_search_provider(&mut self, id: &str, cx: &mut Context<Self>) {
+        let result = self.store.set_active_search_provider(id);
+        self.web_result(result, cx);
+    }
+
+    pub fn reset_web_usage(&mut self, cx: &mut Context<Self>) {
+        let result = self.store.reset_web_usage(None);
+        self.web_result(result, cx);
+    }
+
+    /// Settings › Web as the page draws it.
+    pub fn web_data(&self, cx: &App) -> WebData {
+        let config = self.store.web_config();
+        let editor = self.web.editor.as_ref().map(|editor| {
+            let lenders = self
+                .store
+                .lendable_connections(editor.kind)
+                .into_iter()
+                .map(|connection| (connection.id.clone(), connection.name.clone()))
+                .collect();
+            let saved = editor.editing.as_deref().is_some_and(|id| self.store.search_key_saved(id));
+            WebEditorData::of(editor, saved, lenders, cx)
+        });
+        WebData {
+            fetch: config.fetch,
+            search: config.search,
+            route_fetch: config.route_fetch,
+            providers: self.store.search_providers(),
+            connection_names: self.store.connections().iter().map(|connection| (connection.id.clone(), connection.name.clone())).collect(),
+            editor,
+            error: self.web.error.clone(),
+        }
+    }
+
+    /// The editor for a new provider of `kind`. Returns its name field.
+    pub fn add_search_provider(&mut self, kind: wack_core::web::search::SearchKind, cx: &mut Context<Self>) -> Entity<TextField> {
+        let draft = wack_core::web::SearchDraft::new(kind);
+        self.open_search_editor(WebEditor::new(&draft, cx), cx)
+    }
+
+    pub fn edit_search_provider(&mut self, id: &str, cx: &mut Context<Self>) -> Option<Entity<TextField>> {
+        let provider = self.store.web_config().providers.iter().find(|provider| provider.id == id)?.clone();
+        let draft = wack_core::web::SearchDraft::of(&provider);
+        Some(self.open_search_editor(WebEditor::new(&draft, cx), cx))
+    }
+
+    fn open_search_editor(&mut self, editor: WebEditor, cx: &mut Context<Self>) -> Entity<TextField> {
+        let name = editor.name.clone();
+        self.web.editor = Some(editor);
+        self.web.error = None;
+        self.watch_search_editor(cx);
+        cx.notify();
+        name
+    }
+
+    pub fn close_search_editor(&mut self, cx: &mut Context<Self>) {
+        self.web.editor = None;
+        self.web_subscriptions.clear();
+        cx.notify();
+    }
+
+    pub fn choose_search_key(&mut self, connection: Option<String>, cx: &mut Context<Self>) {
+        if let Some(editor) = self.web.editor.as_mut() {
+            editor.key_source = match connection {
+                Some(connection) => wack_core::web::search::KeySource::Connection { connection },
+                None => wack_core::web::search::KeySource::Own,
+            };
+            editor.error = None;
+        }
+        cx.notify();
+    }
+
+    pub fn choose_search_method(&mut self, method: wack_core::web::search::HttpMethod, cx: &mut Context<Self>) {
+        if let Some(editor) = self.web.editor.as_mut() {
+            editor.method = method;
+            editor.error = None;
+        }
+        cx.notify();
+    }
+
+    pub fn save_search_provider(&mut self, cx: &mut Context<Self>) {
+        let Some(editor) = self.web.editor.as_ref() else {
+            return;
+        };
+        let key = editor.key(cx);
+        let result = editor.draft(cx).and_then(|draft| self.store.save_search_provider(&draft, key.as_deref()));
+        match result {
+            Ok(_) => self.close_search_editor(cx),
+            Err(message) => {
+                if let Some(editor) = self.web.editor.as_mut() {
+                    editor.error = Some(message.into());
+                }
+                cx.notify();
+            }
+        }
+    }
+
+    /// Runs the draft as it stands, with a typed key or the saved one, and shows what came back.
+    pub fn test_search_provider(&mut self, cx: &mut Context<Self>) {
+        let Some(editor) = self.web.editor.as_mut() else {
+            return;
+        };
+        let key = editor.key(cx);
+        let client = editor.draft(cx).and_then(|draft| self.store.draft_search_client(&draft, key.as_deref()));
+        let client = match client {
+            Ok(client) => client,
+            Err(message) => {
+                editor.test = Some(TestOutcome::Failed(message.into()));
+                cx.notify();
+                return;
+            }
+        };
+        editor.testing = true;
+        editor.test = None;
+        editor.test_serial += 1;
+        let serial = editor.test_serial;
+        let work = Tokio::spawn(cx, async move {
+            let started = std::time::Instant::now();
+            let query = wack_core::web::search::normalize_query("WackCode", Some(3), None, None)?;
+            let hits = client.search(&query).await?;
+            Ok::<_, String>((started.elapsed().as_millis() as u64, hits))
+        });
+        cx.spawn(async move |app, cx| {
+            let result = work.await.unwrap_or_else(|_| Err("The test search stopped.".into()));
+            let _ = app.update(cx, |app, cx| {
+                let Some(editor) = app.web.editor.as_mut().filter(|editor| editor.test_serial == serial) else {
+                    return;
+                };
+                editor.testing = false;
+                editor.test = Some(match result {
+                    Ok((elapsed_ms, hits)) => TestOutcome::Found {
+                        elapsed_ms,
+                        hits: hits
+                            .into_iter()
+                            .map(|hit| {
+                                let host = hit.url.split('/').nth(2).unwrap_or("").trim_start_matches("www.").to_string();
+                                (hit.title.into(), host.into())
+                            })
+                            .collect(),
+                    },
+                    Err(message) => TestOutcome::Failed(message.into()),
+                });
+                cx.notify();
+            });
+        })
+        .detach();
+        cx.notify();
+    }
+
+    pub fn ask_delete_search_provider(&mut self, confirming: bool, cx: &mut Context<Self>) {
+        if let Some(editor) = self.web.editor.as_mut() {
+            editor.confirming_delete = confirming;
+        }
+        cx.notify();
+    }
+
+    pub fn confirm_delete_search_provider(&mut self, cx: &mut Context<Self>) {
+        let Some(id) = self.web.editor.as_ref().and_then(|editor| editor.editing.clone()) else {
+            return;
+        };
+        match self.store.delete_search_provider(&id) {
+            Ok(()) => self.close_search_editor(cx),
+            Err(message) => {
+                if let Some(editor) = self.web.editor.as_mut() {
+                    editor.confirming_delete = false;
+                    editor.error = Some(message.into());
+                }
+                cx.notify();
+            }
+        }
+    }
+
+    fn watch_search_editor(&mut self, cx: &mut Context<Self>) {
+        self.web_subscriptions.clear();
+        let Some(editor) = self.web.editor.as_ref() else {
+            return;
+        };
+        let body = editor.body_template.clone();
+        for field in editor.fields() {
+            let multiline = field == body;
+            self.web_subscriptions.push(cx.subscribe(&field, move |app, field, event: &TextFieldEvent, cx| match event {
+                TextFieldEvent::Enter if multiline => field.update(cx, |field, cx| field.insert_line_break(cx)),
+                TextFieldEvent::Enter | TextFieldEvent::SendNow => app.save_search_provider(cx),
+                TextFieldEvent::Changed => {
+                    if let Some(editor) = app.web.editor.as_mut() {
+                        editor.error = None;
+                    }
+                    cx.notify();
+                }
+                TextFieldEvent::Moved | TextFieldEvent::Menu(_) => {}
+            }));
+        }
     }
 
     /// Settings › Integrations: the ledger's off switch.
@@ -583,6 +798,7 @@ impl AppState {
             Selection::Settings => match self.settings_section {
                 Section::Providers => self.form.open.then(|| self.form.name.clone()),
                 Section::Memory => self.memory.editor.as_ref().map(|editor| editor.title.clone()),
+                Section::Web => self.web.editor.as_ref().map(|editor| editor.name.clone()),
                 Section::Skills => self.skills.editor.as_ref().map(|editor| editor.name.clone()),
                 Section::Commands => self.templates.editor.as_ref().map(|editor| editor.name.clone()),
                 _ => None,

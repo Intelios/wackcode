@@ -38,6 +38,7 @@ State lives in models, not views. Closing a pane or switching a tab must never l
   v3/backgrounds/           backdrop images
   v3/memory/<label>-<key>/  one project's memory notes (Markdown with frontmatter), origin.json, .trash/
   v3/commands/<name>.md     the user's own slash commands (Settings › Commands)
+  v3/web-usage.json         Settings › Web's monthly count of searches and page reads per provider
 ~/.agents/skills/           the user's skills, shared with other tools; the only skill folder WackCode writes to
 ```
 
@@ -91,7 +92,8 @@ Built so far:
 
 - Plan and Ultra Plan, the question card, the todo list and Ultra reasoning, ported from version 2 with its prompts and tested logic: the mode toggle and ⇧Tab, the interview with Write the plan now, the plan card (Approve & implement, Save PLAN.md, Copy, Discard), the todo list folding finished tasks, agent-initiated Plan, Settings › Tools' unrestricted planning, and `wack run --mode` / `--effort ultra`. Verified in the dev app against the Testing connection (Ultra Plan interview to plan to implementation, relaunch mid-plan, Discard, a Build run keeping a todo list) and headless.
 
-- Web Fetch (`wack-web`), ported from version 2: `web_fetch {url, offset}`, deferred and read-only, through one public-address guard enforced at the HTTP client's DNS resolver and on every redirect; Readability (`dom_smoothie`) then `htmd` to Markdown, text passed through, binaries refused, character-offset paging, a short page cache. On by default, switched in Settings › Tools. Verified headless against the Testing connection (a real page read, localhost refused). Web Search, Settings › Web and MCP come next.
+- Web Fetch (`wack-web`), ported from version 2: `web_fetch {url, offset}`, deferred and read-only, through one public-address guard enforced at the HTTP client's DNS resolver and on every redirect; Readability (`dom_smoothie`) then `htmd` to Markdown, text passed through, binaries refused, character-offset paging, a short page cache. On by default, switched in Settings › Tools. Verified headless against the Testing connection (a real page read, localhost refused).
+- Web Search and Settings › Web, ported from version 2: DeepSeek, Brave, Tavily, SearXNG and Custom (`wack-web/search.rs`, with v2's tests), `web_search {query, count, site, recency}` (deferred, read-only, offered only while search is on and the active provider can search), reading pages through DeepSeek or Tavily, own keys or a DeepSeek connection's, the local monthly meter (`wack-core/web_usage.rs`), and Settings › Web's overview and provider editor with Test search. Version 2's key reveal is not ported. Tested offline and against a local server; no paid search provider has been called. MCP comes next.
 
 Known gaps in the agent core, to close as the features that need them arrive:
 

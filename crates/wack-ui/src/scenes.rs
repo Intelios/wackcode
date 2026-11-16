@@ -547,6 +547,7 @@ pub fn all() -> Vec<Scene> {
         skills: Default::default(),
         commands: Default::default(),
         integrations: Default::default(),
+        web: Default::default(),
                 };
                 cx.new(|_| Shell::showing(fixtures::sidebar(Selected::None), Screen::Settings(Box::new(data)))).into()
             },
@@ -620,6 +621,36 @@ pub fn all() -> Vec<Scene> {
             description: "Settings › Integrations when a write failed: records waiting, one lost, and the failure itself.",
             size: size(px(1180.), px(1000.)),
             build: |_, cx| integrations_scene(UsageScene::Attention, None, cx),
+        },
+        Scene {
+            name: "settings-web",
+            description: "Settings › Web: reading through DeepSeek, three providers (one needing a key) and this month's usage.",
+            size: size(px(1180.), px(1100.)),
+            build: |_, cx| web_scene(WebScene::Providers, None, cx),
+        },
+        Scene {
+            name: "settings-web-empty",
+            description: "Settings › Web before any search provider is added.",
+            size: size(px(1180.), px(900.)),
+            build: |_, cx| web_scene(WebScene::Empty, None, cx),
+        },
+        Scene {
+            name: "settings-web-backdrop",
+            description: "Settings › Web over a backdrop.",
+            size: size(px(1180.), px(1100.)),
+            build: |_, cx| web_scene(WebScene::Providers, Some(over(fixtures::backdrop(wack_core::Texture::None), cx)), cx),
+        },
+        Scene {
+            name: "settings-web-editor",
+            description: "Settings › Web's editor for DeepSeek, borrowing a connection's key, after a Test search.",
+            size: size(px(1180.), px(1000.)),
+            build: |_, cx| web_scene(WebScene::Editor, None, cx),
+        },
+        Scene {
+            name: "settings-web-custom",
+            description: "Settings › Web's editor for a Custom POST API whose Test search failed.",
+            size: size(px(1180.), px(1400.)),
+            build: |_, cx| web_scene(WebScene::Custom, None, cx),
         },
         Scene {
             name: "settings-memory",
@@ -1193,6 +1224,7 @@ fn providers_scene(state: Providers, sidebar_hidden: bool, cx: &mut App) -> AnyV
         skills: Default::default(),
         commands: Default::default(),
         integrations: Default::default(),
+        web: Default::default(),
     };
     cx.new(|_| {
         let shell = Shell::showing(fixtures::sidebar(Selected::None), Screen::Settings(Box::new(data)));
@@ -1213,6 +1245,7 @@ fn settings_scene(backdrop: Option<crate::backdrop::Picture>, cx: &mut App) -> A
         skills: Default::default(),
         commands: Default::default(),
         integrations: Default::default(),
+        web: Default::default(),
     };
     cx.new(|_| {
         let shell = Shell::showing(fixtures::sidebar(Selected::None), Screen::Settings(Box::new(data)));
@@ -1389,6 +1422,7 @@ fn memory_scene(scene: MemoryScene, backdrop: Option<crate::backdrop::Picture>, 
         skills: Default::default(),
         commands: Default::default(),
         integrations: Default::default(),
+        web: Default::default(),
     };
     cx.new(|_| {
         let shell = Shell::showing(fixtures::sidebar(Selected::None), Screen::Settings(Box::new(data)));
@@ -1608,6 +1642,7 @@ fn skills_scene(scene: SkillsScene, backdrop: bool, cx: &mut App) -> AnyView {
         skills: state.data(cx),
         commands: Default::default(),
         integrations: Default::default(),
+        web: Default::default(),
     };
     cx.new(|_| {
         let shell = Shell::showing(fixtures::sidebar(Selected::None), Screen::Settings(Box::new(data)));
@@ -1659,6 +1694,7 @@ fn commands_scene(editing: bool, cx: &mut App) -> AnyView {
         skills: Default::default(),
         commands: state.data(cx),
         integrations: Default::default(),
+        web: Default::default(),
     };
     cx.new(|_| Shell::showing(fixtures::sidebar(Selected::None), Screen::Settings(Box::new(data)))).into()
 }
@@ -1672,6 +1708,126 @@ enum UsageScene {
     Paused,
     /// A write failed: records waiting, one lost, and the failure itself.
     Attention,
+}
+
+#[derive(Clone, Copy)]
+enum WebScene {
+    Empty,
+    Providers,
+    Editor,
+    Custom,
+}
+
+/// Settings › Web, drawn over `backdrop` when there is one.
+fn web_scene(scene: WebScene, backdrop: Option<crate::backdrop::Picture>, cx: &mut App) -> AnyView {
+    use wack_core::{
+        web::{
+            ProviderSummary, SearchDraft,
+            search::{CustomSpec, HttpMethod, KeySource, SearchKind, SearchProvider},
+        },
+        web_usage::Counters,
+    };
+    use crate::web_page::{EditorData, TestOutcome, WebData, WebEditor};
+
+    let provider = |id: &str, name: &str, kind: SearchKind, key_source: KeySource| SearchProvider {
+        id: id.into(),
+        name: name.into(),
+        kind,
+        key_source,
+        base_url: (kind == SearchKind::Searxng).then(|| "https://searx.example.org".into()),
+        custom: None,
+        price_search_per_1k: (kind == SearchKind::Deepseek).then_some(0.75),
+        price_fetch_per_1k: (kind == SearchKind::Deepseek).then_some(0.75),
+    };
+    let providers = match scene {
+        WebScene::Empty => Vec::new(),
+        _ => vec![
+            ProviderSummary {
+                provider: provider("deepseek", "DeepSeek", SearchKind::Deepseek, KeySource::Connection { connection: "ds".into() }),
+                active: true,
+                problem: None,
+                usage: Counters { searches: 214, fetches: 38, billed_searches: 209, billed_fetches: 36, failed: 3 },
+            },
+            ProviderSummary {
+                provider: provider("searx", "Home SearXNG", SearchKind::Searxng, KeySource::None),
+                active: false,
+                problem: None,
+                usage: Counters::default(),
+            },
+            ProviderSummary {
+                provider: provider("brave", "Brave Search", SearchKind::Brave, KeySource::Own),
+                active: false,
+                problem: Some("Add an API key for Brave Search in Settings › Web.".into()),
+                usage: Counters::default(),
+            },
+        ],
+    };
+    let editor = match scene {
+        WebScene::Editor => {
+            let mut draft = SearchDraft::new(SearchKind::Deepseek);
+            draft.id = Some("deepseek".into());
+            draft.key_source = KeySource::Connection { connection: "ds".into() };
+            let mut editor = WebEditor::new(&draft, cx);
+            editor.test = Some(TestOutcome::Found {
+                elapsed_ms: 812,
+                hits: vec![
+                    ("WackCode — a native macOS coding agent".into(), "github.com".into()),
+                    ("Release notes · WackCode".into(), "wackcode.dev".into()),
+                    ("Show HN: WackCode".into(), "news.ycombinator.com".into()),
+                ],
+            });
+            let lenders = vec![("ds".to_string(), "DeepSeek".to_string()), ("ds-work".to_string(), "DeepSeek (work)".to_string())];
+            Some(EditorData::of(&editor, false, lenders, cx))
+        }
+        WebScene::Custom => {
+            let mut draft = SearchDraft::new(SearchKind::Custom);
+            draft.name = "Company search".into();
+            draft.base_url = Some("https://search.example.com/api/v2".into());
+            draft.custom = Some(CustomSpec {
+                method: HttpMethod::Post,
+                auth_header: Some("X-API-Key".into()),
+                body_template: Some(r#"{"q": "{{query}}", "size": {{count}}}"#.into()),
+                results_path: "data.items".into(),
+                title_path: "name".into(),
+                url_path: "link.href".into(),
+                snippet_path: Some("blurb".into()),
+                ..CustomSpec::default()
+            });
+            let mut editor = WebEditor::new(&draft, cx);
+            editor.test = Some(TestOutcome::Failed("Company search rejected the API key. Check it in Settings › Web.".into()));
+            Some(EditorData::of(&editor, false, Vec::new(), cx))
+        }
+        _ => None,
+    };
+    let web = WebData {
+        fetch: true,
+        search: !matches!(scene, WebScene::Empty),
+        route_fetch: matches!(scene, WebScene::Providers),
+        providers,
+        connection_names: vec![("ds".into(), "DeepSeek".into())],
+        editor,
+        error: None,
+    };
+    let form = ProviderForm::new(cx);
+    let data = SettingsData {
+        section: Section::Web,
+        providers: ProvidersData::new(&fixtures::connections(), |_| true, &form, cx),
+        appearance: fixtures::appearance(backdrop.clone(), cx),
+        tools: Default::default(),
+        memory: Default::default(),
+        skills: Default::default(),
+        commands: Default::default(),
+        integrations: Default::default(),
+        web,
+    };
+    cx.new(|_| {
+        let shell = Shell::showing(fixtures::sidebar(Selected::None), Screen::Settings(Box::new(data)));
+        match backdrop {
+            Some(picture) => shell.with_backdrop(picture),
+            None => shell,
+        }
+    })
+    .into()
 }
 
 /// Settings › Integrations, drawn over `backdrop` when there is one.
@@ -1715,6 +1871,7 @@ fn integrations_scene(scene: UsageScene, backdrop: Option<crate::backdrop::Pictu
         skills: Default::default(),
         commands: Default::default(),
         integrations: crate::integrations_page::IntegrationsData { status },
+        web: Default::default(),
     };
     cx.new(|_| {
         let shell = Shell::showing(fixtures::sidebar(Selected::None), Screen::Settings(Box::new(data)));

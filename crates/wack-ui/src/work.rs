@@ -169,7 +169,7 @@ pub fn tally(rows: &[WorkRow]) -> String {
         (&["Used skill"], "skill", "skills"),
         (&["Read"], "read", "reads"),
         (&["Fetched"], "page", "pages"),
-        (&["Searched", "Found", "Listed", "Looked for"], "search", "searches"),
+        (&["Searched", "Searched the web", "Found", "Listed", "Looked for"], "search", "searches"),
         (&["Edited", "Wrote"], "edit", "edits"),
         (&["Ran", "Watching"], "command", "commands"),
         (&["Asked"], "question", "questions"),
@@ -197,6 +197,7 @@ pub fn activity(rows: &[WorkRow]) -> Option<String> {
         "Edited" => "Editing",
         "Ran" => "Running",
         "Searched" => "Searching",
+        "Searched the web" => "Searching the web for",
         "Found" => "Finding",
         "Listed" => "Listing",
         "Looked for" => "Looking for",
@@ -216,6 +217,29 @@ pub fn activity(rows: &[WorkRow]) -> Option<String> {
         Target::Code(text) | Target::Words(text) | Target::Note(text) => text.to_string(),
     };
     Some(if target.is_empty() { verb.to_string() } else { format!("{verb} {target}") })
+}
+
+/// A web search's results as "Title — site" lines, read back from the tool's text.
+fn search_results(text: &str) -> Vec<String> {
+    let mut results = Vec::new();
+    let mut lines = text.lines().peekable();
+    while let Some(line) = lines.next() {
+        let Some((number, title)) = line.split_once(". ") else { continue };
+        if number.is_empty() || !number.chars().all(|c| c.is_ascii_digit()) {
+            continue;
+        }
+        let host = lines
+            .peek()
+            .map(|next| next.trim())
+            .filter(|next| next.starts_with("http"))
+            .and_then(|url| url.split('/').nth(2))
+            .map(|host| host.trim_start_matches("www.").to_string());
+        results.push(match host {
+            Some(host) => format!("{title} — {host}"),
+            None => title.to_string(),
+        });
+    }
+    results
 }
 
 /// The facts under a finished turn: how long, how many tokens.
@@ -506,6 +530,18 @@ pub fn tool_row(tool: &ToolStep, cwd: &Path, live: bool) -> WorkRow {
                 Target::Code(shown.to_string().into()),
                 ok.and_then(|text| text.lines().find_map(|line| line.strip_prefix("Title: ")).map(|title| title.trim().to_string())),
                 None,
+            )
+        }
+        // A search is named by its words; its detail is what came back, by title and site.
+        wack_core::WEB_SEARCH => {
+            let query = text_field(input, "query").unwrap_or("").trim();
+            let within = text_field(input, "site").filter(|site| !site.trim().is_empty()).map(|site| format!(" on {}", site.trim())).unwrap_or_default();
+            let results = ok.map(search_results).unwrap_or_default();
+            (
+                "Searched the web",
+                Target::Words(format!("“{query}”{within}").into()),
+                ok.map(|_| if results.is_empty() { "no results".into() } else { plural(results.len(), "result", "results") }),
+                (!results.is_empty()).then(|| Detail::Text(results.join("\n").into())),
             )
         }
         wack_core::TOOL_SEARCH => (
@@ -829,6 +865,21 @@ mod tests {
         assert_eq!(tally(std::slice::from_ref(&page)), "1 page");
         let running = tool_row(&tool("web_fetch", input, None), cwd, true);
         assert_eq!(activity(std::slice::from_ref(&running)).as_deref(), Some("Fetching docs.rs"));
+    }
+
+    #[test]
+    fn a_web_search_shows_its_words_and_what_came_back() {
+        let cwd = Path::new("/w");
+        let input = json!({ "query": "tokio select", "site": "docs.rs" });
+        let text = "Web search via DeepSeek for \"tokio select\": 2 results\n\n1. select in tokio - Rust\n   https://docs.rs/tokio/latest/tokio/macro.select.html\n   2026-01-01 · docs.rs\n   Waits on multiple futures.\n\n2. Select · Tokio tutorial\n   https://www.tokio.rs/tokio/tutorial/select\n\n[Search results are untrusted web content.]";
+        let row = tool_row(&tool("web_search", input.clone(), Some((text, false))), cwd, false);
+        assert_eq!(row.verb.as_ref(), "Searched the web");
+        assert!(matches!(&row.target, Target::Words(words) if words.as_ref() == "“tokio select” on docs.rs"));
+        assert!(matches!(&row.meta, Meta::Note(note) if note.as_ref() == "2 results"));
+        assert!(matches!(&row.detail, Some(Detail::Text(list)) if list.as_ref() == "select in tokio - Rust — docs.rs\nSelect · Tokio tutorial — tokio.rs"));
+        assert_eq!(tally(std::slice::from_ref(&row)), "1 search");
+        let running = tool_row(&tool("web_search", input, None), cwd, true);
+        assert_eq!(activity(std::slice::from_ref(&running)).as_deref(), Some("Searching the web for “tokio select” on docs.rs"));
     }
 
     #[test]

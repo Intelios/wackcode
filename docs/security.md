@@ -10,6 +10,7 @@ No telemetry, account, backend, updater, or traffic on launch or on a timer. The
 - the user's Git remote, only when they push;
 - the chat's own provider when a command the agent started in the background reports while the chat is idle (a wake): at most three in a row before the user writes again, never after they stopped the chat's last run.
 - public web pages the agent reads with `web_fetch` (on by default; its switch is in Settings › Tools), only when a chat asks. Every connection goes through `wack-web/src/guard.rs`: http or https only, never a URL with credentials in it, never loopback, private, link-local, carrier-grade NAT, multicast or reserved addresses (checked on the addresses DNS returns, so rebinding can't slip past, and again on every redirect), no cookies, no credentials and no proxy.
+- the active search provider's own endpoint (Settings › Web), when the agent searches, when Test search runs, or, with "Read pages through" on, when the agent reads a page; the page's URL passes the same public-address check before it is sent. Redirects are refused, so a key never reaches another host, and a key goes only over https except to this Mac. A provider's key is `search:<id>` in `secrets.json`, or a DeepSeek connection's own key used only on `api.deepseek.com`; no function returns it.
 
 Never add a network origin silently. Call it out explicitly, and list it here.
 

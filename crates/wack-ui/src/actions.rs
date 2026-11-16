@@ -96,6 +96,20 @@ actions!(
         CancelUnrestrictedPlanning,
         /// Settings › Tools and Settings › Web: turns Web Fetch on or off.
         ToggleWebFetch,
+        /// Settings › Web: the Web Search switch.
+        ToggleWebSearch,
+        /// Settings › Web: reading pages through the active search provider.
+        ToggleRouteFetch,
+        /// Settings › Web: back to the overview from a provider's editor.
+        CloseSearchEditor,
+        SaveSearchProvider,
+        /// Settings › Web: runs the editor's draft as it stands.
+        TestSearchProvider,
+        AskDeleteSearchProvider,
+        ConfirmDeleteSearchProvider,
+        CancelDeleteSearchProvider,
+        /// Settings › Web: clears the usage meter's counts.
+        ResetWebUsage,
         /// Settings › Integrations: turns the usage ledger's recording on or off.
         ToggleUsageRecording,
         /// Adds a picture to the backdrop's library, and shows it.
@@ -528,6 +542,41 @@ pub struct EqualizeSplit {
     pub dock: Dock,
     pub path: Vec<usize>,
     pub index: usize,
+}
+
+/// Settings › Web: makes a search provider the active one.
+#[derive(Clone, Debug, PartialEq, Action)]
+#[action(namespace = wackcode, no_json)]
+pub struct ChooseSearchProvider {
+    pub id: String,
+}
+
+/// Settings › Web: the editor for a new provider of this kind.
+#[derive(Clone, Debug, PartialEq, Action)]
+#[action(namespace = wackcode, no_json)]
+pub struct AddSearchProvider {
+    pub kind: wack_core::web::search::SearchKind,
+}
+
+/// Settings › Web: the editor for a saved provider.
+#[derive(Clone, Debug, PartialEq, Action)]
+#[action(namespace = wackcode, no_json)]
+pub struct EditSearchProvider {
+    pub id: String,
+}
+
+/// Settings › Web: where the edited provider's key comes from: its own, or a connection's.
+#[derive(Clone, Debug, PartialEq, Action)]
+#[action(namespace = wackcode, no_json)]
+pub struct ChooseSearchKey {
+    pub connection: Option<String>,
+}
+
+/// Settings › Web: a Custom provider's request method.
+#[derive(Clone, Debug, PartialEq, Action)]
+#[action(namespace = wackcode, no_json)]
+pub struct ChooseSearchMethod {
+    pub method: wack_core::web::search::HttpMethod,
 }
 
 #[derive(Clone, Debug, PartialEq, Action)]

@@ -99,6 +99,20 @@ actions!(
         /// Settings › Memory: moves the note or folder waiting for confirmation to the Trash.
         ConfirmMemoryDelete,
         CancelMemoryDelete,
+        /// Settings › Skills: a new skill in Your skills.
+        NewSkill,
+        /// Settings › Skills: saves the skill the editor describes.
+        SaveSkill,
+        /// Settings › Skills: back to the list from the editor or a skill on view.
+        CloseSkill,
+        /// Settings › Skills: asks before the skill in the editor moves to the Trash.
+        AskDeleteSkill,
+        ConfirmSkillDelete,
+        CancelSkillDelete,
+        /// Settings › Skills: adds a folder to load skills from.
+        AddSkillFolder,
+        /// Settings › Skills: imports skills from a folder, a .md file or a .zip.
+        ImportSkills,
         /// Dismisses the Build/Run command configuration popover.
         CloseCommandEditor,
         /// Settings › Providers › Automatic titles: the switch.
@@ -350,6 +364,50 @@ pub struct RemoveProject {
 #[action(namespace = wackcode, no_json)]
 pub struct DeleteChat {
     pub id: String,
+}
+
+/// Settings › Skills: one skill's switch, by its key.
+#[derive(Clone, Debug, PartialEq, Action)]
+#[action(namespace = wackcode, no_json)]
+pub struct SwitchSkill {
+    pub key: String,
+    pub on: bool,
+}
+
+/// Settings › Skills: another tool's folder switched on or off.
+#[derive(Clone, Debug, PartialEq, Action)]
+#[action(namespace = wackcode, no_json)]
+pub struct SwitchSkillFolder {
+    pub id: String,
+    pub on: bool,
+}
+
+/// Settings › Skills: stops loading skills from a folder the user added.
+#[derive(Clone, Debug, PartialEq, Action)]
+#[action(namespace = wackcode, no_json)]
+pub struct RemoveSkillFolder {
+    pub id: String,
+}
+
+/// Settings › Skills: opens a skill, in the editor when it is one of the user's, else read-only.
+#[derive(Clone, Debug, PartialEq, Action)]
+#[action(namespace = wackcode, no_json)]
+pub struct OpenSkill {
+    pub file: std::path::PathBuf,
+}
+
+/// Settings › Skills: copies a skill from another folder into Your skills.
+#[derive(Clone, Debug, PartialEq, Action)]
+#[action(namespace = wackcode, no_json)]
+pub struct CopySkill {
+    pub file: std::path::PathBuf,
+}
+
+/// Settings › Skills' editor: whether the skill runs only as /name.
+#[derive(Clone, Debug, PartialEq, Action)]
+#[action(namespace = wackcode, no_json)]
+pub struct ChooseSkillUse {
+    pub manual: bool,
 }
 
 /// Picks a row of the `/` menu.

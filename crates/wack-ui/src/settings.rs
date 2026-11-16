@@ -494,10 +494,11 @@ pub enum Section {
     Providers,
     Tools,
     Memory,
+    Skills,
 }
 
 impl Section {
-    pub const ALL: [Section; 4] = [Section::Appearance, Section::Providers, Section::Tools, Section::Memory];
+    pub const ALL: [Section; 5] = [Section::Appearance, Section::Providers, Section::Tools, Section::Memory, Section::Skills];
 
     pub fn name(self) -> &'static str {
         match self {
@@ -505,6 +506,7 @@ impl Section {
             Section::Providers => "Providers",
             Section::Tools => "Tools",
             Section::Memory => "Memory",
+            Section::Skills => "Skills",
         }
     }
 
@@ -514,6 +516,7 @@ impl Section {
             Section::Providers => "section-providers",
             Section::Tools => "section-tools",
             Section::Memory => "section-memory",
+            Section::Skills => "section-skills",
         }
     }
 }
@@ -529,7 +532,7 @@ const GROUPS: [(&str, &[Entry]); 4] = [
     ("Models", &[(Some(Section::Providers), "Providers"), (None, "Prompts")]),
     (
         "Agent",
-        &[(Some(Section::Tools), "Tools"), (Some(Section::Memory), "Memory"), (None, "Skills"), (None, "Commands"), (None, "Sub-agents"), (None, "Git")],
+        &[(Some(Section::Tools), "Tools"), (Some(Section::Memory), "Memory"), (Some(Section::Skills), "Skills"), (None, "Commands"), (None, "Sub-agents"), (None, "Git")],
     ),
     ("Reach", &[(None, "MCP servers"), (None, "Web"), (None, "Computer use")]),
 ];
@@ -542,6 +545,7 @@ pub struct SettingsData {
     pub appearance: AppearanceData,
     pub tools: crate::tools_page::ToolsData,
     pub memory: crate::memory_page::MemoryData,
+    pub skills: crate::skills_page::SkillsData,
 }
 
 /// The title strip's words: `Settings › Providers`.
@@ -646,6 +650,7 @@ pub fn page(data: SettingsData, inline_nav: bool, narrow: bool, stack_form: bool
         Section::Providers => providers(data.providers, stack_form, theme).into_any_element(),
         Section::Tools => crate::tools_page::page(data.tools, theme).into_any_element(),
         Section::Memory => crate::memory_page::page(data.memory, theme),
+        Section::Skills => crate::skills_page::page(data.skills, theme),
     };
     let footer = if section == Section::Providers {
         editor.as_ref().and_then(|editor| save_bar(editor, narrow, theme))

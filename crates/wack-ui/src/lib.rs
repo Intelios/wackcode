@@ -32,6 +32,7 @@ pub mod slash_menu;
 pub mod slide;
 pub mod shell;
 pub mod sidebar;
+pub mod skills_page;
 pub mod specimen;
 pub mod tags;
 pub mod text_field;

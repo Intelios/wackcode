@@ -12,7 +12,8 @@
 //! - Nothing is cached: a run loads its skills as it starts, and the `/` menu reads the
 //!   catalogue each time it opens, so an edit in another app shows at once. Both read only small
 //!   files from a few folders.
-//! - Deleting moves to the macOS Trash; an import never overwrites a skill.
+//! - Deleting moves to the macOS Trash, through the function the caller passes (the UI's uses
+//!   Finder's, so Put Back works); an import never overwrites a skill.
 
 use std::{
     collections::HashSet,
@@ -31,6 +32,13 @@ pub use wack_agent::{
     skills::{Catalog, Document, Problem, Root, Shadowed, Skill, read_document},
 };
 use wack_agent::{commands, skills};
+
+/// A skill file's instructions, without its frontmatter.
+pub fn split_body(text: &str) -> String {
+    skills::frontmatter::split(text).1
+}
+
+pub use wack_agent::skills::{validate_description, validate_hint, validate_name};
 
 use crate::store::Store;
 
@@ -363,16 +371,16 @@ impl Store {
         self.save_state()
     }
 
-    /// Moves a skill in "Your skills" to the Trash: its whole folder for a `SKILL.md`, the file
-    /// for a loose one.
-    pub fn delete_skill(&mut self, file: &Path) -> Result<(), String> {
+    /// Moves a skill in "Your skills" to the Trash with `trash`: its whole folder for a
+    /// `SKILL.md`, the file for a loose one.
+    pub fn delete_skill(&mut self, file: &Path, trash: &dyn Fn(&Path) -> Result<(), String>) -> Result<(), String> {
         let file = self.library_file(file)?;
         let library = self.skills_library();
         let target = match file.parent() {
             Some(folder) if file.file_name().is_some_and(|name| name == "SKILL.md") && folder != library => folder.to_path_buf(),
             _ => file.clone(),
         };
-        move_to_trash(&target, &self.home())?;
+        trash(&target)?;
         let key = file_key(Kind::Skill, &file);
         if self.skills_config().off.contains(&key) {
             self.skills_config_mut().off.retain(|entry| *entry != key);
@@ -456,13 +464,16 @@ impl Store {
         Ok(file)
     }
 
-    /// Moves one of the user's commands to the Trash.
-    pub fn delete_template(&mut self, name: &str) -> Result<(), String> {
+    /// Moves one of the user's commands to the Trash with `trash`.
+    pub fn delete_template(&mut self, name: &str, trash: &dyn Fn(&Path) -> Result<(), String>) -> Result<(), String> {
         if !valid_command_name(name) {
             return Err("That command is not recognised.".into());
         }
         let file = self.commands_folder().join(format!("{name}.md"));
-        move_to_trash(&file, &self.home())?;
+        if fs::symlink_metadata(&file).is_err() {
+            return Err("That command could not be found. It may have been deleted already.".into());
+        }
+        trash(&file)?;
         let key = file_key(Kind::Template, &file);
         if self.skills_config().off.contains(&key) {
             self.skills_config_mut().off.retain(|entry| *entry != key);
@@ -502,27 +513,6 @@ fn write_atomic(file: &Path, text: &str) -> Result<(), String> {
         let _ = fs::remove_file(&staging);
         format!("Could not save the file: {error}")
     })
-}
-
-/// Moves `path` into `~/.Trash`, numbered when the name is taken there.
-fn move_to_trash(path: &Path, home: &Path) -> Result<(), String> {
-    if fs::symlink_metadata(path).is_err() {
-        return Err("It could not be found. It may have been moved or deleted already.".into());
-    }
-    let trash = home.join(".Trash");
-    fs::create_dir_all(&trash).map_err(|error| format!("Could not reach the Trash: {error}"))?;
-    let name = path.file_name().map(|name| name.to_string_lossy().into_owned()).unwrap_or_else(|| "skill".into());
-    let (stem, extension) = match name.rsplit_once('.') {
-        Some((stem, extension)) if !stem.is_empty() => (stem.to_string(), format!(".{extension}")),
-        _ => (name.clone(), String::new()),
-    };
-    let mut target = trash.join(&name);
-    let mut number = 2;
-    while fs::symlink_metadata(&target).is_ok() {
-        target = trash.join(format!("{stem} {number}{extension}"));
-        number += 1;
-    }
-    fs::rename(path, &target).map_err(|error| format!("Could not move it to the Trash: {error}"))
 }
 
 /// A skill's files into a new folder `target`: its whole folder for a `SKILL.md`, the file alone
@@ -629,6 +619,15 @@ mod tests {
         store: Store,
     }
 
+    /// The tests' Trash: a folder in the fake home.
+    fn trash(home: &Path) -> impl Fn(&Path) -> Result<(), String> + '_ {
+        move |path: &Path| {
+            let bin = home.join(".Trash");
+            fs::create_dir_all(&bin).unwrap();
+            fs::rename(path, bin.join(path.file_name().unwrap())).map_err(|error| error.to_string())
+        }
+    }
+
     fn fixture() -> Fixture {
         let data = tempfile::tempdir().unwrap();
         let home = tempfile::tempdir().unwrap();
@@ -713,9 +712,9 @@ mod tests {
         let other = f.home.path().join(".claude/skills/x/SKILL.md");
         write(&other, &skill_text("x", "Theirs"));
         assert!(f.store.update_skill(&other, "x", "y", false, "", "").is_err());
-        assert!(f.store.delete_skill(&other).is_err());
+        assert!(f.store.delete_skill(&other, &trash(f.home.path())).is_err());
 
-        f.store.delete_skill(&moved).unwrap();
+        f.store.delete_skill(&moved, &trash(f.home.path())).unwrap();
         assert!(!moved.parent().unwrap().exists());
         assert!(f.home.path().join(".Trash/pdf-forms/SKILL.md").exists());
     }
@@ -766,7 +765,7 @@ mod tests {
         let check = overview.iter().find(|entry| entry.command.name == "check").unwrap();
         assert!(!check.enabled);
         assert_eq!(check.command.description, "Check a file");
-        f.store.delete_template("check").unwrap();
+        f.store.delete_template("check", &trash(f.home.path())).unwrap();
         assert!(!renamed.exists());
         assert!(f.store.skills_config().off.is_empty());
     }

@@ -34,6 +34,7 @@ use crate::{
     backdrop::Picture,
     chat::{ChatEvent, ChatSession, now_millis},
     memory_page::{MemoryConfirm, MemoryEditor, MemoryState},
+    skills_page::{SkillEditor, SkillsState, Viewing},
     motion::TitleSwap,
     panes::{ChatPanes, Layout, PaneKind},
     run_button::{CommandButtonData, CommandEditorData},
@@ -129,6 +130,9 @@ pub struct AppState {
     /// Settings › Memory: the overview as last read, the note editor and a pending delete.
     pub memory: MemoryState,
     memory_subscriptions: Vec<Subscription>,
+    /// Settings › Skills: the folders as last read, the editor, a skill on view.
+    pub skills: SkillsState,
+    skill_subscriptions: Vec<Subscription>,
     /// Long-lived Build and Run PTY commands keyed by `(canonical_cwd, kind)`.
     runs: Runner,
     command_event_tx: mpsc::UnboundedSender<CommandEvent>,
@@ -275,6 +279,8 @@ impl AppState {
             confirming_unrestricted: false,
             memory: MemoryState::default(),
             memory_subscriptions: Vec::new(),
+            skills: SkillsState::default(),
+            skill_subscriptions: Vec::new(),
             runs,
             command_event_tx,
             new_chat_panes: HashMap::new(),
@@ -518,6 +524,7 @@ impl AppState {
             Selection::Settings => match self.settings_section {
                 Section::Providers => self.form.open.then(|| self.form.name.clone()),
                 Section::Memory => self.memory.editor.as_ref().map(|editor| editor.title.clone()),
+                Section::Skills => self.skills.editor.as_ref().map(|editor| editor.name.clone()),
                 _ => None,
             },
             Selection::Welcome => None,
@@ -560,6 +567,9 @@ impl AppState {
                 }
                 if self.settings_section == Section::Memory {
                     self.refresh_memory();
+                }
+                if self.settings_section == Section::Skills {
+                    self.refresh_skills();
                 }
             }
             Selection::Welcome => {}
@@ -1044,6 +1054,10 @@ impl AppState {
         self.settings_section = section;
         if section == Section::Memory {
             self.refresh_memory();
+        }
+        if section == Section::Skills {
+            self.skills.notice = None;
+            self.refresh_skills();
         }
         cx.notify();
     }
@@ -2144,6 +2158,211 @@ pub fn shown_path(path: &Path) -> String {
             Err(_) => path.display().to_string(),
         },
         None => path.display().to_string(),
+    }
+}
+
+// -------------------------------------------------------------------------------------------------
+// Settings › Skills
+
+impl AppState {
+    fn refresh_skills(&mut self) {
+        self.skills.folders = self.store.skills_overview();
+    }
+
+    fn skills_result(&mut self, result: Result<(), String>, cx: &mut Context<Self>) {
+        self.skills.error = result.err().map(Into::into);
+        self.refresh_skills();
+        cx.notify();
+    }
+
+    pub fn switch_skill(&mut self, key: &str, on: bool, cx: &mut Context<Self>) {
+        let result = self.store.set_command_enabled(key, on);
+        self.skills_result(result, cx);
+    }
+
+    pub fn switch_skill_folder(&mut self, id: &str, on: bool, cx: &mut Context<Self>) {
+        let result = self.store.set_skill_folder_enabled(id, on);
+        self.skills_result(result, cx);
+    }
+
+    pub fn add_skill_folder(&mut self, path: &Path, cx: &mut Context<Self>) {
+        let result = self.store.add_skill_folder(path);
+        self.skills_result(result, cx);
+    }
+
+    pub fn remove_skill_folder(&mut self, id: &str, cx: &mut Context<Self>) {
+        let result = self.store.remove_skill_folder(id);
+        self.skills_result(result, cx);
+    }
+
+    /// Imports skills into Your skills and says what came in and what was skipped.
+    pub fn import_skills(&mut self, source: &Path, cx: &mut Context<Self>) {
+        let names = |names: &[String]| names.iter().map(|name| format!("/{name}")).collect::<Vec<_>>().join(", ");
+        match self.store.import_skills(source) {
+            Ok((imported, skipped)) => {
+                let mut words = Vec::new();
+                if !imported.is_empty() {
+                    words.push(format!("Imported {}.", names(&imported)));
+                }
+                if !skipped.is_empty() {
+                    words.push(format!("Skipped {}: Your skills already has one by that name, or the name doesn't follow the skill format.", names(&skipped)));
+                }
+                self.skills.notice = Some(words.join(" ").into());
+                self.skills_result(Ok(()), cx);
+            }
+            Err(message) => {
+                self.skills.notice = None;
+                self.skills_result(Err(message), cx);
+            }
+        }
+    }
+
+    /// Opens the skill at `file`: in the editor when it is in Your skills, else read-only.
+    pub fn open_skill(&mut self, file: &Path, cx: &mut Context<Self>) -> Option<Entity<TextField>> {
+        self.refresh_skills();
+        let (folder, entry) = self.skills.find(file)?;
+        let (library, folder_label, entry) = (folder.kind == wack_core::skills::FolderKind::Library, folder.label.clone(), entry.clone());
+        self.skills.error = None;
+        self.skills.notice = None;
+        if !library {
+            let body = std::fs::read_to_string(file).map(|text| wack_core::skills::split_body(&text)).unwrap_or_default();
+            self.skills.viewing = Some(Viewing { entry, folder: folder_label, body });
+            cx.notify();
+            return None;
+        }
+        let document = match wack_core::skills::read_document(file) {
+            Ok(document) => document,
+            Err(message) => {
+                self.skills_result(Err(message), cx);
+                return None;
+            }
+        };
+        Some(self.start_skill_editor(SkillEditor::new(Some(file.to_path_buf()), Some(&document), cx), cx))
+    }
+
+    /// The editor for a new skill. Returns its name field, for focus.
+    pub fn new_skill(&mut self, cx: &mut Context<Self>) -> Entity<TextField> {
+        self.skills.viewing = None;
+        self.skills.notice = None;
+        self.start_skill_editor(SkillEditor::new(None, None, cx), cx)
+    }
+
+    fn start_skill_editor(&mut self, editor: SkillEditor, cx: &mut Context<Self>) -> Entity<TextField> {
+        let name = editor.name.clone();
+        self.skills.editor = Some(editor);
+        self.watch_skill_editor(cx);
+        cx.notify();
+        name
+    }
+
+    pub fn close_skill(&mut self, cx: &mut Context<Self>) {
+        self.skills.editor = None;
+        self.skills.viewing = None;
+        self.skill_subscriptions.clear();
+        self.refresh_skills();
+        cx.notify();
+    }
+
+    pub fn choose_skill_use(&mut self, manual: bool, cx: &mut Context<Self>) {
+        if let Some(editor) = self.skills.editor.as_mut() {
+            editor.manual = manual;
+            editor.error = None;
+            cx.notify();
+        }
+    }
+
+    /// Saves the skill the editor describes, then goes back to the list.
+    pub fn save_skill(&mut self, cx: &mut Context<Self>) {
+        let Some(editor) = self.skills.editor.as_mut() else {
+            return;
+        };
+        if let Some(issue) = editor.issue(cx) {
+            editor.error = Some(issue);
+            cx.notify();
+            return;
+        }
+        let text = |field: &Entity<TextField>| field.read(cx).text().to_string();
+        let (name, description, hint, body) = (text(&editor.name), text(&editor.description), text(&editor.hint), text(&editor.body));
+        let manual = editor.manual;
+        let file = editor.file.clone();
+        let result = match &file {
+            Some(file) => self.store.update_skill(file, &name, &description, manual, &hint, &body),
+            None => self.store.create_skill(&name, &description, manual, &hint, &body),
+        };
+        match result {
+            Ok(_) => self.close_skill(cx),
+            Err(message) => {
+                if let Some(editor) = self.skills.editor.as_mut() {
+                    editor.error = Some(message.into());
+                }
+                cx.notify();
+            }
+        }
+    }
+
+    pub fn ask_delete_skill(&mut self, ask: bool, cx: &mut Context<Self>) {
+        if let Some(editor) = self.skills.editor.as_mut() {
+            editor.confirming = ask && editor.file.is_some();
+            cx.notify();
+        }
+    }
+
+    /// Moves the skill in the editor to the macOS Trash.
+    pub fn confirm_skill_delete(&mut self, cx: &mut Context<Self>) {
+        let Some(file) = self.skills.editor.as_ref().filter(|editor| editor.confirming).and_then(|editor| editor.file.clone()) else {
+            return;
+        };
+        match self.store.delete_skill(&file, &crate::memory_page::move_to_trash) {
+            Ok(()) => self.close_skill(cx),
+            Err(message) => {
+                if let Some(editor) = self.skills.editor.as_mut() {
+                    editor.confirming = false;
+                    editor.error = Some(message.into());
+                }
+                cx.notify();
+            }
+        }
+    }
+
+    /// Copies a skill from another folder into Your skills and opens the copy.
+    pub fn copy_skill(&mut self, file: &Path, cx: &mut Context<Self>) -> Option<Entity<TextField>> {
+        let skill = self.skills.find(file)?.1.skill.clone();
+        match self.store.copy_skill_to_library(&skill) {
+            Ok(copy) => {
+                self.skills.viewing = None;
+                let field = self.open_skill(&copy, cx);
+                self.skills.notice = Some(format!("Copied /{} to Your skills.", skill.name).into());
+                field
+            }
+            Err(message) => {
+                self.skills_result(Err(message), cx);
+                None
+            }
+        }
+    }
+
+    fn watch_skill_editor(&mut self, cx: &mut Context<Self>) {
+        self.skill_subscriptions.clear();
+        let Some(editor) = self.skills.editor.as_ref() else {
+            return;
+        };
+        let changed = |app: &mut AppState, cx: &mut Context<AppState>| {
+            if let Some(editor) = app.skills.editor.as_mut() {
+                editor.error = None;
+            }
+            cx.notify();
+        };
+        for (index, field) in editor.fields().into_iter().enumerate() {
+            // The name and the hint are one line: ↩ saves. In the description and the
+            // instructions ↩ is a new line and ⌘↩ saves.
+            let one_line = index == 0 || index == 2;
+            self.skill_subscriptions.push(cx.subscribe(&field, move |app, field, event: &TextFieldEvent, cx| match event {
+                TextFieldEvent::Enter if !one_line => field.update(cx, |field, cx| field.insert_line_break(cx)),
+                TextFieldEvent::Enter | TextFieldEvent::SendNow => app.save_skill(cx),
+                TextFieldEvent::Changed => changed(app, cx),
+                TextFieldEvent::Moved | TextFieldEvent::Menu(_) => {}
+            }));
+        }
     }
 }
 

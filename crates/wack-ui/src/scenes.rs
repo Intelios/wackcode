@@ -544,9 +544,40 @@ pub fn all() -> Vec<Scene> {
                     appearance: fixtures::appearance(None, cx),
                     tools: crate::tools_page::ToolsData { unrestricted_planning: false, confirming: true },
                     memory: Default::default(),
+        skills: Default::default(),
                 };
                 cx.new(|_| Shell::showing(fixtures::sidebar(Selected::None), Screen::Settings(Box::new(data)))).into()
             },
+        },
+        Scene {
+            name: "settings-skills",
+            description: "Settings › Skills: your skills, Claude Code's folder on with a skill that lost its name, an added folder and a file that could not load.",
+            size: size(px(1180.), px(1200.)),
+            build: |_, cx| skills_scene(SkillsScene::List, false, cx),
+        },
+        Scene {
+            name: "settings-skills-backdrop",
+            description: "Settings › Skills over a backdrop.",
+            size: size(px(1180.), px(1200.)),
+            build: |_, cx| skills_scene(SkillsScene::List, true, cx),
+        },
+        Scene {
+            name: "settings-skills-empty",
+            description: "Settings › Skills before the user has a skill of their own.",
+            size: size(px(1180.), px(1000.)),
+            build: |_, cx| skills_scene(SkillsScene::Empty, false, cx),
+        },
+        Scene {
+            name: "settings-skills-editor",
+            description: "Settings › Skills: editing one of your skills, asking before it moves to the Trash.",
+            size: size(px(1180.), px(1150.)),
+            build: |_, cx| skills_scene(SkillsScene::Editor, false, cx),
+        },
+        Scene {
+            name: "settings-skills-view",
+            description: "Settings › Skills: a skill from Claude Code's folder, open read-only.",
+            size: size(px(1180.), px(1000.)),
+            build: |_, cx| skills_scene(SkillsScene::View, false, cx),
         },
         Scene {
             name: "settings-memory",
@@ -1042,6 +1073,7 @@ fn providers_scene(state: Providers, sidebar_hidden: bool, cx: &mut App) -> AnyV
         appearance: fixtures::appearance(None, cx),
         tools: Default::default(),
         memory: Default::default(),
+        skills: Default::default(),
     };
     cx.new(|_| {
         let shell = Shell::showing(fixtures::sidebar(Selected::None), Screen::Settings(Box::new(data)));
@@ -1059,6 +1091,7 @@ fn settings_scene(backdrop: Option<crate::backdrop::Picture>, cx: &mut App) -> A
         appearance: fixtures::appearance(backdrop.clone(), cx),
         tools: Default::default(),
         memory: Default::default(),
+        skills: Default::default(),
     };
     cx.new(|_| {
         let shell = Shell::showing(fixtures::sidebar(Selected::None), Screen::Settings(Box::new(data)));
@@ -1232,6 +1265,7 @@ fn memory_scene(scene: MemoryScene, backdrop: Option<crate::backdrop::Picture>, 
         appearance: fixtures::appearance(backdrop.clone(), cx),
         tools: Default::default(),
         memory: state.data(cx),
+        skills: Default::default(),
     };
     cx.new(|_| {
         let shell = Shell::showing(fixtures::sidebar(Selected::None), Screen::Settings(Box::new(data)));
@@ -1336,6 +1370,126 @@ fn command_scene(open: bool, cx: &mut App) -> AnyView {
                 composer: fixtures::composer_after_turn(Input::Drawn { text: None, placeholder: crate::chat::FOLLOW_UP_PLACEHOLDER.into() }),
             },
         )
+    })
+    .into()
+}
+
+#[derive(Clone, Copy, PartialEq)]
+enum SkillsScene {
+    List,
+    Empty,
+    Editor,
+    View,
+}
+
+/// Settings › Skills with believable folders.
+fn skills_scene(scene: SkillsScene, backdrop: bool, cx: &mut App) -> AnyView {
+    use std::path::PathBuf;
+    use wack_core::skills::{Document, FolderKind, Problem, Skill, SkillEntry, SkillFolder};
+    let skill = |folder: &str, name: &str, description: &str, manual: bool, hint: Option<&str>, source: &str| Skill {
+        name: name.into(),
+        description: description.into(),
+        file: PathBuf::from(format!("/Users/me/{folder}/{name}/SKILL.md")),
+        base_dir: PathBuf::from(format!("/Users/me/{folder}/{name}")),
+        manual,
+        hint: hint.map(Into::into),
+        source: source.into(),
+    };
+    let on = |skill: Skill| SkillEntry { skill, enabled: true, shadowed_by: None };
+    let library = SkillFolder {
+        id: "library".into(),
+        label: "Your skills".into(),
+        path: "/Users/me/.agents/skills".into(),
+        display: "~/.agents/skills".into(),
+        kind: FolderKind::Library,
+        enabled: true,
+        skills: if scene == SkillsScene::Empty {
+            Vec::new()
+        } else {
+            vec![
+                on(skill(".agents/skills", "release-notes", "Drafts release notes from the commits since a tag, grouped by area. Use when asked for release notes or a changelog.", false, Some("[since]"), "Your skills")),
+                on(skill(".agents/skills", "review", "Reviews a change the way the team does: correctness first, then naming, then tests.", true, Some("<path>"), "Your skills")),
+                SkillEntry { enabled: false, ..on(skill(".agents/skills", "playtest", "Play-test an app hands-on, the way a real first-time user would, and write up what you find.", false, None, "Your skills")) },
+            ]
+        },
+        problems: Vec::new(),
+    };
+    let claude = SkillFolder {
+        id: "claude".into(),
+        label: "Claude Code".into(),
+        path: "/Users/me/.claude/skills".into(),
+        display: "~/.claude/skills".into(),
+        kind: FolderKind::Tool,
+        enabled: scene != SkillsScene::Empty,
+        skills: vec![
+            on(skill(".claude/skills", "pdf", "Fill, merge and split PDF forms. Use whenever a .pdf is involved.", false, None, "Claude Code")),
+            SkillEntry { shadowed_by: Some("Your skills".into()), ..on(skill(".claude/skills", "review", "Review pull requests.", false, None, "Claude Code")) },
+        ],
+        problems: vec![Problem { file: "/Users/me/.claude/skills/draft/SKILL.md".into(), message: "It has no description, which the agent decides from.".into() }],
+    };
+    let tool = |id: &str, label: &str, path: &str| SkillFolder {
+        id: id.into(),
+        label: label.into(),
+        path: format!("/Users/me/{path}").into(),
+        display: format!("~/{path}"),
+        kind: FolderKind::Tool,
+        enabled: false,
+        skills: Vec::new(),
+        problems: Vec::new(),
+    };
+    let added = SkillFolder {
+        id: "added:/Users/me/Work/team-skills".into(),
+        label: "team-skills".into(),
+        path: "/Users/me/Work/team-skills".into(),
+        display: "~/Work/team-skills".into(),
+        kind: FolderKind::Added,
+        enabled: true,
+        skills: vec![on(skill("Work/team-skills", "deploy-staging", "Deploys the current branch to staging and checks the health endpoint.", true, None, "team-skills"))],
+        problems: Vec::new(),
+    };
+    let mut folders = vec![library, claude.clone(), tool("codex", "Codex", ".codex/skills"), tool("opencode", "OpenCode", ".config/opencode/skills")];
+    if scene != SkillsScene::Empty {
+        folders.push(added);
+    }
+    let mut state = crate::skills_page::SkillsState { folders, ..Default::default() };
+    match scene {
+        SkillsScene::Editor => {
+            let document = Document {
+                name: "release-notes".into(),
+                description: "Drafts release notes from the commits since a tag, grouped by area. Use when asked for release notes or a changelog.".into(),
+                manual: false,
+                hint: "[since]".into(),
+                body: "# Release notes\n\n1. Find the last tag with `git describe --tags --abbrev=0`, or use the one given.\n2. List the commits since it and group them: Features, Fixes, Under the hood.\n3. Write one line per change, in the user's words, not the commit's.".into(),
+            };
+            let mut editor = crate::skills_page::SkillEditor::new(Some("/Users/me/.agents/skills/release-notes/SKILL.md".into()), Some(&document), cx);
+            editor.confirming = true;
+            state.editor = Some(editor);
+        }
+        SkillsScene::View => {
+            state.viewing = Some(crate::skills_page::Viewing {
+                entry: claude.skills[0].clone(),
+                folder: "Claude Code".into(),
+                body: "# PDF\n\nUse scripts/fields.py to list a form's fields before filling them.\nNever flatten a form unless the user asks.".into(),
+            });
+        }
+        SkillsScene::List | SkillsScene::Empty => {}
+    }
+    let picture = backdrop.then(|| over(fixtures::backdrop(wack_core::Texture::None), cx));
+    let form = ProviderForm::new(cx);
+    let data = SettingsData {
+        section: Section::Skills,
+        providers: ProvidersData::new(&fixtures::connections(), |_| true, &form, cx),
+        appearance: fixtures::appearance(picture.clone(), cx),
+        tools: Default::default(),
+        memory: Default::default(),
+        skills: state.data(cx),
+    };
+    cx.new(|_| {
+        let shell = Shell::showing(fixtures::sidebar(Selected::None), Screen::Settings(Box::new(data)));
+        match picture {
+            Some(picture) => shell.with_backdrop(picture),
+            None => shell,
+        }
     })
     .into()
 }

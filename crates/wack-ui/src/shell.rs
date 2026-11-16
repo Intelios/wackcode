@@ -46,7 +46,8 @@ use crate::{
         OpenSettingsSection, PinProject, PreviousTab, RemoveConnection, RemovePicture, ShowCommandOutput, ShowPicture, RemoveProject, ResetDockSize,
         PickCommand, SelectChat, Send, Stop, StopCommand, ToggleChanges, ToggleProject, ToggleSidebar, ToggleTerminal, TriggerProjectCommand, Unqueue,
         ToggleAutoTitles, ToggleTitleModels, ChooseTitleModel, RenameChat, RenameChatAt, CancelRename, ToggleModelReasoning,
-        ToggleModelEffort,
+        ToggleModelEffort, SwitchSkill, SwitchSkillFolder, RemoveSkillFolder, OpenSkill, CopySkill, ChooseSkillUse, NewSkill, SaveSkill,
+        CloseSkill, AskDeleteSkill, ConfirmSkillDelete, CancelSkillDelete, AddSkillFolder, ImportSkills,
     },
     app::{AppState, Menu, RenamePlace, Selection, shown_path},
     appearance_page::AppearanceData,
@@ -649,9 +650,33 @@ impl Shell {
         }
     }
 
-    /// Once the memory editor has closed, the shell takes the keys again.
+    /// Puts focus in a field that has just appeared on the page.
+    fn focus_new_field(&mut self, field: Option<Entity<crate::text_field::TextField>>, window: &mut Window, cx: &mut Context<Self>) {
+        if let Some(field) = field {
+            let handle = field.read(cx).focus_handle(cx);
+            window.defer(cx, move |window, cx| window.focus(&handle, cx));
+        }
+    }
+
+    /// Asks for a folder (or, with `files`, a `.md` or `.zip` too) and hands it to `then`.
+    fn pick_path(&mut self, files: bool, prompt: &'static str, cx: &mut Context<Self>, then: fn(&mut AppState, &std::path::Path, &mut Context<AppState>)) {
+        let Some(app) = self.app() else {
+            return;
+        };
+        let paths = cx.prompt_for_paths(PathPromptOptions { files, directories: true, multiple: false, prompt: Some(prompt.into()) });
+        cx.spawn(async move |_, cx| {
+            if let Ok(Ok(Some(paths))) = paths.await
+                && let Some(path) = paths.into_iter().next()
+            {
+                app.update(cx, |app, cx| then(app, &path, cx));
+            }
+        })
+        .detach();
+    }
+
+    /// Once the memory or skill editor has closed, the shell takes the keys again.
     fn refocus_if_closed(&mut self, window: &mut Window, cx: &mut Context<Self>) {
-        let open = self.app().is_some_and(|app| app.read(cx).memory.editor.is_some());
+        let open = self.app().is_some_and(|app| app.read(cx).memory.editor.is_some() || app.read(cx).skills.editor.is_some());
         if !open && let Some(focus) = self.focus.clone() {
             window.defer(cx, move |window, cx| window.focus(&focus, cx));
         }
@@ -1068,6 +1093,52 @@ impl Render for Shell {
                 .on_action(cx.listener(|shell, _: &ConfirmMemoryDelete, _, cx| shell.with_app(cx, |app, cx| app.confirm_memory_delete(cx))))
                 .on_action(cx.listener(|shell, _: &CancelMemoryDelete, _, cx| shell.with_app(cx, |app, cx| app.cancel_memory_delete(cx))))
                 .on_action(cx.listener(|_, action: &RevealMemory, _, _| crate::memory_page::reveal(&action.path)))
+                .on_action(cx.listener(|shell, action: &SwitchSkill, _, cx| {
+                    let (key, on) = (action.key.clone(), action.on);
+                    shell.with_app(cx, |app, cx| app.switch_skill(&key, on, cx));
+                }))
+                .on_action(cx.listener(|shell, action: &SwitchSkillFolder, _, cx| {
+                    let (id, on) = (action.id.clone(), action.on);
+                    shell.with_app(cx, |app, cx| app.switch_skill_folder(&id, on, cx));
+                }))
+                .on_action(cx.listener(|shell, action: &RemoveSkillFolder, _, cx| {
+                    let id = action.id.clone();
+                    shell.with_app(cx, |app, cx| app.remove_skill_folder(&id, cx));
+                }))
+                .on_action(cx.listener(|shell, _: &AddSkillFolder, _, cx| shell.pick_path(false, "Add", cx, AppState::add_skill_folder)))
+                .on_action(cx.listener(|shell, _: &ImportSkills, _, cx| shell.pick_path(true, "Import", cx, AppState::import_skills)))
+                .on_action(cx.listener(|shell, action: &OpenSkill, window, cx| {
+                    let file = action.file.clone();
+                    let field = shell.app().and_then(|app| app.update(cx, |app, cx| app.open_skill(&file, cx)));
+                    shell.focus_new_field(field, window, cx);
+                }))
+                .on_action(cx.listener(|shell, action: &CopySkill, window, cx| {
+                    let file = action.file.clone();
+                    let field = shell.app().and_then(|app| app.update(cx, |app, cx| app.copy_skill(&file, cx)));
+                    shell.focus_new_field(field, window, cx);
+                }))
+                .on_action(cx.listener(|shell, _: &NewSkill, window, cx| {
+                    let field = shell.app().map(|app| app.update(cx, |app, cx| app.new_skill(cx)));
+                    shell.focus_new_field(field, window, cx);
+                }))
+                .on_action(cx.listener(|shell, action: &ChooseSkillUse, _, cx| {
+                    let manual = action.manual;
+                    shell.with_app(cx, |app, cx| app.choose_skill_use(manual, cx));
+                }))
+                .on_action(cx.listener(|shell, _: &SaveSkill, window, cx| {
+                    shell.with_app(cx, |app, cx| app.save_skill(cx));
+                    shell.refocus_if_closed(window, cx);
+                }))
+                .on_action(cx.listener(|shell, _: &CloseSkill, window, cx| {
+                    shell.with_app(cx, |app, cx| app.close_skill(cx));
+                    shell.refocus_if_closed(window, cx);
+                }))
+                .on_action(cx.listener(|shell, _: &AskDeleteSkill, _, cx| shell.with_app(cx, |app, cx| app.ask_delete_skill(true, cx))))
+                .on_action(cx.listener(|shell, _: &CancelSkillDelete, _, cx| shell.with_app(cx, |app, cx| app.ask_delete_skill(false, cx))))
+                .on_action(cx.listener(|shell, _: &ConfirmSkillDelete, window, cx| {
+                    shell.with_app(cx, |app, cx| app.confirm_skill_delete(cx));
+                    shell.refocus_if_closed(window, cx);
+                }))
                 .on_action(cx.listener(|shell, _: &ShowDoneTodos, _, cx| shell.with_session(cx, |session, cx| session.show_done_todos(cx))))
                 .on_action(cx.listener(|shell, _: &DiscardPlan, _, cx| shell.with_session(cx, |session, cx| session.ask_discard_plan(cx))))
                 .on_action(cx.listener(|shell, _: &KeepPlan, _, cx| shell.with_session(cx, |session, cx| session.keep_plan(cx))))
@@ -1430,6 +1501,7 @@ fn live_view(app: &AppState, cx: &App) -> (SidebarData, Screen, StripData) {
                     confirming: app.confirming_unrestricted,
                 },
                 memory: app.memory.data(cx),
+                skills: app.skills.data(cx),
             }))
         }
         Selection::NewChat(project) => match info(project) {

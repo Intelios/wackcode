@@ -26,7 +26,7 @@ use serde::{Deserialize, Serialize};
 
 pub use wack_agent::{
     commands::{
-        Action, BUILTINS, Builtin, Command, CommandUse, Kind, Template, active_slash, builtin_key, compose_template, expand_template, file_key,
+        Action, BUILTINS, Builtin, Command, CommandUse, Kind, Template, active_slash, builtin_key, catalog, compose_template, expand_template, file_key,
         find, matching, parse_line, pick, valid_name as valid_command_name,
     },
     skills::{Catalog, Document, Problem, Root, Shadowed, Skill, read_document},
@@ -462,6 +462,11 @@ impl Store {
             self.move_switch(&file_key(Kind::Template, &old), &file_key(Kind::Template, &file))?;
         }
         Ok(file)
+    }
+
+    /// One of the user's commands, by name, for the editor.
+    pub fn read_template(&self, name: &str) -> Option<Template> {
+        valid_command_name(name).then(|| commands::load_template(&self.commands_folder().join(format!("{name}.md"))))?
     }
 
     /// Moves one of the user's commands to the Trash with `trash`.

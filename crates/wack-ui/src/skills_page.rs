@@ -26,7 +26,7 @@ use crate::{
     },
     button::{Button, Kind as ButtonKind},
     icon::Icon,
-    settings::{field, text_input},
+    settings::{field, text_area, text_input},
     settings_kit::{card, dispatch, head, pill, segmented},
     tags::Tag,
     text_field::TextField,
@@ -507,7 +507,7 @@ fn editor_page(editor: &EditorData, theme: &Theme) -> impl IntoElement {
             field(
                 "Description",
                 Some("What it does and when to use it. Every chat lists this, and the agent decides from it alone.".into()),
-                text_box(editor.description.clone(), theme).min_h(px(64.)).tag("skill-description"),
+                text_area(editor.description.clone(), 64., theme).tag("skill-description"),
                 theme,
             )
             .into_any_element(),
@@ -526,7 +526,7 @@ fn editor_page(editor: &EditorData, theme: &Theme) -> impl IntoElement {
                 .into_any_element(),
         ))
         .child(section(
-            field("Instructions", Some("Markdown. Relative paths in it are read from the skill's folder.".into()), text_box(editor.body.clone(), theme).tag("skill-body"), theme)
+            field("Instructions", Some("Markdown. Relative paths in it are read from the skill's folder.".into()), text_area(editor.body.clone(), 160., theme).tag("skill-body"), theme)
                 .into_any_element(),
         ));
     if editor.confirming {

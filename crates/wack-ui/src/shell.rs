@@ -47,7 +47,8 @@ use crate::{
         PickCommand, SelectChat, Send, Stop, StopCommand, ToggleChanges, ToggleProject, ToggleSidebar, ToggleTerminal, TriggerProjectCommand, Unqueue,
         ToggleAutoTitles, ToggleTitleModels, ChooseTitleModel, RenameChat, RenameChatAt, CancelRename, ToggleModelReasoning,
         ToggleModelEffort, SwitchSkill, SwitchSkillFolder, RemoveSkillFolder, OpenSkill, CopySkill, ChooseSkillUse, NewSkill, SaveSkill,
-        CloseSkill, AskDeleteSkill, ConfirmSkillDelete, CancelSkillDelete, AddSkillFolder, ImportSkills,
+        CloseSkill, AskDeleteSkill, ConfirmSkillDelete, CancelSkillDelete, AddSkillFolder, ImportSkills, SwitchSlashCommand, OpenSlashCommand,
+        NewSlashCommand, SaveSlashCommand, CloseSlashCommand, AskDeleteSlashCommand, ConfirmSlashCommandDelete, CancelSlashCommandDelete,
     },
     app::{AppState, Menu, RenamePlace, Selection, shown_path},
     appearance_page::AppearanceData,
@@ -676,7 +677,10 @@ impl Shell {
 
     /// Once the memory or skill editor has closed, the shell takes the keys again.
     fn refocus_if_closed(&mut self, window: &mut Window, cx: &mut Context<Self>) {
-        let open = self.app().is_some_and(|app| app.read(cx).memory.editor.is_some() || app.read(cx).skills.editor.is_some());
+        let open = self.app().is_some_and(|app| {
+            let app = app.read(cx);
+            app.memory.editor.is_some() || app.skills.editor.is_some() || app.templates.editor.is_some()
+        });
         if !open && let Some(focus) = self.focus.clone() {
             window.defer(cx, move |window, cx| window.focus(&focus, cx));
         }
@@ -1133,6 +1137,33 @@ impl Render for Shell {
                     shell.with_app(cx, |app, cx| app.close_skill(cx));
                     shell.refocus_if_closed(window, cx);
                 }))
+                .on_action(cx.listener(|shell, action: &SwitchSlashCommand, _, cx| {
+                    let (key, on) = (action.key.clone(), action.on);
+                    shell.with_app(cx, |app, cx| app.switch_slash_command(&key, on, cx));
+                }))
+                .on_action(cx.listener(|shell, action: &OpenSlashCommand, window, cx| {
+                    let name = action.name.clone();
+                    let field = shell.app().and_then(|app| app.update(cx, |app, cx| app.open_slash_command(Some(&name), cx)));
+                    shell.focus_new_field(field, window, cx);
+                }))
+                .on_action(cx.listener(|shell, _: &NewSlashCommand, window, cx| {
+                    let field = shell.app().and_then(|app| app.update(cx, |app, cx| app.open_slash_command(None, cx)));
+                    shell.focus_new_field(field, window, cx);
+                }))
+                .on_action(cx.listener(|shell, _: &SaveSlashCommand, window, cx| {
+                    shell.with_app(cx, |app, cx| app.save_slash_command(cx));
+                    shell.refocus_if_closed(window, cx);
+                }))
+                .on_action(cx.listener(|shell, _: &CloseSlashCommand, window, cx| {
+                    shell.with_app(cx, |app, cx| app.close_slash_command(cx));
+                    shell.refocus_if_closed(window, cx);
+                }))
+                .on_action(cx.listener(|shell, _: &AskDeleteSlashCommand, _, cx| shell.with_app(cx, |app, cx| app.ask_delete_slash_command(true, cx))))
+                .on_action(cx.listener(|shell, _: &CancelSlashCommandDelete, _, cx| shell.with_app(cx, |app, cx| app.ask_delete_slash_command(false, cx))))
+                .on_action(cx.listener(|shell, _: &ConfirmSlashCommandDelete, window, cx| {
+                    shell.with_app(cx, |app, cx| app.confirm_slash_command_delete(cx));
+                    shell.refocus_if_closed(window, cx);
+                }))
                 .on_action(cx.listener(|shell, _: &AskDeleteSkill, _, cx| shell.with_app(cx, |app, cx| app.ask_delete_skill(true, cx))))
                 .on_action(cx.listener(|shell, _: &CancelSkillDelete, _, cx| shell.with_app(cx, |app, cx| app.ask_delete_skill(false, cx))))
                 .on_action(cx.listener(|shell, _: &ConfirmSkillDelete, window, cx| {
@@ -1502,6 +1533,7 @@ fn live_view(app: &AppState, cx: &App) -> (SidebarData, Screen, StripData) {
                 },
                 memory: app.memory.data(cx),
                 skills: app.skills.data(cx),
+                commands: app.templates.data(cx),
             }))
         }
         Selection::NewChat(project) => match info(project) {

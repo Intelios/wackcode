@@ -495,10 +495,11 @@ pub enum Section {
     Tools,
     Memory,
     Skills,
+    Commands,
 }
 
 impl Section {
-    pub const ALL: [Section; 5] = [Section::Appearance, Section::Providers, Section::Tools, Section::Memory, Section::Skills];
+    pub const ALL: [Section; 6] = [Section::Appearance, Section::Providers, Section::Tools, Section::Memory, Section::Skills, Section::Commands];
 
     pub fn name(self) -> &'static str {
         match self {
@@ -507,6 +508,7 @@ impl Section {
             Section::Tools => "Tools",
             Section::Memory => "Memory",
             Section::Skills => "Skills",
+            Section::Commands => "Commands",
         }
     }
 
@@ -517,6 +519,7 @@ impl Section {
             Section::Tools => "section-tools",
             Section::Memory => "section-memory",
             Section::Skills => "section-skills",
+            Section::Commands => "section-commands",
         }
     }
 }
@@ -532,7 +535,7 @@ const GROUPS: [(&str, &[Entry]); 4] = [
     ("Models", &[(Some(Section::Providers), "Providers"), (None, "Prompts")]),
     (
         "Agent",
-        &[(Some(Section::Tools), "Tools"), (Some(Section::Memory), "Memory"), (Some(Section::Skills), "Skills"), (None, "Commands"), (None, "Sub-agents"), (None, "Git")],
+        &[(Some(Section::Tools), "Tools"), (Some(Section::Memory), "Memory"), (Some(Section::Skills), "Skills"), (Some(Section::Commands), "Commands"), (None, "Sub-agents"), (None, "Git")],
     ),
     ("Reach", &[(None, "MCP servers"), (None, "Web"), (None, "Computer use")]),
 ];
@@ -546,6 +549,7 @@ pub struct SettingsData {
     pub tools: crate::tools_page::ToolsData,
     pub memory: crate::memory_page::MemoryData,
     pub skills: crate::skills_page::SkillsData,
+    pub commands: crate::commands_page::CommandsData,
 }
 
 /// The title strip's words: `Settings › Providers`.
@@ -651,6 +655,7 @@ pub fn page(data: SettingsData, inline_nav: bool, narrow: bool, stack_form: bool
         Section::Tools => crate::tools_page::page(data.tools, theme).into_any_element(),
         Section::Memory => crate::memory_page::page(data.memory, theme),
         Section::Skills => crate::skills_page::page(data.skills, theme),
+        Section::Commands => crate::commands_page::page(data.commands, theme),
     };
     let footer = if section == Section::Providers {
         editor.as_ref().and_then(|editor| save_bar(editor, narrow, theme))
@@ -1187,6 +1192,29 @@ pub(crate) fn text_input(field: Entity<TextField>, tag: &'static str, theme: &Th
         .items_center()
         .child(field)
         .tag(tag)
+}
+
+/// A tall field's ground (a description, a prompt): the whole box takes a click, not only the
+/// lines already written.
+pub(crate) fn text_area(field: Entity<TextField>, min_height: f32, theme: &Theme) -> gpui::Div {
+    let target = field.clone();
+    div()
+        .w_full()
+        .min_h(px(min_height))
+        .px(px(11.))
+        .py(px(9.))
+        .rounded(px(9.))
+        .bg(theme.window)
+        .border_1()
+        .border_color(theme.border)
+        .cursor_text()
+        .on_mouse_down(gpui::MouseButton::Left, move |_, window, cx| {
+            // The shell's root would take focus back as the click bubbles up.
+            cx.stop_propagation();
+            let handle = gpui::Focusable::focus_handle(target.read(cx), cx);
+            window.focus(&handle, cx);
+        })
+        .child(field)
 }
 
 /// The bar under the page while there is something to save, or a word about the last save.

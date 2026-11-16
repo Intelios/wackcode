@@ -99,6 +99,16 @@ actions!(
         /// Settings › Memory: moves the note or folder waiting for confirmation to the Trash.
         ConfirmMemoryDelete,
         CancelMemoryDelete,
+        /// Settings › Commands: a new command of the user's own.
+        NewSlashCommand,
+        /// Settings › Commands: saves the command the editor describes.
+        SaveSlashCommand,
+        /// Settings › Commands: back to the list.
+        CloseSlashCommand,
+        /// Settings › Commands: asks before the command in the editor moves to the Trash.
+        AskDeleteSlashCommand,
+        ConfirmSlashCommandDelete,
+        CancelSlashCommandDelete,
         /// Settings › Skills: a new skill in Your skills.
         NewSkill,
         /// Settings › Skills: saves the skill the editor describes.
@@ -408,6 +418,21 @@ pub struct CopySkill {
 #[action(namespace = wackcode, no_json)]
 pub struct ChooseSkillUse {
     pub manual: bool,
+}
+
+/// Settings › Commands: one command's switch, by its key.
+#[derive(Clone, Debug, PartialEq, Action)]
+#[action(namespace = wackcode, no_json)]
+pub struct SwitchSlashCommand {
+    pub key: String,
+    pub on: bool,
+}
+
+/// Settings › Commands: opens one of the user's commands in the editor.
+#[derive(Clone, Debug, PartialEq, Action)]
+#[action(namespace = wackcode, no_json)]
+pub struct OpenSlashCommand {
+    pub name: String,
 }
 
 /// Picks a row of the `/` menu.

@@ -545,6 +545,7 @@ pub fn all() -> Vec<Scene> {
                     tools: crate::tools_page::ToolsData { unrestricted_planning: false, confirming: true },
                     memory: Default::default(),
         skills: Default::default(),
+        commands: Default::default(),
                 };
                 cx.new(|_| Shell::showing(fixtures::sidebar(Selected::None), Screen::Settings(Box::new(data)))).into()
             },
@@ -578,6 +579,18 @@ pub fn all() -> Vec<Scene> {
             description: "Settings › Skills: a skill from Claude Code's folder, open read-only.",
             size: size(px(1180.), px(1000.)),
             build: |_, cx| skills_scene(SkillsScene::View, false, cx),
+        },
+        Scene {
+            name: "settings-commands",
+            description: "Settings › Commands: two commands of your own, one switched off, and WackCode's.",
+            size: size(px(1180.), px(1050.)),
+            build: |_, cx| commands_scene(false, cx),
+        },
+        Scene {
+            name: "settings-commands-editor",
+            description: "Settings › Commands: a command's editor, its preview expanding sample arguments.",
+            size: size(px(1180.), px(1100.)),
+            build: |_, cx| commands_scene(true, cx),
         },
         Scene {
             name: "settings-memory",
@@ -1074,6 +1087,7 @@ fn providers_scene(state: Providers, sidebar_hidden: bool, cx: &mut App) -> AnyV
         tools: Default::default(),
         memory: Default::default(),
         skills: Default::default(),
+        commands: Default::default(),
     };
     cx.new(|_| {
         let shell = Shell::showing(fixtures::sidebar(Selected::None), Screen::Settings(Box::new(data)));
@@ -1092,6 +1106,7 @@ fn settings_scene(backdrop: Option<crate::backdrop::Picture>, cx: &mut App) -> A
         tools: Default::default(),
         memory: Default::default(),
         skills: Default::default(),
+        commands: Default::default(),
     };
     cx.new(|_| {
         let shell = Shell::showing(fixtures::sidebar(Selected::None), Screen::Settings(Box::new(data)));
@@ -1266,6 +1281,7 @@ fn memory_scene(scene: MemoryScene, backdrop: Option<crate::backdrop::Picture>, 
         tools: Default::default(),
         memory: state.data(cx),
         skills: Default::default(),
+        commands: Default::default(),
     };
     cx.new(|_| {
         let shell = Shell::showing(fixtures::sidebar(Selected::None), Screen::Settings(Box::new(data)));
@@ -1483,6 +1499,7 @@ fn skills_scene(scene: SkillsScene, backdrop: bool, cx: &mut App) -> AnyView {
         tools: Default::default(),
         memory: Default::default(),
         skills: state.data(cx),
+        commands: Default::default(),
     };
     cx.new(|_| {
         let shell = Shell::showing(fixtures::sidebar(Selected::None), Screen::Settings(Box::new(data)));
@@ -1492,4 +1509,47 @@ fn skills_scene(scene: SkillsScene, backdrop: bool, cx: &mut App) -> AnyView {
         }
     })
     .into()
+}
+
+/// Settings › Commands with two of the user's commands, or the editor on one of them.
+fn commands_scene(editing: bool, cx: &mut App) -> AnyView {
+    use std::{collections::HashSet, path::PathBuf};
+    use wack_core::skills::{CommandEntry, Template, builtin_key};
+    let template = |name: &str, description: &str, hint: Option<&str>, body: &str| Template {
+        name: name.into(),
+        description: description.into(),
+        hint: hint.map(Into::into),
+        body: body.into(),
+        file: PathBuf::from(format!("/Users/me/Library/Application Support/com.wackcode.desktop/v3/commands/{name}.md")),
+    };
+    let templates = vec![
+        template("review", "Review a file the way the team does", Some("<file>"), "Review $1 for correctness first, then naming, then tests. Say what you would change before changing anything."),
+        template("explain", "Explain a piece of the code to a newcomer", Some("[topic]"), "Explain ${1:-this project} as you would to someone joining the team today."),
+    ];
+    let off: HashSet<String> = [builtin_key("copy"), wack_core::skills::file_key(wack_core::skills::Kind::Template, &templates[1].file)].into();
+    let entries: Vec<CommandEntry> = wack_core::skills::catalog(&templates, &[], &HashSet::new())
+        .into_iter()
+        .map(|command| CommandEntry { enabled: !off.contains(&command.key), command })
+        .collect();
+    let mut state = crate::commands_page::CommandsState {
+        entries,
+        folder: "/Users/me/Library/Application Support/com.wackcode.desktop/v3/commands".into(),
+        ..Default::default()
+    };
+    if editing {
+        let editor = crate::commands_page::CommandEditor::new(Some(&templates[0]), cx);
+        editor.sample.update(cx, |field, cx| field.set_text("crates/wack-llm/src/retry.rs", cx));
+        state.editor = Some(editor);
+    }
+    let form = ProviderForm::new(cx);
+    let data = SettingsData {
+        section: Section::Commands,
+        providers: ProvidersData::new(&fixtures::connections(), |_| true, &form, cx),
+        appearance: fixtures::appearance(None, cx),
+        tools: Default::default(),
+        memory: Default::default(),
+        skills: Default::default(),
+        commands: state.data(cx),
+    };
+    cx.new(|_| Shell::showing(fixtures::sidebar(Selected::None), Screen::Settings(Box::new(data)))).into()
 }

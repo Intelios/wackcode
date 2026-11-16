@@ -35,6 +35,7 @@ use crate::{
     chat::{ChatEvent, ChatSession, now_millis},
     memory_page::{MemoryConfirm, MemoryEditor, MemoryState},
     skills_page::{SkillEditor, SkillsState, Viewing},
+    commands_page::{CommandEditor, CommandsState},
     motion::TitleSwap,
     panes::{ChatPanes, Layout, PaneKind},
     run_button::{CommandButtonData, CommandEditorData},
@@ -133,6 +134,9 @@ pub struct AppState {
     /// Settings › Skills: the folders as last read, the editor, a skill on view.
     pub skills: SkillsState,
     skill_subscriptions: Vec<Subscription>,
+    /// Settings › Commands: the commands as last read and the editor.
+    pub templates: CommandsState,
+    template_subscriptions: Vec<Subscription>,
     /// Long-lived Build and Run PTY commands keyed by `(canonical_cwd, kind)`.
     runs: Runner,
     command_event_tx: mpsc::UnboundedSender<CommandEvent>,
@@ -281,6 +285,8 @@ impl AppState {
             memory_subscriptions: Vec::new(),
             skills: SkillsState::default(),
             skill_subscriptions: Vec::new(),
+            templates: CommandsState::default(),
+            template_subscriptions: Vec::new(),
             runs,
             command_event_tx,
             new_chat_panes: HashMap::new(),
@@ -525,6 +531,7 @@ impl AppState {
                 Section::Providers => self.form.open.then(|| self.form.name.clone()),
                 Section::Memory => self.memory.editor.as_ref().map(|editor| editor.title.clone()),
                 Section::Skills => self.skills.editor.as_ref().map(|editor| editor.name.clone()),
+                Section::Commands => self.templates.editor.as_ref().map(|editor| editor.name.clone()),
                 _ => None,
             },
             Selection::Welcome => None,
@@ -570,6 +577,9 @@ impl AppState {
                 }
                 if self.settings_section == Section::Skills {
                     self.refresh_skills();
+                }
+                if self.settings_section == Section::Commands {
+                    self.refresh_templates();
                 }
             }
             Selection::Welcome => {}
@@ -1058,6 +1068,9 @@ impl AppState {
         if section == Section::Skills {
             self.skills.notice = None;
             self.refresh_skills();
+        }
+        if section == Section::Commands {
+            self.refresh_templates();
         }
         cx.notify();
     }
@@ -2360,6 +2373,123 @@ impl AppState {
                 TextFieldEvent::Enter if !one_line => field.update(cx, |field, cx| field.insert_line_break(cx)),
                 TextFieldEvent::Enter | TextFieldEvent::SendNow => app.save_skill(cx),
                 TextFieldEvent::Changed => changed(app, cx),
+                TextFieldEvent::Moved | TextFieldEvent::Menu(_) => {}
+            }));
+        }
+    }
+}
+
+// -------------------------------------------------------------------------------------------------
+// Settings › Commands
+
+impl AppState {
+    fn refresh_templates(&mut self) {
+        self.templates.entries = self.store.commands_overview();
+        self.templates.folder = self.store.commands_folder();
+    }
+
+    fn templates_result(&mut self, result: Result<(), String>, cx: &mut Context<Self>) {
+        self.templates.error = result.err().map(Into::into);
+        self.refresh_templates();
+        cx.notify();
+    }
+
+    pub fn switch_slash_command(&mut self, key: &str, on: bool, cx: &mut Context<Self>) {
+        let result = self.store.set_command_enabled(key, on);
+        self.templates_result(result, cx);
+    }
+
+    /// The editor for the user's command `name`, or a new one. Returns its name field.
+    pub fn open_slash_command(&mut self, name: Option<&str>, cx: &mut Context<Self>) -> Option<Entity<TextField>> {
+        let template = match name {
+            Some(name) => match self.store.read_template(name) {
+                Some(template) => Some(template),
+                None => {
+                    self.templates_result(Err(format!("/{name} could not be read. It may have been moved or deleted.")), cx);
+                    return None;
+                }
+            },
+            None => None,
+        };
+        let editor = CommandEditor::new(template.as_ref(), cx);
+        let field = editor.name.clone();
+        self.templates.editor = Some(editor);
+        self.templates.error = None;
+        self.watch_template_editor(cx);
+        cx.notify();
+        Some(field)
+    }
+
+    pub fn close_slash_command(&mut self, cx: &mut Context<Self>) {
+        self.templates.editor = None;
+        self.template_subscriptions.clear();
+        self.refresh_templates();
+        cx.notify();
+    }
+
+    pub fn save_slash_command(&mut self, cx: &mut Context<Self>) {
+        let Some(editor) = self.templates.editor.as_mut() else {
+            return;
+        };
+        if let Some(issue) = editor.issue(cx) {
+            editor.error = Some(issue);
+            cx.notify();
+            return;
+        }
+        let text = |field: &Entity<TextField>| field.read(cx).text().to_string();
+        let (name, description, hint, body) = (text(&editor.name), text(&editor.description), text(&editor.hint), text(&editor.body));
+        let previous = editor.previous.clone();
+        match self.store.save_template(previous.as_deref(), &name, &description, &hint, &body) {
+            Ok(_) => self.close_slash_command(cx),
+            Err(message) => {
+                if let Some(editor) = self.templates.editor.as_mut() {
+                    editor.error = Some(message.into());
+                }
+                cx.notify();
+            }
+        }
+    }
+
+    pub fn ask_delete_slash_command(&mut self, ask: bool, cx: &mut Context<Self>) {
+        if let Some(editor) = self.templates.editor.as_mut() {
+            editor.confirming = ask && editor.previous.is_some();
+            cx.notify();
+        }
+    }
+
+    pub fn confirm_slash_command_delete(&mut self, cx: &mut Context<Self>) {
+        let Some(name) = self.templates.editor.as_ref().filter(|editor| editor.confirming).and_then(|editor| editor.previous.clone()) else {
+            return;
+        };
+        match self.store.delete_template(&name, &crate::memory_page::move_to_trash) {
+            Ok(()) => self.close_slash_command(cx),
+            Err(message) => {
+                if let Some(editor) = self.templates.editor.as_mut() {
+                    editor.confirming = false;
+                    editor.error = Some(message.into());
+                }
+                cx.notify();
+            }
+        }
+    }
+
+    fn watch_template_editor(&mut self, cx: &mut Context<Self>) {
+        self.template_subscriptions.clear();
+        let Some(editor) = self.templates.editor.as_ref() else {
+            return;
+        };
+        for (index, field) in editor.fields().into_iter().enumerate() {
+            // The prompt is the one field where ↩ is a new line; ⌘↩ saves from any.
+            let prompt = index == 3;
+            self.template_subscriptions.push(cx.subscribe(&field, move |app, field, event: &TextFieldEvent, cx| match event {
+                TextFieldEvent::Enter if prompt => field.update(cx, |field, cx| field.insert_line_break(cx)),
+                TextFieldEvent::Enter | TextFieldEvent::SendNow => app.save_slash_command(cx),
+                TextFieldEvent::Changed => {
+                    if let Some(editor) = app.templates.editor.as_mut() {
+                        editor.error = None;
+                    }
+                    cx.notify();
+                }
                 TextFieldEvent::Moved | TextFieldEvent::Menu(_) => {}
             }));
         }

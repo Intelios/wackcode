@@ -138,6 +138,10 @@ pub fn compose(original: Option<&str>, fields: &[(&str, Option<Value<'_>>)], bod
     }
     out.push_str("---\n");
     let body = body.trim();
+    // With nothing to say above the body, the file is the body alone.
+    if out == "---\n---\n" {
+        return format!("{body}\n");
+    }
     if !body.is_empty() {
         out.push('\n');
         out.push_str(body);
@@ -185,6 +189,11 @@ mod tests {
         assert_eq!(fields.hint("argument-hint").as_deref(), Some("<file> [more]"));
         assert!(Fields::parse(Some("name: [unclosed")).is_err());
         assert_eq!(Fields::parse(Some("just a string")).unwrap().text("name"), None);
+    }
+
+    #[test]
+    fn no_keys_means_no_frontmatter() {
+        assert_eq!(compose(None, &[("description", None)], "Sort the imports in $1."), "Sort the imports in $1.\n");
     }
 
     #[test]

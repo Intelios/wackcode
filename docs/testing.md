@@ -68,6 +68,8 @@ cargo wack run --effort ultra "…"
 cargo wack --data-dir /tmp/x connect …         # a throwaway data folder, for a local mock server
 ```
 
+`--effort` must be one the model lists under Reasoning in Settings › Providers (or Ultra, when it lists any). A model added with `wack connect` does not reason until its efforts are picked there.
+
 A debug build shares the dev app's data folder, so a connection added here is there for `cargo dev` too. While a run is going, a typed line is sent to the agent as a message, and Ctrl-C stops the run. When the agent asks a question, the next typed line answers it: an option's number (`2`, or `1,3` when it takes several), your own words, `w` to have Ultra Plan write its plan now, or an empty line to dismiss it. With input piped in, nobody can answer and the agent is told so. A submitted plan is printed when the run ends. The tools really run: use a scratch folder for anything that edits files.
 
 ## Real LLMs

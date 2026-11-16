@@ -19,11 +19,15 @@
 //! Renders from plain data ([`ComposerData`]) and reports clicks as actions (`crate::actions`),
 //! which the shell handles; in a gallery scene nothing handles them.
 
-use std::{cell::Cell, rc::Rc};
+use std::{
+    cell::Cell,
+    rc::Rc,
+    time::{Duration, Instant},
+};
 
 use gpui::{
-    AnchoredPositionMode, AnimationExt, App, Bounds, Entity, Focusable, Hsla, MouseButton, Pixels, SharedString, Window, anchored,
-    deferred, div, point, prelude::*, px,
+    AnchoredPositionMode, AnimationExt, App, Background, Bounds, BoxShadow, ElementId, Entity, Focusable, Hsla, MouseButton, Pixels,
+    SharedString, Window, anchored, deferred, div, point, prelude::*, px,
 };
 use wack_core::{AgentMode, Reasoning};
 
@@ -39,7 +43,7 @@ use crate::{
     theme::Theme,
     tooltip::tip,
     typography::{Type, Typography},
-    ultra::{UltraLabel, UltraMark, prism_edge},
+    ultra::{UltraField, UltraLabel, UltraMark, prism_edge},
 };
 
 #[derive(Clone)]
@@ -223,7 +227,7 @@ impl RenderOnce for Composer {
                 .when(ultra, |pill| pill.bg(Hsla { a: 0.12, ..theme.ultra }).border_1().border_color(Hsla { a: 0.24, ..theme.ultra }))
                 .when(!ultra, |pill| pill.hover(|pill| pill.bg(theme.hover)))
                 .child(if ultra {
-                    UltraMark::new("effort-ultra-mark", px(12.)).into_any_element()
+                    UltraMark::new("effort-ultra-mark", px(12.)).animated(!data.working).into_any_element()
                 } else {
                     Icon::Brain.view(px(13.), theme.accent_text).into_any_element()
                 })
@@ -232,7 +236,9 @@ impl RenderOnce for Composer {
                 } else {
                     div().typography(Type::Ui).text_color(theme.accent_text).child(effort).into_any_element()
                 });
-            let slider = menu_for(Menu::Effort).map(|menu| effort_slider(menu, data.model.clone(), &theme).into_any_element());
+            let slider = menu_for(Menu::Effort).map(|menu| {
+                EffortSlider { menu, model: data.model.clone(), key: data.key.clone() }.into_any_element()
+            });
             controls = controls.child(picker("effort", button, slider, false, viewport));
         }
         controls = controls.child(div().flex_1());
@@ -507,174 +513,353 @@ fn nearest_stop(x: f32, count: usize, width: f32) -> usize {
     (along * (count.max(2) - 1) as f32).round() as usize
 }
 
+/// How long the knob takes to travel between stops, and the thumb to pop as it lands.
+const TRAVEL: Duration = Duration::from_millis(260);
+const POP: Duration = Duration::from_millis(320);
+
+/// The knob's travel, `t` (0–1) through: it crosses most of the gap quickly and settles with a
+/// slight overshoot, version 2's `cubic-bezier(.34, 1.3, .64, 1)`.
+fn slide_ease(t: f32) -> f32 {
+    let back = t.clamp(0., 1.) - 1.;
+    1. + 1.9 * back * back * back + 0.9 * back * back
+}
+
+/// The thumb's pop, `t` (0–1) through: it swells past full size and settles back, version 2's
+/// `.72 → 1.14 → 1`.
+fn thumb_pop(t: f32) -> f32 {
+    keyframes(&[(0., 0.72), (0.55, 1.14), (1., 1.)], t)
+}
+
+/// A value that eases to each new target over [`TRAVEL`], for the slider's knob and fill. Unlike
+/// [`crate::motion::Ease`] it keeps version 2's slide: quick off the mark, a slight overshoot,
+/// then settled. The holder calls [`Slide::toward`] as it renders and asks for another frame
+/// while [`Slide::moving`].
+#[derive(Clone, Copy, Debug)]
+struct Slide {
+    from: f32,
+    to: f32,
+    since: Option<Instant>,
+}
+
+impl Slide {
+    fn at(value: f32) -> Self {
+        Self { from: value, to: value, since: None }
+    }
+
+    fn value(&self, now: Instant) -> f32 {
+        match self.since {
+            Some(since) => {
+                let t = now.saturating_duration_since(since).as_secs_f32() / TRAVEL.as_secs_f32();
+                self.from + (self.to - self.from) * slide_ease(t)
+            }
+            None => self.to,
+        }
+    }
+
+    fn moving(&self, now: Instant) -> bool {
+        self.since.is_some_and(|since| now.saturating_duration_since(since) < TRAVEL)
+    }
+
+    /// Heads for `to` from wherever the value is now; `still` jumps straight there.
+    fn toward(&mut self, to: f32, still: bool) {
+        if to == self.to {
+            return;
+        }
+        let now = Instant::now();
+        *self = Self { from: self.value(now), to, since: (!still).then_some(now) };
+    }
+}
+
+/// The slider's memory between frames: where the knob and the fill are easing, and when the thumb
+/// last popped.
+struct SliderMotion {
+    knob: Slide,
+    fill: Slide,
+    pop: Option<Instant>,
+}
+
+impl SliderMotion {
+    fn new(knob: f32, fill: f32, still: bool) -> Self {
+        Self { knob: Slide::at(knob), fill: Slide::at(fill), pop: (!still).then(Instant::now) }
+    }
+
+    /// Heads for the stop at `knob` and its fill from wherever they are; `still` jumps.
+    fn toward(&mut self, knob: f32, fill: f32, still: bool) {
+        if self.knob.to != knob {
+            self.pop = (!still).then(Instant::now);
+        }
+        self.knob.toward(knob, still);
+        self.fill.toward(fill, still);
+    }
+
+    fn moving(&self, now: Instant) -> bool {
+        self.knob.moving(now) || self.fill.moving(now) || self.pop.is_some_and(|pop| now.saturating_duration_since(pop) < POP)
+    }
+
+    fn pop_scale(&self, now: Instant) -> f32 {
+        match self.pop {
+            Some(pop) => {
+                let t = now.saturating_duration_since(pop).as_secs_f32() / POP.as_secs_f32();
+                if t >= 1. { 1. } else { thumb_pop(t) }
+            }
+            None => 1.,
+        }
+    }
+
+    /// How far the head's name has risen into place, 0–1, after the last move.
+    fn name_rise(&self, now: Instant) -> f32 {
+        match self.knob.since {
+            Some(since) => crate::motion::spring(now.saturating_duration_since(since).as_secs_f32() / TRAVEL.as_secs_f32()),
+            None => 1.,
+        }
+    }
+}
+
 /// WackCode 2's effort slider, from the effort menu's choices (Default, then Low through Ultra):
 /// a head naming the effort and the model, a track with a stop for each choice and a knob, and the
 /// stops' names beneath. Clicking or dragging along the track, or clicking a name, moves the
 /// effort at once and leaves the slider open (`SlideEffort`).
-fn effort_slider(menu: MenuData, model: SharedString, theme: &Theme) -> impl IntoElement {
-    let items: Vec<MenuItem> = menu.groups.into_iter().flat_map(|group| group.items).collect();
-    let choices: Vec<Option<Reasoning>> = items
-        .iter()
-        .map(|item| match item.choice {
-            Choice::Effort(effort) => effort,
-            Choice::Model { .. } => None,
-        })
-        .collect();
-    let count = items.len();
-    let current = items.iter().position(|item| item.selected).unwrap_or(0);
-    let ultra = choices.get(current).copied().flatten() == Some(Reasoning::Ultra);
-    let on = current > 0;
-    let width = SLIDER_WIDTH - 2. * SLIDER_PAD;
-    let (tone, wash) = if ultra { (theme.ultra, Hsla { a: 0.14, ..theme.ultra }) } else { (theme.accent, theme.accent_wash) };
-    let selected = &items[current.min(count.saturating_sub(1))];
+///
+/// The knob and the fill ease between stops rather than jumping, the thumb pops as it lands, and
+/// the head's name rises into place; at Ultra the fill becomes the prism's glyph field. All of
+/// them are version 2's, restored.
+#[derive(IntoElement)]
+struct EffortSlider {
+    menu: MenuData,
+    model: SharedString,
+    /// Whose composer this is, so the motion's state is this slider's own.
+    key: SharedString,
+}
 
-    let head = div()
-        .flex()
-        .items_center()
-        .gap(px(10.))
-        .child(
-            div()
-                .flex_none()
-                .size(px(30.))
-                .rounded_full()
-                .flex()
-                .items_center()
-                .justify_center()
-                .bg(if on { wash } else { theme.hover })
-                .child(if ultra {
-                    UltraMark::new("slider-ultra-mark", px(14.)).into_any_element()
-                } else {
-                    Icon::Brain.view(px(15.), if on { theme.accent_text } else { theme.text_dim }).into_any_element()
-                }),
-        )
-        .child(
-            div()
-                .flex_1()
-                .min_w_0()
-                .flex()
-                .flex_col()
-                .child(if ultra {
-                    UltraLabel::new("slider-ultra", selected.label.clone(), Type::UiStrong).into_any_element()
-                } else {
-                    div()
-                        .typography(Type::UiStrong)
-                        .text_color(if on { theme.accent_text } else { theme.text })
-                        .child(selected.label.clone())
-                        .into_any_element()
-                })
-                .child(div().truncate().typography(Type::Small).text_color(theme.text_dim).child(model)),
-        )
-        .when_some(selected.detail.clone(), |head, detail| {
-            head.child(div().flex_none().typography(Type::Small).text_color(theme.text_faint).child(detail))
+impl RenderOnce for EffortSlider {
+    fn render(self, window: &mut Window, cx: &mut App) -> impl IntoElement {
+        let theme = Theme::get(cx).clone();
+        let items: Vec<MenuItem> = self.menu.groups.into_iter().flat_map(|group| group.items).collect();
+        let choices: Vec<Option<Reasoning>> = items
+            .iter()
+            .map(|item| match item.choice {
+                Choice::Effort(effort) => effort,
+                Choice::Model { .. } => None,
+            })
+            .collect();
+        let count = items.len();
+        let current = items.iter().position(|item| item.selected).unwrap_or(0);
+        let ultra = choices.get(current).copied().flatten() == Some(Reasoning::Ultra);
+        let on = current > 0;
+        let width = SLIDER_WIDTH - 2. * SLIDER_PAD;
+        let (tone, wash) = if ultra { (theme.ultra, Hsla { a: 0.14, ..theme.ultra }) } else { (theme.accent, theme.accent_wash) };
+        let selected = &items[current.min(count.saturating_sub(1))];
+
+        // The knob's place and the fill's, eased from wherever they were: a press or a drag moves
+        // the effort at once, and the bar catches up.
+        let still = cx.reduce_motion();
+        let knob_target = stop_x(current, count, width);
+        let fill_target = if on { knob_target + TRACK_HEIGHT / 2. } else { 0. };
+        let motion = window.use_keyed_state(
+            ElementId::Name(format!("effort-motion-{}", self.key).into()),
+            cx,
+            move |_, _| SliderMotion::new(knob_target, fill_target, still),
+        );
+        let now = Instant::now();
+        let (knob, fill, pop, rise) = motion.update(cx, |motion, _| {
+            motion.toward(knob_target, fill_target, still);
+            (motion.knob.value(now), motion.fill.value(now), motion.pop_scale(now), motion.name_rise(now))
         });
+        if motion.read(cx).moving(now) {
+            window.request_animation_frame();
+        }
 
-    // The track remembers where it was drawn, so a press or a drag finds the nearest stop.
-    let drawn: Rc<Cell<Option<Bounds<Pixels>>>> = Rc::default();
-    let pick = {
-        let drawn = drawn.clone();
-        let choices = choices.clone();
-        move |x: Pixels, window: &mut Window, cx: &mut App| {
-            let Some(bounds) = drawn.get() else {
-                return;
-            };
-            let index = nearest_stop(f32::from(x - bounds.left()), count, f32::from(bounds.size.width));
-            if index != current {
-                window.dispatch_action(Box::new(SlideEffort { effort: choices[index] }), cx);
+        let head = div()
+            .flex()
+            .items_center()
+            .gap(px(10.))
+            .child(
+                div()
+                    .flex_none()
+                    .size(px(30.))
+                    .rounded_full()
+                    .flex()
+                    .items_center()
+                    .justify_center()
+                    .bg(if on { wash } else { theme.hover })
+                    .child(if ultra {
+                        UltraMark::new("slider-ultra-mark", px(14.)).animated(true).into_any_element()
+                    } else {
+                        Icon::Brain.view(px(15.), if on { theme.accent_text } else { theme.text_dim }).into_any_element()
+                    }),
+            )
+            .child(
+                div()
+                    .flex_1()
+                    .min_w_0()
+                    .flex()
+                    .flex_col()
+                    // The name rises into place at each stop, as version 2's did.
+                    .child(
+                        div()
+                            .relative()
+                            .top(px((1. - rise) * 3.))
+                            .opacity(0.25 + 0.75 * rise)
+                            .when(ultra, |name| name.child(UltraLabel::new("slider-ultra", selected.label.clone(), Type::UiStrong)))
+                            .when(!ultra, |name| {
+                                name.child(
+                                    div()
+                                        .typography(Type::UiStrong)
+                                        .text_color(if on { theme.accent_text } else { theme.text })
+                                        .child(selected.label.clone()),
+                                )
+                            }),
+                    )
+                    .child(div().truncate().typography(Type::Small).text_color(theme.text_dim).child(self.model.clone())),
+            )
+            .when_some(selected.detail.clone(), |head, detail| {
+                head.child(div().flex_none().typography(Type::Small).text_color(theme.text_faint).child(detail))
+            });
+
+        // The track remembers where it was drawn, so a press or a drag finds the nearest stop.
+        let drawn: Rc<Cell<Option<Bounds<Pixels>>>> = Rc::default();
+        let pick = {
+            let drawn = drawn.clone();
+            let choices = choices.clone();
+            move |x: Pixels, window: &mut Window, cx: &mut App| {
+                let Some(bounds) = drawn.get() else {
+                    return;
+                };
+                let index = nearest_stop(f32::from(x - bounds.left()), count, f32::from(bounds.size.width));
+                if index != current {
+                    window.dispatch_action(Box::new(SlideEffort { effort: choices[index] }), cx);
+                }
+            }
+        };
+        let pick: crate::slide::Pick = Rc::new(pick);
+        // At Ultra the fill is a well the prism's glyph field writes into, as version 2 drew it.
+        let fill_ground: Background = if ultra { Hsla { a: 0.13, ..theme.ultra }.into() } else { theme.accent_fill() };
+        let mut track = div()
+            .id("effort-track")
+            .relative()
+            .h(px(TRACK_HEIGHT))
+            .rounded_full()
+            .bg(theme.hover)
+            .child(crate::slide::follow("effort-track", drawn, pick.clone()).absolute().left_0().top_0().size_full())
+            .when(fill > 0.01, |track| {
+                track.child(
+                    div()
+                        .absolute()
+                        .left_0()
+                        .top_0()
+                        .bottom_0()
+                        .w(px(fill))
+                        .rounded_full()
+                        .overflow_hidden()
+                        .bg(fill_ground)
+                        .when(ultra, |fill| fill.border_1().border_color(Hsla { a: 0.2, ..theme.ultra }))
+                        .when(ultra, |fill| {
+                            fill.child(UltraField::new(
+                                ElementId::Name(format!("effort-field-{}", self.key).into()),
+                                px(width),
+                                px(TRACK_HEIGHT),
+                            ))
+                        }),
+                )
+            });
+        // The field's density carries the stops at Ultra, so the dots step aside there.
+        if !ultra {
+            for index in 0..count {
+                let lit = on && index <= current;
+                track = track.child(
+                    div()
+                        .absolute()
+                        .top(px(TRACK_HEIGHT / 2. - 2.))
+                        .left(px(stop_x(index, count, width) - 2.))
+                        .size(px(4.))
+                        .rounded_full()
+                        .bg(if lit { Hsla { a: 0.45, ..theme.on_accent } } else { theme.border_strong }),
+                );
             }
         }
-    };
-    let pick: crate::slide::Pick = Rc::new(pick);
-    let knob_x = stop_x(current, count, width);
-    let fill_ground = if ultra { theme.ultra.into() } else { theme.accent_fill() };
-    let mut track = div()
-        .id("effort-track")
-        .relative()
-        .h(px(TRACK_HEIGHT))
-        .rounded_full()
-        .bg(theme.hover)
-        .child(crate::slide::follow("effort-track", drawn, pick.clone()).absolute().left_0().top_0().size_full())
-        .when(on, |track| {
-            track.child(div().absolute().left_0().top_0().bottom_0().w(px(knob_x + TRACK_HEIGHT / 2.)).rounded_full().bg(fill_ground))
-        });
-    for index in 0..count {
-        let lit = on && index <= current;
-        track = track.child(
-            div()
-                .absolute()
-                .top(px(TRACK_HEIGHT / 2. - 2.))
-                .left(px(stop_x(index, count, width) - 2.))
-                .size(px(4.))
-                .rounded_full()
-                .bg(if lit { Hsla { a: 0.45, ..theme.on_accent } } else { theme.border_strong }),
-        );
-    }
-    let track = track
-        .child(
-            div()
-                .absolute()
-                .top(px((TRACK_HEIGHT - KNOB) / 2.))
-                .left(px(knob_x - KNOB / 2.))
-                .size(px(KNOB))
-                .rounded_full()
-                .bg(theme.raised)
-                .border_1()
-                .border_color(theme.border_strong)
-                .shadow_sm(),
-        )
-        .on_mouse_down(MouseButton::Left, move |event, window, cx| {
-            cx.stop_propagation();
-            crate::slide::begin("effort-track");
-            pick(event.position.x, window, cx)
-        })
-        .tag("effort-track");
+        let knob_size = KNOB * pop;
+        let knob = div()
+            .absolute()
+            .top(px((TRACK_HEIGHT - knob_size) / 2.))
+            .left(px(knob - knob_size / 2.))
+            .size(px(knob_size))
+            .rounded_full()
+            .flex()
+            .items_center()
+            .justify_center()
+            .bg(if ultra { theme.ultra_glow } else { theme.raised })
+            .border_1()
+            .border_color(if ultra { Hsla { a: 0.55, ..theme.ultra } } else { theme.border_strong });
+        let knob = if ultra {
+            knob
+                .shadow(vec![BoxShadow {
+                    color: Hsla { a: 0.5, ..theme.ultra_spectrum[1] },
+                    offset: point(px(0.), px(0.)),
+                    blur_radius: px(14.),
+                    spread_radius: px(2.),
+                    inset: false,
+                }])
+                .child(UltraMark::new("effort-knob-mark", px(11. * pop)).ink(theme.on_ultra))
+        } else {
+            knob.shadow_sm()
+        };
+        let track = track
+            .child(knob)
+            .on_mouse_down(MouseButton::Left, move |event, window, cx| {
+                cx.stop_propagation();
+                crate::slide::begin("effort-track");
+                pick(event.position.x, window, cx)
+            })
+            .tag("effort-track");
 
-    let mut names = div().relative().h(px(16.)).mt(px(7.));
-    for (index, item) in items.iter().enumerate() {
-        let effort = choices[index];
-        let chosen = index == current;
-        let label = item.label.clone();
-        names = names.child(
-            div()
-                .id(("effort-stop", index))
-                .absolute()
-                .top_0()
-                .left(px(stop_x(index, count, width) - STOP_LABEL / 2.))
-                .w(px(STOP_LABEL))
-                .flex()
-                .justify_center()
-                .on_click(move |_, window, cx| window.dispatch_action(Box::new(SlideEffort { effort }), cx))
-                .child(if effort == Some(Reasoning::Ultra) {
-                    UltraLabel::new(("slider-stop-ultra", index), label, Type::Small).decode_on_arrival(false).into_any_element()
-                } else {
-                    div()
-                        .typography(Type::Small)
-                        .when(chosen, |name| name.font_weight(gpui::FontWeight::SEMIBOLD))
-                        .text_color(if chosen { theme.text } else { theme.text_faint })
-                        .hover(|name| name.text_color(theme.text))
-                        .child(label)
-                        .into_any_element()
-                }),
-        );
-    }
+        let mut names = div().relative().h(px(16.)).mt(px(7.));
+        for (index, item) in items.iter().enumerate() {
+            let effort = choices[index];
+            let chosen = index == current;
+            let label = item.label.clone();
+            names = names.child(
+                div()
+                    .id(("effort-stop", index))
+                    .absolute()
+                    .top_0()
+                    .left(px(stop_x(index, count, width) - STOP_LABEL / 2.))
+                    .w(px(STOP_LABEL))
+                    .flex()
+                    .justify_center()
+                    .on_click(move |_, window, cx| window.dispatch_action(Box::new(SlideEffort { effort }), cx))
+                    .child(if effort == Some(Reasoning::Ultra) {
+                        UltraLabel::new(("slider-stop-ultra", index), label, Type::Small).decode_on_arrival(false).into_any_element()
+                    } else {
+                        div()
+                            .typography(Type::Small)
+                            .when(chosen, |name| name.font_weight(gpui::FontWeight::SEMIBOLD))
+                            .text_color(if chosen { theme.text } else { theme.text_faint })
+                            .hover(|name| name.text_color(theme.text))
+                            .child(label)
+                            .into_any_element()
+                    }),
+            );
+        }
 
-    div()
-        .id("effort-slider")
-        // Presses inside stay inside: the click-away layer beneath must not close the slider.
-        .occlude()
-        .w(px(SLIDER_WIDTH))
-        .p(px(SLIDER_PAD))
-        .pb(px(10.))
-        .rounded(px(16.))
-        .bg(theme.raised)
-        .border_1()
-        .border_color(if ultra { Hsla { a: 0.34, ..tone } } else { theme.border_strong })
-        .shadow_lg()
-        .flex()
-        .flex_col()
-        .gap(px(14.))
-        .child(head)
-        .child(div().flex().flex_col().child(track).child(names))
-        .tag("effort-slider")
+        div()
+            .id("effort-slider")
+            // Presses inside stay inside: the click-away layer beneath must not close the slider.
+            .occlude()
+            .w(px(SLIDER_WIDTH))
+            .p(px(SLIDER_PAD))
+            .pb(px(10.))
+            .rounded(px(16.))
+            .bg(theme.raised)
+            .border_1()
+            .border_color(if ultra { Hsla { a: 0.34, ..tone } } else { theme.border_strong })
+            .shadow_lg()
+            .flex()
+            .flex_col()
+            .gap(px(14.))
+            .child(head)
+            .child(div().flex().flex_col().child(track).child(names))
+            .tag("effort-slider")
+    }
 }
 
 /// The room each stop's name has beneath the track.
@@ -1005,6 +1190,23 @@ mod tests {
         assert_eq!(plan_button_target(AgentMode::Build), AgentMode::Plan);
         assert_eq!(plan_button_target(AgentMode::Plan), AgentMode::UltraPlan);
         assert_eq!(plan_button_target(AgentMode::UltraPlan), AgentMode::Plan);
+    }
+
+    #[test]
+    fn the_knob_crosses_the_gap_quickly_and_settles_with_a_slight_overshoot() {
+        assert_eq!(slide_ease(0.), 0.);
+        assert_eq!(slide_ease(1.), 1.);
+        assert!(slide_ease(0.25) > 0.6, "most of the way there early: {}", slide_ease(0.25));
+        let peak = (0..=100).map(|step| slide_ease(step as f32 / 100.)).fold(0., f32::max);
+        assert!(peak > 1.02 && peak < 1.05, "a slight overshoot: {peak}");
+        assert!(slide_ease(0.7) > 1.);
+    }
+
+    #[test]
+    fn the_thumb_pops_past_full_size_and_settles() {
+        assert_eq!(thumb_pop(0.), 0.72);
+        assert_eq!(thumb_pop(1.), 1.);
+        assert!(thumb_pop(0.55) > 1.1);
     }
 
     #[test]

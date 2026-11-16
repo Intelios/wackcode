@@ -259,7 +259,7 @@ pub fn all() -> Vec<Scene> {
         },
         Scene {
             name: "effort-menu",
-            description: "The effort slider with Ultra chosen, over a chat in Ultra Plan.",
+            description: "The effort slider with Ultra chosen, its glyph field at rest, over a chat in Ultra Plan.",
             size: WINDOW,
             build: |_, cx| {
                 cx.new(|_| {

@@ -1,26 +1,28 @@
 //! Ultra's look, shared by Ultra Plan and the Ultra reasoning level: a fixed prism (the theme's
-//! `ultra*` tokens, which never follow the accent), the pixel wildcard ([`UltraMark`]) and a label
-//! that decodes from glyph noise ([`UltraLabel`]). Ported from version 2's `ultra-fx.ts`.
+//! `ultra*` tokens, which never follow the accent), the pixel wildcard ([`UltraMark`]), a label
+//! that decodes from glyph noise ([`UltraLabel`]) and the reasoning slider's glyph field
+//! ([`UltraField`]). Ported from version 2's `ultra-fx.ts` and `UltraGlyphField`.
 //!
-//! The timings and shapes are pure functions ([`mark_frame`], [`scramble`]), tested below; the
-//! views only clock and paint them.
+//! The timings and shapes are pure functions ([`mark_frame`], [`scramble`], [`field_frame`]),
+//! tested below; the views only clock and paint them.
 //!
 //! Motion budget: the mark changes in whole LED steps, so a live mark redraws only when its frame
 //! changes (about nine times a second through the orbit, then not at all through the hold), never
-//! every display frame. Only the mark's arrival and the label's decode, each under 600 ms, draw
-//! every frame. Under Reduce Motion the mark shows its settled wildcard and the label never
-//! decodes.
+//! every display frame; the field steps about twenty-five times a second, not sixty. Only the
+//! mark's arrival and the label's decode, each under 600 ms, draw every frame. Under Reduce Motion
+//! the mark shows its settled wildcard, the label never decodes, and the field paints one still
+//! frame.
 
 use std::time::{Duration, Instant};
 
 use gpui::{
-    App, BoxShadow, Bounds, ContentMask, ElementId, HighlightStyle, Hsla, Pixels, SharedString, StyledText, Window, canvas,
-    div, fill, linear_color_stop, linear_gradient, point, prelude::*, px, size,
+    App, BoxShadow, Bounds, ContentMask, ElementId, HighlightStyle, Hsla, Pixels, SharedString, StyledText, TextAlign,
+    TextRun, Window, canvas, div, fill, font, linear_color_stop, linear_gradient, point, prelude::*, px, size,
 };
 
 use crate::{
     theme::Theme,
-    typography::{Type, Typography},
+    typography::{MONO_FONT, Type, Typography},
 };
 
 // ── The edge ──────────────────────────────────────────
@@ -165,18 +167,26 @@ pub struct UltraMark {
     id: ElementId,
     size: Pixels,
     animated: bool,
+    ink: Option<Hsla>,
 }
 
 impl UltraMark {
     /// A still mark. `id` must be unique among the marks on screen.
     pub fn new(id: impl Into<ElementId>, size: Pixels) -> Self {
-        Self { id: id.into(), size, animated: false }
+        Self { id: id.into(), size, animated: false, ink: None }
     }
 
     /// Runs the LED cycle: for a mark that says Ultra is on and waiting, not for one that only
     /// labels, and not while a run owns the control.
     pub fn animated(mut self, animated: bool) -> Self {
         self.animated = animated;
+        self
+    }
+
+    /// Draws the whole mark in one colour, for a ground the prism cannot read on: the reasoning
+    /// slider's glow-white thumb.
+    pub fn ink(mut self, colour: Hsla) -> Self {
+        self.ink = Some(colour);
         self
     }
 }
@@ -223,7 +233,11 @@ impl RenderOnce for UltraMark {
         let cell = 3. * unit * scale;
         let pitch = 4. * unit * scale;
         let inset = (f32::from(self.size) - (2. * pitch + cell)) / 2.;
+        let ink = self.ink;
         let colour = |index: usize| -> Hsla {
+            if let Some(ink) = ink {
+                return ink;
+            }
             match RING.iter().position(|&ring| ring == index) {
                 Some(place) => theme.ultra_spectrum[STOPS[place]],
                 None => theme.ultra_glow,
@@ -378,6 +392,239 @@ impl RenderOnce for UltraLabel {
     }
 }
 
+// ── The glyph field ───────────────────────────────────
+
+/// Sparse to dense. The space lets the field thin out at the low end.
+const GLYPHS: [char; 10] = [' ', '.', ':', '-', '=', '+', '*', '#', '%', '@'];
+/// What floods the fill while it boots, before each column resolves.
+const FLOOD: [char; 4] = ['@', '#', '%', '&'];
+/// The field's left margin, and the room kept clear for the thumb at the track's end.
+const FIELD_LEFT: f32 = 8.;
+const THUMB_ROOM: f32 = 30.;
+/// The glyphs' size: SF Mono's advance at 11 points is 6.6, version 2's pitch.
+const FIELD_TEXT: f32 = 11.;
+/// How often a share of the cells re-rolls, and how many of them do.
+const REROLL_MS: u64 = 80;
+const REROLL_SHARE: f32 = 0.35;
+/// How long the fill takes to resolve from left to right when it appears.
+const ENTRANCE_MS: u64 = 750;
+/// How fast the spectrum slides along the field: one stop-span per 20 seconds.
+const DRIFT_PER_MS: f32 = 1. / 20_000.;
+/// How long the scan head takes to cross the track, and how far past its end it rests.
+const SWEEP_MS: u64 = 1700;
+/// How often the field steps. It is decorative, and an open slider should not cost a redraw for
+/// every display frame.
+const FIELD_STEP_MS: u64 = 40;
+
+/// How dense a cell is: sparse at the track's start and packed toward the thumb (`x`, 0–1),
+/// shaken by the cell's own `noise` (0–1) and lifted by the scan head passing over it (`scan`,
+/// 0–1).
+pub fn field_density(x: f32, noise: f32, scan: f32) -> f32 {
+    (0.1 + 0.62 * x + (noise - 0.5) * 0.35 + scan * 0.6).clamp(0., 1.)
+}
+
+/// The glyph for a density, from the ramp.
+pub fn glyph_for(density: f32) -> char {
+    GLYPHS[(density.clamp(0., 1.) * (GLYPHS.len() - 1) as f32).round() as usize]
+}
+
+/// Where the scan head is, in columns: it sweeps past the last one, then rests off the track.
+pub fn scan_head(elapsed: u64, columns: usize) -> f32 {
+    ((elapsed as f32 / SWEEP_MS as f32) % 1.25) * columns as f32
+}
+
+/// How close a column is to the head (0–1): a soft bump a few columns wide.
+pub fn scan_closeness(column: f32, head: f32) -> f32 {
+    (-((column - head).powi(2)) / 5.).exp()
+}
+
+/// A colour's place along the prism, `t` running 0→1 across the stops and bouncing back at each
+/// end, so a drifting offset never jumps from the last stop to the first.
+pub fn bounced(t: f32) -> f32 {
+    let wrapped = t.rem_euclid(2.);
+    if wrapped <= 1. { wrapped } else { 2. - wrapped }
+}
+
+/// One column of the field: what it shows, where its colour sits along the prism, how close the
+/// scan head is, and how opaque it is.
+#[derive(Clone, Copy, Debug, PartialEq)]
+pub struct FieldCell {
+    pub glyph: char,
+    pub along: f32,
+    pub near: f32,
+    pub alpha: f32,
+    /// A column still waiting for the entrance to reach it: drawn in the glow, not the prism.
+    pub flood: bool,
+}
+
+/// A flood glyph for a column, changing with the field's step seed.
+fn flood_glyph(column: usize, seed: u32) -> char {
+    let mut value = seed ^ (column as u32).wrapping_mul(0x9e37_79b9);
+    value ^= value >> 15;
+    value = value.wrapping_mul(0x85eb_ca6b);
+    value ^= value >> 13;
+    FLOOD[(value % FLOOD.len() as u32) as usize]
+}
+
+/// The field `elapsed` milliseconds after it appeared. Under Reduce Motion it is one still frame:
+/// every column resolved, the head parked at seven tenths.
+pub fn field_frame(elapsed: u64, columns: usize, noise: &[f32], seed: u32, still: bool) -> Vec<FieldCell> {
+    let head = if still { columns as f32 * 0.7 } else { scan_head(elapsed, columns) };
+    let reveal = if still { 1. } else { (elapsed as f32 / ENTRANCE_MS as f32).min(1.) };
+    (0..columns)
+        .map(|column| {
+            let x = column as f32 / columns.max(1) as f32;
+            if x > reveal {
+                return FieldCell { glyph: flood_glyph(column, seed), along: 0., near: 1., alpha: 0.95, flood: true };
+            }
+            let near = scan_closeness(column as f32, head);
+            let density = field_density(x, noise.get(column).copied().unwrap_or(0.5), near);
+            FieldCell {
+                glyph: glyph_for(density),
+                along: bounced(x + elapsed as f32 * DRIFT_PER_MS),
+                near,
+                alpha: 0.5 + 0.5 * (near + x * 0.4).min(1.),
+                flood: false,
+            }
+        })
+        .collect()
+}
+
+/// `amount` of `to` over `from`.
+fn mix(from: Hsla, to: Hsla, amount: f32) -> Hsla {
+    from.blend(to.opacity(amount.clamp(0., 1.)))
+}
+
+/// Paints the field's cells across the track, one monospace glyph per column at the font's own
+/// advance, so the grid stays even.
+fn paint_field(cells: &[FieldCell], bounds: Bounds<Pixels>, theme: &Theme, window: &mut Window, cx: &mut App) {
+    let font = font(MONO_FONT);
+    let font_size = px(FIELD_TEXT);
+    let text: String = cells.iter().map(|cell| cell.glyph).collect();
+    let runs: Vec<TextRun> = cells
+        .iter()
+        .map(|cell| TextRun {
+            len: cell.glyph.len_utf8(),
+            font: font.clone(),
+            color: if cell.flood {
+                theme.ultra_glow
+            } else {
+                mix(theme.ultra_at(cell.along), theme.ultra_glow, cell.near * 0.8)
+            }
+            .opacity(cell.alpha),
+            ..TextRun::default()
+        })
+        .collect();
+    let shaped = window.text_system().shape_line(text.into(), font_size, &runs, None);
+    let origin = bounds.origin + point(px(FIELD_LEFT), px(0.));
+    let _ = shaped.paint(origin, bounds.size.height, TextAlign::Left, None, window, cx);
+}
+
+/// The field's clock and its columns' noise, kept between frames while the slider is open at
+/// Ultra.
+struct Field {
+    since: Instant,
+    noise: Vec<f32>,
+    seed: u32,
+    rolled_at: u64,
+    waiting: bool,
+}
+
+impl Field {
+    fn new(columns: usize) -> Self {
+        let mut seed = std::time::SystemTime::now().duration_since(std::time::UNIX_EPOCH).map_or(7, |since| since.subsec_nanos()) | 1;
+        let noise = (0..columns).map(|_| random(&mut seed)).collect();
+        Self { since: Instant::now(), noise, seed, rolled_at: 0, waiting: false }
+    }
+
+    /// Keeps the noise in step with a track that has been resized.
+    fn fit(&mut self, columns: usize) {
+        if self.noise.len() != columns {
+            self.noise = (0..columns).map(|_| random(&mut self.seed)).collect();
+        }
+    }
+
+    /// Re-rolls a share of the columns, as the field does every [`REROLL_MS`].
+    fn roll(&mut self, elapsed: u64) {
+        self.rolled_at = elapsed;
+        for value in &mut self.noise {
+            if random(&mut self.seed) < REROLL_SHARE {
+                *value = random(&mut self.seed);
+            }
+        }
+    }
+}
+
+/// A small xorshift: the field only has to look random.
+fn random(seed: &mut u32) -> f32 {
+    *seed ^= *seed << 13;
+    *seed ^= *seed >> 17;
+    *seed ^= *seed << 5;
+    (*seed % 1000) as f32 / 1000.
+}
+
+/// The reasoning slider's fill at Ultra: a strip of monospace glyphs, sparse at the track's start
+/// and packed towards the thumb, its cells re-rolling, a bright scan head sweeping through, in
+/// the prism running cyan to peach. Version 2's `UltraGlyphField`, ported.
+///
+/// It steps rather than drawing every display frame, so an open slider costs twenty-five redraws
+/// a second instead of sixty. Under Reduce Motion it paints one still frame, the head parked.
+#[derive(IntoElement)]
+pub struct UltraField {
+    id: ElementId,
+    /// The whole track's width: the field is drawn across it and the fill's edge reveals it.
+    width: Pixels,
+    height: Pixels,
+}
+
+impl UltraField {
+    pub fn new(id: impl Into<ElementId>, width: Pixels, height: Pixels) -> Self {
+        Self { id: id.into(), width, height }
+    }
+}
+
+impl RenderOnce for UltraField {
+    fn render(self, window: &mut Window, cx: &mut App) -> impl IntoElement {
+        let theme = Theme::get(cx).clone();
+        let still = cx.reduce_motion();
+        let font = font(MONO_FONT);
+        let font_size = px(FIELD_TEXT);
+        let font_id = window.text_system().resolve_font(&font);
+        let advance = window.text_system().advance(font_id, font_size, 'm').map_or(6.6, |size| f32::from(size.width)).max(1.);
+        let columns = (((f32::from(self.width) - FIELD_LEFT - THUMB_ROOM) / advance).floor().max(0.) as usize) + 1;
+        let field = window.use_keyed_state(self.id.clone(), cx, |_, _| Field::new(columns));
+        let now = Instant::now();
+        let (cells, elapsed) = field.update(cx, |field, _| {
+            field.fit(columns);
+            let elapsed = now.saturating_duration_since(field.since).as_millis() as u64;
+            if !still && elapsed.saturating_sub(field.rolled_at) >= REROLL_MS {
+                field.roll(elapsed);
+            }
+            (field_frame(elapsed, columns, &field.noise, field.seed, still), elapsed)
+        });
+        if !still && !field.read(cx).waiting {
+            field.update(cx, |field, _| field.waiting = true);
+            let wait = Duration::from_millis(FIELD_STEP_MS - elapsed % FIELD_STEP_MS);
+            let field = field.clone();
+            window
+                .spawn(cx, async move |cx| {
+                    cx.background_executor().timer(wait).await;
+                    field.update(cx, |field, cx| {
+                        field.waiting = false;
+                        cx.notify();
+                    });
+                })
+                .detach();
+        }
+        canvas(|_, _, _| {}, move |bounds, _, window, cx| paint_field(&cells, bounds, &theme, window, cx))
+            .absolute()
+            .left_0()
+            .top_0()
+            .w(self.width)
+            .h(self.height)
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -462,5 +709,68 @@ mod tests {
         let halfway = scramble("Ultra", 0.5, || 0.);
         assert!(halfway.starts_with("Ul"));
         assert!(halfway.ends_with(NOISE.chars().next().unwrap()));
+    }
+
+    #[test]
+    fn the_field_maps_density_onto_the_ramp_and_clamps_it() {
+        assert_eq!(glyph_for(-1.), GLYPHS[0]);
+        assert_eq!(glyph_for(0.), ' ');
+        assert_eq!(glyph_for(1.), '@');
+        assert_eq!(glyph_for(4.), '@');
+    }
+
+    #[test]
+    fn the_field_thickens_toward_the_thumb_and_under_the_scan_head() {
+        assert!(field_density(0.9, 0.5, 0.) > field_density(0.1, 0.5, 0.));
+        assert!(field_density(0.4, 0.5, 1.) > field_density(0.4, 0.5, 0.));
+    }
+
+    #[test]
+    fn the_scan_head_sweeps_across_the_track_and_rests_past_its_end() {
+        assert_eq!(scan_head(0, 40), 0.);
+        assert!((scan_head(SWEEP_MS / 2, 40) - 20.).abs() < 0.001);
+        assert!(scan_head(SWEEP_MS * 11 / 10, 40) > 40.);
+        assert_eq!(scan_closeness(10., 10.), 1.);
+        assert!(scan_closeness(20., 10.) < 0.01);
+    }
+
+    #[test]
+    fn the_spectrum_bounces_back_instead_of_jumping() {
+        assert_eq!(bounced(0.), 0.);
+        assert_eq!(bounced(0.5), 0.5);
+        assert_eq!(bounced(1.), 1.);
+        assert_eq!(bounced(1.5), 0.5);
+        assert_eq!(bounced(2.), 0.);
+        assert_eq!(bounced(-0.5), 0.5);
+    }
+
+    #[test]
+    fn the_entrance_floods_from_the_left_then_resolves() {
+        let noise = [0.5; 20];
+        let start = field_frame(0, 20, &noise, 1, false);
+        assert!(!start[0].flood, "the first column resolves at once");
+        assert!(start.iter().skip(1).all(|cell| cell.flood));
+        let halfway = field_frame(ENTRANCE_MS / 2, 20, &noise, 1, false);
+        assert!(!halfway[9].flood);
+        assert!(halfway[11].flood);
+        let done = field_frame(ENTRANCE_MS, 20, &noise, 1, false);
+        assert!(done.iter().all(|cell| !cell.flood));
+    }
+
+    #[test]
+    fn the_still_field_is_resolved_with_the_head_parked() {
+        let noise = [0.5; 20];
+        let still = field_frame(0, 20, &noise, 1, true);
+        assert!(still.iter().all(|cell| !cell.flood));
+        assert!(still[14].near > 0.9, "the head rests at seven tenths");
+        assert!(still[0].near < 0.01);
+    }
+
+    #[test]
+    fn the_field_is_sparse_at_the_start_and_packed_at_the_end() {
+        let noise = [0.5; 20];
+        let cells = field_frame(ENTRANCE_MS, 20, &noise, 1, false);
+        let rank = |glyph: char| GLYPHS.iter().position(|candidate| *candidate == glyph).unwrap_or(0);
+        assert!(rank(cells[19].glyph) > rank(cells[0].glyph));
     }
 }

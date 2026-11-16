@@ -23,7 +23,10 @@ use serde::{Deserialize, Serialize};
 use serde_json::Value;
 use wack_llm::{Block, Message, Role, Usage};
 
-use crate::compaction::{Summary, estimate_tokens};
+use crate::{
+    commands::CommandUse,
+    compaction::{Summary, estimate_tokens},
+};
 
 const VERSION: u32 = 1;
 const INTERRUPTED: &str = "This tool was interrupted before it finished: the app quit while it ran. Check what it changed before running it again.";
@@ -47,6 +50,10 @@ enum Entry {
         /// Set when the app wrote this message, not the user: what kind of note it is.
         #[serde(default, skip_serializing_if = "Option::is_none")]
         note: Option<String>,
+        /// Set when the user sent this message as a slash command: what they typed, which the
+        /// transcript shows in place of the expanded text the model got.
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        command: Option<CommandUse>,
     },
     /// Everything before this line is replaced by `summary`, except the last `keep` messages.
     Compaction {
@@ -226,7 +233,12 @@ impl Session {
 
     /// Adds a message. `usage` is the provider's count for an assistant reply.
     pub fn push(&mut self, message: Message, usage: Option<Usage>) -> Result<(), String> {
-        self.append(&Entry::Message { message: message.clone(), usage, at: Some(now_millis()), note: None })?;
+        self.push_as(message, usage, None)
+    }
+
+    /// Adds a message the user sent as a slash command (`command`), or a plain one (`None`).
+    pub fn push_as(&mut self, message: Message, usage: Option<Usage>, command: Option<CommandUse>) -> Result<(), String> {
+        self.append(&Entry::Message { message: message.clone(), usage, at: Some(now_millis()), note: None, command })?;
         self.remember(message, usage, None);
         Ok(())
     }
@@ -234,7 +246,7 @@ impl Session {
     /// Adds a message the app wrote for the model.
     pub fn push_note(&mut self, note: Note) -> Result<(), String> {
         let message = Message::user(note.text);
-        self.append(&Entry::Message { message: message.clone(), usage: None, at: Some(now_millis()), note: Some(note.tag.clone()) })?;
+        self.append(&Entry::Message { message: message.clone(), usage: None, at: Some(now_millis()), note: Some(note.tag.clone()), command: None })?;
         self.remember(message, None, Some(note.tag));
         Ok(())
     }
@@ -326,7 +338,7 @@ fn now_millis() -> u64 {
 /// [`Session::messages`], nothing is dropped at a compaction.
 #[derive(Clone, Debug, PartialEq)]
 pub enum HistoryEntry {
-    Message { message: Message, usage: Option<Usage>, at: Option<u64> },
+    Message { message: Message, usage: Option<Usage>, at: Option<u64>, command: Option<CommandUse> },
     /// The conversation before this point was summarised for the model.
     Compacted,
     /// The app told the model something here (a mode contract). Not shown as a message.
@@ -344,7 +356,7 @@ pub fn history(path: &Path) -> Result<Vec<HistoryEntry>, String> {
     for line in String::from_utf8_lossy(&bytes[..complete]).lines() {
         match serde_json::from_str::<Entry>(line) {
             Ok(Entry::Message { note: Some(tag), .. }) => entries.push(HistoryEntry::Note { tag }),
-            Ok(Entry::Message { message, usage, at, note: None }) => entries.push(HistoryEntry::Message { message, usage, at }),
+            Ok(Entry::Message { message, usage, at, note: None, command }) => entries.push(HistoryEntry::Message { message, usage, at, command }),
             Ok(Entry::Compaction { .. }) => entries.push(HistoryEntry::Compacted),
             Ok(Entry::State { key, value }) => entries.push(HistoryEntry::State { key, value }),
             Ok(Entry::Meta { .. } | Entry::ToolsLoaded { .. }) | Err(_) => {}

@@ -37,6 +37,9 @@ ignore = "0.4"
 regex = "1"
 serde = { version = "1", features = ["derive"] }
 serde_json = "1"
+# Skill frontmatter: the SKILL.md files other tools write use the whole of YAML (folded
+# descriptions, lists, nested metadata), which a line reader would get wrong.
+yaml-rust2 = { version = "0.13", default-features = false }
 tokio = { version = "1", features = ["full"] }
 # The terminal pane's emulator: the grid, escape sequences, the PTY. Drawing is ours.
 alacritty_terminal = "0.26"

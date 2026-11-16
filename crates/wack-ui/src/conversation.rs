@@ -203,7 +203,7 @@ impl Conversation {
                     conversation.close_turn(None);
                     conversation.entries.push(Entry::Compacted);
                 }
-                HistoryEntry::Message { message, usage, at } => conversation.replay(message, *usage, *at),
+                HistoryEntry::Message { message, usage, at, .. } => conversation.replay(message, *usage, *at),
                 HistoryEntry::State { key, value } => conversation.apply_state(key, value),
                 HistoryEntry::Note { .. } => {}
             }
@@ -468,8 +468,8 @@ mod tests {
     #[test]
     fn discarding_returns_to_build_and_saved_state_replays() {
         let history = vec![
-            HistoryEntry::Message { message: Message::user("Plan it"), usage: None, at: Some(1) },
-            HistoryEntry::Message { message: assistant(vec![Block::Text { text: "Here it is.".into() }]), usage: None, at: Some(2) },
+            HistoryEntry::Message { message: Message::user("Plan it"), usage: None, at: Some(1), command: None },
+            HistoryEntry::Message { message: assistant(vec![Block::Text { text: "Here it is.".into() }]), usage: None, at: Some(2), command: None },
             HistoryEntry::State { key: PLAN_STATE.into(), value: json!({ "mode": "plan", "plan": "Steps" }) },
             HistoryEntry::State { key: TODO_STATE.into(), value: json!({ "tasks": [{ "id": 1, "subject": "Write", "status": "pending" }], "nextId": 2 }) },
         ];
@@ -497,7 +497,7 @@ mod tests {
     }
 
     fn at(message: Message, ms: u64, usage: Option<Usage>) -> HistoryEntry {
-        HistoryEntry::Message { message, usage, at: Some(ms) }
+        HistoryEntry::Message { message, usage, at: Some(ms), command: None }
     }
 
     fn turns(conversation: &Conversation) -> Vec<&Turn> {

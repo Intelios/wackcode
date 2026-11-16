@@ -38,6 +38,7 @@ use wack_llm::{
 
 use crate::{
     ask::{Answer, Question},
+    commands::CommandUse,
     compaction::{self, Summary},
     prompt,
     registry::{Registry, TOOL_SEARCH},
@@ -304,12 +305,18 @@ impl Agent {
     /// Runs one user message to completion: until the model stops calling tools, or the user
     /// stops it. An `Err` is a failure the user has to see; the session stays valid either way.
     pub async fn run(&mut self, prompt: &str, control: &Control, events: EventSink<'_>) -> Result<Outcome, String> {
+        self.run_as(prompt, None, control, events).await
+    }
+
+    /// [`Agent::run`] for a message the user sent as a slash command: `prompt` is the expanded
+    /// text the model gets, and `command` what they typed, saved beside it for the transcript.
+    pub async fn run_as(&mut self, prompt: &str, command: Option<CommandUse>, control: &Control, events: EventSink<'_>) -> Result<Outcome, String> {
         for feature in &self.features {
             feature.on_run_start();
         }
         self.save_state(events)?;
         self.save_notes()?;
-        self.session.push(Message::user(prompt), None)?;
+        self.session.push_as(Message::user(prompt), None, command)?;
         let mut compacted_for_overflow = false;
         loop {
             if control.stopped() {

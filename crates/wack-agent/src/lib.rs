@@ -4,10 +4,12 @@
 //! This crate is the replacement for Pi. It has no UI dependency and runs headless (see `wack-cli`),
 //! which is how its behaviour is tested. Features hook in through one small compiled-in trait
 //! rather than a dynamic extension runtime: so far the question tool (`ask`), the todo list
-//! (`todo`), Plan mode (`plan`) and memory (`memory`), assembled for a run by `kit`.
+//! (`todo`), Plan mode (`plan`), memory (`memory`) and skills (`skills`), assembled for a run by
+//! `kit`. Slash commands (`commands`) expand before a run starts.
 
 pub mod agent;
 pub mod ask;
+pub mod commands;
 pub mod compaction;
 pub mod kit;
 pub mod memory;
@@ -15,12 +17,14 @@ pub mod plan;
 pub mod prompt;
 pub mod registry;
 pub mod session;
+pub mod skills;
 pub mod todo;
 pub mod tool;
 
 pub use agent::{Agent, Control, Event, EventSink, Feature, Outcome, Profile, Settings, Verdict};
 pub use kit::Kit;
 pub use memory::Memory;
+pub use commands::CommandUse;
 pub use plan::AgentMode;
 pub use registry::{Registry, TOOL_SEARCH};
 pub use session::{HistoryEntry, Note, Session, history};

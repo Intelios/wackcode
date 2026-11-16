@@ -1,11 +1,12 @@
 //! The features every coding chat runs with, assembled for one run: the question tool, the todo
-//! list, Plan mode and, when the engine hands it a folder, memory. The app and the command line
+//! list, Plan mode, the skills index and, when the engine hands it a folder, memory. The app and the command line
 //! both build their agent from this, so a chat behaves the same in either.
 //!
 //! A kit is built from the session at the start of a run and dropped at its end: what must
 //! outlast the run is in the session's state lines, and what must not (Ultra Plan's "Write the
 //! plan now") goes with the kit. Memory's index is read here, once per run, so the system prompt
-//! stays fixed for the run while a save made during it shows from the next one.
+//! stays fixed for the run while a save made during it shows from the next one. Skills work the
+//! same way: the engine loads the catalogue as the run starts, and its index joins the prompt.
 
 use std::{path::PathBuf, sync::Arc};
 
@@ -15,6 +16,7 @@ use crate::{
     memory::Memory,
     plan::{AgentMode, Plan},
     session::Session,
+    skills::{self, Catalog},
     todo::Todo,
     tool::Tool,
 };
@@ -24,6 +26,8 @@ pub struct Kit {
     pub todo: Todo,
     /// The project's memory, and its index as it stood when the run started.
     memory: Option<(Memory, Option<String>)>,
+    /// The skills index as it stood when the run started.
+    skills: Option<String>,
 }
 
 impl Kit {
@@ -36,7 +40,13 @@ impl Kit {
             let index = memory.index();
             (memory, index)
         });
-        Self { plan: Plan::new(session, mode, unrestricted), todo: Todo::new(session), memory }
+        Self { plan: Plan::new(session, mode, unrestricted), todo: Todo::new(session), memory, skills: None }
+    }
+
+    /// Lists `catalog`'s skills in the system prompt, for the model to load when a task matches.
+    pub fn with_skills(mut self, catalog: &Catalog) -> Self {
+        self.skills = skills::index(catalog);
+        self
     }
 
     /// The tools these features add to a chat's own, in the order the model is shown them.
@@ -58,6 +68,9 @@ impl Kit {
     /// Hooks the features into an agent whose registry holds [`Kit::tools`].
     pub fn attach(&self, mut agent: Agent) -> Agent {
         if let Some((_, Some(index))) = &self.memory {
+            agent = agent.with_system_part(index.clone());
+        }
+        if let Some(index) = &self.skills {
             agent = agent.with_system_part(index.clone());
         }
         self.features().into_iter().fold(agent, Agent::with_feature)

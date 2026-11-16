@@ -14,6 +14,8 @@ wack-core.workspace = true
 gpui.workspace = true
 gpui_tokio.workspace = true
 futures.workspace = true
+# The ledger's retry loop sleeps between attempts, on the engine's runtime (app.rs).
+tokio.workspace = true
 unicode-segmentation = "1"
 serde_json.workspace = true
 pulldown-cmark = { version = "0.13", default-features = false }

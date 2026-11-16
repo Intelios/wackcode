@@ -268,6 +268,19 @@ async fn agent(args: &mut Args, folder: &Path) -> Result<ExitCode, String> {
     let kit = Kit::new(&session, mode, store.planning_unrestricted(), store.memory_for(session.cwd()))
         .with_skills(&store.skill_catalog())
         .with_tasks(&session, tasks.clone());
+    // The usage ledger records this run under the session file's stem, the closest thing to a
+    // chat it has, and a write that fails is retried while the run lasts.
+    let stem = session.path().file_stem().map(|stem| stem.to_string_lossy().into_owned());
+    let usage = stem.map(|stem| store.usage_recorder(connection, &stem, session.cwd()));
+    if store.usage_recording() {
+        let writer = store.usage().clone();
+        tokio::spawn(async move {
+            loop {
+                tokio::time::sleep(std::time::Duration::from_secs(5)).await;
+                writer.flush();
+            }
+        });
+    }
     let mut tools = wack_tools::core_tools();
     tools.extend(kit.tools());
     let registry = Arc::new(Registry::new(tools)?);
@@ -287,7 +300,12 @@ async fn agent(args: &mut Args, folder: &Path) -> Result<ExitCode, String> {
         context_window: model.context_window,
         ultra: effort.is_ultra(),
     };
-    let mut agent = kit.attach(Agent::new(Arc::new(store.provider(connection)?), registry, session, &Profile::code(), settings));
+    let agent = Agent::new(Arc::new(store.provider(connection)?), registry, session, &Profile::code(), settings);
+    let agent = match usage {
+        Some(usage) => agent.with_recorder(usage),
+        None => agent,
+    };
+    let mut agent = kit.attach(agent);
     let mut header = format!("{} · {} · {}", connection.name, model.id, agent.session().cwd().display());
     if kit.plan.mode().planning() {
         header.push_str(&format!(" · {}", kit.plan.mode().label()));

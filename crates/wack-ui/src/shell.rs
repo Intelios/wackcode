@@ -39,7 +39,7 @@ use gpui::{
 
 use crate::{
     actions::{
-        self, ActivatePane, AddFolder, Back, ChooseBackdrop, ChooseEffort, SlideEffort, ToggleTodos, ToggleWaiting, ChooseFocus, ClearCommandOutput, CloseCommandEditor, CycleAgentMode, SetAgentMode, PickOption, ShowQuestion, NextQuestion, PreviousQuestion, SubmitAnswers, CancelQuestion, WrapUpQuestion, ShowDoneTodos, DiscardPlan, KeepPlan, ConfirmDiscardPlan, ApprovePlan, SavePlan, CopyPlan, ToggleUnrestrictedPlanning, ConfirmUnrestrictedPlanning, CancelUnrestrictedPlanning, ToggleMemory, SwitchProjectMemory, NewMemory, EditMemory, ChooseMemoryKind, SaveMemory, CloseMemoryEditor, AskDeleteMemory, AskRemoveMemoryFolder, ConfirmMemoryDelete, CancelMemoryDelete, RevealMemory,
+        self, ActivatePane, AddFolder, Back, ChooseBackdrop, ChooseEffort, SlideEffort, ToggleTodos, ToggleWaiting, ChooseFocus, ClearCommandOutput, CloseCommandEditor, CycleAgentMode, SetAgentMode, PickOption, ShowQuestion, NextQuestion, PreviousQuestion, SubmitAnswers, CancelQuestion, WrapUpQuestion, ShowDoneTodos, DiscardPlan, KeepPlan, ConfirmDiscardPlan, ApprovePlan, SavePlan, CopyPlan, ToggleUnrestrictedPlanning, ConfirmUnrestrictedPlanning, CancelUnrestrictedPlanning, ToggleMemory, SwitchProjectMemory, NewMemory, EditMemory, ChooseMemoryKind, SaveMemory, CloseMemoryEditor, AskDeleteMemory, AskRemoveMemoryFolder, ConfirmMemoryDelete, CancelMemoryDelete, RevealMemory, ToggleUsageRecording, RevealUsageFolder,
         ChooseBlur, ChooseDim, ChooseFormat, OpenCommandEditor, OpenConnectionForm, CloseConnectionForm, SwitchConnection, ChooseMode, ChooseModel, ChooseTexture, ChooseTheme, CloseChatTab, CloseMenu, ClosePane,
         ClosePaneId, CloseSettings, CloseTab, Compact, DeleteChat, DiscardConnection, EditConnection, EqualizeSplit, FocusNext, FocusPrevious, MovePane, AddModelRow, RemoveModelRow, SaveCommandEditor, SaveConnection,
         NewChat, NewChatIn, NewTerminal, NewTerminalWith, NextTab, OpenEffortMenu, OpenModelMenu, OpenSettings,
@@ -1097,6 +1097,10 @@ impl Render for Shell {
                 .on_action(cx.listener(|shell, _: &ConfirmMemoryDelete, _, cx| shell.with_app(cx, |app, cx| app.confirm_memory_delete(cx))))
                 .on_action(cx.listener(|shell, _: &CancelMemoryDelete, _, cx| shell.with_app(cx, |app, cx| app.cancel_memory_delete(cx))))
                 .on_action(cx.listener(|_, action: &RevealMemory, _, _| crate::memory_page::reveal(&action.path)))
+                .on_action(cx.listener(|shell, _: &ToggleUsageRecording, _, cx| {
+                    shell.with_app(cx, |app, cx| app.toggle_usage_recording(cx))
+                }))
+                .on_action(cx.listener(|_, action: &RevealUsageFolder, _, _| crate::memory_page::reveal(&action.path)))
                 .on_action(cx.listener(|shell, action: &SwitchSkill, _, cx| {
                     let (key, on) = (action.key.clone(), action.on);
                     shell.with_app(cx, |app, cx| app.switch_skill(&key, on, cx));
@@ -1554,6 +1558,7 @@ fn live_view(app: &AppState, cx: &App) -> (SidebarData, Screen, StripData) {
                 memory: app.memory.data(cx),
                 skills: app.skills.data(cx),
                 commands: app.templates.data(cx),
+                integrations: crate::integrations_page::IntegrationsData { status: store.usage().status() },
             }))
         }
         Selection::NewChat(project) => match info(project) {

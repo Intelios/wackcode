@@ -94,6 +94,8 @@ actions!(
         ToggleUnrestrictedPlanning,
         ConfirmUnrestrictedPlanning,
         CancelUnrestrictedPlanning,
+        /// Settings › Integrations: turns the usage ledger's recording on or off.
+        ToggleUsageRecording,
         /// Adds a picture to the backdrop's library, and shows it.
         ChooseBackdrop,
         /// Settings › Memory: the master switch.
@@ -252,6 +254,13 @@ pub struct AskRemoveMemoryFolder {
 #[derive(Clone, Debug, PartialEq, Action)]
 #[action(namespace = wackcode, no_json)]
 pub struct RevealMemory {
+    pub path: std::path::PathBuf,
+}
+
+/// Shows the usage ledger's folder in Finder (Settings › Integrations).
+#[derive(Clone, Debug, PartialEq, Action)]
+#[action(namespace = wackcode, no_json)]
+pub struct RevealUsageFolder {
     pub path: std::path::PathBuf,
 }
 

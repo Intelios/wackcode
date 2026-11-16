@@ -28,6 +28,9 @@ use wack_llm::Provider;
 
 use crate::store::{Chat, Store};
 
+/// Reports each model invocation to the usage ledger.
+pub type Usage = std::sync::Arc<dyn wack_agent::Recorder>;
+
 /// Everything a run needs, resolved before it starts.
 pub struct RunSetup {
     pub provider: Arc<dyn Provider>,
@@ -48,6 +51,8 @@ pub struct RunSetup {
     /// The chat's shell tasks, which outlive the run. `None` gives the run its own, which go
     /// with it.
     pub tasks: Option<Tasks>,
+    /// Reports the run's model calls to the usage ledger.
+    pub usage: Option<Usage>,
 }
 
 pub enum Job {
@@ -101,6 +106,7 @@ impl Store {
             skill_roots: self.skill_roots(),
             disabled_skills: self.disabled_skills(),
             tasks: None,
+            usage: Some(self.usage_recorder(&resolved.connection, &chat.id, &project.path)),
         })
     }
 }
@@ -139,13 +145,18 @@ pub async fn run(
         Ok(registry) => Arc::new(registry),
         Err(message) => return finished(Err(message), None),
     };
-    let mut agent = kit.attach(Agent::new(
+    let agent = Agent::new(
         setup.provider,
         registry,
         session,
         &Profile::code(),
         setup.settings,
-    ));
+    );
+    let agent = match setup.usage {
+        Some(usage) => agent.with_recorder(usage),
+        None => agent,
+    };
+    let mut agent = kit.attach(agent);
     let sink = |event: Event| events(RunEvent::Agent(event));
     let result = match job {
         Job::Prompt(prompt) => agent.run(&prompt, &control, &sink).await,
@@ -207,6 +218,7 @@ mod tests {
             skill_roots: Vec::new(),
             disabled_skills: HashSet::new(),
             tasks: None,
+            usage: None,
         }
     }
 

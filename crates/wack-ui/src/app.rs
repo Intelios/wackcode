@@ -315,7 +315,46 @@ impl AppState {
         app.watch_form(cx);
         theme::apply(app.store.appearance(), cx);
         app.select(selection, cx);
+        app.start_usage_tasks(cx);
         app
+    }
+
+    /// The ledger's two background loops: a write that failed is retried every few seconds,
+    /// and Settings › Integrations, while it is the section shown, refreshes to show the queue
+    /// draining and failures clearing on their own.
+    fn start_usage_tasks(&self, cx: &mut Context<Self>) {
+        let writer = self.store.usage().clone();
+        Tokio::spawn(cx, async move {
+            loop {
+                tokio::time::sleep(Duration::from_secs(5)).await;
+                writer.flush();
+            }
+        })
+        .detach();
+        cx.spawn(async move |app, cx| {
+            loop {
+                cx.background_executor().timer(Duration::from_secs(5)).await;
+                if app
+                    .update(cx, |app, cx| {
+                        if app.selection == Selection::Settings && app.settings_section == Section::Integrations {
+                            cx.notify();
+                        }
+                    })
+                    .is_err()
+                {
+                    return;
+                }
+            }
+        })
+        .detach();
+    }
+
+    /// Settings › Integrations: the ledger's off switch.
+    pub fn toggle_usage_recording(&mut self, cx: &mut Context<Self>) {
+        if let Err(message) = self.store.set_usage_recording(!self.store.usage_recording()) {
+            self.notice = Some(message.into());
+        }
+        cx.notify();
     }
 
     /// Changes how the app looks; the theme follows at once.
@@ -811,7 +850,7 @@ impl AppState {
     /// Asks the title model for a name for a chat that has just started, alongside its first run.
     /// The opening-line title stays until the answer comes, and after a failure.
     fn start_title(&mut self, chat: &str, opening: &str, cx: &mut Context<Self>) {
-        let (provider, model) = match self.store.title_setup() {
+        let (provider, connection, model) = match self.store.title_setup() {
             None => return,
             Some(Ok(setup)) => setup,
             Some(Err(_)) => {
@@ -820,10 +859,19 @@ impl AppState {
             }
         };
         let request = title::request(&model, opening);
+        // The ledger records the request against the chat's project, as a run's calls are.
+        let recorder = self
+            .store
+            .chat(chat)
+            .and_then(|listed| self.store.project(&listed.project))
+            .map(|project| self.store.usage_recorder(&connection, chat, &project.path));
         self.title_attempts += 1;
         let attempt = self.title_attempts;
         let id = chat.to_string();
-        let work = Tokio::spawn(cx, async move { title::generate(&provider, &request).await });
+        let work = Tokio::spawn(cx, async move {
+            let recorder = recorder.as_deref().map(|recorder| recorder as &dyn wack_core::Recorder);
+            title::generate(&provider, &request, recorder).await
+        });
         let task = cx.spawn(async move |app, cx| {
             let result = work.await.unwrap_or_else(|_| Err("The title request stopped.".into()));
             let _ = app.update(cx, |app, cx| app.title_arrived(&id, attempt, result, cx));
@@ -835,7 +883,7 @@ impl AppState {
         &mut self,
         chat: &str,
         attempt: u64,
-        result: Result<(Option<String>, Option<wack_core::Usage>), String>,
+        result: Result<Option<String>, String>,
         cx: &mut Context<Self>,
     ) {
         // A rename, stop or delete since: the answer is no longer wanted.
@@ -843,8 +891,7 @@ impl AppState {
             return;
         }
         self.titling.remove(chat);
-        // The usage ledger records this request (`purpose: "title"`) once its writer exists.
-        let Ok((Some(name), _usage)) = result else {
+        let Ok(Some(name)) = result else {
             self.note(chat, title::FAILED, cx);
             return;
         };

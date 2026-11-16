@@ -546,6 +546,7 @@ pub fn all() -> Vec<Scene> {
                     memory: Default::default(),
         skills: Default::default(),
         commands: Default::default(),
+        integrations: Default::default(),
                 };
                 cx.new(|_| Shell::showing(fixtures::sidebar(Selected::None), Screen::Settings(Box::new(data)))).into()
             },
@@ -591,6 +592,34 @@ pub fn all() -> Vec<Scene> {
             description: "Settings › Commands: a command's editor, its preview expanding sample arguments.",
             size: size(px(1180.), px(1100.)),
             build: |_, cx| commands_scene(true, cx),
+        },
+        Scene {
+            name: "settings-integrations",
+            description: "Settings › Integrations: TokenTrail recording, a recent record, and the ledger's folder.",
+            size: size(px(1180.), px(1000.)),
+            build: |_, cx| integrations_scene(UsageScene::Recording, None, cx),
+        },
+        Scene {
+            name: "settings-integrations-backdrop",
+            description: "Settings › Integrations over a backdrop.",
+            size: size(px(1180.), px(1000.)),
+            build: |_, cx| integrations_scene(
+                UsageScene::Recording,
+                Some(over(fixtures::backdrop(wack_core::Texture::None), cx)),
+                cx,
+            ),
+        },
+        Scene {
+            name: "settings-integrations-paused",
+            description: "Settings › Integrations with recording paused.",
+            size: size(px(1180.), px(1000.)),
+            build: |_, cx| integrations_scene(UsageScene::Paused, None, cx),
+        },
+        Scene {
+            name: "settings-integrations-attention",
+            description: "Settings › Integrations when a write failed: records waiting, one lost, and the failure itself.",
+            size: size(px(1180.), px(1000.)),
+            build: |_, cx| integrations_scene(UsageScene::Attention, None, cx),
         },
         Scene {
             name: "settings-memory",
@@ -1163,6 +1192,7 @@ fn providers_scene(state: Providers, sidebar_hidden: bool, cx: &mut App) -> AnyV
         memory: Default::default(),
         skills: Default::default(),
         commands: Default::default(),
+        integrations: Default::default(),
     };
     cx.new(|_| {
         let shell = Shell::showing(fixtures::sidebar(Selected::None), Screen::Settings(Box::new(data)));
@@ -1182,6 +1212,7 @@ fn settings_scene(backdrop: Option<crate::backdrop::Picture>, cx: &mut App) -> A
         memory: Default::default(),
         skills: Default::default(),
         commands: Default::default(),
+        integrations: Default::default(),
     };
     cx.new(|_| {
         let shell = Shell::showing(fixtures::sidebar(Selected::None), Screen::Settings(Box::new(data)));
@@ -1357,6 +1388,7 @@ fn memory_scene(scene: MemoryScene, backdrop: Option<crate::backdrop::Picture>, 
         memory: state.data(cx),
         skills: Default::default(),
         commands: Default::default(),
+        integrations: Default::default(),
     };
     cx.new(|_| {
         let shell = Shell::showing(fixtures::sidebar(Selected::None), Screen::Settings(Box::new(data)));
@@ -1575,6 +1607,7 @@ fn skills_scene(scene: SkillsScene, backdrop: bool, cx: &mut App) -> AnyView {
         memory: Default::default(),
         skills: state.data(cx),
         commands: Default::default(),
+        integrations: Default::default(),
     };
     cx.new(|_| {
         let shell = Shell::showing(fixtures::sidebar(Selected::None), Screen::Settings(Box::new(data)));
@@ -1625,6 +1658,70 @@ fn commands_scene(editing: bool, cx: &mut App) -> AnyView {
         memory: Default::default(),
         skills: Default::default(),
         commands: state.data(cx),
+        integrations: Default::default(),
     };
     cx.new(|_| Shell::showing(fixtures::sidebar(Selected::None), Screen::Settings(Box::new(data)))).into()
+}
+
+/// What Settings › Integrations shows in a scene.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+enum UsageScene {
+    /// Recording, with a record just written.
+    Recording,
+    /// Paused.
+    Paused,
+    /// A write failed: records waiting, one lost, and the failure itself.
+    Attention,
+}
+
+/// Settings › Integrations, drawn over `backdrop` when there is one.
+fn integrations_scene(scene: UsageScene, backdrop: Option<crate::backdrop::Picture>, cx: &mut App) -> AnyView {
+    let status = match scene {
+        UsageScene::Recording => wack_core::UsageStatus {
+            enabled: true,
+            path: "/Users/me/Library/Application Support/com.wackcode.desktop/usage/v1".into(),
+            has_history: true,
+            error: None,
+            pending: 0,
+            dropped: 0,
+            last_written: Some(crate::chat::now_millis() as i64 - 142_000),
+        },
+        UsageScene::Paused => wack_core::UsageStatus {
+            enabled: false,
+            path: "/Users/me/Library/Application Support/com.wackcode.desktop/usage/v1".into(),
+            has_history: true,
+            error: None,
+            pending: 0,
+            dropped: 0,
+            last_written: Some(crate::chat::now_millis() as i64 - 52_000_000),
+        },
+        UsageScene::Attention => wack_core::UsageStatus {
+            enabled: true,
+            path: "/Users/me/Library/Application Support/com.wackcode.desktop/usage/v1".into(),
+            has_history: true,
+            error: Some("Could not save usage. Recording will retry.".into()),
+            pending: 2,
+            dropped: 1,
+            last_written: Some(crate::chat::now_millis() as i64 - 900_000),
+        },
+    };
+    let form = ProviderForm::new(cx);
+    let data = SettingsData {
+        section: Section::Integrations,
+        providers: ProvidersData::new(&fixtures::connections(), |_| true, &form, cx),
+        appearance: fixtures::appearance(backdrop.clone(), cx),
+        tools: Default::default(),
+        memory: Default::default(),
+        skills: Default::default(),
+        commands: Default::default(),
+        integrations: crate::integrations_page::IntegrationsData { status },
+    };
+    cx.new(|_| {
+        let shell = Shell::showing(fixtures::sidebar(Selected::None), Screen::Settings(Box::new(data)));
+        match backdrop {
+            Some(picture) => shell.with_backdrop(picture),
+            None => shell,
+        }
+    })
+    .into()
 }

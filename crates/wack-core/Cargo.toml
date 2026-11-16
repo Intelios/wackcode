@@ -11,6 +11,7 @@ wack-llm.workspace = true
 wack-tools.workspace = true
 serde.workspace = true
 serde_json.workspace = true
+uuid.workspace = true
 alacritty_terminal.workspace = true
 image.workspace = true
 libc.workspace = true
@@ -18,3 +19,5 @@ tokio.workspace = true
 
 [dev-dependencies]
 tempfile.workspace = true
+# Tests pause the clock, so a request's own timeout fires at once.
+tokio = { workspace = true, features = ["test-util"] }

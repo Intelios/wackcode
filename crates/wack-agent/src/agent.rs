@@ -25,6 +25,7 @@ use std::{
         Arc, Mutex,
         atomic::{AtomicBool, AtomicU64, Ordering},
     },
+    time::Instant,
 };
 
 use futures::future::join_all;
@@ -45,6 +46,7 @@ use crate::{
     session::{Note, Session},
     tasks::Tasks,
     tool::{Loading, Tool, ToolContext, ToolSpec, User},
+    usage::{self, CallOutcome, Purpose, Recorder},
 };
 
 /// Compaction starts when the conversation fills this share of the model's context window.
@@ -271,6 +273,7 @@ pub struct Agent {
     system: Vec<SystemPart>,
     cwd: PathBuf,
     tasks: Tasks,
+    recorder: Option<Arc<dyn Recorder>>,
 }
 
 enum Planned {
@@ -292,7 +295,17 @@ impl Agent {
         if settings.ultra {
             system.push(SystemPart { text: prompt::ULTRA_PROMPT.to_string() });
         }
-        Self { provider, registry, session, settings, features: Vec::new(), system, cwd, tasks: Tasks::scratch() }
+        Self {
+            provider,
+            registry,
+            session,
+            settings,
+            features: Vec::new(),
+            system,
+            cwd,
+            tasks: Tasks::scratch(),
+            recorder: None,
+        }
     }
 
     /// Adds a part to the system prompt after the project instructions and before Ultra's, for a
@@ -313,6 +326,17 @@ impl Agent {
     pub fn with_feature(mut self, feature: Box<dyn Feature>) -> Self {
         self.features.push(feature);
         self
+    }
+
+    /// Reports every model invocation to this recorder, for the usage ledger.
+    pub fn with_recorder(mut self, recorder: Arc<dyn Recorder>) -> Self {
+        self.recorder = Some(recorder);
+        self
+    }
+
+    /// Tells the recorder about one finished model invocation.
+    fn record(&self, purpose: Purpose, started: Instant, outcome: CallOutcome, usage: Option<Usage>) {
+        usage::report(&self.recorder, purpose, &self.settings.model, started, outcome, usage);
     }
 
     pub fn session(&self) -> &Session {
@@ -383,6 +407,7 @@ impl Agent {
                 })
             };
             let retrying = |notice: RetryNotice| events(Event::Retrying(notice));
+            let started = Instant::now();
             let result = tokio::select! {
                 biased;
                 () = control.cancel.cancelled() => None,
@@ -390,6 +415,7 @@ impl Agent {
             };
             let response = match result {
                 None => {
+                    self.record(Purpose::Chat, started, CallOutcome::Cancelled, None);
                     // The user saw this text appear, so it stays in the conversation.
                     let text = written.into_inner().unwrap();
                     if !text.trim().is_empty() {
@@ -398,6 +424,7 @@ impl Agent {
                     return Ok(Outcome::Stopped);
                 }
                 Some(Err(error)) if error.kind == ErrorKind::ContextOverflow && !compacted_for_overflow => {
+                    self.record(Purpose::Chat, started, CallOutcome::Failed, None);
                     compacted_for_overflow = true;
                     match self.compact(None, true, control, events).await {
                         Ok(()) => continue,
@@ -407,8 +434,14 @@ impl Agent {
                         }
                     }
                 }
-                Some(Err(error)) => return Err(error.message),
-                Some(Ok(response)) => response,
+                Some(Err(error)) => {
+                    self.record(Purpose::Chat, started, CallOutcome::Failed, None);
+                    return Err(error.message);
+                }
+                Some(Ok(response)) => {
+                    self.record(Purpose::Chat, started, CallOutcome::Completed, response.usage);
+                    response
+                }
             };
             compacted_for_overflow = false;
 
@@ -657,11 +690,24 @@ impl Agent {
             (start..cut).filter(|index| !self.session.is_note(*index)).map(|index| messages[index].clone()).collect();
         let request = compaction::request(&self.settings.model, self.session.summary(), &conversation, focus, budget);
         let retrying = |notice: RetryNotice| events(Event::Retrying(notice));
+        let started = Instant::now();
         let response = tokio::select! {
             biased;
-            () = control.cancel.cancelled() => return Err("Compaction was stopped.".to_string()),
+            () = control.cancel.cancelled() => {
+                self.record(Purpose::Compaction, started, CallOutcome::Cancelled, None);
+                return Err("Compaction was stopped.".to_string());
+            }
             result = stream_with_retry(self.provider.as_ref(), &request, &|_| {}, &retrying) => {
-                result.map_err(|error| error.message)?
+                match result {
+                    Ok(response) => {
+                        self.record(Purpose::Compaction, started, CallOutcome::Completed, response.usage);
+                        response
+                    }
+                    Err(error) => {
+                        self.record(Purpose::Compaction, started, CallOutcome::Failed, None);
+                        return Err(error.message);
+                    }
+                }
             }
         };
         let body = response.message.text();
@@ -692,6 +738,7 @@ mod tests {
     use async_trait::async_trait;
     use serde_json::json;
     use tokio::sync::{Barrier, Notify};
+    use crate::usage::ModelCall;
     use wack_llm::{
         LlmError, Response,
         testing::{ScriptedProvider, Step, call, say},
@@ -833,6 +880,15 @@ mod tests {
     }
 
     fn rig_with(provider: ScriptedProvider, tools: Vec<Arc<dyn Tool>>, context_window: Option<u64>) -> Rig {
+        rig_with_recorder(provider, tools, context_window, None)
+    }
+
+    fn rig_with_recorder(
+        provider: ScriptedProvider,
+        tools: Vec<Arc<dyn Tool>>,
+        context_window: Option<u64>,
+        recorder: Option<Arc<dyn Recorder>>,
+    ) -> Rig {
         let folder = tempfile::tempdir().unwrap();
         let session = Session::create(&folder.path().join("chat.jsonl"), folder.path()).unwrap();
         let settings = Settings { model: "test-model".into(), effort: None, max_output_tokens: None, context_window, ultra: false };
@@ -843,11 +899,36 @@ mod tests {
             &Profile::code(),
             settings,
         );
+        let agent = match recorder {
+            Some(recorder) => agent.with_recorder(recorder),
+            None => agent,
+        };
         Rig { agent, provider, events: Arc::default(), _folder: folder }
     }
 
     fn rig(steps: Vec<Step>, tools: Vec<Arc<dyn Tool>>) -> Rig {
         rig_with(ScriptedProvider::new(steps), tools, None)
+    }
+
+    /// A rig that reports its model calls to `calls`, for the ledger's tests.
+    fn rig_recording(steps: Vec<Step>, calls: Arc<Calls>) -> Rig {
+        rig_with_recorder(ScriptedProvider::new(steps), Vec::new(), None, Some(calls))
+    }
+
+    /// Collects the model calls a recorder is handed.
+    #[derive(Default)]
+    struct Calls(Mutex<Vec<crate::ModelCall>>);
+
+    impl Recorder for Calls {
+        fn record(&self, call: ModelCall) {
+            self.0.lock().unwrap().push(call);
+        }
+    }
+
+    impl Calls {
+        fn summary(&self) -> Vec<(Purpose, CallOutcome, Option<Usage>)> {
+            self.0.lock().unwrap().iter().map(|call| (call.purpose, call.outcome, call.usage)).collect()
+        }
     }
 
     impl Rig {
@@ -969,6 +1050,105 @@ mod tests {
         // The chat carries on from there.
         assert_eq!(rig.run("continue", &Control::new()).await, Ok(Outcome::Done));
         assert_eq!(rig.provider.requests()[1].messages.len(), 3);
+    }
+
+    #[tokio::test]
+    async fn the_loop_reports_each_model_call() {
+        let calls = Arc::new(Calls::default());
+        let mut rig = rig_recording(vec![say("hello"), say("again")], calls.clone());
+        assert_eq!(rig.run("go", &Control::new()).await, Ok(Outcome::Done));
+        assert_eq!(rig.run("more", &Control::new()).await, Ok(Outcome::Done));
+        assert_eq!(
+            calls.summary(),
+            [(Purpose::Chat, CallOutcome::Completed, Some(Usage { input: 100, output: 10, cache_read: 0, cache_write: 0 })); 2]
+        );
+        let calls = calls.0.lock().unwrap();
+        assert_eq!(calls.len(), 2, "one report per model invocation");
+        assert_eq!(calls[0].model, "test-model");
+    }
+
+    #[tokio::test]
+    async fn a_failed_request_is_reported_once() {
+        let calls = Arc::new(Calls::default());
+        let mut rig = rig_recording(vec![Step::Fail(LlmError::new(ErrorKind::Auth, "no."))], calls.clone());
+        assert!(rig.run("go", &Control::new()).await.is_err());
+        assert_eq!(calls.summary(), [(Purpose::Chat, CallOutcome::Failed, None)]);
+    }
+
+    #[tokio::test]
+    async fn retries_inside_one_request_are_one_call() {
+        let calls = Arc::new(Calls::default());
+        let mut rig =
+            rig_recording(vec![Step::Fail(LlmError::new(ErrorKind::RateLimited, "slow")), say("done")], calls.clone());
+        assert_eq!(rig.run("go", &Control::new()).await, Ok(Outcome::Done));
+        assert_eq!(
+            calls.summary(),
+            [(Purpose::Chat, CallOutcome::Completed, Some(Usage { input: 100, output: 10, cache_read: 0, cache_write: 0 }))]
+        );
+    }
+
+    #[tokio::test]
+    async fn a_request_stopped_mid_reply_is_reported_cancelled() {
+        let calls = Arc::new(Calls::default());
+        let mut rig = rig_recording(vec![Step::Hang { text: "writ".into() }], calls.clone());
+        let control = Control::new();
+        let stopper = control.clone();
+        tokio::spawn(async move {
+            tokio::time::sleep(Duration::from_millis(20)).await;
+            stopper.stop();
+        });
+        assert_eq!(rig.run("go", &control).await, Ok(Outcome::Stopped));
+        assert_eq!(calls.summary(), [(Purpose::Chat, CallOutcome::Cancelled, None)]);
+    }
+
+    #[tokio::test]
+    async fn compaction_reports_its_own_call_even_when_its_summary_is_empty() {
+        let calls = Arc::new(Calls::default());
+        let mut rig = rig_recording(vec![say("hello"), say("")], calls.clone());
+        assert_eq!(rig.run("go", &Control::new()).await, Ok(Outcome::Done));
+        assert!(rig.agent.compact(None, true, &Control::new(), &|_| {}).await.is_err());
+        assert_eq!(
+            calls.summary()[1..],
+            [(Purpose::Compaction, CallOutcome::Completed, Some(Usage { input: 100, output: 10, cache_read: 0, cache_write: 0 }))]
+        );
+    }
+
+    #[tokio::test]
+    async fn a_compaction_stopped_mid_request_is_reported_cancelled() {
+        let calls = Arc::new(Calls::default());
+        let mut rig = rig_recording(vec![say("hello"), Step::Hang { text: "sum".into() }], calls.clone());
+        assert_eq!(rig.run("go", &Control::new()).await, Ok(Outcome::Done));
+        let control = Control::new();
+        let stopper = control.clone();
+        tokio::spawn(async move {
+            tokio::time::sleep(Duration::from_millis(20)).await;
+            stopper.stop();
+        });
+        assert!(rig.agent.compact(None, true, &control, &|_| {}).await.is_err());
+        assert_eq!(calls.summary()[1..], [(Purpose::Compaction, CallOutcome::Cancelled, None)]);
+    }
+
+    #[tokio::test]
+    async fn an_overflowing_request_fails_then_compacts_then_carries_on() {
+        let calls = Arc::new(Calls::default());
+        let mut rig = rig_recording(
+            vec![
+                Step::Fail(LlmError::new(ErrorKind::ContextOverflow, "too long")),
+                say("summary"),
+                say("done"),
+            ],
+            calls.clone(),
+        );
+        assert_eq!(rig.run("go", &Control::new()).await, Ok(Outcome::Done));
+        let usage = Some(Usage { input: 100, output: 10, cache_read: 0, cache_write: 0 });
+        assert_eq!(
+            calls.summary(),
+            [
+                (Purpose::Chat, CallOutcome::Failed, None),
+                (Purpose::Compaction, CallOutcome::Completed, usage),
+                (Purpose::Chat, CallOutcome::Completed, usage),
+            ]
+        );
     }
 
     #[tokio::test]

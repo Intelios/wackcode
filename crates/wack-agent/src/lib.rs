@@ -21,6 +21,7 @@ pub mod skills;
 pub mod tasks;
 pub mod todo;
 pub mod tool;
+pub mod usage;
 
 pub use agent::{Agent, Control, Event, EventSink, Feature, Outcome, Profile, Settings, Verdict};
 pub use kit::Kit;
@@ -31,3 +32,4 @@ pub use registry::{Registry, TOOL_SEARCH};
 pub use session::{HistoryEntry, Note, Session, history};
 pub use tasks::{Tasks, SECRET_ENV};
 pub use tool::{Loading, Tool, ToolContext, ToolSpec, User};
+pub use usage::{CallOutcome, ModelCall, Purpose, Recorder};

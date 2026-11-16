@@ -19,6 +19,7 @@ pub mod fixtures;
 pub mod glass;
 pub mod highlight;
 pub mod icon;
+pub mod integrations_page;
 pub mod markdown;
 pub mod memory_page;
 pub mod motion;

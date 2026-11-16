@@ -18,12 +18,13 @@
 //!   reason), else its lowest level.
 //! - **A typed name wins.** The app accepts an answer only while its attempt is still current; a
 //!   manual rename, a stop or a delete drops the attempt.
-//! - **Usage.** [`generate`] returns the request's usage for the ledger (`purpose: "title"`) once
-//!   the ledger writer exists; nothing records it yet.
+//! - **Usage.** [`generate`] reports its request to the usage ledger (`purpose: "title"`) through
+//!   the recorder it is handed, however the request ends.
 
-use std::time::Duration;
+use std::time::{Duration, Instant};
 
 use serde::{Deserialize, Serialize};
+use wack_agent::{CallOutcome, ModelCall, Purpose, Recorder};
 use wack_llm::{Effort, Message, Provider, Request, StopReason, SystemPart, Usage};
 
 use crate::store::{Model, Reasoning};
@@ -79,17 +80,41 @@ pub fn request(model: &Model, opening: &str) -> Request {
 }
 
 /// Sends the request once. `Ok(None)` is an answer that is not a usable title: cut short, refused,
-/// or rejected by [`normalize`]. The usage is returned either way, for the ledger.
-pub async fn generate(provider: &dyn Provider, request: &Request) -> Result<(Option<String>, Option<Usage>), String> {
-    let response = tokio::time::timeout(TIMEOUT, provider.stream(request, &|_| {}))
-        .await
-        .map_err(|_| "The title model took too long to answer.".to_string())?
-        .map_err(|error| error.message)?;
+/// or rejected by [`normalize`]. The call is reported to `recorder` either way, for the ledger.
+pub async fn generate(
+    provider: &dyn Provider,
+    request: &Request,
+    recorder: Option<&dyn Recorder>,
+) -> Result<Option<String>, String> {
+    let report = |outcome: CallOutcome, usage: Option<Usage>, started: Instant| {
+        if let Some(recorder) = recorder {
+            recorder.record(ModelCall {
+                purpose: Purpose::Title,
+                model: request.model.clone(),
+                duration_ms: started.elapsed().as_millis() as u64,
+                outcome,
+                usage,
+            });
+        }
+    };
+    let started = Instant::now();
+    let response = match tokio::time::timeout(TIMEOUT, provider.stream(request, &|_| {})).await {
+        Err(_) => {
+            report(CallOutcome::Cancelled, None, started);
+            return Err("The title model took too long to answer.".to_string());
+        }
+        Ok(Err(error)) => {
+            report(CallOutcome::Failed, None, started);
+            return Err(error.message);
+        }
+        Ok(Ok(response)) => response,
+    };
+    report(CallOutcome::Completed, response.usage, started);
     let title = match response.stop {
         StopReason::EndTurn => normalize(&response.message.text()),
         _ => None,
     };
-    Ok((title, response.usage))
+    Ok(title)
 }
 
 /// Cleans a model's answer into a title: one line, unquoted, at most [`MAX_TITLE_CHARS`]. An
@@ -164,9 +189,8 @@ mod tests {
     #[tokio::test]
     async fn a_finished_answer_becomes_the_title() {
         let provider = ScriptedProvider::new([say("  \"Remember the sidebar width\"  ")]);
-        let (title, usage) = generate(&provider, &request(&small(), "hi")).await.unwrap();
+        let title = generate(&provider, &request(&small(), "hi"), None).await.unwrap();
         assert_eq!(title.as_deref(), Some("Remember the sidebar width"));
-        assert!(usage.is_some());
         assert_eq!(provider.requests().len(), 1);
     }
 
@@ -177,15 +201,56 @@ mod tests {
             stop: StopReason::MaxTokens,
             usage: None,
         })]);
-        let (title, _) = generate(&provider, &request(&small(), "hi")).await.unwrap();
+        let title = generate(&provider, &request(&small(), "hi"), None).await.unwrap();
         assert_eq!(title, None);
     }
 
     #[tokio::test]
     async fn a_failed_request_is_tried_once() {
         let provider = ScriptedProvider::new([Step::Fail(LlmError::new(ErrorKind::RateLimited, "Slow down."))]);
-        let error = generate(&provider, &request(&small(), "hi")).await.unwrap_err();
+        let error = generate(&provider, &request(&small(), "hi"), None).await.unwrap_err();
         assert_eq!(error, "Slow down.");
         assert_eq!(provider.requests().len(), 1);
+    }
+
+    /// Collects the model calls a recorder is handed.
+    #[derive(Default)]
+    struct Calls(std::sync::Mutex<Vec<ModelCall>>);
+
+    impl Recorder for Calls {
+        fn record(&self, call: ModelCall) {
+            self.0.lock().unwrap().push(call);
+        }
+    }
+
+    // The clock starts paused, so the title request's own timeout fires at once.
+    #[tokio::test(start_paused = true)]
+    async fn the_call_reaches_the_ledger_however_it_ends() {
+        let calls = std::sync::Arc::new(Calls::default());
+
+        // An answer the normalizer refuses still completed.
+        let provider = ScriptedProvider::new([say("OK.")]);
+        let title = generate(&provider, &request(&small(), "hi"), Some(&*calls.clone())).await.unwrap();
+        assert_eq!(title, None);
+
+        // A refused request failed.
+        let provider = ScriptedProvider::new([Step::Fail(LlmError::new(ErrorKind::Auth, "no."))]);
+        assert!(generate(&provider, &request(&small(), "hi"), Some(&*calls.clone())).await.is_err());
+
+        // A request that never finished was cancelled by its own timeout.
+        let provider = ScriptedProvider::new([Step::Hang { text: "th".into() }]);
+        let error = generate(&provider, &request(&small(), "hi"), Some(&*calls)).await.unwrap_err();
+        assert_eq!(error, "The title model took too long to answer.");
+
+        let calls = calls.0.lock().unwrap();
+        assert_eq!(calls.len(), 3);
+        assert_eq!(calls[0].model, "small");
+        assert_eq!(calls[0].purpose, Purpose::Title);
+        assert_eq!(calls[0].outcome, CallOutcome::Completed);
+        assert_eq!(calls[0].usage, Some(Usage { input: 100, output: 10, cache_read: 0, cache_write: 0 }));
+        assert_eq!(calls[1].outcome, CallOutcome::Failed);
+        assert_eq!(calls[1].usage, None);
+        assert_eq!(calls[2].outcome, CallOutcome::Cancelled);
+        assert_eq!(calls[2].usage, None);
     }
 }

@@ -22,6 +22,7 @@ use wack_llm::{Effort, HttpProvider, WireFormat};
 use crate::{
     appearance::{Appearance, Backdrop},
     secrets::SecretStore,
+    usage::{RunRecorder, UsageWriter, root_for},
 };
 
 #[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
@@ -306,6 +307,14 @@ struct State {
     /// Settings › Skills' and Settings › Commands' switches.
     #[serde(default)]
     skills: crate::skills::SkillsConfig,
+    /// Settings › Integrations: TokenTrail's ledger. Recording is the default, and files saved
+    /// before the switch existed load as on.
+    #[serde(default = "recording_on")]
+    record_usage: bool,
+}
+
+fn recording_on() -> bool {
+    true
 }
 
 /// A connection and model resolved from a [`ModelChoice`], ready to build a run.
@@ -360,6 +369,8 @@ pub struct Store {
     folder: PathBuf,
     state: State,
     secrets: SecretStore,
+    /// The usage ledger's writer, shared by every run and the title requests.
+    usage: std::sync::Arc<UsageWriter>,
     /// Stands in for `$HOME` where skill folders are looked for, in tests.
     home: Option<PathBuf>,
 }
@@ -395,6 +406,7 @@ impl Store {
         };
         let mut store = Self {
             folder: folder.to_path_buf(),
+            usage: std::sync::Arc::new(UsageWriter::new(&root_for(folder), state.record_usage)),
             state,
             secrets: SecretStore::load(folder)?,
             home: None,
@@ -867,13 +879,42 @@ impl Store {
     }
 
     /// What a new chat's title request needs: `None` while titles are off, an error when their
-    /// model can no longer be used, else the provider and the model to ask.
-    pub fn title_setup(&self) -> Option<Result<(HttpProvider, Model), String>> {
+    /// model can no longer be used, else the provider, the connection (whose id and name the
+    /// ledger records) and the model to ask.
+    pub fn title_setup(&self) -> Option<Result<(HttpProvider, Connection, Model), String>> {
         let config = &self.state.auto_title;
         if !config.enabled {
             return None;
         }
-        Some(self.title_model(config).and_then(|(connection, model)| Ok((self.provider(&connection)?, model))))
+        Some(self.title_model(config).and_then(|(connection, model)| Ok((self.provider(&connection)?, connection, model))))
+    }
+
+    /// Settings › Integrations: whether TokenTrail's ledger is being recorded.
+    pub fn usage_recording(&self) -> bool {
+        self.state.record_usage
+    }
+
+    /// The ledger's writer.
+    pub fn usage(&self) -> &std::sync::Arc<UsageWriter> {
+        &self.usage
+    }
+
+    /// Turns recording on or off. Off gives up on everything still queued, counting it.
+    pub fn set_usage_recording(&mut self, enabled: bool) -> Result<(), String> {
+        if self.state.record_usage == enabled {
+            return Ok(());
+        }
+        self.state.record_usage = enabled;
+        self.usage.set_enabled(enabled);
+        self.save()
+    }
+
+    /// The ledger's recorder for a run of `session` (a chat, or a CLI session's stem) working
+    /// in `workspace` on `connection`. The project is the workspace's repository root, so
+    /// worktrees of one repository land in the same project.
+    pub fn usage_recorder(&self, connection: &Connection, session: &str, workspace: &Path) -> std::sync::Arc<RunRecorder> {
+        let project = crate::git::common_root(workspace).unwrap_or_else(|| workspace.to_path_buf());
+        std::sync::Arc::new(RunRecorder::new(&self.usage, connection, session, &project, workspace))
     }
 
     pub fn set_layout(&mut self, id: &str, layout: Option<serde_json::Value>) -> Result<(), String> {
@@ -1463,7 +1504,7 @@ mod tests {
 
         let chosen = AutoTitleConfig { enabled: true, connection: Some(connection.id.clone()), model: Some(model.clone()) };
         store.set_auto_title(chosen.clone()).unwrap();
-        let (_, asked) = store.title_setup().unwrap().unwrap();
+        let (_, _, asked) = store.title_setup().unwrap().unwrap();
         assert_eq!(asked.id, model);
         let reopened = Store::open(folder.path()).unwrap();
         assert_eq!(reopened.auto_title(), &chosen, "saved");

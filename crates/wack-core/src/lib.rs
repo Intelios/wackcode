@@ -8,7 +8,7 @@
 //! So far: the data folder, the secret store, connections, projects, chats, running the agent for
 //! a chat (`run`), what changed in a project (`git`), terminals (`terminal`), how the app looks
 //! (`appearance`), where each project's memory lives (`memory`), skills and slash commands
-//! (`skills`), and automatic chat titles (`title`).
+//! (`skills`), automatic chat titles (`title`), and the usage ledger TokenTrail reads (`usage`).
 
 pub mod appearance;
 pub mod git;
@@ -20,17 +20,19 @@ pub mod skills;
 pub mod store;
 pub mod terminal;
 pub mod title;
+pub mod usage;
 
 pub use appearance::{Appearance, Backdrop, Mode, Texture, ThemeName};
 pub use run::{Job, RunEvent, RunSetup, discard_plan, run, save_plan};
 pub use title::AutoTitleConfig;
 pub use runner::{CommandEvent, CommandInfo, CommandSession, CommandStatus, Runner};
+pub use usage::{RunRecorder, UsageStatus, UsageWriter};
 pub use store::{
     Chat, CommandKind, Connection, Model, ModelChoice, NewConnection, Project, Reasoning, Resolved, Store, Ui, title_from,
 };
 
 // What the UI needs from the layers below, so it depends on the engine alone.
-pub use wack_agent::{AgentMode, Control, Event, HistoryEntry, Outcome, TOOL_SEARCH, history};
+pub use wack_agent::{AgentMode, Control, Event, HistoryEntry, Outcome, Recorder, TOOL_SEARCH, history};
 pub use wack_llm::{Message, RetryNotice, Role, Usage, WireFormat};
 
 /// Asking the user: the questions a tool raises and the answers that go back.

@@ -283,6 +283,7 @@ async fn agent(args: &mut Args, folder: &Path) -> Result<ExitCode, String> {
     }
     let mut tools = wack_tools::core_tools();
     tools.extend(kit.tools());
+    tools.extend(wack_web::tools(&store.web_setup())?);
     let registry = Arc::new(Registry::new(tools)?);
     // The effort must be one the model lists in Settings › Providers; without --effort, the
     // app's default for it.

@@ -542,7 +542,7 @@ pub fn all() -> Vec<Scene> {
                     section: Section::Tools,
                     providers: ProvidersData::new(&fixtures::connections(), |_| true, &form, cx),
                     appearance: fixtures::appearance(None, cx),
-                    tools: crate::tools_page::ToolsData { unrestricted_planning: false, confirming: true },
+                    tools: crate::tools_page::ToolsData { unrestricted_planning: false, confirming: true, web_fetch: true },
                     memory: Default::default(),
         skills: Default::default(),
         commands: Default::default(),

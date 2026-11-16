@@ -94,6 +94,8 @@ actions!(
         ToggleUnrestrictedPlanning,
         ConfirmUnrestrictedPlanning,
         CancelUnrestrictedPlanning,
+        /// Settings › Tools and Settings › Web: turns Web Fetch on or off.
+        ToggleWebFetch,
         /// Settings › Integrations: turns the usage ledger's recording on or off.
         ToggleUsageRecording,
         /// Adds a picture to the backdrop's library, and shows it.

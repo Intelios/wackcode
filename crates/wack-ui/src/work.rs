@@ -165,9 +165,10 @@ pub fn summary(turn: &Turn, now: u64) -> String {
 /// What a log did, counted: "2 reads · 1 search · 1 edit · 1 command". Thoughts, notes and
 /// smaller tools are left out; empty when nothing counted.
 pub fn tally(rows: &[WorkRow]) -> String {
-    const KINDS: [(&[&str], &str, &str); 7] = [
+    const KINDS: [(&[&str], &str, &str); 8] = [
         (&["Used skill"], "skill", "skills"),
         (&["Read"], "read", "reads"),
+        (&["Fetched"], "page", "pages"),
         (&["Searched", "Found", "Listed", "Looked for"], "search", "searches"),
         (&["Edited", "Wrote"], "edit", "edits"),
         (&["Ran", "Watching"], "command", "commands"),
@@ -191,6 +192,7 @@ pub fn activity(rows: &[WorkRow]) -> Option<String> {
     let row = rows.iter().rev().find(|row| matches!(row.meta, Meta::Running))?;
     let verb = match row.verb.as_ref() {
         "Read" => "Reading",
+        "Fetched" => "Fetching",
         "Wrote" => "Writing",
         "Edited" => "Editing",
         "Ran" => "Running",
@@ -209,6 +211,7 @@ pub fn activity(rows: &[WorkRow]) -> Option<String> {
         other => other,
     };
     let target = match &row.target {
+        Target::Code(text) if row.verb.as_ref() == "Fetched" => text.split('/').next().unwrap_or(text).to_string(),
         Target::Code(text) if row.verb.as_ref() != "Ran" => text.rsplit('/').next().unwrap_or(text).to_string(),
         Target::Code(text) | Target::Words(text) | Target::Note(text) => text.to_string(),
     };
@@ -494,6 +497,17 @@ pub fn tool_row(tool: &ToolStep, cwd: &Path, live: bool) -> WorkRow {
             ok.map(|text| if text.starts_with("(The folder is empty") { "empty".into() } else { plural(result_lines(text), "entry", "entries") }),
             ok.map(|text| Detail::Output(tail(text, DETAIL_LINES).into())),
         ),
+        // A page is named by where it is, without the scheme; the result's title says what it was.
+        wack_core::WEB_FETCH => {
+            let url = text_field(input, "url").unwrap_or("").trim();
+            let shown = url.strip_prefix("https://").or_else(|| url.strip_prefix("http://")).unwrap_or(url).trim_end_matches('/');
+            (
+                "Fetched",
+                Target::Code(shown.to_string().into()),
+                ok.and_then(|text| text.lines().find_map(|line| line.strip_prefix("Title: ")).map(|title| title.trim().to_string())),
+                None,
+            )
+        }
         wack_core::TOOL_SEARCH => (
             "Looked for",
             Target::Words(format!("tools for “{}”", text_field(input, "query").unwrap_or("")).into()),
@@ -802,6 +816,19 @@ mod tests {
         let grep = tool_row(&tool("grep", json!({ "pattern": "finish", "path": "crates" }), Some(("No matches.", false))), cwd, false);
         assert!(matches!(&grep.target, Target::Words(words) if words.as_ref() == "“finish” in crates"));
         assert!(matches!(&grep.meta, Meta::Note(note) if note.as_ref() == "no matches"));
+    }
+
+    #[test]
+    fn a_fetched_page_is_named_by_where_it_is_and_what_it_was() {
+        let cwd = Path::new("/w");
+        let input = json!({ "url": "https://docs.rs/tokio/latest/" });
+        let page = tool_row(&tool("web_fetch", input.clone(), Some(("URL: https://docs.rs/tokio/latest/\nTitle: tokio - Rust\n\nBody", false))), cwd, false);
+        assert_eq!(page.verb.as_ref(), "Fetched");
+        assert!(matches!(&page.target, Target::Code(url) if url.as_ref() == "docs.rs/tokio/latest"));
+        assert!(matches!(&page.meta, Meta::Note(note) if note.as_ref() == "tokio - Rust"));
+        assert_eq!(tally(std::slice::from_ref(&page)), "1 page");
+        let running = tool_row(&tool("web_fetch", input, None), cwd, true);
+        assert_eq!(activity(std::slice::from_ref(&running)).as_deref(), Some("Fetching docs.rs"));
     }
 
     #[test]

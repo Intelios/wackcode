@@ -26,6 +26,11 @@ impl HttpProvider {
             .connect_timeout(Duration::from_secs(30))
             // A reply can take many minutes, but silence for this long means the connection died.
             .read_timeout(Duration::from_secs(300))
+            // The web tools turn on reqwest's decompression for the whole build; provider streams
+            // stay uncompressed, as they always were.
+            .no_gzip()
+            .no_brotli()
+            .no_deflate()
             .build()
             .map_err(|error| format!("Could not set up the network client: {error}"))?;
         Ok(Self {

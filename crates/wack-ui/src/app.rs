@@ -349,6 +349,14 @@ impl AppState {
         .detach();
     }
 
+    /// Settings › Tools: whether the agent may read public web pages.
+    pub fn toggle_web_fetch(&mut self, cx: &mut Context<Self>) {
+        if let Err(message) = self.store.set_web_fetch(!self.store.web_fetch_enabled()) {
+            self.notice = Some(message.into());
+        }
+        cx.notify();
+    }
+
     /// Settings › Integrations: the ledger's off switch.
     pub fn toggle_usage_recording(&mut self, cx: &mut Context<Self>) {
         if let Err(message) = self.store.set_usage_recording(!self.store.usage_recording()) {

@@ -53,6 +53,8 @@ pub struct RunSetup {
     pub tasks: Option<Tasks>,
     /// Reports the run's model calls to the usage ledger.
     pub usage: Option<Usage>,
+    /// Which web tools the run offers (Settings › Web).
+    pub web: wack_web::WebSetup,
 }
 
 pub enum Job {
@@ -107,6 +109,7 @@ impl Store {
             disabled_skills: self.disabled_skills(),
             tasks: None,
             usage: Some(self.usage_recorder(&resolved.connection, &chat.id, &project.path)),
+            web: self.web_setup(),
         })
     }
 }
@@ -141,6 +144,10 @@ pub async fn run(
     }
     let mut tools = wack_tools::core_tools();
     tools.extend(kit.tools());
+    match wack_web::tools(&setup.web) {
+        Ok(web) => tools.extend(web),
+        Err(message) => return finished(Err(message), None),
+    }
     let registry = match Registry::new(tools) {
         Ok(registry) => Arc::new(registry),
         Err(message) => return finished(Err(message), None),
@@ -219,6 +226,7 @@ mod tests {
             disabled_skills: HashSet::new(),
             tasks: None,
             usage: None,
+            web: wack_web::WebSetup::default(),
         }
     }
 
@@ -337,6 +345,16 @@ mod tests {
         assert_eq!(provider.requests().len(), 1);
         let names: Vec<String> = provider.requests()[0].tools.iter().map(|tool| tool.name.clone()).collect();
         assert_eq!(names[10..], ["ask_user_question", "todo", "plan_mode_enter", "plan_mode_complete"]);
+
+        // With Web Fetch on, the tool waits behind tool_search, after everything always loaded.
+        let provider = ScriptedProvider::new([say("ok")]);
+        let mut fetching = setup(provider.clone(), folder.path());
+        fetching.web.fetch = true;
+        let (_, sink) = collect();
+        run(fetching, Job::Prompt("hi".into()), Control::new(), sink).await;
+        let names: Vec<String> = provider.requests()[0].tools.iter().map(|tool| tool.name.clone()).collect();
+        assert_eq!(names.last().map(String::as_str), Some(wack_agent::TOOL_SEARCH));
+        assert!(!names.iter().any(|name| name == wack_web::WEB_FETCH));
 
         let saved = save_plan(folder.path(), waiting.plan.as_deref().unwrap()).unwrap();
         assert_eq!(std::fs::read_to_string(&saved).unwrap(), "# Fix\n\n1. Do it\n");

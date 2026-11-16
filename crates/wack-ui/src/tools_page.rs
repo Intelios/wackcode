@@ -1,11 +1,11 @@
-//! Settings › Tools: what the agent's tools may do. For now one switch in the Planning card,
-//! version 2's "Remove Plan / Ultra Plan read-only restrictions", which asks inside the card
-//! before it turns on: it lets a planning run change things. Turning it off needs no asking.
+//! Settings › Tools: what the agent's tools may do. The Planning card has version 2's "Remove Plan /
+//! Ultra Plan read-only restrictions", which asks inside the card before it turns on: it lets a
+//! planning run change things. Turning it off needs no asking. The Web card switches Web Fetch.
 
 use gpui::{div, prelude::*, px};
 
 use crate::{
-    actions::{CancelUnrestrictedPlanning, ConfirmUnrestrictedPlanning, OpenSettingsSection, ToggleUnrestrictedPlanning},
+    actions::{CancelUnrestrictedPlanning, ConfirmUnrestrictedPlanning, OpenSettingsSection, ToggleUnrestrictedPlanning, ToggleWebFetch},
     button::{Button, Kind},
     settings::Section,
     settings_kit::{card, dispatch, head, pill, row},
@@ -20,6 +20,8 @@ pub struct ToolsData {
     pub unrestricted_planning: bool,
     /// Turning it on is waiting for the user to confirm.
     pub confirming: bool,
+    /// The agent may read public web pages.
+    pub web_fetch: bool,
 }
 
 /// An on / off switch, drawn from theme tokens.
@@ -43,6 +45,13 @@ pub fn page(data: ToolsData, theme: &Theme) -> impl IntoElement {
         .on_click(|_, window, cx| window.dispatch_action(Box::new(ToggleUnrestrictedPlanning), cx))
         .child(switch(data.unrestricted_planning, theme))
         .tag("unrestricted-planning");
+
+    let web_fetch = div()
+        .id("web-fetch")
+        .cursor_pointer()
+        .on_click(|_, window, cx| window.dispatch_action(Box::new(ToggleWebFetch), cx))
+        .child(switch(data.web_fetch, theme))
+        .tag("web-fetch");
 
     let confirm = data.confirming.then(|| {
         div()
@@ -78,7 +87,7 @@ pub fn page(data: ToolsData, theme: &Theme) -> impl IntoElement {
     div()
         .flex()
         .flex_col()
-        .child(head("Tools", "What the agent may do while it plans. Building always has every tool.", None, theme))
+        .child(head("Tools", "What the agent may do while it plans, and what it may reach beyond this Mac.", None, theme))
         .child(
             card(Some("Planning"), None, None, theme)
                 .child(
@@ -90,6 +99,18 @@ pub fn page(data: ToolsData, theme: &Theme) -> impl IntoElement {
                     .view(theme),
                 )
                 .children(confirm),
+        )
+        .child(
+            div().pt(px(18.)).child(
+                card(Some("Web"), None, None, theme).child(
+                    row(
+                        "Web Fetch",
+                        Some("Reads public web pages the agent has a link to. It never reaches this Mac or your local network, and sends no cookies or sign-ins."),
+                    )
+                    .control(web_fetch)
+                    .view(theme),
+                ),
+            ),
         )
         .child(
             div().pt(px(18.)).child(

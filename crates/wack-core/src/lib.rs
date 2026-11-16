@@ -8,7 +8,8 @@
 //! So far: the data folder, the secret store, connections, projects, chats, running the agent for
 //! a chat (`run`), what changed in a project (`git`), terminals (`terminal`), how the app looks
 //! (`appearance`), where each project's memory lives (`memory`), skills and slash commands
-//! (`skills`), automatic chat titles (`title`), and the usage ledger TokenTrail reads (`usage`).
+//! (`skills`), automatic chat titles (`title`), the usage ledger TokenTrail reads (`usage`), and
+//! the web tools' settings (`web`).
 
 pub mod appearance;
 pub mod git;
@@ -21,6 +22,7 @@ pub mod store;
 pub mod terminal;
 pub mod title;
 pub mod usage;
+pub mod web;
 
 pub use appearance::{Appearance, Backdrop, Mode, Texture, ThemeName};
 pub use run::{Job, RunEvent, RunSetup, discard_plan, run, save_plan};
@@ -34,6 +36,7 @@ pub use store::{
 // What the UI needs from the layers below, so it depends on the engine alone.
 pub use wack_agent::{AgentMode, Control, Event, HistoryEntry, Outcome, Recorder, TOOL_SEARCH, history};
 pub use wack_llm::{Message, RetryNotice, Role, Usage, WireFormat};
+pub use wack_web::WEB_FETCH;
 
 /// Asking the user: the questions a tool raises and the answers that go back.
 pub mod ask {

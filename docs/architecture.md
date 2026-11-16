@@ -11,11 +11,12 @@ crates/wack-ui     views, pane tree, layout solver, theme        (GPUI)
 crates/wack-core   engine: projects, chats, settings, secrets, Git, PTYs, events
 crates/wack-agent  turn loop, tool registry, prompt assembly, sessions, compaction
 crates/wack-tools  read, write, edit, bash, grep, find, ls
+crates/wack-web    web_fetch (and web_search), and the guard that keeps them on the public internet
 crates/wack-llm    provider wire formats, streaming events, usage, retries
 crates/wack-cli    `wack`: the agent without the app
 ```
 
-Dependencies point downwards only: `wack-ui` → `wack-core` → `wack-agent` → `wack-llm`, with `wack-tools` beside the agent.
+Dependencies point downwards only: `wack-ui` → `wack-core` → `wack-agent` → `wack-llm`, with `wack-tools` and `wack-web` beside the agent.
 
 ## The one boundary that matters
 
@@ -89,6 +90,8 @@ Built so far:
 - The usage ledger, ported from version 2 with its tested writer logic (`wack-core/usage.rs`): one record per model invocation — chats, compactions, automatic titles and `wack run` — appended to `usage/v1/YYYY-MM/<writer-uuid>.jsonl` beside `v3`, byte-identical in shape to version 2's records (the additive `provider_name` kept, `mode` waiting for the Chat area). The writer queues (cap 1024, drop-oldest), flushes as records arrive, retries every 5 seconds, repairs only its own unfinished tail, and keeps files 0600 in 0700 folders; months are UTC. Recording is on by default, and Settings › Integrations turns it off and shows the ledger's health (state, last record, a waiting queue, losses, failures, the folder). The dev app's ledger stays in the dev app's folder. Verified in the dev app against the Testing connection and headless with the fixture, which the writer reproduces byte-for-byte.
 
 - Plan and Ultra Plan, the question card, the todo list and Ultra reasoning, ported from version 2 with its prompts and tested logic: the mode toggle and ⇧Tab, the interview with Write the plan now, the plan card (Approve & implement, Save PLAN.md, Copy, Discard), the todo list folding finished tasks, agent-initiated Plan, Settings › Tools' unrestricted planning, and `wack run --mode` / `--effort ultra`. Verified in the dev app against the Testing connection (Ultra Plan interview to plan to implementation, relaunch mid-plan, Discard, a Build run keeping a todo list) and headless.
+
+- Web Fetch (`wack-web`), ported from version 2: `web_fetch {url, offset}`, deferred and read-only, through one public-address guard enforced at the HTTP client's DNS resolver and on every redirect; Readability (`dom_smoothie`) then `htmd` to Markdown, text passed through, binaries refused, character-offset paging, a short page cache. On by default, switched in Settings › Tools. Verified headless against the Testing connection (a real page read, localhost refused). Web Search, Settings › Web and MCP come next.
 
 Known gaps in the agent core, to close as the features that need them arrive:
 

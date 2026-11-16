@@ -311,6 +311,9 @@ struct State {
     /// before the switch existed load as on.
     #[serde(default = "recording_on")]
     record_usage: bool,
+    /// Settings › Web.
+    #[serde(default)]
+    web: crate::web::WebConfig,
 }
 
 fn recording_on() -> bool {
@@ -472,6 +475,14 @@ impl Store {
 
     pub(crate) fn save_state(&self) -> Result<(), String> {
         self.save()
+    }
+
+    pub(crate) fn web_config(&self) -> &crate::web::WebConfig {
+        &self.state.web
+    }
+
+    pub(crate) fn web_config_mut(&mut self) -> &mut crate::web::WebConfig {
+        &mut self.state.web
     }
 
     pub(crate) fn memory_config_mut(&mut self) -> &mut crate::memory::MemoryConfig {

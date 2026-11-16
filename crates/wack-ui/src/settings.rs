@@ -430,16 +430,18 @@ pub enum Section {
     Appearance,
     Providers,
     Tools,
+    Memory,
 }
 
 impl Section {
-    pub const ALL: [Section; 3] = [Section::Appearance, Section::Providers, Section::Tools];
+    pub const ALL: [Section; 4] = [Section::Appearance, Section::Providers, Section::Tools, Section::Memory];
 
     pub fn name(self) -> &'static str {
         match self {
             Section::Appearance => "Appearance",
             Section::Providers => "Providers",
             Section::Tools => "Tools",
+            Section::Memory => "Memory",
         }
     }
 
@@ -448,6 +450,7 @@ impl Section {
             Section::Appearance => "section-appearance",
             Section::Providers => "section-providers",
             Section::Tools => "section-tools",
+            Section::Memory => "section-memory",
         }
     }
 }
@@ -463,7 +466,7 @@ const GROUPS: [(&str, &[Entry]); 4] = [
     ("Models", &[(Some(Section::Providers), "Providers"), (None, "Prompts")]),
     (
         "Agent",
-        &[(Some(Section::Tools), "Tools"), (None, "Memory"), (None, "Skills"), (None, "Commands"), (None, "Sub-agents"), (None, "Git")],
+        &[(Some(Section::Tools), "Tools"), (Some(Section::Memory), "Memory"), (None, "Skills"), (None, "Commands"), (None, "Sub-agents"), (None, "Git")],
     ),
     ("Reach", &[(None, "MCP servers"), (None, "Web"), (None, "Computer use")]),
 ];
@@ -475,6 +478,7 @@ pub struct SettingsData {
     pub providers: ProvidersData,
     pub appearance: AppearanceData,
     pub tools: crate::tools_page::ToolsData,
+    pub memory: crate::memory_page::MemoryData,
 }
 
 /// The title strip's words: `Settings › Providers`.
@@ -578,6 +582,7 @@ pub fn page(data: SettingsData, inline_nav: bool, narrow: bool, stack_form: bool
         Section::Appearance => appearance_page::page(data.appearance, theme).into_any_element(),
         Section::Providers => providers(data.providers, stack_form, theme).into_any_element(),
         Section::Tools => crate::tools_page::page(data.tools, theme).into_any_element(),
+        Section::Memory => crate::memory_page::page(data.memory, theme),
     };
     let footer = if section == Section::Providers {
         editor.as_ref().and_then(|editor| save_bar(editor, narrow, theme))
@@ -1026,7 +1031,7 @@ fn model_row(index: usize, row: &ModelField, theme: &Theme) -> impl IntoElement 
 }
 
 /// A labelled control in the connection card.
-fn field(label: &'static str, hint: Option<SharedString>, control: impl IntoElement, theme: &Theme) -> impl IntoElement {
+pub(crate) fn field(label: &'static str, hint: Option<SharedString>, control: impl IntoElement, theme: &Theme) -> impl IntoElement {
     div()
         .flex_1()
         .min_w_0()
@@ -1040,7 +1045,7 @@ fn field(label: &'static str, hint: Option<SharedString>, control: impl IntoElem
 }
 
 /// A field's ground, as round as the app's other controls but wide enough for an address.
-fn text_input(field: Entity<TextField>, tag: &'static str, theme: &Theme) -> impl IntoElement {
+pub(crate) fn text_input(field: Entity<TextField>, tag: &'static str, theme: &Theme) -> impl IntoElement {
     div()
         .w_full()
         .h(px(34.))

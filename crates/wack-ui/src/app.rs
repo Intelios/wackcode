@@ -28,6 +28,7 @@ use crate::{
     backdrop::Picture,
     chat::{ChatEvent, ChatSession, now_millis},
     panes::Layout,
+    memory_page::{MemoryConfirm, MemoryEditor, MemoryState},
     settings::{ProviderForm, Section},
     theme,
     text_field::{TextField, TextFieldEvent},
@@ -93,6 +94,9 @@ pub struct AppState {
     pub importing: bool,
     /// Settings › Tools is asking before planning loses its restrictions.
     pub confirming_unrestricted: bool,
+    /// Settings › Memory: the overview as last read, the note editor and a pending delete.
+    pub memory: MemoryState,
+    memory_subscriptions: Vec<Subscription>,
     /// Chats open as tabs, in order.
     tabs: Vec<String>,
     sidebar_hidden: bool,
@@ -162,6 +166,8 @@ impl AppState {
             menu: None,
             settings_section: Section::default(),
             confirming_unrestricted: false,
+            memory: MemoryState::default(),
+            memory_subscriptions: Vec::new(),
             appearance_notice: None,
             importing: false,
             tabs,
@@ -389,7 +395,11 @@ impl AppState {
         match &self.selection {
             Selection::NewChat(_) => Some(self.draft.clone()),
             Selection::Chat(chat) => self.sessions.get(chat).map(|session| session.read(cx).composer.clone()),
-            Selection::Settings => (self.settings_section == Section::Providers && self.form.open).then(|| self.form.name.clone()),
+            Selection::Settings => match self.settings_section {
+                Section::Providers => self.form.open.then(|| self.form.name.clone()),
+                Section::Memory => self.memory.editor.as_ref().map(|editor| editor.title.clone()),
+                _ => None,
+            },
             Selection::Welcome => None,
         }
     }
@@ -427,6 +437,9 @@ impl AppState {
             Selection::Settings => {
                 if self.selection != Selection::Settings {
                     self.before_settings = self.selection.clone();
+                }
+                if self.settings_section == Section::Memory {
+                    self.refresh_memory();
                 }
             }
             Selection::Welcome => {}
@@ -683,6 +696,215 @@ impl AppState {
             self.notice = Some(message.into());
         }
         cx.notify();
+    }
+
+    /// Shows a Settings section. Memory's overview is read afresh as it opens: a run may have
+    /// saved a note since.
+    pub fn open_settings_section(&mut self, section: Section, cx: &mut Context<Self>) {
+        self.settings_section = section;
+        if section == Section::Memory {
+            self.refresh_memory();
+        }
+        cx.notify();
+    }
+
+    fn refresh_memory(&mut self) {
+        self.memory.overview = self.store.memory_overview();
+    }
+
+    fn memory_result(&mut self, result: Result<(), String>, cx: &mut Context<Self>) {
+        self.memory.error = result.err().map(Into::into);
+        self.refresh_memory();
+        cx.notify();
+    }
+
+    /// Settings › Memory's master switch.
+    pub fn toggle_memory(&mut self, cx: &mut Context<Self>) {
+        let on = !self.store.memory_enabled();
+        let result = self.store.set_memory_enabled(on);
+        self.memory_result(result, cx);
+    }
+
+    pub fn switch_project_memory(&mut self, key: &str, on: bool, cx: &mut Context<Self>) {
+        let result = self.store.set_project_memory_enabled(key, on);
+        self.memory_result(result, cx);
+    }
+
+    /// The editor for a new note in `dir`, or for its note `name`. Returns the title field.
+    pub fn open_memory_editor(&mut self, dir: &Path, name: Option<&str>, cx: &mut Context<Self>) -> Option<Entity<TextField>> {
+        self.refresh_memory();
+        let project = self.memory.overview.projects.iter().find(|project| project.dir == dir)?.clone();
+        let note = match name {
+            Some(name) => Some(project.notes.iter().find(|note| note.name == name)?.clone()),
+            None => None,
+        };
+        let editor = MemoryEditor::new(&project, note.as_ref(), cx);
+        let title = editor.title.clone();
+        self.memory.editor = Some(editor);
+        self.memory.confirming = None;
+        self.memory.error = None;
+        self.watch_memory_editor(cx);
+        cx.notify();
+        Some(title)
+    }
+
+    pub fn close_memory_editor(&mut self, cx: &mut Context<Self>) {
+        self.memory.editor = None;
+        self.memory_subscriptions.clear();
+        self.refresh_memory();
+        cx.notify();
+    }
+
+    pub fn choose_memory_kind(&mut self, kind: wack_core::memory::Kind, cx: &mut Context<Self>) {
+        let Some(editor) = self.memory.editor.as_mut() else {
+            return;
+        };
+        editor.kind = kind;
+        editor.error = None;
+        if editor.name_follows {
+            self.follow_title(cx);
+        }
+        cx.notify();
+    }
+
+    /// Writes the note's name from its title, without the name counting as edited by hand.
+    fn follow_title(&mut self, cx: &mut Context<Self>) {
+        let Some(editor) = self.memory.editor.as_ref() else {
+            return;
+        };
+        let title = editor.title.read(cx).text().trim().to_string();
+        let name = if title.is_empty() { String::new() } else { editor.suggested_name(cx) };
+        let field = editor.name.clone();
+        if field.read(cx).text() != name {
+            self.memory_subscriptions.clear();
+            field.update(cx, |field, cx| field.set_text(&name, cx));
+            self.watch_memory_editor(cx);
+        }
+    }
+
+    /// Saves the note the editor describes, creating it or rewriting it (renaming its file if the
+    /// name changed), then goes back to the list.
+    pub fn save_memory(&mut self, cx: &mut Context<Self>) {
+        let Some(editor) = self.memory.editor.as_mut() else {
+            return;
+        };
+        if let Some(issue) = editor.issue(cx) {
+            editor.error = Some(issue);
+            cx.notify();
+            return;
+        }
+        let draft = editor.draft(cx);
+        match wack_core::memory::save_draft(&editor.dir, editor.previous.as_deref(), &draft) {
+            Ok(_) => self.close_memory_editor(cx),
+            Err(message) => {
+                editor.error = Some(message.into());
+                cx.notify();
+            }
+        }
+    }
+
+    fn watch_memory_editor(&mut self, cx: &mut Context<Self>) {
+        self.memory_subscriptions.clear();
+        let Some(editor) = self.memory.editor.as_ref() else {
+            return;
+        };
+        let [title, description, name, body] = editor.fields();
+        let changed = |app: &mut AppState, cx: &mut Context<AppState>| {
+            if let Some(editor) = app.memory.editor.as_mut() {
+                editor.error = None;
+            }
+            cx.notify();
+        };
+        let save_on_enter = move |app: &mut AppState, event: &TextFieldEvent, cx: &mut Context<AppState>| match event {
+            TextFieldEvent::Enter | TextFieldEvent::SendNow => app.save_memory(cx),
+            TextFieldEvent::Changed => changed(app, cx),
+        };
+        self.memory_subscriptions.push(cx.subscribe(&title, move |app, _, event: &TextFieldEvent, cx| {
+            if matches!(event, TextFieldEvent::Changed) && app.memory.editor.as_ref().is_some_and(|editor| editor.name_follows) {
+                app.follow_title(cx);
+            }
+            save_on_enter(app, event, cx);
+        }));
+        self.memory_subscriptions.push(cx.subscribe(&description, move |app, _, event: &TextFieldEvent, cx| save_on_enter(app, event, cx)));
+        self.memory_subscriptions.push(cx.subscribe(&name, move |app, field, event: &TextFieldEvent, cx| {
+            if matches!(event, TextFieldEvent::Changed) {
+                // Typed by hand: the name stops following the title, and is kept a valid name.
+                if let Some(editor) = app.memory.editor.as_mut() {
+                    editor.name_follows = false;
+                }
+                let text = field.read(cx).text().to_string();
+                let tidy: String = text.to_lowercase().split_whitespace().collect::<Vec<_>>().join("-");
+                let tidy = if text.ends_with(char::is_whitespace) && !tidy.is_empty() { format!("{tidy}-") } else { tidy };
+                if tidy != text {
+                    field.update(cx, |field, cx| field.set_text(&tidy, cx));
+                }
+            }
+            save_on_enter(app, event, cx);
+        }));
+        self.memory_subscriptions.push(cx.subscribe(&body, move |app, field, event: &TextFieldEvent, cx| match event {
+            // Return writes a new line in the note; ⌘↩ saves it.
+            TextFieldEvent::Enter => field.update(cx, |field, cx| field.insert_line_break(cx)),
+            TextFieldEvent::SendNow => app.save_memory(cx),
+            TextFieldEvent::Changed => changed(app, cx),
+        }));
+    }
+
+    pub fn ask_delete_memory(&mut self, dir: &Path, name: &str, cx: &mut Context<Self>) {
+        let title = self
+            .memory
+            .overview
+            .projects
+            .iter()
+            .find(|project| project.dir == dir)
+            .and_then(|project| project.notes.iter().find(|note| note.name == name))
+            .map(|note| note.title.clone())
+            .unwrap_or_else(|| name.to_string());
+        self.memory.confirming = Some(MemoryConfirm::Note { dir: dir.to_path_buf(), name: name.to_string(), title });
+        cx.notify();
+    }
+
+    pub fn ask_remove_memory_folder(&mut self, key: &str, cx: &mut Context<Self>) {
+        let Some(project) = self.memory.overview.projects.iter().find(|project| project.key == key) else {
+            return;
+        };
+        self.memory.confirming = Some(MemoryConfirm::Folder {
+            key: key.to_string(),
+            dir: project.dir.clone(),
+            name: project.name.clone(),
+            notes: project.notes.len(),
+        });
+        cx.notify();
+    }
+
+    pub fn cancel_memory_delete(&mut self, cx: &mut Context<Self>) {
+        self.memory.confirming = None;
+        cx.notify();
+    }
+
+    /// Moves the note or folder the user confirmed to the macOS Trash. Only paths the overview
+    /// listed are touched: a note by its checked name inside a listed folder, or a listed folder.
+    pub fn confirm_memory_delete(&mut self, cx: &mut Context<Self>) {
+        let Some(confirm) = self.memory.confirming.take() else {
+            return;
+        };
+        let listed = |dir: &Path| self.memory.overview.projects.iter().any(|project| project.dir == dir);
+        let result = match confirm {
+            MemoryConfirm::Note { dir, name, .. } => {
+                if listed(&dir) && wack_core::memory::read(&dir, &name).is_some() {
+                    crate::memory_page::move_to_trash(&dir.join(format!("{name}.md")))
+                } else {
+                    Err("That memory is gone.".into())
+                }
+            }
+            MemoryConfirm::Folder { key, dir, .. } => {
+                if listed(&dir) {
+                    crate::memory_page::move_to_trash(&dir).and_then(|()| self.store.forget_memory_project(&key))
+                } else {
+                    Err("That memory folder is gone.".into())
+                }
+            }
+        };
+        self.memory_result(result, cx);
     }
 
     /// ⇧Tab: Build → Plan → Ultra Plan → Build.

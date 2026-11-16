@@ -19,6 +19,7 @@ pub mod glass;
 pub mod highlight;
 pub mod icon;
 pub mod markdown;
+pub mod memory_page;
 pub mod motion;
 pub mod panes;
 pub mod plan_card;

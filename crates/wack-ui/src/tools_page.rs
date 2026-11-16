@@ -5,9 +5,10 @@
 use gpui::{div, prelude::*, px};
 
 use crate::{
-    actions::{CancelUnrestrictedPlanning, ConfirmUnrestrictedPlanning, ToggleUnrestrictedPlanning},
+    actions::{CancelUnrestrictedPlanning, ConfirmUnrestrictedPlanning, OpenSettingsSection, ToggleUnrestrictedPlanning},
     button::{Button, Kind},
-    settings_kit::{card, head, row},
+    settings::Section,
+    settings_kit::{card, dispatch, head, pill, row},
     tags::Tag,
     theme::Theme,
     typography::{Type, Typography},
@@ -89,5 +90,14 @@ pub fn page(data: ToolsData, theme: &Theme) -> impl IntoElement {
                     .view(theme),
                 )
                 .children(confirm),
+        )
+        .child(
+            div().pt(px(18.)).child(
+                card(Some("Elsewhere"), None, None, theme).child(
+                    row("Memory", Some("Notes it saves and recalls, per project."))
+                        .control(pill("tools-memory", "Open", None, false, theme).on_click(dispatch(OpenSettingsSection { section: Section::Memory })))
+                        .view(theme),
+                ),
+            ),
         )
 }

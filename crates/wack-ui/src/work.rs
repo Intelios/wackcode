@@ -148,12 +148,13 @@ pub fn summary(turn: &Turn, now: u64) -> String {
 /// What a log did, counted: "2 reads · 1 search · 1 edit · 1 command". Thoughts, notes and
 /// smaller tools are left out; empty when nothing counted.
 pub fn tally(rows: &[WorkRow]) -> String {
-    const KINDS: [(&[&str], &str, &str); 5] = [
+    const KINDS: [(&[&str], &str, &str); 6] = [
         (&["Read"], "read", "reads"),
         (&["Searched", "Found", "Listed", "Looked for"], "search", "searches"),
         (&["Edited", "Wrote"], "edit", "edits"),
         (&["Ran"], "command", "commands"),
         (&["Asked"], "question", "questions"),
+        (&["Saved memory", "Updated memory", "Recalled memory", "Forgot memory"], "memory note", "memory notes"),
     ];
     KINDS
         .iter()
@@ -180,6 +181,10 @@ pub fn activity(rows: &[WorkRow]) -> Option<String> {
         "Listed" => "Listing",
         "Looked for" => "Looking for",
         "Asked" => "Asking",
+        "Saved memory" => "Saving memory",
+        "Updated memory" => "Updating memory",
+        "Recalled memory" => "Recalling memory",
+        "Forgot memory" => "Forgetting memory",
         other => other,
     };
     let target = match &row.target {
@@ -390,6 +395,22 @@ pub fn tool_row(tool: &ToolStep, cwd: &Path, live: bool) -> WorkRow {
             ("Plan", Target::Words(if ultra { "switched to Ultra Plan" } else { "switched to Plan mode" }.into()), None, None)
         }
         wack_core::plan::PLAN_MODE_COMPLETE => ("Plan", Target::Words("submitted for review".into()), None, None),
+        wack_core::memory::MEMORY_SAVE => (
+            if text_field(input, "name").is_some_and(|name| !name.trim().is_empty()) { "Updated memory" } else { "Saved memory" },
+            Target::Words(text_field(input, "title").unwrap_or("").into()),
+            None,
+            text_field(input, "body").map(|body| Detail::Text(body.to_string().into())),
+        ),
+        wack_core::memory::MEMORY_RECALL => {
+            let names: Vec<&str> = input
+                .as_ref()
+                .and_then(|input| input.get("names"))
+                .and_then(Value::as_array)
+                .map(|names| names.iter().filter_map(Value::as_str).collect())
+                .unwrap_or_default();
+            ("Recalled memory", Target::Code(names.join(", ").into()), None, ok.map(|text| Detail::Text(text.to_string().into())))
+        }
+        wack_core::memory::MEMORY_FORGET => ("Forgot memory", Target::Code(text_field(input, "name").unwrap_or("").into()), None, None),
         other => (
             other,
             Target::Code(input.as_ref().map(|input| input.to_string()).unwrap_or_default().into()),
@@ -539,6 +560,24 @@ mod tests {
             input: Some(input),
             result: result.map(|(text, is_error)| ToolResult { text: text.into(), is_error }),
         }
+    }
+
+    #[test]
+    fn memory_calls_read_as_what_they_did_to_a_note() {
+        let cwd = Path::new("/");
+        let saved = tool_row(&tool("memory_save", json!({ "type": "user", "title": "Tabs", "description": "", "body": "Prefers tabs" }), Some(("Saved user_tabs: Tabs", false))), cwd, false);
+        assert_eq!(saved.verb.as_ref(), "Saved memory");
+        assert!(matches!(&saved.target, Target::Words(words) if words.as_ref() == "Tabs"));
+        assert!(matches!(&saved.detail, Some(Detail::Text(body)) if body.as_ref() == "Prefers tabs"));
+        let updated = tool_row(&tool("memory_save", json!({ "type": "user", "title": "Tabs", "body": "b", "name": "user_tabs" }), None), cwd, true);
+        assert_eq!(updated.verb.as_ref(), "Updated memory");
+        let recalled = tool_row(&tool("memory_recall", json!({ "names": ["user_tabs", "project_x"] }), Some(("# Tabs (user)\nPrefers tabs", false))), cwd, false);
+        assert_eq!(recalled.verb.as_ref(), "Recalled memory");
+        assert!(matches!(&recalled.target, Target::Code(names) if names.as_ref() == "user_tabs, project_x"));
+        let forgot = tool_row(&tool("memory_forget", json!({ "name": "user_tabs" }), Some(("Forgot user_tabs.", false))), cwd, false);
+        assert_eq!(forgot.verb.as_ref(), "Forgot memory");
+        assert_eq!(tally(&[saved, recalled, forgot]), "3 memory notes");
+        assert_eq!(activity(&[updated]).unwrap(), "Updating memory Tabs");
     }
 
     #[test]

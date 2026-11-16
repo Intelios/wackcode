@@ -209,6 +209,13 @@ impl TextField {
         cx.notify();
     }
 
+    /// A line break at the caret, for an owner whose Return means "new line" (a note's body).
+    pub fn insert_line_break(&mut self, cx: &mut Context<Self>) {
+        if self.multiline {
+            self.insert("\n", EditKind::Typing, cx);
+        }
+    }
+
     pub fn set_placeholder(&mut self, placeholder: impl Into<SharedString>, cx: &mut Context<Self>) {
         self.placeholder = placeholder.into();
         cx.notify();

@@ -90,8 +90,68 @@ actions!(
         CancelUnrestrictedPlanning,
         /// Adds a picture to the backdrop's library, and shows it.
         ChooseBackdrop,
+        /// Settings › Memory: the master switch.
+        ToggleMemory,
+        /// Settings › Memory: saves the note the editor describes.
+        SaveMemory,
+        /// Settings › Memory: back to the list, forgetting the editor's changes.
+        CloseMemoryEditor,
+        /// Settings › Memory: moves the note or folder waiting for confirmation to the Trash.
+        ConfirmMemoryDelete,
+        CancelMemoryDelete,
     ]
 );
+
+/// Settings › Memory: switches one project's memory on or off.
+#[derive(Clone, Debug, PartialEq, Action)]
+#[action(namespace = wackcode, no_json)]
+pub struct SwitchProjectMemory {
+    pub key: String,
+    pub on: bool,
+}
+
+/// Settings › Memory: the editor, for a new note in this memory folder.
+#[derive(Clone, Debug, PartialEq, Action)]
+#[action(namespace = wackcode, no_json)]
+pub struct NewMemory {
+    pub dir: std::path::PathBuf,
+}
+
+/// Settings › Memory: the editor, showing a saved note.
+#[derive(Clone, Debug, PartialEq, Action)]
+#[action(namespace = wackcode, no_json)]
+pub struct EditMemory {
+    pub dir: std::path::PathBuf,
+    pub name: String,
+}
+
+#[derive(Clone, Debug, PartialEq, Action)]
+#[action(namespace = wackcode, no_json)]
+pub struct ChooseMemoryKind {
+    pub kind: wack_core::memory::Kind,
+}
+
+/// Asks before a note moves to the Trash.
+#[derive(Clone, Debug, PartialEq, Action)]
+#[action(namespace = wackcode, no_json)]
+pub struct AskDeleteMemory {
+    pub dir: std::path::PathBuf,
+    pub name: String,
+}
+
+/// Asks before a project's whole memory folder moves to the Trash.
+#[derive(Clone, Debug, PartialEq, Action)]
+#[action(namespace = wackcode, no_json)]
+pub struct AskRemoveMemoryFolder {
+    pub key: String,
+}
+
+/// Shows a memory file or folder in Finder.
+#[derive(Clone, Debug, PartialEq, Action)]
+#[action(namespace = wackcode, no_json)]
+pub struct RevealMemory {
+    pub path: std::path::PathBuf,
+}
 
 /// Shows a picture from the library behind the window, or none, bringing back the theme it
 /// remembers.

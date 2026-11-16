@@ -34,6 +34,7 @@ State lives in models, not views. Closing a pane or switching a tab must never l
   v3/secrets.json           API keys, mode 0600
   v3/sessions/<chat>.jsonl  one append-only file per chat
   v3/backgrounds/           backdrop images
+  v3/memory/<label>-<key>/  one project's memory notes (Markdown with frontmatter), origin.json, .trash/
 ```
 
 Version 3 keeps everything of its own under `v3/` and never reads or writes version 2's files, which share the same folder.
@@ -50,6 +51,7 @@ Each file's header comment states its invariants; this is the map.
 - **The prompt** (`prompt.rs`): the profile's core text, a guide to this chat (date, folder, tool list), then `AGENTS.md` / `CLAUDE.md` from the working directory and every folder above it. Built once per run.
 - **Features** hook in through `agent::Feature` (`on_run_start`, `notes`, `before_request`, `on_tool_call`, `after_turn`, `on_run_end`, `state_to_save`, `summary_sections`): compiled in, no extension runtime. A feature keeps its state in the session (`Entry::State`, latest per key, kept through compaction) and tells the model things through app notes (user-role messages the transcript hides and compaction never quotes as the user's words). A tool can end the run (`ToolSpec::ends_run`) or wait on the user (`ToolContext::user`, answered through `Control::answer`).
 - **Plan and Ultra Plan, questions, todos** (`plan/`, `ask.rs`, `todo/`, assembled by `kit.rs`), ported from version 2 with its prompts: the mode contract is a note, re-sent only when the mode in force differs from the last one the model saw; while planning, a tool runs only if it changes nothing (`parallel_safe`) or, for `bash`, passes the shell policy (`plan/policy.rs`, fail-closed), unless Settings › Tools lifts that. `plan_mode_complete` ends the run with the plan saved as state `plan`; a new user message consumes it. The tool list and system prompt never change between modes, so the prompt cache holds. **Ultra** reasoning is `wack_core::Reasoning::Ultra`: the provider gets its maximum effort and the system prompt gains `prompt::ULTRA_PROMPT`; it never reaches `wack-llm`.
+- **Memory** (`memory/`, the folder chosen by `wack-core/memory.rs`), ported from version 2 with its tool texts: `memory_save`, `memory_recall` and `memory_forget` work on one project's note files, keyed on the repository's common root so worktrees share them. The kit reads the index once per run and adds it to the system prompt after the project instructions and before Ultra; bodies never enter the prompt. Memory switched off (Settings › Memory, globally or per project) means no folder for the run: no tools and no index. Plan mode lets the memory tools through. Version 2's notes are not imported.
 - **`wack-core/store.rs`** holds connections in `state.json` and their keys in `secrets.json`; `Store::provider` is the only place a key leaves the secret store. A connection switched off stays stored with its key but is skipped by `Store::resolve`, the model menu and `wack run`.
 
 ## The UI layer
@@ -101,6 +103,6 @@ Known gaps in identity:
 
 - The window's own controls follow macOS's light or dark, not the one chosen in Settings.
 
-The foundation (phases 0 to 4) is complete: the owner signed off its look on 2026-11-15. Features now return in this order, each with its own plan: Plan and Ultra Plan with the question dialog, todo list and Ultra reasoning (done); Memory, Build and Run, auto titles, skills and slash commands, background shell jobs, commit / push / PR, the usage ledger writer; MCP and web tools; sub-agents and task suggestions; the browser pane, visual replies and canvas; the Chat area; computer use, the skill creator, signature motion and Liquid Glass.
+The foundation (phases 0 to 4) is complete: the owner signed off its look on 2026-11-15. Features now return in this order, each with its own plan: Plan and Ultra Plan with the question dialog, todo list and Ultra reasoning (done); Memory (done); Build and Run, auto titles, skills and slash commands, background shell jobs, commit / push / PR, the usage ledger writer; MCP and web tools; sub-agents and task suggestions; the browser pane, visual replies and canvas; the Chat area; computer use, the skill creator, signature motion and Liquid Glass.
 
 Update this section as each piece lands.

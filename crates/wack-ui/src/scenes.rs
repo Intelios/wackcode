@@ -475,9 +475,46 @@ pub fn all() -> Vec<Scene> {
                     providers: ProvidersData::new(&fixtures::connections(), |_| true, &form, cx),
                     appearance: fixtures::appearance(None, cx),
                     tools: crate::tools_page::ToolsData { unrestricted_planning: false, confirming: true },
+                    memory: Default::default(),
                 };
                 cx.new(|_| Shell::showing(fixtures::sidebar(Selected::None), Screen::Settings(data))).into()
             },
+        },
+        Scene {
+            name: "settings-memory",
+            description: "Settings › Memory: a project with notes of every kind, one switched off, and one waiting for a first note.",
+            size: size(px(1180.), px(1000.)),
+            build: |_, cx| memory_scene(MemoryScene::Notes, None, cx),
+        },
+        Scene {
+            name: "settings-memory-backdrop",
+            description: "Settings › Memory over a backdrop.",
+            size: size(px(1180.), px(1000.)),
+            build: |_, cx| memory_scene(MemoryScene::Notes, Some(over(fixtures::backdrop(wack_core::Texture::None), cx)), cx),
+        },
+        Scene {
+            name: "settings-memory-empty",
+            description: "Settings › Memory before the agent has saved anything: how memory works, in three steps.",
+            size: WINDOW,
+            build: |_, cx| memory_scene(MemoryScene::Empty, None, cx),
+        },
+        Scene {
+            name: "settings-memory-off",
+            description: "Settings › Memory with the master switch off: every switch reads off and the page says the tools are withdrawn.",
+            size: size(px(1180.), px(1000.)),
+            build: |_, cx| memory_scene(MemoryScene::Off, None, cx),
+        },
+        Scene {
+            name: "settings-memory-confirm",
+            description: "Settings › Memory asking before a note moves to the Trash.",
+            size: size(px(1180.), px(1000.)),
+            build: |_, cx| memory_scene(MemoryScene::Confirm, None, cx),
+        },
+        Scene {
+            name: "settings-memory-editor",
+            description: "The memory editor, writing a new note: its name follows the title.",
+            size: size(px(1180.), px(1000.)),
+            build: |_, cx| memory_scene(MemoryScene::Editor, None, cx),
         },
         Scene {
             name: "settings-appearance",
@@ -665,6 +702,7 @@ fn providers_scene(state: Providers, sidebar_hidden: bool, cx: &mut App) -> AnyV
         providers: ProvidersData::new(&connections, |id| id != "c2", &form, cx),
         appearance: fixtures::appearance(None, cx),
         tools: Default::default(),
+        memory: Default::default(),
     };
     cx.new(|_| {
         let shell = Shell::showing(fixtures::sidebar(Selected::None), Screen::Settings(data));
@@ -681,6 +719,7 @@ fn settings_scene(backdrop: Option<crate::backdrop::Picture>, cx: &mut App) -> A
         providers: ProvidersData::new(&fixtures::connections(), |_| true, &form, cx),
         appearance: fixtures::appearance(backdrop.clone(), cx),
         tools: Default::default(),
+        memory: Default::default(),
     };
     cx.new(|_| {
         let shell = Shell::showing(fixtures::sidebar(Selected::None), Screen::Settings(data));
@@ -762,4 +801,105 @@ impl Render for SceneRoot {
     fn render(&mut self, _window: &mut Window, _cx: &mut Context<Self>) -> impl IntoElement {
         tags::root(self.view.clone())
     }
+}
+
+#[derive(Clone, Copy, PartialEq)]
+enum MemoryScene {
+    Notes,
+    Empty,
+    Off,
+    Confirm,
+    Editor,
+}
+
+/// Settings › Memory with fixture notes, in the state `scene` names.
+fn memory_scene(scene: MemoryScene, backdrop: Option<crate::backdrop::Picture>, cx: &mut App) -> AnyView {
+    use wack_core::memory::{Kind, MemoryOverview, MemoryProject, Note};
+
+    use crate::memory_page::{MemoryConfirm, MemoryEditor, MemoryState};
+
+    let note = |kind: Kind, name: &str, title: &str, description: &str, modified: &str| Note {
+        name: name.into(),
+        kind,
+        title: title.into(),
+        description: description.into(),
+        modified: Some(modified.into()),
+        body: String::new(),
+    };
+    let today = wack_core::memory::now_iso();
+    let folder = |name: &str| std::path::PathBuf::from(format!("/Users/you/Library/Application Support/com.wackcode.desktop/v3/memory/{name}"));
+    let projects = vec![
+        MemoryProject {
+            key: "3f2a9c1b7e44".into(),
+            name: "wackcode".into(),
+            path: "/Users/you/Code/wackcode".into(),
+            dir: folder("wackcode-3f2a9c1b7e44"),
+            notes: vec![
+                note(Kind::User, "user_prefers-short-answers", "Prefers short answers", "Lead with the outcome; no recaps", &today),
+                note(Kind::Feedback, "feedback_run-the-gallery", "Check UI changes in the gallery", "Render the scene before calling a view done", "2026-11-12T09:30:00Z"),
+                note(Kind::Project, "project_memory-port", "Memory is being ported from version 2", "", "2026-11-03T16:05:00Z"),
+                note(Kind::Reference, "reference_testing-connection", "The Testing connection", "The only connection agents may use", "2026-10-21T08:00:00Z"),
+            ],
+            enabled: true,
+        },
+        MemoryProject {
+            key: "8b1d0e6f2a90".into(),
+            name: "tokentrail".into(),
+            path: "/Users/you/Code/tokentrail".into(),
+            dir: folder("tokentrail-8b1d0e6f2a90"),
+            notes: vec![note(Kind::Feedback, "feedback_ledger-is-append-only", "The usage ledger is append-only", "Never rewrite a line once written", "2026-11-14T18:40:00Z")],
+            enabled: false,
+        },
+        MemoryProject {
+            key: "c0ffee123456".into(),
+            name: "scratch".into(),
+            path: "/Users/you/Code/scratch".into(),
+            dir: folder("scratch-c0ffee123456"),
+            notes: Vec::new(),
+            enabled: true,
+        },
+    ];
+    let mut state = MemoryState {
+        overview: MemoryOverview { enabled: scene != MemoryScene::Off, projects },
+        ..Default::default()
+    };
+    match scene {
+        MemoryScene::Empty => state.overview.projects.retain(|project| project.notes.is_empty()),
+        MemoryScene::Confirm => {
+            let project = &state.overview.projects[0];
+            state.confirming = Some(MemoryConfirm::Note {
+                dir: project.dir.clone(),
+                name: project.notes[2].name.clone(),
+                title: project.notes[2].title.clone(),
+            });
+        }
+        MemoryScene::Editor => {
+            let editor = MemoryEditor::new(&state.overview.projects[0], None, cx);
+            editor.title.update(cx, |field, cx| field.set_text("Run clippy before committing", cx));
+            editor.description.update(cx, |field, cx| field.set_text("Warnings fail review", cx));
+            let name = editor.suggested_name(cx);
+            editor.name.update(cx, |field, cx| field.set_text(&name, cx));
+            editor.body.update(cx, |field, cx| {
+                field.set_text("cargo clippy --workspace must be clean before a commit.\nThe owner treats a new warning as a failed review.", cx)
+            });
+            state.editor = Some(editor);
+        }
+        MemoryScene::Notes | MemoryScene::Off => {}
+    }
+    let form = ProviderForm::new(cx);
+    let data = SettingsData {
+        section: Section::Memory,
+        providers: ProvidersData::new(&fixtures::connections(), |_| true, &form, cx),
+        appearance: fixtures::appearance(backdrop.clone(), cx),
+        tools: Default::default(),
+        memory: state.data(cx),
+    };
+    cx.new(|_| {
+        let shell = Shell::showing(fixtures::sidebar(Selected::None), Screen::Settings(data));
+        match backdrop {
+            Some(picture) => shell.with_backdrop(picture),
+            None => shell,
+        }
+    })
+    .into()
 }

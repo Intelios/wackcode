@@ -283,6 +283,7 @@ fn row_icon(verb: &str, theme: &Theme) -> impl IntoElement {
         "Ran" => Some(Icon::Terminal),
         "Thought" => Some(Icon::Brain),
         "Asked" => Some(Icon::Question),
+        "Saved memory" | "Updated memory" | "Recalled memory" | "Forgot memory" => Some(Icon::Bookmark),
         "" => None,
         _ => Some(Icon::Hammer),
     };

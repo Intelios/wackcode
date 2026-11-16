@@ -19,7 +19,7 @@ use serde::{Deserialize, Serialize};
 
 pub use wack_agent::memory::{
     MEMORY_FORGET, MEMORY_RECALL, MEMORY_SAVE, MEMORY_TOOLS,
-    store::{Draft, Kind, MAX_DESCRIPTION_CHARS, MAX_NAME_CHARS, MAX_TITLE_CHARS, Note, draft_issue, note_name, read, save_draft, slugify},
+    store::{Draft, Kind, MAX_DESCRIPTION_CHARS, MAX_NAME_CHARS, MAX_TITLE_CHARS, Note, draft_issue, note_name, now_iso, read, save_draft, slugify},
 };
 
 use crate::store::Store;

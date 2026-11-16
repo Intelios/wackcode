@@ -12,6 +12,8 @@ use gpui::{AssetSource, Hsla, Pixels, SharedString, Styled, Svg, svg};
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub enum Icon {
     ArrowUp,
+    /// Memory: a note kept for later chats.
+    Bookmark,
     /// Plan mode.
     Brain,
     Branch,
@@ -44,6 +46,7 @@ pub enum Icon {
 /// Every icon file, by asset path. One list, so a missing file fails the test below.
 const FILES: &[(&str, &[u8])] = &[
     ("icons/arrow-up.svg", include_bytes!("../assets/icons/arrow-up.svg")),
+    ("icons/bookmark.svg", include_bytes!("../assets/icons/bookmark.svg")),
     ("icons/brain.svg", include_bytes!("../assets/icons/brain.svg")),
     ("icons/branch.svg", include_bytes!("../assets/icons/branch.svg")),
     ("icons/check.svg", include_bytes!("../assets/icons/check.svg")),
@@ -82,6 +85,7 @@ impl Icon {
             Icon::Close => "icons/close.svg",
             Icon::Copy => "icons/copy.svg",
             Icon::Download => "icons/download.svg",
+            Icon::Bookmark => "icons/bookmark.svg",
             Icon::Duck => "icons/duck.svg",
             Icon::File => "icons/file.svg",
             Icon::Folder => "icons/folder.svg",
@@ -139,6 +143,7 @@ mod tests {
     fn every_icon_has_a_file() {
         for icon in [
             Icon::ArrowUp,
+            Icon::Bookmark,
             Icon::Brain,
             Icon::Branch,
             Icon::Check,

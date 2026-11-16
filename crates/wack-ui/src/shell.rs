@@ -39,7 +39,7 @@ use gpui::{
 
 use crate::{
     actions::{
-        self, ActivatePane, AddFolder, Back, ChooseBackdrop, ChooseEffort, SlideEffort, ToggleTodos, ToggleWaiting, ChooseFocus, CycleAgentMode, SetAgentMode, PickOption, ShowQuestion, NextQuestion, PreviousQuestion, SubmitAnswers, CancelQuestion, WrapUpQuestion, ShowDoneTodos, DiscardPlan, KeepPlan, ConfirmDiscardPlan, ApprovePlan, SavePlan, CopyPlan, ToggleUnrestrictedPlanning, ConfirmUnrestrictedPlanning, CancelUnrestrictedPlanning,
+        self, ActivatePane, AddFolder, Back, ChooseBackdrop, ChooseEffort, SlideEffort, ToggleTodos, ToggleWaiting, ChooseFocus, CycleAgentMode, SetAgentMode, PickOption, ShowQuestion, NextQuestion, PreviousQuestion, SubmitAnswers, CancelQuestion, WrapUpQuestion, ShowDoneTodos, DiscardPlan, KeepPlan, ConfirmDiscardPlan, ApprovePlan, SavePlan, CopyPlan, ToggleUnrestrictedPlanning, ConfirmUnrestrictedPlanning, CancelUnrestrictedPlanning, ToggleMemory, SwitchProjectMemory, NewMemory, EditMemory, ChooseMemoryKind, SaveMemory, CloseMemoryEditor, AskDeleteMemory, AskRemoveMemoryFolder, ConfirmMemoryDelete, CancelMemoryDelete, RevealMemory,
         ChooseBlur, ChooseDim, ChooseFormat, OpenConnectionForm, CloseConnectionForm, SwitchConnection, ChooseMode, ChooseModel, ChooseTexture, ChooseTheme, CloseChatTab, CloseMenu, ClosePane,
         ClosePaneId, CloseSettings, CloseTab, Compact, DeleteChat, DiscardConnection, EditConnection, EqualizeSplit, FocusNext, FocusPrevious, MovePane, AddModelRow, RemoveModelRow, SaveConnection,
         NewChat, NewChatIn, NewTerminal, NewTerminalWith, NextTab, OpenEffortMenu, OpenModelMenu, OpenSettings,
@@ -589,11 +589,30 @@ impl Shell {
         }
     }
 
+    /// Opens Settings › Memory's editor and puts the caret in its title.
+    fn open_memory_editor(&mut self, dir: &std::path::Path, name: Option<&str>, window: &mut Window, cx: &mut Context<Self>) {
+        let Some(app) = self.app() else {
+            return;
+        };
+        let title = app.update(cx, |app, cx| app.open_memory_editor(dir, name, cx));
+        if let Some(title) = title {
+            let handle = title.read(cx).focus_handle(cx);
+            window.defer(cx, move |window, cx| window.focus(&handle, cx));
+        }
+    }
+
+    /// Once the memory editor has closed, the shell takes the keys again.
+    fn refocus_if_closed(&mut self, window: &mut Window, cx: &mut Context<Self>) {
+        let open = self.app().is_some_and(|app| app.read(cx).memory.editor.is_some());
+        if !open && let Some(focus) = self.focus.clone() {
+            window.defer(cx, move |window, cx| window.focus(&focus, cx));
+        }
+    }
+
     fn open_settings_section(&mut self, action: &OpenSettingsSection, _: &mut Window, cx: &mut Context<Self>) {
         let section = action.section;
         self.with_app(cx, |app, cx| {
-            app.settings_section = section;
-            cx.notify();
+            app.open_settings_section(section, cx);
         });
         // The new section's field, if it has one, takes focus.
         self.focused = None;
@@ -930,6 +949,42 @@ impl Render for Shell {
                         cx.notify();
                     })
                 }))
+                .on_action(cx.listener(|shell, _: &ToggleMemory, _, cx| shell.with_app(cx, |app, cx| app.toggle_memory(cx))))
+                .on_action(cx.listener(|shell, action: &SwitchProjectMemory, _, cx| {
+                    let (key, on) = (action.key.clone(), action.on);
+                    shell.with_app(cx, |app, cx| app.switch_project_memory(&key, on, cx));
+                }))
+                .on_action(cx.listener(|shell, action: &NewMemory, window, cx| {
+                    let dir = action.dir.clone();
+                    shell.open_memory_editor(&dir, None, window, cx);
+                }))
+                .on_action(cx.listener(|shell, action: &EditMemory, window, cx| {
+                    let (dir, name) = (action.dir.clone(), action.name.clone());
+                    shell.open_memory_editor(&dir, Some(&name), window, cx);
+                }))
+                .on_action(cx.listener(|shell, action: &ChooseMemoryKind, _, cx| {
+                    let kind = action.kind;
+                    shell.with_app(cx, |app, cx| app.choose_memory_kind(kind, cx));
+                }))
+                .on_action(cx.listener(|shell, _: &SaveMemory, window, cx| {
+                    shell.with_app(cx, |app, cx| app.save_memory(cx));
+                    shell.refocus_if_closed(window, cx);
+                }))
+                .on_action(cx.listener(|shell, _: &CloseMemoryEditor, window, cx| {
+                    shell.with_app(cx, |app, cx| app.close_memory_editor(cx));
+                    shell.refocus_if_closed(window, cx);
+                }))
+                .on_action(cx.listener(|shell, action: &AskDeleteMemory, _, cx| {
+                    let (dir, name) = (action.dir.clone(), action.name.clone());
+                    shell.with_app(cx, |app, cx| app.ask_delete_memory(&dir, &name, cx));
+                }))
+                .on_action(cx.listener(|shell, action: &AskRemoveMemoryFolder, _, cx| {
+                    let key = action.key.clone();
+                    shell.with_app(cx, |app, cx| app.ask_remove_memory_folder(&key, cx));
+                }))
+                .on_action(cx.listener(|shell, _: &ConfirmMemoryDelete, _, cx| shell.with_app(cx, |app, cx| app.confirm_memory_delete(cx))))
+                .on_action(cx.listener(|shell, _: &CancelMemoryDelete, _, cx| shell.with_app(cx, |app, cx| app.cancel_memory_delete(cx))))
+                .on_action(cx.listener(|_, action: &RevealMemory, _, _| crate::memory_page::reveal(&action.path)))
                 .on_action(cx.listener(|shell, _: &ShowDoneTodos, _, cx| shell.with_session(cx, |session, cx| session.show_done_todos(cx))))
                 .on_action(cx.listener(|shell, _: &DiscardPlan, _, cx| shell.with_session(cx, |session, cx| session.ask_discard_plan(cx))))
                 .on_action(cx.listener(|shell, _: &KeepPlan, _, cx| shell.with_session(cx, |session, cx| session.keep_plan(cx))))
@@ -1220,6 +1275,7 @@ fn live_view(app: &AppState, cx: &App) -> (SidebarData, Screen, StripData) {
                     unrestricted_planning: store.planning_unrestricted(),
                     confirming: app.confirming_unrestricted,
                 },
+                memory: app.memory.data(cx),
             })
         }
         Selection::NewChat(project) => match info(project) {

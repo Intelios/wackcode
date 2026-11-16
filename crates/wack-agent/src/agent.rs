@@ -43,6 +43,7 @@ use crate::{
     prompt,
     registry::{Registry, TOOL_SEARCH},
     session::{Note, Session},
+    tasks::Tasks,
     tool::{Loading, Tool, ToolContext, ToolSpec, User},
 };
 
@@ -96,6 +97,12 @@ pub trait Feature: Send + Sync {
     /// loop saves what comes back. Return nothing once the session shows the model was told.
     fn notes(&self, _session: &Session) -> Vec<Note> {
         Vec::new()
+    }
+
+    /// True when `notes` has something new the model should read before it finishes: a reply
+    /// that would end the run goes round again instead.
+    fn pending(&self) -> bool {
+        false
     }
 
     /// Called with each request just before it is sent. Changes here are never saved.
@@ -238,6 +245,8 @@ pub enum Event {
     Question { id: String, questions: Vec<Question>, wrap_up: bool },
     /// A feature saved its state: the todo list, the plan awaiting review.
     State { key: String, value: Value },
+    /// A note the app wrote for the model was saved (a background task's news).
+    Noted { tag: String, text: String },
     /// Something the user should know that is not part of the conversation.
     Notice(String),
 }
@@ -261,6 +270,7 @@ pub struct Agent {
     features: Vec<Box<dyn Feature>>,
     system: Vec<SystemPart>,
     cwd: PathBuf,
+    tasks: Tasks,
 }
 
 enum Planned {
@@ -282,7 +292,7 @@ impl Agent {
         if settings.ultra {
             system.push(SystemPart { text: prompt::ULTRA_PROMPT.to_string() });
         }
-        Self { provider, registry, session, settings, features: Vec::new(), system, cwd }
+        Self { provider, registry, session, settings, features: Vec::new(), system, cwd, tasks: Tasks::scratch() }
     }
 
     /// Adds a part to the system prompt after the project instructions and before Ultra's, for a
@@ -290,6 +300,13 @@ impl Agent {
     pub fn with_system_part(mut self, text: String) -> Self {
         let at = self.system.len() - usize::from(self.settings.ultra);
         self.system.insert(at, SystemPart { text });
+        self
+    }
+
+    /// Runs shell commands as tasks of this registry, which outlives the run. Without one, a run
+    /// has a registry of its own that goes with it.
+    pub fn with_tasks(mut self, tasks: Tasks) -> Self {
+        self.tasks = tasks;
         self
     }
 
@@ -315,8 +332,26 @@ impl Agent {
             feature.on_run_start();
         }
         self.save_state(events)?;
-        self.save_notes()?;
+        self.save_notes(events)?;
         self.session.push_as(Message::user(prompt), None, command)?;
+        self.turns(control, events).await
+    }
+
+    /// Runs with no message from the user, for news a feature has for the model (a background
+    /// task finished while the chat was idle). Done at once, sending nothing, when there is none.
+    pub async fn wake(&mut self, control: &Control, events: EventSink<'_>) -> Result<Outcome, String> {
+        for feature in &self.features {
+            feature.on_run_start();
+        }
+        self.save_state(events)?;
+        if self.save_notes(events)? == 0 {
+            return Ok(Outcome::Done);
+        }
+        self.turns(control, events).await
+    }
+
+    /// Asks the model and runs its tools until it stops.
+    async fn turns(&mut self, control: &Control, events: EventSink<'_>) -> Result<Outcome, String> {
         let mut compacted_for_overflow = false;
         loop {
             if control.stopped() {
@@ -330,8 +365,9 @@ impl Agent {
                     return Ok(Outcome::Stopped);
                 }
             }
-            // A tool may have changed the mode, or a compaction summarised a note away.
-            self.save_notes()?;
+            // A tool may have changed the mode, a compaction summarised a note away, or a
+            // background task has news.
+            self.save_notes(events)?;
 
             let request = self.request();
             let written = Mutex::new(String::new());
@@ -397,6 +433,10 @@ impl Agent {
                     events(Event::Steered(text));
                     continue;
                 }
+                // News that arrived while the model wrote its last reply is read before it stops.
+                if self.features.iter().any(|feature| feature.pending()) {
+                    continue;
+                }
                 let reply = response.message.text();
                 for feature in &self.features {
                     if let Some(notice) = feature.on_run_end(&reply) {
@@ -441,13 +481,16 @@ impl Agent {
         })
     }
 
-    /// Saves the notes features owe the model.
-    fn save_notes(&mut self) -> Result<(), String> {
+    /// Saves the notes features owe the model, and says how many there were.
+    fn save_notes(&mut self, events: EventSink<'_>) -> Result<usize, String> {
         let notes: Vec<Note> = self.features.iter().flat_map(|feature| feature.notes(&self.session)).collect();
+        let count = notes.len();
         for note in notes {
+            let (tag, text) = (note.tag.clone(), note.text.clone());
             self.session.push_note(note)?;
+            events(Event::Noted { tag, text });
         }
-        Ok(())
+        Ok(count)
     }
 
     /// Saves each feature's state that changed, and tells whoever is watching.
@@ -513,7 +556,12 @@ impl Agent {
             plans.push(plan);
         }
 
-        let context = ToolContext { cwd: self.cwd.clone(), cancel: control.cancel.clone(), user: User::new(control.clone(), events) };
+        let context = ToolContext {
+            cwd: self.cwd.clone(),
+            cancel: control.cancel.clone(),
+            user: User::new(control.clone(), events),
+            tasks: self.tasks.clone(),
+        };
         let features = &self.features;
         let run_one = |index: usize| {
             let (id, name, input) = &calls[index];
@@ -1455,5 +1503,119 @@ mod tests {
         assert_eq!(rig.run("go", &Control::new()).await, Ok(Outcome::Done));
         let results = rig.results();
         assert!(results[0].1 && results[0].0.contains("length limit"));
+    }
+
+    /// Leaves a background task's news in the chat's inbox, as if a task just ended.
+    struct Tell;
+
+    #[async_trait]
+    impl Tool for Tell {
+        fn spec(&self) -> ToolSpec {
+            spec("tell", Loading::Always, false)
+        }
+
+        async fn run(&self, _: Value, context: &ToolContext<'_>) -> Result<String, String> {
+            context.tasks.tell(Note { tag: "task:t1:end".into(), text: "Task t1 finished.".into() });
+            Ok("told".to_string())
+        }
+    }
+
+    fn with_tasks(rig: &mut Rig, tasks: &crate::tasks::Tasks) {
+        let feature = crate::tasks::TasksFeature::new(rig.agent.session(), tasks.clone());
+        let agent = std::mem::replace(&mut rig.agent, rig_with(ScriptedProvider::new(Vec::new()), Vec::new(), None).agent);
+        rig.agent = agent.with_tasks(tasks.clone()).with_feature(Box::new(feature));
+    }
+
+    fn noted(messages: &[Message], text: &str) -> usize {
+        messages.iter().filter(|message| message.text() == text).count()
+    }
+
+    #[tokio::test]
+    async fn task_news_reaches_the_model_once_before_its_next_request() {
+        let tasks = crate::tasks::Tasks::scratch();
+        let mut rig = rig(vec![call(&[("a", "tell", json!({}))]), say("Seen it.")], vec![Arc::new(Tell)]);
+        with_tasks(&mut rig, &tasks);
+        assert_eq!(rig.run("go", &Control::new()).await, Ok(Outcome::Done));
+        let second = &rig.provider.requests()[1].messages;
+        assert_eq!(noted(second, "Task t1 finished."), 1);
+        assert_eq!(second.last().unwrap().text(), "Task t1 finished.", "news follows the tool results");
+        assert_eq!(noted(rig.agent.session().messages(), "Task t1 finished."), 1);
+        assert!(rig.saw(|event| matches!(event, Event::Noted { tag, .. } if tag == "task:t1:end")));
+        assert!(!tasks.has_news());
+    }
+
+    /// Brings news while the model writes a reply that would end the run.
+    struct LateNews(crate::tasks::Tasks, AtomicBool);
+
+    impl Feature for LateNews {
+        fn after_turn(&self, _: &Message) {
+            if !self.1.swap(true, Ordering::SeqCst) {
+                self.0.tell(Note { tag: "task:t2:end".into(), text: "Task t2 finished.".into() });
+            }
+        }
+    }
+
+    #[tokio::test]
+    async fn news_arriving_as_the_model_finishes_keeps_the_run_going() {
+        let tasks = crate::tasks::Tasks::scratch();
+        let mut rig = rig(vec![say("All done."), say("t2 is done too.")], Vec::new());
+        with_tasks(&mut rig, &tasks);
+        rig.agent = std::mem::replace(&mut rig.agent, rig_with(ScriptedProvider::new(Vec::new()), Vec::new(), None).agent)
+            .with_feature(Box::new(LateNews(tasks.clone(), AtomicBool::new(false))));
+        assert_eq!(rig.run("go", &Control::new()).await, Ok(Outcome::Done));
+        let requests = rig.provider.requests();
+        assert_eq!(requests.len(), 2);
+        assert_eq!(requests[1].messages.last().unwrap().text(), "Task t2 finished.");
+    }
+
+    #[tokio::test]
+    async fn waking_runs_on_news_alone_and_sends_nothing_without_it() {
+        let tasks = crate::tasks::Tasks::scratch();
+        let mut rig = rig(vec![say("Started it."), say("The build passed.")], Vec::new());
+        with_tasks(&mut rig, &tasks);
+        assert_eq!(rig.run("build it", &Control::new()).await, Ok(Outcome::Done));
+        let events = rig.events.clone();
+        let sink = move |event| events.lock().unwrap().push(event);
+        assert_eq!(rig.agent.wake(&Control::new(), &sink).await, Ok(Outcome::Done));
+        assert_eq!(rig.provider.requests().len(), 1, "no news, no request");
+
+        tasks.tell(Note { tag: "task:t3:end".into(), text: "Task t3 finished: exit code 0.".into() });
+        assert_eq!(rig.agent.wake(&Control::new(), &sink).await, Ok(Outcome::Done));
+        let requests = rig.provider.requests();
+        assert_eq!(requests.len(), 2);
+        let last = requests[1].messages.last().unwrap();
+        assert_eq!(last.text(), "Task t3 finished: exit code 0.");
+        assert_eq!(rig.agent.session().messages().last().unwrap().text(), "The build passed.");
+    }
+
+    #[tokio::test]
+    async fn a_task_left_running_by_a_quit_is_reported_on_the_next_run() {
+        let folder = tempfile::tempdir().unwrap();
+        let path = folder.path().join("chat.jsonl");
+        {
+            let mut session = Session::create(&path, folder.path()).unwrap();
+            let info = crate::tasks::TaskInfo {
+                id: "gone1234".into(),
+                command: "npm run dev".into(),
+                description: String::new(),
+                kind: crate::tasks::Kind::Shell,
+                started_at: 1,
+                ended_at: None,
+                status: crate::tasks::Status::Running,
+                background: Some(crate::tasks::Why::Asked),
+                log: folder.path().join("gone1234.log"),
+                bytes: 0,
+                last_line: String::new(),
+            };
+            session.set_state(crate::tasks::TASKS_STATE, json!([info])).unwrap();
+        }
+        let session = Session::open(&path).unwrap();
+        let tasks = crate::tasks::Tasks::scratch();
+        let feature = crate::tasks::TasksFeature::new(&session, tasks.clone());
+        let notes = feature.notes(&session);
+        assert_eq!(notes.len(), 1);
+        assert!(notes[0].text.contains("gone1234") && notes[0].text.contains("stopped when WackCode quit"), "{}", notes[0].text);
+        assert!(feature.notes(&session).is_empty(), "told once");
+        assert_eq!(feature.state_to_save()[0].1, json!([]));
     }
 }

@@ -7,7 +7,8 @@ These are product guarantees, not implementation details. Don't weaken any of th
 No telemetry, account, backend, updater, or traffic on launch or on a timer. The app contacts only:
 
 - provider endpoints the user configured, when a chat or a settings test asks for it, and the title model's connection (Settings › Providers › Automatic titles) once when a chat starts, while titles are on;
-- the user's Git remote, only when they push.
+- the user's Git remote, only when they push;
+- the chat's own provider when a command the agent started in the background reports while the chat is idle (a wake): at most three in a row before the user writes again, never after they stopped the chat's last run.
 
 Never add a network origin silently. Call it out explicitly, and list it here.
 
@@ -17,7 +18,7 @@ Never add a network origin silently. Call it out explicitly, and list it here.
 - A key travels from `secrets.json` to the request that needs it and nowhere else: never into `state.json`, a session file, an environment variable, a command line, a log, an error message or the usage ledger.
 - No function returns a key. `Store::provider` (`wack-core`) reads it and hands back the provider that sends the requests.
 - A key is never a command-line argument. `wack connect` asks for it at a hidden prompt, or reads it from a pipe.
-- Processes the agent starts (the `bash` tool; later PTYs, Run and Build) have provider key variables removed from their environment (`SECRET_ENV` in `wack-tools/src/bash.rs`).
+- Processes the agent starts (`bash`, `watch`, Run and Build) have provider key variables removed from their environment (`SECRET_ENV` in `wack-agent/src/tasks/mod.rs`).
 - Error text shown to the user or written to disk is redacted first: the HTTP client removes the key from any error a server echoes back.
 - TLS trusts the system certificate store.
 

@@ -5,9 +5,11 @@
 //! and the send button, the one filled control (the stop button while the agent works). In Ultra
 //! Plan the card wears the prism's edge.
 //!
-//! Above the card, a row of status pills: what the run is doing and for how long, the todo list,
-//! the waiting messages. The list and the messages open above their pills and fold back into
-//! them (`ChatSession::todos_open`, `waiting_open`). An open question comes first: it stacks
+//! Above the card, a row of status pills: what the run is doing and for how long (with ⌘B to move
+//! the command it waits on to the background), the todo list, the commands running in the
+//! background, the waiting messages. The list, the commands and the messages open above their
+//! pills and fold back into them (`ChatSession::todos_open`, `tasks_open`, `waiting_open`). The
+//! commands' pill shows even between runs: a server keeps running after the turn. An open question comes first: it stacks
 //! above the pills, and while it is open the pills only report, with the list and the messages
 //! folded into them.
 //!
@@ -36,8 +38,8 @@ use wack_core::{AgentMode, Reasoning};
 
 use crate::{
     actions::{
-        ChooseEffort, ChooseModel, CloseMenu, Compact, OpenEffortMenu, OpenModelMenu, Send, SetAgentMode, SlideEffort, Stop, ToggleTodos,
-        ToggleWaiting, Unqueue,
+        ChooseEffort, ChooseModel, CloseMenu, Compact, MoveToBackground, OpenEffortMenu, OpenModelMenu, Send, SetAgentMode, ShowTask,
+        SlideEffort, Stop, StopTask, ToggleTasks, ToggleTodos, ToggleWaiting, Unqueue,
     },
     app::Menu,
     icon::Icon,
@@ -91,6 +93,23 @@ pub struct ComposerData {
     /// The todo list and the waiting messages are open above their pills.
     pub todos_open: bool,
     pub waiting_open: bool,
+    /// Commands the agent started in the background: running ones first, then a few that ended.
+    pub tasks: Vec<TaskLine>,
+    pub tasks_open: bool,
+    /// The agent is waiting on a command in the foreground, which ⌘B would move.
+    pub foreground: bool,
+}
+
+/// A background command as its list above the composer shows it.
+#[derive(Clone, Debug)]
+pub struct TaskLine {
+    pub id: SharedString,
+    pub label: SharedString,
+    /// "running · 2m10s", "exit 1 · 42s".
+    pub words: SharedString,
+    pub status: wack_core::tasks::Status,
+    /// The last line it printed.
+    pub last: SharedString,
 }
 
 #[derive(Clone, Debug)]
@@ -367,7 +386,32 @@ impl RenderOnce for Composer {
                 })
                 .tag("activity")
         });
-        if activity_pill.is_some() || todo_pill.is_some() || waiting_pill.is_some() {
+        // Moving the command the agent waits on to the background, beside what it is doing.
+        let background_pill = (data.working && data.foreground).then(|| {
+            status_pill("background-pill", false, true, &theme)
+                .tooltip(tip("Keep this command running in the background and let the agent carry on"))
+                .on_click(dispatch(MoveToBackground))
+                .child(div().typography(Type::Small).text_color(theme.text_soft).child("Background"))
+                .child(div().typography(Type::Small).text_color(theme.text_faint).child("⌘B"))
+                .tag("background-pill")
+        });
+        let running_tasks = data.tasks.iter().filter(|task| task.status.running()).count();
+        let tasks_pill = (running_tasks > 0).then(|| {
+            status_pill("tasks-pill", data.tasks_open && !asking, !asking, &theme)
+                .when(!asking, |pill| pill.on_click(dispatch(ToggleTasks)))
+                .child(Icon::Terminal.view(px(11.), theme.accent_text))
+                .child(div().typography(Type::Small).text_color(theme.text_soft).child(format!("{running_tasks} running")))
+                .when(!asking, |pill| pill.child(if data.tasks_open { Icon::ChevronDown } else { Icon::ChevronRight }.view(px(11.), theme.text_faint)))
+                .tag("tasks-pill")
+        });
+        if data.tasks_open && !asking && running_tasks > 0 {
+            let mut rows = div().id("tasks").flex_shrink(1.).min_h(px(36.)).max_h(px(WAITING_MAX_HEIGHT)).overflow_y_scroll().flex().flex_col().gap(px(6.));
+            for task in data.tasks {
+                rows = rows.child(div().flex_none().child(task_row(task, &theme)));
+            }
+            column = column.child(rows);
+        }
+        if activity_pill.is_some() || todo_pill.is_some() || waiting_pill.is_some() || tasks_pill.is_some() {
             column = column.child(
                 div()
                     .flex_none()
@@ -376,8 +420,10 @@ impl RenderOnce for Composer {
                     .items_center()
                     .gap(px(6.))
                     .children(activity_pill)
+                    .children(background_pill)
                     .children(todo_pill)
                     .child(div().flex_1())
+                    .children(tasks_pill)
                     .children(waiting_pill),
             );
         }
@@ -453,6 +499,66 @@ fn waiting_row(index: usize, waiting: Waiting, theme: &Theme) -> impl IntoElemen
                     .hover(|button| button.text_color(theme.text))
                     .on_click(dispatch(Unqueue { index }))
                     .child("Edit"),
+            )
+        })
+}
+
+/// A background command above the card: how it stands, its last line, its output and Stop.
+fn task_row(task: TaskLine, theme: &Theme) -> impl IntoElement {
+    let running = task.status.running();
+    let colour = crate::panes::tasks::status_colour(&task.status, theme);
+    let (show, stop) = (task.id.clone(), task.id.clone());
+    div()
+        .id(SharedString::from(format!("task-{}", task.id)))
+        .mx(px(4.))
+        .px(px(14.))
+        .py(px(6.))
+        .flex()
+        .items_center()
+        .gap(px(10.))
+        .rounded(px(14.))
+        .bg(theme.surface)
+        .border_1()
+        .border_color(theme.border)
+        .child(div().flex_none().size(px(6.)).rounded_full().bg(colour))
+        .child(
+            div()
+                .flex_1()
+                .min_w_0()
+                .flex()
+                .items_baseline()
+                .gap(px(8.))
+                .child(div().flex_none().max_w(gpui::relative(0.5)).truncate().typography(Type::Ui).text_color(theme.text_soft).child(task.label))
+                .child(div().flex_none().typography(Type::Small).text_color(if running { theme.text_faint } else { colour }).child(task.words))
+                .child(div().flex_1().min_w_0().truncate().typography(Type::Mono).text_color(theme.text_faint).child(task.last)),
+        )
+        .child(
+            div()
+                .id(SharedString::from(format!("show-task-{}", task.id)))
+                .flex_none()
+                .typography(Type::Small)
+                .text_color(theme.text_dim)
+                .cursor_pointer()
+                .hover(|button| button.text_color(theme.text))
+                .on_click(move |_, window, cx| window.dispatch_action(Box::new(ShowTask { id: show.clone() }), cx))
+                .child("Output"),
+        )
+        .when(running, |row| {
+            row.child(
+                div()
+                    .id(SharedString::from(format!("stop-task-{}", task.id)))
+                    .flex_none()
+                    .size(px(22.))
+                    .rounded_full()
+                    .flex()
+                    .items_center()
+                    .justify_center()
+                    .bg(Hsla { a: 0.14, ..theme.danger })
+                    .cursor_pointer()
+                    .hover(|button| button.bg(Hsla { a: 0.24, ..theme.danger }))
+                    .tooltip(tip("Stop it; the agent is told"))
+                    .on_click(move |_, window, cx| window.dispatch_action(Box::new(StopTask { id: stop.clone() }), cx))
+                    .child(Icon::Stop.view(px(9.), theme.danger)),
             )
         })
 }

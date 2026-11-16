@@ -341,8 +341,9 @@ pub enum HistoryEntry {
     Message { message: Message, usage: Option<Usage>, at: Option<u64>, command: Option<CommandUse> },
     /// The conversation before this point was summarised for the model.
     Compacted,
-    /// The app told the model something here (a mode contract). Not shown as a message.
-    Note { tag: String },
+    /// The app told the model something here (a mode contract, a background task's news). Not
+    /// shown as a message.
+    Note { tag: String, text: String, at: Option<u64> },
     /// A feature saved its state here.
     State { key: String, value: Value },
 }
@@ -355,7 +356,7 @@ pub fn history(path: &Path) -> Result<Vec<HistoryEntry>, String> {
     let mut entries = Vec::new();
     for line in String::from_utf8_lossy(&bytes[..complete]).lines() {
         match serde_json::from_str::<Entry>(line) {
-            Ok(Entry::Message { note: Some(tag), .. }) => entries.push(HistoryEntry::Note { tag }),
+            Ok(Entry::Message { note: Some(tag), message, at, .. }) => entries.push(HistoryEntry::Note { tag, text: message.text(), at }),
             Ok(Entry::Message { message, usage, at, note: None, command }) => entries.push(HistoryEntry::Message { message, usage, at, command }),
             Ok(Entry::Compaction { .. }) => entries.push(HistoryEntry::Compacted),
             Ok(Entry::State { key, value }) => entries.push(HistoryEntry::State { key, value }),
@@ -495,7 +496,7 @@ mod tests {
             .map(|entry| match entry {
                 HistoryEntry::Message { message, .. } => format!("message {}", message.text()),
                 HistoryEntry::Compacted => "compacted".to_string(),
-                HistoryEntry::Note { tag } => format!("note {tag}"),
+                HistoryEntry::Note { tag, .. } => format!("note {tag}"),
                 HistoryEntry::State { key, .. } => format!("state {key}"),
             })
             .collect();

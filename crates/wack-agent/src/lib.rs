@@ -18,6 +18,7 @@ pub mod prompt;
 pub mod registry;
 pub mod session;
 pub mod skills;
+pub mod tasks;
 pub mod todo;
 pub mod tool;
 
@@ -28,4 +29,5 @@ pub use commands::CommandUse;
 pub use plan::AgentMode;
 pub use registry::{Registry, TOOL_SEARCH};
 pub use session::{HistoryEntry, Note, Session, history};
+pub use tasks::{Tasks, SECRET_ENV};
 pub use tool::{Loading, Tool, ToolContext, ToolSpec, User};

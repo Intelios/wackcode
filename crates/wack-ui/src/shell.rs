@@ -44,7 +44,7 @@ use crate::{
         ClosePaneId, CloseSettings, CloseTab, Compact, DeleteChat, DiscardConnection, EditConnection, EqualizeSplit, FocusNext, FocusPrevious, MovePane, AddModelRow, RemoveModelRow, SaveCommandEditor, SaveConnection,
         NewChat, NewChatIn, NewTerminal, NewTerminalWith, NextTab, OpenEffortMenu, OpenModelMenu, OpenSettings,
         OpenSettingsSection, PinProject, PreviousTab, RemoveConnection, RemovePicture, ShowCommandOutput, ShowPicture, RemoveProject, ResetDockSize,
-        PickCommand, SelectChat, Send, Stop, StopCommand, ToggleChanges, ToggleProject, ToggleSidebar, ToggleTerminal, TriggerProjectCommand, Unqueue,
+        PickCommand, SelectChat, Send, Stop, StopCommand, MoveToBackground, ToggleTasks, ToggleTasksPane, StopTask, ShowTask, ToggleChanges, ToggleProject, ToggleSidebar, ToggleTerminal, TriggerProjectCommand, Unqueue,
         ToggleAutoTitles, ToggleTitleModels, ChooseTitleModel, RenameChat, RenameChatAt, CancelRename, ToggleModelReasoning,
         ToggleModelEffort, SwitchSkill, SwitchSkillFolder, RemoveSkillFolder, OpenSkill, CopySkill, ChooseSkillUse, NewSkill, SaveSkill,
         CloseSkill, AskDeleteSkill, ConfirmSkillDelete, CancelSkillDelete, AddSkillFolder, ImportSkills, SwitchSlashCommand, OpenSlashCommand,
@@ -1203,6 +1203,22 @@ impl Render for Shell {
                 }))
                 .on_action(cx.listener(|shell, _: &ToggleTodos, _, cx| shell.with_session(cx, |session, cx| session.toggle_todos(cx))))
                 .on_action(cx.listener(|shell, _: &ToggleWaiting, _, cx| shell.with_session(cx, |session, cx| session.toggle_waiting(cx))))
+                .on_action(cx.listener(|shell, _: &ToggleTasks, _, cx| shell.with_session(cx, |session, cx| session.toggle_tasks(cx))))
+                .on_action(cx.listener(|shell, _: &MoveToBackground, _, cx| {
+                    shell.with_session(cx, |session, cx| {
+                        session.background_command(cx);
+                    })
+                }))
+                .on_action(cx.listener(|shell, action: &StopTask, _, cx| {
+                    let id = action.id.to_string();
+                    shell.with_session(cx, |session, cx| session.stop_task(id, cx));
+                }))
+                .on_action(cx.listener(|shell, _: &ToggleTasksPane, window, cx| shell.toggle_pane(PaneKind::Tasks, window, cx)))
+                .on_action(cx.listener(|shell, action: &ShowTask, _, cx| {
+                    let id = action.id.to_string();
+                    shell.change_layout(cx, |layout| layout.open(PaneKind::Tasks));
+                    shell.with_session(cx, |session, cx| session.panes.select_task(&id, cx));
+                }))
                 .on_action(cx.listener(|shell, _: &SaveConnection, _, cx| shell.with_app(cx, |app, cx| app.save_connection(cx))))
                 .on_action(cx.listener(|shell, _: &OpenConnectionForm, window, cx| {
                     // The editor opens ready to type its name.
@@ -1562,6 +1578,9 @@ fn live_view(app: &AppState, cx: &App) -> (SidebarData, Screen, StripData) {
                         activity: None,
                         todos_open: false,
                         waiting_open: false,
+                        tasks: Vec::new(),
+                        tasks_open: false,
+                        foreground: false,
                     },
                     notice: app.notice.clone(),
                 }
@@ -1615,6 +1634,9 @@ fn live_view(app: &AppState, cx: &App) -> (SidebarData, Screen, StripData) {
                     activity: state.running().then(|| state.activity()).flatten(),
                     todos_open: state.todos_open,
                     waiting_open: state.waiting_open,
+                    tasks: task_lines(&state.tasks),
+                    tasks_open: state.tasks_open,
+                    foreground: state.tasks.has_foreground(),
                 },
             }
         }
@@ -1698,6 +1720,22 @@ pub fn effort_groups(choices: &[wack_core::Reasoning], current: wack_core::Reaso
             })
             .collect(),
     }]
+}
+
+/// The commands running in a chat's background, then the three that ended last.
+pub(crate) fn task_lines(tasks: &wack_core::tasks::Tasks) -> Vec<crate::composer::TaskLine> {
+    let now = wack_core::tasks::now_millis();
+    let list = tasks.list();
+    let line = |info: &wack_core::tasks::TaskInfo| crate::composer::TaskLine {
+        id: info.id.clone().into(),
+        label: info.label().to_string().into(),
+        words: crate::panes::tasks::status_words(info, now).into(),
+        status: info.status.clone(),
+        last: crate::panes::tasks::plain(&info.last_line).into(),
+    };
+    let mut lines: Vec<_> = list.iter().filter(|info| info.status.running()).map(line).collect();
+    lines.extend(list.iter().rev().filter(|info| !info.status.running()).take(3).map(line));
+    lines
 }
 
 fn first_line(text: &str) -> SharedString {

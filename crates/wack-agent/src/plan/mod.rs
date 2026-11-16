@@ -37,6 +37,7 @@ use crate::{
     ask::ASK_USER_QUESTION,
     session::{Note, Session},
     memory::MEMORY_TOOLS,
+    tasks::{STOP_TASK, WAIT_FOR_TASKS, WATCH},
     todo::TODO,
     tool::{Loading, Tool, ToolContext, ToolSpec},
 };
@@ -241,10 +242,13 @@ impl Feature for Plan {
         if self.unrestricted
             || [ASK_USER_QUESTION, PLAN_MODE_ENTER, PLAN_MODE_COMPLETE, TODO].contains(&name)
             || MEMORY_TOOLS.contains(&name)
+            // Stopping or waiting on a background command changes nothing in the project.
+            || [STOP_TASK, WAIT_FOR_TASKS].contains(&name)
         {
             return Verdict::Allow;
         }
-        if name == "bash" {
+        // A command in the background, or a watch, passes the same read-only test as any other.
+        if name == "bash" || name == WATCH {
             let command = input["command"].as_str().unwrap_or_default();
             return match policy::blocked_segment(command, Some(&self.cwd)) {
                 None => Verdict::Allow,
@@ -412,6 +416,14 @@ mod tests {
         assert_eq!(verdict(&plan, "bash", false, json!({ "command": "git status" })), None);
         let refused = verdict(&plan, "bash", false, json!({ "command": "ls && rm -rf x" })).unwrap();
         assert_eq!(refused, "Plan mode only allows read-only shell commands (inspection, status, tests).\nBlocked command: rm -rf x");
+
+        // Commands in the background pass the same test; stopping and waiting on them change
+        // nothing in the project.
+        assert_eq!(verdict(&plan, "bash", false, json!({ "command": "cargo test", "run_in_background": true })), None);
+        assert!(verdict(&plan, WATCH, false, json!({ "command": "touch x" })).is_some());
+        assert_eq!(verdict(&plan, WATCH, false, json!({ "command": "git log" })), None);
+        assert_eq!(verdict(&plan, STOP_TASK, false, json!({ "id": "x" })), None);
+        assert_eq!(verdict(&plan, WAIT_FOR_TASKS, false, json!({})), None);
 
         // Lifting the restrictions lifts only this check.
         let free = Plan::new(&session, Some(AgentMode::UltraPlan), true);

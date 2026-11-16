@@ -8,7 +8,7 @@ use wack_core::{CommandKind, CommandSession, CommandStatus};
 
 use crate::{
     composer::{ComposerData, Input},
-    panes::{ChangesPane, ChatPanes, Dock, Edge, Layout, PaneKind, PaneModel, RunPane, Target, TerminalPane},
+    panes::{ChangesPane, ChatPanes, Dock, Edge, Layout, PaneKind, PaneModel, RunPane, Target, TasksPane, TerminalPane},
     run_button::{CommandButtonData, CommandEditorData},
     settings::{ProviderForm, ProvidersData, Section, SettingsData},
     fixtures::{self, Selected},
@@ -946,6 +946,81 @@ pub fn all() -> Vec<Scene> {
                             }),
                         },
                         strip,
+                    )
+                    .with_panes(panes, false)
+                })
+                .into()
+            },
+        },
+        Scene {
+            name: "chat-tasks",
+            description: "Commands in the background: started, a failed suite waking the chat, the list open above the composer.",
+            size: WINDOW,
+            build: |_, cx| {
+                cx.new(|_| {
+                    Shell::showing_tabs(
+                        fixtures::sidebar(Selected::Finished),
+                        Screen::Chat {
+                            title: fixtures::FINISHED_TITLE.into(),
+                            project: fixtures::project(),
+                            body: Body::Items(fixtures::task_turns()),
+                            composer: fixtures::composer_tasks(true),
+                        },
+                        fixtures::strip(Some(fixtures::FINISHED_TITLE)),
+                    )
+                })
+                .into()
+            },
+        },
+        Scene {
+            name: "chat-tasks-foreground",
+            description: "The agent waiting on a slow command: Background ⌘B beside what it is doing, and the tasks pill.",
+            size: WINDOW,
+            build: |_, cx| {
+                cx.new(|_| {
+                    Shell::showing_tabs(
+                        fixtures::sidebar(Selected::Working),
+                        Screen::Chat {
+                            title: fixtures::WORKING_TITLE.into(),
+                            project: fixtures::project(),
+                            body: Body::Items(fixtures::working_turn()),
+                            composer: fixtures::composer_foreground(),
+                        },
+                        fixtures::strip(Some(fixtures::WORKING_TITLE)),
+                    )
+                })
+                .into()
+            },
+        },
+        Scene {
+            name: "tasks-pane",
+            description: "The Tasks pane in the bottom dock: a running server, a failed suite, a watch.",
+            size: size(px(1480.), px(940.)),
+            build: |_, cx| {
+                cx.new(|cx| {
+                    let mut layout = Layout::default();
+                    let tasks_id = layout.open(PaneKind::Tasks);
+                    layout.bottom_height = Some(320.);
+                    let mut panes = ChatPanes::new(layout, "/Users/you/Code/wackcode".into());
+                    let tasks = fixtures::tasks();
+                    panes.insert(
+                        tasks_id,
+                        PaneModel::Tasks(cx.new(|cx| {
+                            let mut pane = TasksPane::new(tasks.clone(), cx);
+                            pane.selected = Some("k3v9x2m1".into());
+                            pane
+                        })),
+                        cx,
+                    );
+                    Shell::showing_tabs(
+                        fixtures::sidebar(Selected::Finished),
+                        Screen::Chat {
+                            title: fixtures::FINISHED_TITLE.into(),
+                            project: fixtures::project(),
+                            body: Body::Items(fixtures::task_turns()),
+                            composer: fixtures::composer_tasks(false),
+                        },
+                        fixtures::strip(Some(fixtures::FINISHED_TITLE)),
                     )
                     .with_panes(panes, false)
                 })

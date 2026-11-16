@@ -16,17 +16,19 @@ pub mod grid;
 pub mod layout;
 pub mod run;
 pub mod solve;
+pub mod tasks;
 pub mod terminal;
 
 use std::{collections::HashMap, path::PathBuf};
 
 use gpui::{App, AppContext, Entity, FocusHandle, SharedString, Subscription};
-use wack_core::{CommandKind, CommandSession, CommandStatus, Runner};
+use wack_core::{CommandKind, CommandSession, CommandStatus, Runner, tasks::Tasks};
 
 pub use changes::ChangesPane;
 pub use layout::{Axis, Dock, Edge, Layout, Node, Pane, PaneId, PaneKind, Stack, Target};
 pub use run::RunPane;
 pub use solve::{Rect, Solution, solve};
+pub use tasks::TasksPane;
 pub use terminal::TerminalPane;
 
 #[derive(Clone)]
@@ -35,6 +37,7 @@ pub enum PaneModel {
     Terminal(Entity<TerminalPane>),
     Build(Entity<RunPane>),
     Run(Entity<RunPane>),
+    Tasks(Entity<TasksPane>),
 }
 
 impl PaneModel {
@@ -43,6 +46,7 @@ impl PaneModel {
             PaneModel::Changes(pane) => pane.read(cx).focus.clone(),
             PaneModel::Terminal(pane) => pane.read(cx).focus.clone(),
             PaneModel::Build(pane) | PaneModel::Run(pane) => pane.read(cx).focus.clone(),
+            PaneModel::Tasks(pane) => pane.read(cx).focus.clone(),
         }
     }
 }
@@ -53,6 +57,8 @@ pub struct ChatPanes {
     runner: Runner,
     build_command: Option<String>,
     run_command: Option<String>,
+    /// The chat's background commands, for its Tasks pane.
+    tasks: Option<Tasks>,
     models: HashMap<PaneId, (PaneModel, Subscription)>,
 }
 
@@ -64,7 +70,21 @@ impl ChatPanes {
             runner: Runner::new(),
             build_command: None,
             run_command: None,
+            tasks: None,
             models: HashMap::new(),
+        }
+    }
+
+    pub fn set_tasks(&mut self, tasks: Tasks) {
+        self.tasks = Some(tasks);
+    }
+
+    /// Shows a task's output in the Tasks pane, if one has been made.
+    pub fn select_task(&self, id: &str, cx: &mut App) {
+        for (model, _) in self.models.values() {
+            if let PaneModel::Tasks(pane) = model {
+                pane.update(cx, |pane, cx| pane.select(id.to_string(), cx));
+            }
         }
     }
 
@@ -120,6 +140,10 @@ impl ChatPanes {
                     let runner = self.runner.clone();
                     PaneModel::Run(cx.new(|cx| RunPane::new(CommandKind::Run, folder, &runner, configured, cx)))
                 }
+                PaneKind::Tasks => {
+                    let tasks = self.tasks.clone().unwrap_or_else(Tasks::scratch);
+                    PaneModel::Tasks(cx.new(|cx| TasksPane::new(tasks, cx)))
+                }
             };
             let subscription = match &model {
                 PaneModel::Changes(entity) => {
@@ -131,6 +155,10 @@ impl ChatPanes {
                     cx.observe(entity, move |owner, _, cx| on_change(owner, cx))
                 }
                 PaneModel::Build(entity) | PaneModel::Run(entity) => {
+                    let on_change = on_change.clone();
+                    cx.observe(entity, move |owner, _, cx| on_change(owner, cx))
+                }
+                PaneModel::Tasks(entity) => {
                     let on_change = on_change.clone();
                     cx.observe(entity, move |owner, _, cx| on_change(owner, cx))
                 }
@@ -176,6 +204,7 @@ impl ChatPanes {
             PaneModel::Changes(entity) => cx.observe(entity, |_, _, cx| cx.notify()),
             PaneModel::Terminal(entity) => cx.observe(entity, |_, _, cx| cx.notify()),
             PaneModel::Build(entity) | PaneModel::Run(entity) => cx.observe(entity, |_, _, cx| cx.notify()),
+            PaneModel::Tasks(entity) => cx.observe(entity, |_, _, cx| cx.notify()),
         };
         self.models.insert(id, (model, subscription));
     }
@@ -206,6 +235,7 @@ impl ChatPanes {
             (PaneKind::Changes, _) => "Changes".into(),
             (PaneKind::Build, _) => "Build".into(),
             (PaneKind::Run, _) => "Run".into(),
+            (PaneKind::Tasks, _) => "Tasks".into(),
         }
     }
 
@@ -213,6 +243,7 @@ impl ChatPanes {
     pub fn badge(&self, pane: Pane, cx: &App) -> Option<SharedString> {
         match self.model(pane.id) {
             Some(PaneModel::Changes(changes)) => changes.read(cx).count().filter(|count| *count > 0).map(|count| count.to_string().into()),
+            Some(PaneModel::Tasks(tasks)) => Some(tasks.read(cx).running()).filter(|count| *count > 0).map(|count| count.to_string().into()),
             _ => None,
         }
     }

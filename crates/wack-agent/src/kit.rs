@@ -17,6 +17,7 @@ use crate::{
     plan::{AgentMode, Plan},
     session::Session,
     skills::{self, Catalog},
+    tasks::{Tasks, TasksFeature},
     todo::Todo,
     tool::Tool,
 };
@@ -28,6 +29,8 @@ pub struct Kit {
     memory: Option<(Memory, Option<String>)>,
     /// The skills index as it stood when the run started.
     skills: Option<String>,
+    /// The chat's shell tasks, which outlive the run, and what the session said of them.
+    tasks: Option<(Tasks, TasksFeature)>,
 }
 
 impl Kit {
@@ -40,12 +43,20 @@ impl Kit {
             let index = memory.index();
             (memory, index)
         });
-        Self { plan: Plan::new(session, mode, unrestricted), todo: Todo::new(session), memory, skills: None }
+        Self { plan: Plan::new(session, mode, unrestricted), todo: Todo::new(session), memory, skills: None, tasks: None }
     }
 
     /// Lists `catalog`'s skills in the system prompt, for the model to load when a task matches.
     pub fn with_skills(mut self, catalog: &Catalog) -> Self {
         self.skills = skills::index(catalog);
+        self
+    }
+
+    /// Runs shell commands as tasks of the chat's registry, which outlives the run, and tells the
+    /// model their news. Without it a run's commands go with the run.
+    pub fn with_tasks(mut self, session: &Session, tasks: Tasks) -> Self {
+        let feature = TasksFeature::new(session, tasks.clone());
+        self.tasks = Some((tasks, feature));
         self
     }
 
@@ -62,7 +73,11 @@ impl Kit {
     }
 
     fn features(&self) -> Vec<Box<dyn Feature>> {
-        vec![Box::new(self.plan.clone()), Box::new(self.todo.clone())]
+        let mut features: Vec<Box<dyn Feature>> = vec![Box::new(self.plan.clone()), Box::new(self.todo.clone())];
+        if let Some((_, feature)) = &self.tasks {
+            features.push(Box::new(feature.clone()));
+        }
+        features
     }
 
     /// Hooks the features into an agent whose registry holds [`Kit::tools`].
@@ -72,6 +87,9 @@ impl Kit {
         }
         if let Some(index) = &self.skills {
             agent = agent.with_system_part(index.clone());
+        }
+        if let Some((tasks, _)) = &self.tasks {
+            agent = agent.with_tasks(tasks.clone());
         }
         self.features().into_iter().fold(agent, Agent::with_feature)
     }

@@ -117,6 +117,15 @@ impl Printer {
                 }
             }
             Event::State { .. } => {}
+            Event::Noted { tag, text } if tag.starts_with(wack_agent::tasks::NOTE_PREFIX) => {
+                Self::break_line(&mut state);
+                let mut lines = text.lines();
+                println!("{}", paint("36", &format!("◆ {}", lines.next().unwrap_or_default())));
+                for line in lines.filter(|line| !line.starts_with("```")).take(RESULT_LINES) {
+                    println!("  {}", dim(line));
+                }
+            }
+            Event::Noted { .. } => {}
             Event::Notice(text) => {
                 Self::break_line(&mut state);
                 println!("{}", paint("33", &text));
@@ -168,7 +177,11 @@ fn todo_line(list: &TodoList) -> String {
 fn summary(name: &str, input: &Value) -> String {
     let field = |key: &str| input[key].as_str().map(str::to_string);
     let text = match name {
-        "bash" => field("command"),
+        "bash" | "watch" => {
+            let background = if input["run_in_background"].as_bool() == Some(true) { " (in the background)" } else { "" };
+            field("command").map(|command| format!("{command}{background}"))
+        }
+        "stop_task" => field("id"),
         "read" | "write" | "edit" | "ls" => field("path"),
         "grep" | "find" => field("pattern"),
         _ => None,

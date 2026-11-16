@@ -51,6 +51,14 @@ pub mod todo {
     pub use wack_agent::todo::{Status, TODO, TODO_STATE, Task, TodoList, clean};
 }
 
+/// Shell commands the agent runs, which outlive its runs: a chat owns one registry.
+pub mod tasks {
+    pub use wack_agent::tasks::{
+        Kind, NOTE_PREFIX, STOP_TASK, now_millis, Signal, Status, StoppedBy, TASKS_STATE, Task, TaskInfo, Tasks, WAIT_FOR_TASKS, WATCH, Why, elapsed,
+        first_line,
+    };
+}
+
 /// The provider-neutral conversation model, for code that reads messages.
 pub mod llm {
     pub use wack_llm::Block;

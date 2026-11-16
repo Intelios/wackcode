@@ -22,6 +22,12 @@ actions!(
         Send,
         /// Stop the run in the current chat.
         Stop,
+        /// Move the command the agent is waiting on to the background (⌘B).
+        MoveToBackground,
+        /// Open or fold the list of background commands above the composer.
+        ToggleTasks,
+        /// Show the Tasks pane.
+        ToggleTasksPane,
         /// Summarise the current chat's older messages now.
         Compact,
         /// Step back: closes a menu or Settings, or stops the run.
@@ -442,6 +448,20 @@ pub struct PickCommand {
     pub index: usize,
 }
 
+/// Stops a background command for the user.
+#[derive(Clone, Debug, PartialEq, Action)]
+#[action(namespace = wackcode, no_json)]
+pub struct StopTask {
+    pub id: gpui::SharedString,
+}
+
+/// Shows a background command's output in the Tasks pane.
+#[derive(Clone, Debug, PartialEq, Action)]
+#[action(namespace = wackcode, no_json)]
+pub struct ShowTask {
+    pub id: gpui::SharedString,
+}
+
 /// Takes a queued message back into the composer.
 #[derive(Clone, Debug, PartialEq, Action)]
 #[action(namespace = wackcode, no_json)]
@@ -584,6 +604,7 @@ pub fn init(cx: &mut App) {
         KeyBinding::new("shift-tab", FocusPrevious, Some(FORM_CONTEXT)),
         KeyBinding::new("ctrl-cmd-s", ToggleSidebar, Some(CONTEXT)),
         KeyBinding::new("cmd-shift-g", ToggleChanges, Some(CONTEXT)),
+        KeyBinding::new("cmd-b", MoveToBackground, Some(CONTEXT)),
         KeyBinding::new("ctrl-`", ToggleTerminal, Some(CONTEXT)),
         // macOS may report ⌃⇧` as either.
         KeyBinding::new("ctrl-shift-`", NewTerminal, Some(CONTEXT)),

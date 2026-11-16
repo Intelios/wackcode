@@ -774,6 +774,11 @@ impl Store {
         self.sessions_folder().join(&chat.session)
     }
 
+    /// Where a chat's background commands write their output (`v3/tasks/<chat>/`).
+    pub fn tasks_folder(&self, chat: &Chat) -> PathBuf {
+        self.folder.join("tasks").join(&chat.id)
+    }
+
     /// Marks a chat as just used, so it moves to the top of its project.
     pub fn touch_chat(&mut self, id: &str) -> Result<(), String> {
         if let Some(chat) = self.state.chats.iter_mut().find(|chat| chat.id == id) {
@@ -939,6 +944,7 @@ impl Store {
         };
         self.state.chats.retain(|listed| listed.id != id);
         self.save()?;
+        let _ = fs::remove_dir_all(self.tasks_folder(&chat));
         match fs::remove_file(self.session_path(&chat)) {
             Err(error) if error.kind() != std::io::ErrorKind::NotFound => {
                 Err(format!("Could not delete the chat's file: {error}"))

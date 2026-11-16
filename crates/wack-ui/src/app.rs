@@ -106,6 +106,8 @@ pub struct AppState {
     /// Where closing Settings goes back to.
     before_settings: Selection,
     sessions: HashMap<String, Entity<ChatSession>>,
+    /// Each open chat's shell tasks, so quitting can stop them without a window context.
+    chat_tasks: HashMap<String, wack_core::tasks::Tasks>,
     session_subscriptions: HashMap<String, Vec<Subscription>>,
     /// Projects whose chats the sidebar lists.
     open_projects: HashSet<String>,
@@ -202,6 +204,9 @@ impl Drop for AppState {
     }
 }
 
+/// Times task news may wake a chat before the user writes again.
+const MAX_WAKES: u32 = 3;
+
 /// How long a layout must stay still before it is saved.
 const LAYOUT_SAVE_DELAY: Duration = Duration::from_millis(400);
 
@@ -267,6 +272,7 @@ impl AppState {
             before_settings: selection.clone(),
             selection: Selection::Welcome,
             sessions: HashMap::new(),
+            chat_tasks: HashMap::new(),
             session_subscriptions: HashMap::new(),
             open_projects: HashSet::new(),
             branches: HashMap::new(),
@@ -695,6 +701,10 @@ impl AppState {
     }
 
     fn drop_session(&mut self, chat: &str) {
+        // Its tasks are asked to stop first; dropping the chat would only kill them.
+        if let Some(tasks) = self.chat_tasks.remove(chat) {
+            std::thread::spawn(move || tasks.terminate_all());
+        }
         self.titling.remove(chat);
         self.title_swaps.remove(chat);
         if self.renaming.as_ref().is_some_and(|renaming| renaming.chat == chat) {
@@ -1425,6 +1435,13 @@ impl AppState {
             return false;
         };
         let session = self.ensure_session(&chat, cx);
+        // A message from the user lets task news wake the chat again.
+        if matches!(job, Job::Prompt(_) | Job::Command { .. }) {
+            session.update(cx, |session, _| {
+                session.wakes = 0;
+                session.wake_paused = false;
+            });
+        }
         match self.store.run_setup(&chat) {
             Ok(setup) => {
                 session.update(cx, |session, cx| session.start(setup, job, cx));
@@ -1436,6 +1453,37 @@ impl AppState {
                 session.update(cx, |session, cx| session.show_failure(message, cx));
                 false
             }
+        }
+    }
+
+    /// A background task in an idle chat has news: the chat wakes so the model can act on it,
+    /// unless something is waiting on the user (a plan to review, a queued message), the user
+    /// stopped the last run, or it has already woken [`MAX_WAKES`] times since they last wrote.
+    /// The news is never lost: it waits for the next run, and the tasks pill shows it.
+    fn wake(&mut self, chat: &str, cx: &mut Context<Self>) {
+        let Some(session) = self.sessions.get(chat).cloned() else {
+            return;
+        };
+        let may = {
+            let session = session.read(cx);
+            !session.running()
+                && session.tasks.has_news()
+                && session.awaiting_plan().is_none()
+                && session.queue.is_empty()
+                && session.asking.is_none()
+                && !session.wake_paused
+                && session.wakes < MAX_WAKES
+        };
+        if may {
+            session.update(cx, |session, _| session.wakes += 1);
+            self.run(chat, Job::Wake, cx);
+        }
+    }
+
+    /// Moves the command the agent is waiting on in the current chat to the background (⌘B).
+    pub fn background_command(&mut self, chat: &str, cx: &mut Context<Self>) {
+        if let Some(session) = self.sessions.get(chat) {
+            session.update(cx, |session, cx| session.background_command(cx));
         }
     }
 
@@ -1465,10 +1513,18 @@ impl AppState {
         if !unsent.is_empty() {
             restore(&session, unsent, cx);
         }
-        if let Some(next) = next
-            && !self.send_queued(chat, &next, cx)
-        {
-            restore(&session, vec![next], cx);
+        // The user stopped it, or it failed: no waking until they write again.
+        if !matches!(result, Ok(Outcome::Done | Outcome::CutOff | Outcome::Refused)) {
+            session.update(cx, |session, _| session.wake_paused = true);
+        }
+        match next {
+            Some(next) => {
+                if !self.send_queued(chat, &next, cx) {
+                    restore(&session, vec![next], cx);
+                }
+            }
+            // News that came while it ran, after its last request, wakes it now.
+            None => self.wake(chat, cx),
         }
         cx.notify();
     }
@@ -1507,8 +1563,10 @@ impl AppState {
         let path = self.store.session_path(chat);
         let layout = Layout::from_saved(chat.layout.as_ref());
         let runner = self.runs.clone();
-        let session = cx.new(|cx| ChatSession::load(&chat.id, cwd, &path, layout, runner, commands, cx));
+        let tasks_folder = self.store.tasks_folder(chat);
+        let session = cx.new(|cx| ChatSession::load(&chat.id, cwd, &path, layout, runner, commands, tasks_folder, cx));
         let id = chat.id.clone();
+        self.chat_tasks.insert(id.clone(), session.read(cx).tasks.clone());
         let composer = session.read(cx).composer.clone();
         let mode = chat.mode;
         composer.update(cx, |composer, cx| composer.set_placeholder(placeholder(mode, false), cx));
@@ -1520,6 +1578,7 @@ impl AppState {
                     ChatEvent::Finished(result) => app.finished(&id, result, cx),
                     ChatEvent::LayoutChanged => app.layout_changed(&id, cx),
                     ChatEvent::ModeChanged(mode) => app.set_chat_mode(&id, *mode, cx),
+                    ChatEvent::TasksNews => app.wake(&id, cx),
                 }
             }),
             cx.subscribe(&composer, {
@@ -1984,9 +2043,15 @@ impl AppState {
         cx.notify();
     }
 
-    /// Terminates every active Build/Run process group cleanly when WackCode quits.
+    /// Terminates every active Build/Run process group, and every chat's background commands,
+    /// cleanly when WackCode quits.
     pub fn shutdown_runs(&self) {
+        let tasks: Vec<_> = self.chat_tasks.values().cloned().collect();
+        let stopping: Vec<_> = tasks.into_iter().map(|tasks| std::thread::spawn(move || tasks.terminate_all())).collect();
         self.runs.terminate_all();
+        for thread in stopping {
+            let _ = thread.join();
+        }
     }
 
     fn open_command_pane(&mut self, kind: CommandKind, cx: &mut Context<Self>) {

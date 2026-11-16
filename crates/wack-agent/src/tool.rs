@@ -9,6 +9,7 @@ use tokio_util::sync::CancellationToken;
 use crate::{
     agent::{Control, Event, EventSink},
     ask::{Answer, Question},
+    tasks::Tasks,
 };
 
 /// Whether the model sees a tool from the first request or has to search for it.
@@ -47,12 +48,14 @@ pub struct ToolContext<'a> {
     pub cancel: CancellationToken,
     /// The way to the user, for a tool that has to ask before it can finish.
     pub user: User<'a>,
+    /// The chat's shell tasks, which outlive the run.
+    pub tasks: Tasks,
 }
 
 impl ToolContext<'static> {
     /// A context with nobody on the other end, for running a tool outside a run.
     pub fn detached(cwd: impl Into<PathBuf>) -> Self {
-        Self { cwd: cwd.into(), cancel: CancellationToken::new(), user: User::nobody() }
+        Self { cwd: cwd.into(), cancel: CancellationToken::new(), user: User::nobody(), tasks: Tasks::scratch() }
     }
 }
 

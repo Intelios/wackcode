@@ -40,6 +40,8 @@ pub enum Item {
     /// Facts about a finished turn: time, tokens.
     Footer(SharedString),
     Notice { text: SharedString, failed: bool },
+    /// A background task reported while the chat was idle: one log row on its own.
+    News(WorkRow),
     Compacted,
     /// A proposed plan: the transcript's hero card.
     Plan(crate::plan_card::PlanCard),
@@ -92,6 +94,8 @@ pub enum Target {
 pub enum Meta {
     None,
     Note(SharedString),
+    /// Something that ended well, in the success colour: a background build that passed.
+    Success(SharedString),
     Lines { added: u32, removed: u32 },
     Failed(SharedString),
     Running,
@@ -279,6 +283,7 @@ pub fn item(item: &Item, previous: Option<&Item>, theme: &Theme, handlers: &Hand
             .text_color(if *failed { theme.danger } else { theme.text_dim })
             .child(text.clone())
             .into_any_element(),
+        Item::News(row) => div().pl(px(RAIL + ROW_GAP + 1.)).child(log_row(row, theme, handlers)).into_any_element(),
         Item::Compacted => div()
             .flex()
             .items_center()
@@ -374,7 +379,8 @@ fn row_icon(verb: &str, theme: &Theme) -> impl IntoElement {
         "Searched" | "Found" | "Looked for" => Some(Icon::Search),
         "Listed" => Some(Icon::Folder),
         "Edited" | "Wrote" => Some(Icon::Pencil),
-        "Ran" => Some(Icon::Terminal),
+        "Ran" | "Watching" | "Watch" | "Waited" | "Finished" | "Failed" | "Ended" | "Lost" => Some(Icon::Terminal),
+        "Stopped" => Some(Icon::Stop),
         "Thought" => Some(Icon::Brain),
         "Asked" => Some(Icon::Question),
         "Used skill" => Some(Icon::Book),
@@ -417,6 +423,7 @@ fn log_row(row: &WorkRow, theme: &Theme, handlers: &Handlers) -> AnyElement {
     let meta = match &row.meta {
         Meta::None => div(),
         Meta::Note(text) => div().text_color(theme.text_faint).child(text.clone()),
+        Meta::Success(text) => div().text_color(theme.success).child(text.clone()),
         Meta::Failed(text) => div().text_color(theme.danger).child(text.clone()),
         Meta::Running => div().text_color(theme.accent_text).child("running"),
         Meta::Lines { added, removed } => div()

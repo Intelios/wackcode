@@ -15,6 +15,9 @@
 //!   to the model straight away as steering (⌘↩); `steering` holds those not yet delivered.
 //!   Neither is ever silently dropped: when a run ends without sending them, the app puts them
 //!   back in the composer.
+//! - The chat's shell tasks (`tasks`) live here, not in a run, so a server the agent started
+//!   keeps running between turns; dropping the chat stops them. When one has news for the model
+//!   the chat tells the app ([`ChatEvent::TasksNews`]), which decides whether to wake it.
 //! - A question the agent asks (`asking`) is answered exactly once: answering, cancelling,
 //!   stopping or the run ending all clear it. Its drafts live here, so switching chats keeps them.
 
@@ -30,6 +33,7 @@ use gpui::{AppContext, Context, Entity, EventEmitter, FocusHandle, Focusable, Li
 use gpui_tokio::Tokio;
 use wack_core::{
     Control, Event, HistoryEntry, Job, Outcome, RunEvent, RunSetup, Runner,
+    tasks::{Signal, Tasks},
     ask::{Answer, Question},
 };
 
@@ -55,6 +59,8 @@ pub enum ChatEvent {
     /// The mode in force changed without the user: the agent entered Plan, or a plan was
     /// discarded.
     ModeChanged(wack_core::AgentMode),
+    /// A background task has news for the model.
+    TasksNews,
 }
 
 pub struct ChatSession {
@@ -94,6 +100,15 @@ pub struct ChatSession {
     /// the pills show.
     pub todos_open: bool,
     pub waiting_open: bool,
+    /// Commands the agent started, which outlive its runs.
+    pub tasks: Tasks,
+    /// The list of them is open above its status pill.
+    pub tasks_open: bool,
+    /// Runs started for task news since the user last sent a message, and whether waking is
+    /// paused because the user stopped the last run.
+    pub wakes: u32,
+    pub wake_paused: bool,
+    _tasks_watch: Task<()>,
 }
 
 /// A question the agent is waiting on, and the answers so far.
@@ -140,6 +155,8 @@ pub fn now_millis() -> u64 {
 
 impl ChatSession {
     /// A chat as saved in `session_path`, or an empty one when it has never run.
+    // Each is a separate thing the app owns and hands over once; a struct would only rename them.
+    #[allow(clippy::too_many_arguments)]
     pub fn load(
         id: &str,
         cwd: PathBuf,
@@ -147,6 +164,7 @@ impl ChatSession {
         layout: Layout,
         runner: Runner,
         commands: (Option<String>, Option<String>),
+        tasks_folder: PathBuf,
         cx: &mut Context<Self>,
     ) -> Self {
         let mut context_tokens = None;
@@ -169,6 +187,9 @@ impl ChatSession {
         panes.set_runner(runner);
         panes.set_commands(commands.0, commands.1, cx);
         let composer = cx.new(|cx| TextField::new(Type::Body, FOLLOW_UP_PLACEHOLDER, cx).multiline(12));
+        let tasks = Tasks::new(tasks_folder);
+        let tasks_watch = watch_tasks(&tasks, cx);
+        panes.set_tasks(tasks.clone());
         let mut chat = Self {
             id: id.to_string(),
             cwd,
@@ -193,6 +214,11 @@ impl ChatSession {
             todo_show_done: false,
             todos_open: false,
             waiting_open: false,
+            tasks,
+            tasks_open: false,
+            wakes: 0,
+            wake_paused: false,
+            _tasks_watch: tasks_watch,
         };
         chat.refresh_from(0);
         chat.panes.sync(cx, |_, cx| cx.notify());
@@ -249,6 +275,7 @@ impl ChatSession {
             Job::Prompt(text) => self.conversation.send(text, now_millis()),
             Job::Command { text, command } => self.conversation.send_command(text, command.clone(), now_millis()),
             Job::Compact(_) => self.conversation.begin_compaction(),
+            Job::Wake => self.conversation.wake(now_millis()),
         }
 
         // What was done before this run folds away.
@@ -264,6 +291,8 @@ impl ChatSession {
         let sink: Arc<dyn Fn(RunEvent) + Send + Sync> = Arc::new(move |event| {
             let _ = sender.unbounded_send(event);
         });
+        let mut setup = setup;
+        setup.tasks = Some(self.tasks.clone());
         let run = Tokio::spawn(cx, wack_core::run(setup, job, control.clone(), sink));
         let events = cx.spawn(async move |this, cx| {
             while let Some(first) = receiver.next().await {
@@ -647,6 +676,25 @@ impl ChatSession {
         })
     }
 
+    /// Moves the command the agent is waiting on to the background (⌘B). False when none is.
+    pub fn background_command(&mut self, cx: &mut Context<Self>) -> bool {
+        let moved = self.tasks.background_foreground();
+        cx.notify();
+        moved
+    }
+
+    /// Stops a background task for the user; the agent is told.
+    pub fn stop_task(&mut self, id: String, cx: &mut Context<Self>) {
+        let tasks = self.tasks.clone();
+        Tokio::spawn(cx, async move { tasks.stop(&id, wack_core::tasks::StoppedBy::User).await }).detach();
+        cx.notify();
+    }
+
+    pub fn toggle_tasks(&mut self, cx: &mut Context<Self>) {
+        self.tasks_open = !self.tasks_open;
+        cx.notify();
+    }
+
     pub fn todos(&self) -> &wack_core::todo::TodoList {
         &self.conversation.todos
     }
@@ -665,6 +713,7 @@ impl ChatSession {
         for (index, span) in self.spans.iter().enumerate() {
             let holds = self.items[start..start + span].iter().any(|item| match item {
                 Item::Work(work) => work.key.as_ref() == key || work.rows.iter().any(|row| row.key.as_ref() == key),
+                Item::News(row) => row.key.as_ref() == key,
                 _ => false,
             });
             if holds {
@@ -718,6 +767,43 @@ impl ChatSession {
 
 /// How full the context was after the last reply in a saved chat. Unknown after a compaction,
 /// until the next reply.
+/// Redraws the chat as its tasks change, and tells the app when one has news. While any runs, it
+/// also redraws each second, so their times keep counting.
+fn watch_tasks(tasks: &Tasks, cx: &mut Context<ChatSession>) -> Task<()> {
+    let (sender, mut receiver) = mpsc::unbounded::<Signal>();
+    tasks.observe(move |signal| {
+        let _ = sender.unbounded_send(signal);
+    });
+    cx.spawn(async move |this, cx| {
+        loop {
+            let first = futures::select_biased! {
+                signal = receiver.next() => match signal {
+                    Some(signal) => Some(signal),
+                    None => return,
+                },
+                () = futures::FutureExt::fuse(cx.background_executor().timer(Duration::from_secs(1))) => None,
+            };
+            let mut news = first == Some(Signal::News);
+            while let Ok(signal) = receiver.try_recv() {
+                news |= signal == Signal::News;
+            }
+            let kept = this.update(cx, |chat, cx| {
+                if first.is_some() || !chat.tasks.running().is_empty() {
+                    cx.notify();
+                }
+                if news {
+                    cx.emit(ChatEvent::TasksNews);
+                }
+            });
+            if kept.is_err() {
+                return;
+            }
+            // Output can arrive in a flood: redraw at most ten times a second.
+            cx.background_executor().timer(Duration::from_millis(100)).await;
+        }
+    })
+}
+
 fn last_context(history: &[HistoryEntry]) -> Option<u64> {
     for entry in history.iter().rev() {
         match entry {

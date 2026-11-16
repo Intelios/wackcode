@@ -6,7 +6,7 @@ use std::{collections::HashSet, path::Path, rc::Rc};
 use serde_json::Value;
 
 use crate::{
-    conversation::{Conversation, Entry, Step, ToolStep, Turn, TurnEnd},
+    conversation::{Conversation, Entry, News, Step, ToolStep, Turn, TurnEnd},
     markdown,
     transcript::{CommandShown, Detail, Diff, DiffLine, Item, LineKind, Meta, Target, Work, WorkRow},
 };
@@ -80,6 +80,11 @@ pub fn entry_items(
             }
             Entry::Compacted => items.push(Item::Compacted),
             Entry::Notice { text, failed } => items.push(Item::Notice { text: text.clone().into(), failed: *failed }),
+            Entry::News(news) => {
+                let mut row = news_row(news, &format!("news-{index}"));
+                row.open = row.detail.is_some() && open.contains(row.key.as_ref());
+                items.push(Item::News(row));
+            }
             Entry::Turn(turn) => {
                 let key = format!("turn-{index}");
                 if !turn.steps.is_empty() || turn.live {
@@ -165,7 +170,7 @@ pub fn tally(rows: &[WorkRow]) -> String {
         (&["Read"], "read", "reads"),
         (&["Searched", "Found", "Listed", "Looked for"], "search", "searches"),
         (&["Edited", "Wrote"], "edit", "edits"),
-        (&["Ran"], "command", "commands"),
+        (&["Ran", "Watching"], "command", "commands"),
         (&["Asked"], "question", "questions"),
         (&["Saved memory", "Updated memory", "Recalled memory", "Forgot memory"], "memory note", "memory notes"),
     ];
@@ -199,6 +204,8 @@ pub fn activity(rows: &[WorkRow]) -> Option<String> {
         "Updated memory" => "Updating memory",
         "Recalled memory" => "Recalling memory",
         "Forgot memory" => "Forgetting memory",
+        "Waited" => "Waiting",
+        "Stopped" => "Stopping",
         other => other,
     };
     let target = match &row.target {
@@ -271,9 +278,74 @@ fn step_row(step: &Step, key: &str, cwd: &Path, live: bool, open: &HashSet<Strin
             open: false,
         },
         Step::Tool(tool) => tool_row(tool, cwd, live),
+        Step::Task(news) => news_row(news, key),
     };
     row.open = row.detail.is_some() && open.contains(row.key.as_ref());
     row
+}
+
+/// How a `bash` result says the command carried on in the background, if it did.
+fn background_note(result: &str) -> Option<&'static str> {
+    if result.starts_with("Started in the background (ID:") {
+        Some("in background")
+    } else if result.starts_with("Command did not complete within its") {
+        Some("timed out · in background")
+    } else if result.starts_with("The user moved this command to the background") {
+        Some("moved to background")
+    } else {
+        None
+    }
+}
+
+/// A background task's news as a row: what happened to which command, with the lines it quoted.
+pub fn news_row(news: &News, key: &str) -> WorkRow {
+    let first = first_line(&news.text);
+    // The command is quoted in backticks; a watch's news names its description in brackets.
+    let subject = first.split('`').nth(1).map(str::to_string);
+    let watched = || first.split_once('(').and_then(|(_, rest)| rest.split_once(')')).map(|(name, _)| name.to_string());
+    let after = first.rsplit_once(" after ").map(|(_, rest)| rest.trim_end_matches('.').split(['.', ' ']).next().unwrap_or("").to_string());
+    let lines: Vec<&str> = {
+        let mut inside = false;
+        news.text
+            .lines()
+            .filter(|line| {
+                if line.starts_with("```") {
+                    inside = !inside;
+                    return false;
+                }
+                inside
+            })
+            .collect()
+    };
+    let detail = (!lines.is_empty()).then(|| Detail::Output(tail(&lines.join("\n"), DETAIL_LINES).into()));
+    let with_time = |label: String| match &after {
+        Some(after) if !after.is_empty() => format!("{label} · {after}"),
+        _ => label,
+    };
+    let (verb, target, meta) = match news.what() {
+        "lines" => ("Watch", Target::Words(watched().unwrap_or_default().into()), Meta::Note(plural(lines.len(), "line", "lines").into())),
+        "lost" => ("Lost", Target::Code(subject.unwrap_or_default().into()), Meta::Note("stopped when WackCode quit".into())),
+        _ => {
+            let target = Target::Code(subject.unwrap_or_default().into());
+            if first.contains(") finished: exit code 0") {
+                ("Finished", target, Meta::Success(with_time("in background".into()).into()))
+            } else if let Some(code) = first.split("failed: exit code ").nth(1) {
+                let code = code.split(' ').next().unwrap_or("");
+                ("Failed", target, Meta::Failed(with_time(format!("exit {code}")).into()))
+            } else if first.contains("was killed by signal") {
+                ("Failed", target, Meta::Failed(with_time("killed".into()).into()))
+            } else if first.contains("stopped by the user") {
+                ("Stopped", target, Meta::Note(with_time("by you".into()).into()))
+            } else if first.contains("time limit") {
+                ("Ended", target, Meta::Note("time limit".into()))
+            } else if first.contains("printed so often") {
+                ("Stopped", target, Meta::Failed("too noisy".into()))
+            } else {
+                ("Ended", target, Meta::Note(with_time("in background".into()).into()))
+            }
+        }
+    };
+    WorkRow { key: key.to_string().into(), verb: verb.into(), target, meta, detail, open: false }
 }
 
 fn first_line(text: &str) -> String {
@@ -358,14 +430,48 @@ pub fn tool_row(tool: &ToolStep, cwd: &Path, live: bool) -> WorkRow {
         }
         "bash" => {
             let command = text_field(input, "command").unwrap_or("");
-            let output = result.map(|result| result.text.trim_end().to_string()).filter(|text| !text.is_empty() && text != "(No output.)");
-            (
-                "Ran",
-                Target::Code(first_line(command).into()),
-                None,
-                output.map(|text| Detail::Output(tail(&text, DETAIL_LINES).into())),
-            )
+            let described = text_field(input, "description").map(str::trim).filter(|text| !text.is_empty());
+            let target = match described {
+                Some(description) => Target::Words(description.to_string().into()),
+                None => Target::Code(first_line(command).into()),
+            };
+            // A command that carried on in the background: its result was written for the model.
+            if let Some(how) = ok.and_then(background_note) {
+                ("Ran", target, Some(how.to_string()), Some(Detail::Output(format!("$ {}", command.trim()).into())))
+            } else {
+                let output = result.map(|result| result.text.trim_end().to_string()).filter(|text| !text.is_empty() && text != "(No output.)");
+                // With a description as the subject, the command heads its output.
+                let detail = match (described, output) {
+                    (Some(_), Some(output)) => Some(format!("$ {}\n{}", command.trim(), tail(&output, DETAIL_LINES))),
+                    (Some(_), None) => Some(format!("$ {}", command.trim())),
+                    (None, output) => output.map(|output| tail(&output, DETAIL_LINES)),
+                };
+                ("Ran", target, None, detail.map(|text| Detail::Output(text.into())))
+            }
         }
+        wack_core::tasks::WATCH => {
+            let command = text_field(input, "command").unwrap_or("");
+            let target = match text_field(input, "description").map(str::trim).filter(|text| !text.is_empty()) {
+                Some(description) => Target::Words(description.to_string().into()),
+                None => Target::Code(first_line(command).into()),
+            };
+            ("Watching", target, Some("in background".into()), Some(Detail::Output(format!("$ {}", command.trim()).into())))
+        }
+        wack_core::tasks::STOP_TASK => {
+            // "Stopped task abc (`npm run dev`)." names the command.
+            let command = ok.and_then(|text| text.split('`').nth(1)).map(str::to_string);
+            let target = match command {
+                Some(command) => Target::Code(command.into()),
+                None => Target::Code(text_field(input, "id").unwrap_or("").to_string().into()),
+            };
+            ("Stopped", target, None, None)
+        }
+        wack_core::tasks::WAIT_FOR_TASKS => (
+            "Waited",
+            Target::Words("for background commands".into()),
+            ok.map(|text| if text.starts_with("Nothing reported") { "nothing yet".into() } else { "news arrived".into() }),
+            ok.map(|text| Detail::Text(text.to_string().into())),
+        ),
         "grep" => {
             let pattern = text_field(input, "pattern").unwrap_or("");
             let within = path("path").filter(|path| !path.is_empty() && path != ".").map(|path| format!(" in {path}")).unwrap_or_default();
@@ -720,5 +826,35 @@ mod tests {
         assert!(matches!(&items[0], Item::Prompt { .. }));
         assert!(matches!(&items[1], Item::Reply(blocks) if blocks.len() == 1));
         assert!(matches!(&items[2], Item::Footer(text) if text.as_ref() == "19s  ·  12k in  ·  300 out"));
+    }
+
+    #[test]
+    fn background_commands_and_their_news_say_what_happened() {
+        let cwd = Path::new("/p");
+        let started = tool(
+            "bash",
+            json!({ "command": "npm run dev", "description": "Start the dev server", "run_in_background": true }),
+            Some(("Started in the background (ID: ab12).\nOutput is being written to: /x/ab12.log", false)),
+        );
+        let row = tool_row(&started, cwd, false);
+        assert_eq!(row.verb.as_ref(), "Ran");
+        assert!(matches!(&row.target, Target::Words(text) if text.as_ref() == "Start the dev server"));
+        assert!(matches!(&row.meta, Meta::Note(text) if text.as_ref() == "in background"));
+        assert!(matches!(&row.detail, Some(Detail::Output(text)) if text.as_ref() == "$ npm run dev"));
+
+        let news = |tag: &str, text: &str| news_row(&News { tag: tag.into(), text: text.into() }, "k");
+        let done = news("task:ab12:end", "Background task ab12 (`npm test`) finished: exit code 0 after 1m32s.\nLast lines:\n```\n12 passed\n```\nFull output: /x");
+        assert_eq!(done.verb.as_ref(), "Finished");
+        assert!(matches!(&done.target, Target::Code(text) if text.as_ref() == "npm test"));
+        assert!(matches!(&done.meta, Meta::Success(text) if text.as_ref() == "in background · 1m32s"));
+        assert!(matches!(&done.detail, Some(Detail::Output(text)) if text.as_ref() == "12 passed"));
+
+        let failed = news("task:ab12:end", "Background task ab12 (`cargo build`) failed: exit code 101 after 8s.");
+        assert!(matches!(&failed.meta, Meta::Failed(text) if text.as_ref() == "exit 101 · 8s"));
+        let watched = news("task:cd34:lines", "Watch cd34 (Server errors) printed:\n```\nERROR one\nERROR two\n```");
+        assert_eq!(watched.verb.as_ref(), "Watch");
+        assert!(matches!(&watched.meta, Meta::Note(text) if text.as_ref() == "2 lines"));
+        let lost = news("task:ab12:lost", "Background task ab12 (`npm run dev`) is no longer running: it was stopped when WackCode quit.");
+        assert_eq!(lost.verb.as_ref(), "Lost");
     }
 }

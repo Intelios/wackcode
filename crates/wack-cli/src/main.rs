@@ -17,7 +17,7 @@ use std::{
 };
 
 use args::Args;
-use wack_agent::{Agent, AgentMode, Control, Kit, Outcome, Profile, Registry, Session, Settings};
+use wack_agent::{Agent, AgentMode, Control, Kit, Outcome, Profile, Registry, Session, Settings, Tasks};
 use wack_core::{
     Connection, Model, NewConnection, Reasoning, Store,
     skills::{self, Outgoing},
@@ -193,6 +193,9 @@ fn list_commands(args: &mut Args, folder: &Path) -> Result<ExitCode, String> {
     Ok(ExitCode::SUCCESS)
 }
 
+/// Times background news may wake the agent before `wack run` gives up.
+const MAX_WAKES: u32 = 3;
+
 async fn agent(args: &mut Args, folder: &Path) -> Result<ExitCode, String> {
     let wanted = args.value("--connection")?;
     let model = args.value("--model")?;
@@ -257,7 +260,14 @@ async fn agent(args: &mut Args, folder: &Path) -> Result<ExitCode, String> {
         Outgoing::Prompt { text, command } => (text, Some(command)),
         Outgoing::Builtin { name, .. } => return Err(format!("/{name} only works in the app.")),
     };
-    let kit = Kit::new(&session, mode, store.planning_unrestricted(), store.memory_for(session.cwd())).with_skills(&store.skill_catalog());
+    // Commands the agent runs in the background write their output beside the sessions, in a
+    // folder of this session's own.
+    let stem = session.path().file_stem().map(|stem| stem.to_string_lossy().into_owned()).unwrap_or_else(|| "run".into());
+    let tasks_folder = store.sessions_folder().parent().map(|data| data.join("tasks").join(format!("cli-{stem}"))).unwrap_or_else(|| std::env::temp_dir().join(&stem));
+    let tasks = Tasks::new(tasks_folder);
+    let kit = Kit::new(&session, mode, store.planning_unrestricted(), store.memory_for(session.cwd()))
+        .with_skills(&store.skill_catalog())
+        .with_tasks(&session, tasks.clone());
     let mut tools = wack_tools::core_tools();
     tools.extend(kit.tools());
     let registry = Arc::new(Registry::new(tools)?);
@@ -314,7 +324,36 @@ async fn agent(args: &mut Args, folder: &Path) -> Result<ExitCode, String> {
     }
 
     let printer = print::Printer::new(asking);
-    let outcome = agent.run_as(&prompt, command, &control, &|event| printer.event(event)).await;
+    let mut outcome = agent.run_as(&prompt, command, &control, &|event| printer.event(event)).await;
+    // While commands run in the background the agent is not done: each report wakes it, as the
+    // app would, up to MAX_WAKES times.
+    let mut wakes = 0;
+    while matches!(outcome, Ok(Outcome::Done)) && !control.stopped() {
+        if !tasks.has_news() {
+            let running = tasks.running().len();
+            if running == 0 {
+                break;
+            }
+            printer.finish();
+            eprintln!("{}", print::dim(&format!("Waiting on {running} background command{} — Ctrl-C stops {}.", if running == 1 { "" } else { "s" }, if running == 1 { "it" } else { "them" })));
+            while !tasks.has_news() && !control.stopped() && !tasks.running().is_empty() {
+                tokio::select! {
+                    () = tasks.news() => {}
+                    () = tokio::time::sleep(std::time::Duration::from_millis(200)) => {}
+                }
+            }
+            if !tasks.has_news() {
+                break;
+            }
+        }
+        if wakes == MAX_WAKES {
+            eprintln!("{}", print::dim(&format!("Background commands reported {MAX_WAKES} times in a row; stopping here.")));
+            break;
+        }
+        wakes += 1;
+        outcome = agent.wake(&control, &|event| printer.event(event)).await;
+    }
+    tasks.terminate_all();
     printer.finish();
     eprintln!("{}", print::dim(&format!("{}\nsession: {}", printer.usage_line(), agent.session().path().display())));
     // The steering thread is blocked reading the terminal, so the process is ended directly.

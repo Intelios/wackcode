@@ -11,6 +11,9 @@
 //!   force, the plan awaiting review and the todo list read the same after a relaunch as live.
 //!   A plan is shown on the turn that proposed it; only the one still awaiting a decision
 //!   (`awaiting`) offers actions. A new message, Discard or Approve clears it.
+//! - A background task's news (a note tagged `task:`) is shown where the model read it: in the
+//!   work of a turn still working, or, when the model had finished its reply (the chat was idle
+//!   and woke), as its own entry followed by the turn that answers it, with no prompt before it.
 
 use serde_json::Value;
 use wack_core::{
@@ -18,6 +21,7 @@ use wack_core::{
     llm::Block,
     plan::{PLAN_STATE, PlanState},
     skills::CommandUse,
+    tasks::NOTE_PREFIX,
     todo::{TODO_STATE, TodoList},
 };
 
@@ -31,6 +35,28 @@ pub enum Entry {
     Compacted,
     /// Something about the chat rather than a turn: a manual compaction under way or failed.
     Notice { text: String, failed: bool },
+    /// A background task reported while the chat was idle.
+    News(News),
+}
+
+/// A background task's news as the model read it.
+#[derive(Clone, Debug, PartialEq)]
+pub struct News {
+    /// `task:<id>:<what>`.
+    pub tag: String,
+    pub text: String,
+}
+
+impl News {
+    /// The task's id, from the tag.
+    pub fn task(&self) -> &str {
+        self.tag.strip_prefix(NOTE_PREFIX).and_then(|rest| rest.split(':').next()).unwrap_or_default()
+    }
+
+    /// What happened: `end`, `lines` or `lost`.
+    pub fn what(&self) -> &str {
+        self.tag.rsplit(':').next().unwrap_or_default()
+    }
 }
 
 #[derive(Clone, Debug, Default, PartialEq)]
@@ -63,6 +89,8 @@ pub enum Step {
     Tool(ToolStep),
     /// Something the loop did on its own, such as compacting.
     Event(String),
+    /// A background task reported while the turn worked.
+    Task(News),
 }
 
 #[derive(Clone, Debug, PartialEq)]
@@ -208,6 +236,9 @@ impl Conversation {
                 }
                 HistoryEntry::Message { message, usage, at, command } => conversation.replay(message, *usage, *at, command.clone()),
                 HistoryEntry::State { key, value } => conversation.apply_state(key, value),
+                HistoryEntry::Note { tag, text, at } if tag.starts_with(NOTE_PREFIX) => {
+                    conversation.news(News { tag: tag.clone(), text: text.clone() }, *at, false)
+                }
                 HistoryEntry::Note { .. } => {}
             }
         }
@@ -341,7 +372,59 @@ impl Conversation {
         }
     }
 
+    /// Shows a background task's news: in the work of a turn that is working, or on its own
+    /// with a fresh turn after it when the model had finished (the chat woke for it).
+    fn news(&mut self, news: News, at: Option<u64>, live: bool) {
+        let after_prompt = matches!(self.entries.iter().rev().nth(1), Some(Entry::Prompt { .. }));
+        let working = match self.current() {
+            None => false,
+            Some(turn) => {
+                let empty = turn.steps.is_empty() && turn.reply.trim().is_empty();
+                if empty { after_prompt } else { turn.reply.trim().is_empty() || turn.running_tools().next().is_some() }
+            }
+        };
+        if working {
+            if let Some(turn) = self.current() {
+                turn.thinking_open = false;
+                turn.steps.push(Step::Task(news));
+            }
+            return;
+        }
+        // An empty turn waiting for this news (a wake) moves after it.
+        let waiting = match self.entries.last() {
+            Some(Entry::Turn(turn)) if turn.steps.is_empty() && turn.reply.trim().is_empty() => Some((turn.started, turn.live)),
+            _ => None,
+        };
+        let (started, live) = match waiting {
+            Some(waiting) => {
+                self.entries.pop();
+                waiting
+            }
+            None => {
+                self.close_turn(None);
+                (at, live)
+            }
+        };
+        self.entries.push(Entry::News(news));
+        self.entries.push(Entry::Turn(Turn::new(started.or(at), live)));
+    }
+
+    /// The chat woke to tell the model what its background tasks reported.
+    pub fn wake(&mut self, now: u64) {
+        self.close_turn(None);
+        self.entries.push(Entry::Turn(Turn::new(Some(now), true)));
+    }
+
     fn begin(&mut self, text: &str, steered: bool, at: Option<u64>, live: bool, command: Option<CommandUse>) {
+        // A turn left waiting after news, which nothing answered, is not shown.
+        if let Some(Entry::Turn(turn)) = self.entries.last()
+            && !turn.live
+            && turn.steps.is_empty()
+            && turn.reply.trim().is_empty()
+            && matches!(self.entries.iter().rev().nth(1), Some(Entry::News(_)))
+        {
+            self.entries.pop();
+        }
         self.close_turn(if steered { at } else { None });
         self.entries.push(Entry::Prompt { text: text.to_string(), steered, command });
         self.entries.push(Entry::Turn(Turn::new(at, live)));
@@ -360,6 +443,12 @@ impl Conversation {
     pub fn apply(&mut self, event: &Event, now: u64) {
         if let Event::Steered(text) = event {
             self.begin(text, true, Some(now), true, None);
+            return;
+        }
+        if let Event::Noted { tag, text } = event {
+            if tag.starts_with(NOTE_PREFIX) {
+                self.news(News { tag: tag.clone(), text: text.clone() }, Some(now), true);
+            }
             return;
         }
         let Some(turn) = self.current() else {
@@ -389,7 +478,7 @@ impl Conversation {
             }
             // Never settles the reply: a notice at the end of a run must not fold it away.
             Event::Notice(text) => turn.notices.push(text.clone()),
-            Event::Steered(_) | Event::Question { .. } => {}
+            Event::Steered(_) | Event::Question { .. } | Event::Noted { .. } => {}
         }
     }
 
@@ -623,5 +712,64 @@ mod tests {
         let history = vec![HistoryEntry::Message { message: Message::user("<skill name=\"pdf\">…</skill>\n\nform.pdf"), usage: None, at: Some(1), command: Some(command.clone()) }];
         let conversation = Conversation::from_history(&history);
         assert!(matches!(&conversation.entries[0], Entry::Prompt { text, command: Some(used), .. } if text.starts_with("<skill") && *used == command));
+    }
+
+    fn noted(tag: &str, text: &str) -> HistoryEntry {
+        HistoryEntry::Note { tag: tag.into(), text: text.into(), at: Some(5) }
+    }
+
+    #[test]
+    fn task_news_mid_run_joins_the_work() {
+        let mut conversation = Conversation::default();
+        conversation.send("Build it", 1);
+        conversation.apply(&Event::ToolCall { id: "a".into(), name: "bash".into(), input: json!({ "command": "make" }) }, 2);
+        conversation.apply(&Event::ToolResult { id: "a".into(), name: "bash".into(), content: "ok".into(), is_error: false }, 3);
+        conversation.apply(&Event::Noted { tag: "task:ab12:end".into(), text: "Background task ab12 (`npm test`) finished: exit code 0 after 4s.".into() }, 4);
+        conversation.apply(&Event::Noted { tag: "contract:plan".into(), text: "Plan rules".into() }, 4);
+        let Some(Entry::Turn(turn)) = conversation.entries.last() else { panic!("no turn") };
+        assert!(matches!(&turn.steps[1], Step::Task(news) if news.task() == "ab12" && news.what() == "end"));
+        assert_eq!(turn.steps.len(), 2, "other notes stay hidden");
+    }
+
+    #[test]
+    fn news_after_a_finished_reply_stands_alone_and_its_answer_follows_live_and_replayed() {
+        let news = "Background task ab12 (`cargo build`) failed: exit code 101 after 1m32s.";
+        let history = vec![
+            HistoryEntry::Message { message: Message::user("Build it in the background"), usage: None, at: Some(1), command: None },
+            HistoryEntry::Message { message: assistant(vec![Block::Text { text: "Started it.".into() }]), usage: None, at: Some(2), command: None },
+            noted("task:ab12:end", news),
+            HistoryEntry::Message { message: assistant(vec![Block::Text { text: "The build failed; fixing it.".into() }]), usage: None, at: Some(6), command: None },
+        ];
+        let replayed = Conversation::from_history(&history);
+
+        let mut live = Conversation::default();
+        live.send("Build it in the background", 1);
+        live.apply(&Event::Text("Started it.".into()), 2);
+        live.finish(&Ok(Outcome::Done), 3);
+        live.wake(4);
+        live.apply(&Event::Noted { tag: "task:ab12:end".into(), text: news.into() }, 5);
+        live.apply(&Event::Text("The build failed; fixing it.".into()), 6);
+        live.finish(&Ok(Outcome::Done), 7);
+
+        for conversation in [&replayed, &live] {
+            assert_eq!(conversation.entries.len(), 4, "{:?}", conversation.entries);
+            assert!(matches!(&conversation.entries[2], Entry::News(item) if item.text == news));
+            assert!(matches!(&conversation.entries[3], Entry::Turn(turn) if turn.reply == "The build failed; fixing it."));
+        }
+        let Entry::Turn(first) = &live.entries[1] else { panic!() };
+        assert_eq!(first.reply, "Started it.", "the earlier reply stays a reply");
+    }
+
+    #[test]
+    fn news_nobody_answered_leaves_no_empty_turn_before_the_next_message() {
+        let history = vec![
+            HistoryEntry::Message { message: Message::user("Serve it"), usage: None, at: Some(1), command: None },
+            HistoryEntry::Message { message: assistant(vec![Block::Text { text: "It is up.".into() }]), usage: None, at: Some(2), command: None },
+            noted("task:ab12:lost", "Background task ab12 (`npm run dev`) is no longer running: it was stopped when WackCode quit."),
+            HistoryEntry::Message { message: Message::user("Start it again"), usage: None, at: Some(9), command: None },
+        ];
+        let conversation = Conversation::from_history(&history);
+        assert!(matches!(&conversation.entries[2], Entry::News(_)));
+        assert!(matches!(&conversation.entries[3], Entry::Prompt { text, .. } if text == "Start it again"));
     }
 }

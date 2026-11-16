@@ -19,7 +19,7 @@ use std::{
 };
 
 use wack_agent::{
-    Agent, AgentMode, Control, Event, Kit, Outcome, Profile, Registry, Session, Settings,
+    Agent, AgentMode, Control, Event, Kit, Outcome, Profile, Registry, Session, Settings, Tasks,
     commands::CommandUse,
     plan::{PLAN_STATE, PlanState},
     skills::{self, Root},
@@ -45,6 +45,9 @@ pub struct RunSetup {
     /// read when the run starts, off the UI thread.
     pub skill_roots: Vec<Root>,
     pub disabled_skills: HashSet<PathBuf>,
+    /// The chat's shell tasks, which outlive the run. `None` gives the run its own, which go
+    /// with it.
+    pub tasks: Option<Tasks>,
 }
 
 pub enum Job {
@@ -55,6 +58,9 @@ pub enum Job {
     Command { text: String, command: CommandUse },
     /// Summarise the older part of the conversation now, with an optional focus (`/compact`'s).
     Compact(Option<String>),
+    /// Tell the model what its background tasks reported while the chat was idle, and let it
+    /// carry on. No request is sent when there is nothing to tell.
+    Wake,
 }
 
 #[derive(Clone, Debug, PartialEq)]
@@ -94,6 +100,7 @@ impl Store {
             memory: self.memory_for(&project.path),
             skill_roots: self.skill_roots(),
             disabled_skills: self.disabled_skills(),
+            tasks: None,
         })
     }
 }
@@ -122,7 +129,10 @@ pub async fn run(
         Err(message) => return finished(Err(message), None),
     };
     let catalog = skills::load(&setup.skill_roots, &setup.disabled_skills);
-    let kit = Kit::new(&session, Some(setup.mode), setup.unrestricted_planning, setup.memory).with_skills(&catalog);
+    let mut kit = Kit::new(&session, Some(setup.mode), setup.unrestricted_planning, setup.memory).with_skills(&catalog);
+    if let Some(tasks) = setup.tasks {
+        kit = kit.with_tasks(&session, tasks);
+    }
     let mut tools = wack_tools::core_tools();
     tools.extend(kit.tools());
     let registry = match Registry::new(tools) {
@@ -140,6 +150,7 @@ pub async fn run(
     let result = match job {
         Job::Prompt(prompt) => agent.run(&prompt, &control, &sink).await,
         Job::Command { text, command } => agent.run_as(&text, Some(command), &control, &sink).await,
+        Job::Wake => agent.wake(&control, &sink).await,
         Job::Compact(focus) => agent
             .compact(focus.as_deref().filter(|focus| !focus.trim().is_empty()), false, &control, &sink)
             .await
@@ -195,6 +206,7 @@ mod tests {
             memory: None,
             skill_roots: Vec::new(),
             disabled_skills: HashSet::new(),
+            tasks: None,
         }
     }
 
@@ -312,7 +324,7 @@ mod tests {
         assert!(seen.lock().unwrap().contains(&RunEvent::Agent(Event::State { key: PLAN_STATE.into(), value: waiting.to_value() })));
         assert_eq!(provider.requests().len(), 1);
         let names: Vec<String> = provider.requests()[0].tools.iter().map(|tool| tool.name.clone()).collect();
-        assert_eq!(names[7..], ["ask_user_question", "todo", "plan_mode_enter", "plan_mode_complete"]);
+        assert_eq!(names[10..], ["ask_user_question", "todo", "plan_mode_enter", "plan_mode_complete"]);
 
         let saved = save_plan(folder.path(), waiting.plan.as_deref().unwrap()).unwrap();
         assert_eq!(std::fs::read_to_string(&saved).unwrap(), "# Fix\n\n1. Do it\n");

@@ -106,6 +106,9 @@ pub fn composer_empty(roomy: bool) -> ComposerData {
         activity: None,
         todos_open: false,
         waiting_open: false,
+        tasks: Vec::new(),
+        tasks_open: false,
+        foreground: false,
     }
 }
 
@@ -239,6 +242,106 @@ fn finished(conversation: &mut Conversation) {
     let usage = Usage { input: 1_400, output: 2_800, cache_read: 11_000, cache_write: 0 };
     conversation.apply(&Event::Reply { usage: Some(usage) }, START);
     conversation.finish(&Ok(Outcome::Done), START + 19_000);
+}
+
+/// A chat's background commands: the dev server and a watch running, the test suite failed.
+pub fn tasks() -> wack_core::tasks::Tasks {
+    use wack_core::tasks::{Kind, Status, TaskInfo, Tasks, Why, now_millis};
+    let tasks = Tasks::scratch();
+    let now = now_millis();
+    let info = |id: &str, command: &str, description: &str, kind, started: u64, ended: Option<u64>, status| TaskInfo {
+        id: id.into(),
+        command: command.into(),
+        description: description.into(),
+        kind,
+        started_at: now - started,
+        ended_at: ended.map(|ended| now - ended),
+        status,
+        background: Some(Why::Asked),
+        log: format!("/tmp/{id}.log").into(),
+        bytes: 0,
+        last_line: String::new(),
+    };
+    tasks.insert_fixture(
+        info("p8q2w7z0", "npm test", "Run the test suite", Kind::Shell, 260_000, Some(168_000), Status::Failed { code: Some(1), signal: None }),
+        TEST_OUTPUT,
+    );
+    tasks.insert_fixture(
+        info("k3v9x2m1", "npm run dev", "Start the dev server", Kind::Shell, 262_000, None, Status::Running),
+        DEV_OUTPUT,
+    );
+    tasks.insert_fixture(
+        info("w5n1c8d4", "tail -f dev.log | grep --line-buffered -i error", "Dev server errors", Kind::Watch, 90_000, None, Status::Running),
+        "",
+    );
+    tasks
+}
+
+const DEV_OUTPUT: &str = "\u{1b}[32m  VITE v6.2.0\u{1b}[0m  ready in 412 ms\n\n  ➜  Local:   http://localhost:5173/\n  ➜  Network: use --host to expose\n  ➜  press h + enter to show help\n12:04:31 [vite] page reload src/retry.ts\n12:05:02 [vite] hmr update /src/App.tsx\n";
+const TEST_OUTPUT: &str = " ✓ src/sse.test.ts (14 tests) 38ms\n ✓ src/decoder.test.ts (31 tests) 52ms\n ✗ src/retry.test.ts (9 tests | 2 failed) 61ms\n   × honours Retry-After as an HTTP date\n   × caps the wait at the backoff ceiling\n\n Test Files  1 failed | 23 passed (24)\n      Tests  2 failed | 212 passed (214)\n";
+
+/// A chat that started two commands in the background, then woke when the tests failed.
+pub fn task_turns() -> Vec<Item> {
+    let mut conversation = Conversation::default();
+    conversation.send("Start the dev server, and run the whole test suite while I look at the page.", START);
+    call(
+        &mut conversation,
+        "bash-a",
+        "bash",
+        json!({ "command": "npm run dev", "description": "Start the dev server", "run_in_background": true }),
+        Some("Started in the background (ID: k3v9x2m1)."),
+        START + 2_000,
+    );
+    call(
+        &mut conversation,
+        "bash-b",
+        "bash",
+        json!({ "command": "npm test", "description": "Run the test suite", "run_in_background": true }),
+        Some("Started in the background (ID: p8q2w7z0)."),
+        START + 3_000,
+    );
+    conversation.apply(
+        &Event::Text("Both are running: the dev server is at http://localhost:5173, and the tests are going in the background. I'll tell you how they did when they finish.".into()),
+        START + 5_000,
+    );
+    conversation.finish(&Ok(Outcome::Done), START + 6_000);
+    conversation.wake(START + 98_000);
+    conversation.apply(
+        &Event::Noted {
+            tag: "task:p8q2w7z0:end".into(),
+            text: format!(
+                "Background task p8q2w7z0 (`npm test`) failed: exit code 1 after 1m32s.\nLast lines:\n```\n{}```\nFull output: /tmp/p8q2w7z0.log",
+                TEST_OUTPUT
+            ),
+        },
+        START + 98_000,
+    );
+    conversation.apply(
+        &Event::Text("The suite finished with **2 failures, both in `retry.test.ts`**: an HTTP-date `Retry-After` isn't parsed, and the wait isn't capped at the backoff ceiling. The other 212 pass. Want me to fix the retry parser?".into()),
+        START + 104_000,
+    );
+    conversation.finish(&Ok(Outcome::Done), START + 105_000);
+    items(&conversation, &[], START + 110_000)
+}
+
+/// The composer under the tasks chat, with the background commands listed (`open`).
+pub fn composer_tasks(open: bool) -> ComposerData {
+    ComposerData {
+        tasks: crate::shell::task_lines(&tasks()),
+        tasks_open: open,
+        ..composer_after_turn(drawn(None, crate::chat::FOLLOW_UP_PLACEHOLDER))
+    }
+}
+
+/// The agent waiting on a slow build, which ⌘B would move to the background.
+pub fn composer_foreground() -> ComposerData {
+    ComposerData {
+        working: true,
+        foreground: true,
+        activity: Some(("Working  ·  2m 04s".into(), Some("Running cargo build --release".into()))),
+        tasks: crate::shell::task_lines(&tasks()),
+        ..composer_after_turn(drawn(None, crate::chat::FOLLOW_UP_PLACEHOLDER))
+    }
 }
 
 fn items(conversation: &Conversation, open: &[&str], now: u64) -> Vec<Item> {

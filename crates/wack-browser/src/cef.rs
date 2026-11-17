@@ -25,11 +25,13 @@
 //! - DevTools is reached only in process (`send_dev_tools_message`); there is no remote-debugging
 //!   port or pipe.
 //! - Chromium's own background services are switched off or their hosts mapped to nowhere
-//!   (`QUIET_SWITCHES`, `BLOCKED_HOSTS`).
+//!   (`QUIET_SWITCHES`, `DISABLED_FEATURES`, `BLOCKED_HOSTS`): idle, it reaches no host.
 //! - While the agent drives a tab, every main-frame navigation passes `policy`: redirects and
 //!   script navigations too, re-checked after a DNS lookup off the main thread.
-//! - The profile folder is private (0700), and cookies are encrypted with WackCode's own Keychain
-//!   item, not the generic "Chromium Safe Storage" one.
+//! - The profile folder is private (0700) and is what protects the user's sign-ins, as 0600
+//!   protects `secrets.json`. Chromium's Keychain encryption is off (`use-mock-keychain`, owner's
+//!   call): its key prompted after every rebuild of the ad hoc signed app, and until the prompt was
+//!   answered the network service hung.
 
 use std::{
     cell::RefCell,
@@ -59,13 +61,11 @@ use crate::{
 
 mod appkit;
 
-/// Where the engine keeps its data, and its Keychain item.
+/// Where the engine keeps its data.
 #[derive(Clone, Debug)]
 pub struct EngineConfig {
     /// The browser's folder in the app's data folder (`<data>/browser`): the profile and the log.
     pub root: PathBuf,
-    /// The Keychain item that encrypts the profile's cookies, e.g. "WackCode Browser Safe Storage".
-    pub keychain_service: String,
 }
 
 /// A shown page's rectangle in the host view, in points from its top-left corner.
@@ -91,11 +91,31 @@ const QUIET_SWITCHES: &[&str] = &[
     "no-pings",
     "no-first-run",
     "no-default-browser-check",
+    // The profile is protected by its 0700 folder, never the Keychain (see the header).
+    "use-mock-keychain",
     // Parked pages keep rendering, so the agent can drive and capture them.
     "disable-backgrounding-occluded-windows",
     "disable-renderer-backgrounding",
     "disable-background-timer-throttling",
 ];
+
+/// Chromium features that call Google while idle. `AimEnabled` is AI Mode's kill switch: with it
+/// on, a Google default search engine makes Chromium ask www.google.com/async/folae whether the
+/// user may have AI Mode, at startup and after sign-in changes. That host can't be mapped away
+/// like the others, since the user may browse it.
+const DISABLED_FEATURES: &[&str] = &["AimEnabled"];
+
+/// Adds `extra` to a `--disable-features` list. A second `--disable-features` switch would replace
+/// CEF's own list, not add to it.
+fn with_features(existing: &str, extra: &[&str]) -> String {
+    let mut features: Vec<&str> = existing.split(',').map(str::trim).filter(|f| !f.is_empty()).collect();
+    for feature in extra {
+        if !features.contains(feature) {
+            features.push(feature);
+        }
+    }
+    features.join(",")
+}
 
 /// Hosts only Chromium's own services use (updates, network time, variations): mapped to
 /// nowhere, so their requests fail on this Mac with no DNS lookup.
@@ -253,8 +273,6 @@ fn start() -> Result<(), String> {
         persist_session_cookies: 1,
         log_file: CefString::from(config.root.join("browser.log").to_string_lossy().as_ref()),
         log_severity: cef::LogSeverity::WARNING,
-        keychain_service_name: CefString::from(config.keychain_service.as_str()),
-        keychain_account_name: CefString::from("WackCode"),
         ..Default::default()
     };
     let args = cef::args::Args::new();
@@ -287,6 +305,9 @@ wrap_app! {
             for switch in QUIET_SWITCHES {
                 line.append_switch(Some(&CefString::from(*switch)));
             }
+            let name = CefString::from("disable-features");
+            let existing = CefString::from(&line.switch_value(Some(&name))).to_string();
+            line.append_switch_with_value(Some(&name), Some(&CefString::from(with_features(&existing, DISABLED_FEATURES).as_str())));
             let rules = BLOCKED_HOSTS.iter().map(|host| format!("MAP {host} ~NOTFOUND")).collect::<Vec<_>>().join(", ");
             line.append_switch_with_value(Some(&CefString::from("host-resolver-rules")), Some(&CefString::from(rules.as_str())));
         }
@@ -372,21 +393,37 @@ fn make_page(tab: Arc<Tab>, url: &str) -> Result<(), String> {
         with_main(|main| main.host).ok_or("The browser has no window to show pages in yet.")?;
     let info = child_window_info(host.0);
     let mut client = WackClient::new(tab.id);
+    // Made blank and loaded once the DevTools domains are on, so the page's own document request
+    // and its first console lines are captured too.
     let browser = cef::browser_host_create_browser_sync(
         Some(&info),
         Some(&mut client),
-        Some(&CefString::from(url)),
+        Some(&CefString::from("about:blank")),
         Some(&BrowserSettings::default()),
         None,
         None,
     )
     .ok_or("The browser could not open a page.")?;
-    adopt_page(tab, browser);
+    let id = tab.id;
+    let ready = adopt_page(tab, browser);
+    if url != "about:blank" {
+        let url = url.to_string();
+        // Off the main thread until the page confirms the domains are on, then back to load.
+        std::thread::spawn(move || {
+            let _ = ready.blocking_recv();
+            main_thread::post(move || {
+                if let Some(frame) = browser_of(id).and_then(|browser| browser.main_frame()) {
+                    frame.load_url(Some(&CefString::from(url.as_str())));
+                }
+            });
+        });
+    }
     Ok(())
 }
 
 /// Registers a page CEF made (ours or a popup), parks it and turns on the DevTools domains.
-fn adopt_page(tab: Arc<Tab>, browser: Browser) {
+/// Answers once the page has confirmed them all (they are answered in order).
+fn adopt_page(tab: Arc<Tab>, browser: Browser) -> oneshot::Receiver<Result<Json, String>> {
     let observer = browser
         .host()
         .and_then(|host| host.add_dev_tools_message_observer(Some(&mut WackDevTools::new(tab.id))));
@@ -408,15 +445,15 @@ fn adopt_page(tab: Arc<Tab>, browser: Browser) {
     });
     restack(id);
     position(id, None);
-    for method in [
-        "Runtime.enable",
-        "Page.enable",
-        "Network.enable",
-        "Log.enable",
-    ] {
-        let _ = send(id, method, json!({}), None);
+    let (confirmed, ready) = oneshot::channel();
+    let mut confirmed = Some(confirmed);
+    let methods = ["Runtime.enable", "Page.enable", "Network.enable", "Log.enable"];
+    for (index, method) in methods.iter().enumerate() {
+        let answer = if index + 1 == methods.len() { confirmed.take() } else { None };
+        let _ = send(id, method, json!({}), answer);
     }
     tab.set_live(true);
+    ready
 }
 
 fn view_of(id: TabId) -> Option<Retained<NSView>> {
@@ -622,7 +659,7 @@ wrap_life_span_handler! {
             // Our own pages are adopted when `create_browser_sync` returns; this is for popups.
             let popup = with_main(|main| main.popups.get(&self.tab).cloned());
             if let (Some(tab), Some(browser)) = (popup, browser) {
-                adopt_page(tab, browser.clone());
+                drop(adopt_page(tab, browser.clone()));
             }
         }
 
@@ -809,13 +846,13 @@ wrap_request_handler! {
                                     frame.load_url(Some(&CefString::from(url.as_str())));
                                 }
                             }
-                            Err(error) => refuse(id, &error),
+                            Err(error) => refuse(id, &url, &error),
                         });
                     });
                     1
                 }
                 Err(error) => {
-                    refuse(self.tab, &error);
+                    refuse(self.tab, &url, &error);
                     1
                 }
             }
@@ -838,10 +875,11 @@ wrap_request_handler! {
 }
 
 /// Records a refused navigation where the agent will read it.
-fn refuse(id: TabId, error: &str) {
+fn refuse(id: TabId, url: &str, error: &str) {
     if let Some(tab) = tab_of(id) {
         tab.update(|state| {
-            state.push_console(Level::Error, &format!("Navigation blocked: {error}"), None)
+            state.push_console(Level::Error, &format!("Navigation blocked: {error}"), None);
+            state.load_error = Some((url.to_string(), error.to_string()));
         });
     }
 }
@@ -1093,6 +1131,13 @@ mod tests {
         assert_eq!(unique_path(&dir, "../../etc/passwd"), dir.join("passwd"));
         assert_eq!(unique_path(&dir, ""), dir.join("download"));
         let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    #[test]
+    fn disabled_features_join_cefs_own() {
+        assert_eq!(with_features("", &["AimEnabled"]), "AimEnabled");
+        assert_eq!(with_features("LensOverlay,GlicActorUi", &["AimEnabled"]), "LensOverlay,GlicActorUi,AimEnabled");
+        assert_eq!(with_features("AimEnabled", &["AimEnabled"]), "AimEnabled");
     }
 
     #[test]

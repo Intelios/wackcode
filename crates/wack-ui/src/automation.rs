@@ -448,7 +448,7 @@ async fn browser(window: AnyWindowHandle, cx: &mut AsyncApp, args: BrowserArgs) 
         }
         "eval" => {
             let expression = expression.ok_or("\"eval\" needs an \"expression\".")?;
-            let params = json!({ "expression": expression, "returnByValue": true, "awaitPromise": true });
+            let params = json!({ "expression": expression, "returnByValue": true, "awaitPromise": true, "userGesture": true });
             let result = tabs.cdp(target()?, "Runtime.evaluate", params).await?;
             Ok(json!({ "ok": true, "result": result }))
         }

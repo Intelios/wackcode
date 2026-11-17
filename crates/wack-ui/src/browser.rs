@@ -16,14 +16,8 @@ use raw_window_handle::{HasWindowHandle, RawWindowHandle};
 use wack_browser::{Backend, cef::EngineConfig};
 use wack_core::Store;
 
-/// The Keychain item that encrypts the browser's cookies. The dev app keeps its own, as it keeps
-/// its own data folder.
-fn keychain_service() -> &'static str {
-    if cfg!(debug_assertions) { "WackCode Dev Browser Safe Storage" } else { "WackCode Browser Safe Storage" }
-}
-
 pub fn engine(store: &Store) -> Arc<dyn Backend> {
-    wack_browser::cef::backend(EngineConfig { root: store.browser_folder(), keychain_service: keychain_service().into() })
+    wack_browser::cef::backend(EngineConfig { root: store.browser_folder() })
 }
 
 fn content_view(window: &Window) -> Option<*mut std::ffi::c_void> {

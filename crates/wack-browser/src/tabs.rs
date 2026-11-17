@@ -86,13 +86,15 @@ pub struct Tab {
 
 impl Tab {
     fn new(owner: Owner) -> Arc<Self> {
+        let agents = !matches!(owner, Owner::User);
         Arc::new(Self {
             id: NEXT_ID.fetch_add(1, Ordering::Relaxed),
             owner,
             state: Mutex::new(TabState::default()),
             live: AtomicBool::new(false),
             user_control: AtomicBool::new(false),
-            agent_driving: AtomicBool::new(false),
+            // An agent's tab is the agent's from its first load, so the address policy covers it.
+            agent_driving: AtomicBool::new(agents),
             notify: Mutex::new(None),
             popups: Mutex::new(None),
         })
@@ -658,6 +660,16 @@ pub(crate) mod tests {
         assert!(child.agent_driving());
         assert_eq!(tabs.tabs().len(), 2);
         assert!(!child.is_live(), "the engine makes the popup's page");
+    }
+
+    #[tokio::test]
+    async fn an_agents_tab_is_driven_from_its_first_load() {
+        let tabs = ChatTabs::new(Some(Arc::new(FakeBackend::default())));
+        let agent = tabs.open(Owner::Agent, "https://a.example/").await.unwrap();
+        let sub = tabs.open(Owner::SubAgent("explore-1".into()), "https://b.example/").await.unwrap();
+        let user = tabs.open(Owner::User, "https://c.example/").await.unwrap();
+        assert!(agent.agent_driving() && sub.agent_driving());
+        assert!(!user.agent_driving());
     }
 
     #[test]

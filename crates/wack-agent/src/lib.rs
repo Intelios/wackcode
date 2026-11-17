@@ -20,6 +20,7 @@ pub mod registry;
 pub mod session;
 pub mod shell_env;
 pub mod skills;
+pub mod suggest;
 pub mod tasks;
 pub mod todo;
 pub mod tool;

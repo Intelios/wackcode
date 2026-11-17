@@ -5,7 +5,7 @@
 //! where nothing handles them, clicks simply do nothing.
 
 use gpui::{Action, App, KeyBinding, actions};
-use wack_core::{CommandKind, Reasoning, WireFormat};
+use wack_core::{AgentMode, CommandKind, Reasoning, WireFormat};
 
 use crate::panes::{Dock, PaneId, Target, dock::PANE_CONTEXT, terminal::TERMINAL_CONTEXT};
 
@@ -187,6 +187,45 @@ actions!(
         CancelRename,
     ]
 );
+
+/// A suggested-task card's start: in this chat (queued behind a run) or in a chat of its own.
+#[derive(Clone, Debug, PartialEq, Action)]
+#[action(namespace = wackcode, no_json)]
+pub struct StartSuggestion {
+    /// The `suggest_task` call id.
+    pub id: String,
+    pub target: SuggestionTarget,
+    /// The mode the chat or new chat starts the task in.
+    pub mode: AgentMode,
+}
+
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum SuggestionTarget {
+    Here,
+    New,
+}
+
+/// Folds a suggested task away (or brings it back) in the chat on screen.
+#[derive(Clone, Debug, PartialEq, Action)]
+#[action(namespace = wackcode, no_json)]
+pub struct DismissSuggestion {
+    pub id: String,
+    pub dismissed: bool,
+}
+
+/// Copies a suggested task's message to the clipboard.
+#[derive(Clone, Debug, PartialEq, Action)]
+#[action(namespace = wackcode, no_json)]
+pub struct CopySuggestion {
+    pub id: String,
+}
+
+/// Selects a chat by id — a suggested-task card's "Opened in" link.
+#[derive(Clone, Debug, PartialEq, Action)]
+#[action(namespace = wackcode, no_json)]
+pub struct OpenChat {
+    pub id: String,
+}
 
 /// Settings › Providers › Automatic titles: the model that writes titles.
 #[derive(Clone, Debug, PartialEq, Action)]

@@ -18,6 +18,7 @@ use crate::{
     plan::{AgentMode, Plan},
     session::Session,
     skills::{self, Catalog},
+    suggest::Suggestions,
     tasks::{Tasks, TasksFeature},
     todo::Todo,
     tool::Tool,
@@ -26,6 +27,8 @@ use crate::{
 pub struct Kit {
     pub plan: Plan,
     pub todo: Todo,
+    /// What this chat has already been suggested, shared with the `suggest_task` tool.
+    suggestions: Suggestions,
     /// The project's memory, and its index as it stood when the run started.
     memory: Option<(Memory, Option<String>)>,
     /// The skills index as it stood when the run started.
@@ -50,7 +53,17 @@ impl Kit {
             let index = memory.index();
             (memory, index)
         });
-        Self { plan: Plan::new(session, mode, unrestricted), todo: Todo::new(session), memory, skills: None, tasks: None, agents: None, unrestricted, cwd: session.cwd().to_path_buf() }
+        Self {
+            plan: Plan::new(session, mode, unrestricted),
+            todo: Todo::new(session),
+            suggestions: Suggestions::new(session),
+            memory,
+            skills: None,
+            tasks: None,
+            agents: None,
+            unrestricted,
+            cwd: session.cwd().to_path_buf(),
+        }
     }
 
     /// Lists `catalog`'s skills in the system prompt, for the model to load when a task matches.
@@ -97,11 +110,13 @@ impl Kit {
         if let Some((memory, _)) = &self.memory {
             tools.extend(memory.tools());
         }
+        // Task suggestions ride along in every chat: recording only, never a surface of its own.
+        tools.push(self.suggestions.tool());
         tools
     }
 
     fn features(&self) -> Vec<Box<dyn Feature>> {
-        let mut features: Vec<Box<dyn Feature>> = vec![Box::new(self.plan.clone()), Box::new(self.todo.clone())];
+        let mut features: Vec<Box<dyn Feature>> = vec![Box::new(self.plan.clone()), Box::new(self.todo.clone()), Box::new(self.suggestions.clone())];
         if let Some((_, feature)) = &self.tasks {
             features.push(Box::new(feature.clone()));
         }

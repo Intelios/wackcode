@@ -46,6 +46,7 @@ use crate::{
         OpenSettingsSection, PinProject, PreviousTab, RemoveConnection, RemovePicture, ShowCommandOutput, ShowPicture, RemoveProject, ResetDockSize,
         PickCommand, SelectChat, Send, Stop, StopCommand, MoveToBackground, ToggleTasks, ToggleTasksPane, StopTask, ShowTask, ToggleAgentsPane, ShowAgent, StopAgent, ToggleChanges, ToggleProject, ToggleSidebar, ToggleTerminal, TriggerProjectCommand, Unqueue,
         ToggleAutoTitles, ToggleTitleModels, ChooseTitleModel, RenameChat, RenameChatAt, CancelRename, ToggleModelReasoning,
+        StartSuggestion, DismissSuggestion, CopySuggestion, OpenChat,
         ToggleModelEffort, SwitchSkill, SwitchSkillFolder, RemoveSkillFolder, OpenSkill, CopySkill, ChooseSkillUse, NewSkill, SaveSkill,
         CloseSkill, AskDeleteSkill, ConfirmSkillDelete, CancelSkillDelete, AddSkillFolder, ImportSkills, SwitchSlashCommand, OpenSlashCommand,
         NewSlashCommand, SaveSlashCommand, CloseSlashCommand, AskDeleteSlashCommand, ConfirmSlashCommandDelete, CancelSlashCommandDelete,
@@ -1338,6 +1339,22 @@ impl Render for Shell {
                         cx.write_to_clipboard(gpui::ClipboardItem::new_string(plan));
                         session.update(cx, |session, cx| session.plan_notice("Plan copied to the clipboard.".into(), cx));
                     }
+                }))
+                .on_action(cx.listener(|shell, action: &StartSuggestion, _, cx| {
+                    let (id, target, mode) = (action.id.clone(), action.target, action.mode);
+                    shell.with_app(cx, |app, cx| app.start_suggestion(&id, target, mode, cx));
+                }))
+                .on_action(cx.listener(|shell, action: &DismissSuggestion, _, cx| {
+                    let (id, dismissed) = (action.id.clone(), action.dismissed);
+                    shell.with_app(cx, |app, cx| app.dismiss_suggestion(&id, dismissed, cx));
+                }))
+                .on_action(cx.listener(|shell, action: &CopySuggestion, _, cx| {
+                    let id = action.id.clone();
+                    shell.with_app(cx, |app, cx| app.copy_suggestion(&id, cx));
+                }))
+                .on_action(cx.listener(|shell, action: &OpenChat, _, cx| {
+                    let id = action.id.clone();
+                    shell.with_app(cx, |app, cx| app.select(Selection::Chat(id), cx));
                 }))
                 .on_action(cx.listener(|shell, action: &SetAgentMode, _, cx| {
                     let mode = action.mode;

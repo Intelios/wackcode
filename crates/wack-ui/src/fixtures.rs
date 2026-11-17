@@ -325,6 +325,88 @@ pub fn task_turns() -> Vec<Item> {
     items(&conversation, &[], START + 110_000)
 }
 
+/// A settled turn that filed every kind of suggestion, the next message having started one of
+/// them: the tray shows every state a card can be in.
+pub fn suggestions_turn() -> Vec<Item> {
+    use crate::suggestions::{Card, Kind};
+    let mut conversation = Conversation::default();
+    conversation.send("Fix the SSE decoder tail, and flag anything else worth a look while you're in there.", START);
+    let file = "x\n".repeat(60);
+    call(
+        &mut conversation,
+        "read-s",
+        "read",
+        json!({ "path": format!("{CWD}/crates/wack-llm/src/sse.rs") }),
+        Some(&file),
+        START,
+    );
+    let suggest = |conversation: &mut Conversation, id: &str, kind: &str, title: &str, brief: &str| {
+        call(
+            conversation,
+            id,
+            "suggest_task",
+            json!({ "kind": kind, "title": title, "description": brief }),
+            Some("Saved."),
+            START,
+        );
+    };
+    suggest(
+        &mut conversation,
+        "sug-1",
+        "bug",
+        "Empty queue row flashes on send",
+        "`submit` clears the composer before the queued row mounts, so the text blinks out and back. Keep it until the row draws.",
+    );
+    suggest(
+        &mut conversation,
+        "sug-2",
+        "polish",
+        "Diff headers could carry the file icon",
+        "A small affordance that would help scan a long set of edits.",
+    );
+    suggest(
+        &mut conversation,
+        "sug-3",
+        "improvement",
+        "A keybinding for the tools pane",
+        "⌘⌥T feels like the free slot; check the keymap before offering it.",
+    );
+    suggest(
+        &mut conversation,
+        "sug-4",
+        "polish",
+        "Soften the backdrop under the tray",
+        "The backdrop image competes with the cards on this screen. A stronger wash under the \
+         tray, like the composer's, would settle it. This brief is long on purpose: dismissed \
+         cards fold away behind a title and a Restore so they stay findable without cluttering \
+         the tray, and a bug keeps the danger tone whatever the theme.",
+    );
+    suggest(
+        &mut conversation,
+        "sug-5",
+        "improvement",
+        "Remember the last pane layout per chat",
+        "The layout lives in the session already; it just isn't persisted.",
+    );
+    conversation.apply(&Event::Text(REPLY.into()), START);
+    conversation.finish(&Ok(Outcome::Done), START + 30_000);
+    // The next message started the third suggestion: it carries the generated tail, so the card
+    // reads started here and the bubble shows the suggestion, never the tail.
+    let started = Card {
+        id: "sug-3".into(),
+        kind: Kind::Improvement,
+        title: "A keybinding for the tools pane".into(),
+        description: "⌘⌥T feels like the free slot; check the keymap before offering it.".into(),
+    };
+    conversation.send(&crate::suggestions::compose(&started, None), START + 60_000);
+    conversation.finish(&Ok(Outcome::Done), START + 61_000);
+    // Dismissals, the opened chat and the queue arrive from the chat's saved metadata.
+    conversation.suggestion_view.dismissed.insert("sug-5".into());
+    conversation.suggestion_view.queued.insert("sug-2".into());
+    conversation.suggestion_view.links.insert("sug-4".into(), ("chat-9".into(), "Soften the backdrop".into()));
+    items(&conversation, &[], START + 70_000)
+}
+
 /// The composer under the tasks chat, with the background commands listed (`open`).
 pub fn composer_tasks(open: bool) -> ComposerData {
     ComposerData {

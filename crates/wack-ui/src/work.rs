@@ -13,6 +13,7 @@ use wack_core::agents::{AGENT, AGENT_MESSAGE, AgentInfo, Status, StoppedBy};
 use crate::{
     conversation::{Conversation, Entry, News, Step, ToolStep, Turn, TurnEnd},
     markdown,
+    suggestions,
     transcript::{AgentLine, AgentState, CommandShown, Detail, Diff, DiffLine, Item, LineKind, Meta, Target, Work, WorkRow},
 };
 
@@ -70,7 +71,7 @@ pub fn entry_items(
     };
     {
         match entry {
-            Entry::Prompt { text, steered, command } => {
+            Entry::Prompt { text, steered, command, suggestion } => {
                 let key = format!("prompt-{index}");
                 items.push(Item::Prompt {
                     text: text.clone().into(),
@@ -81,6 +82,7 @@ pub fn entry_items(
                         open: open.contains(&key),
                         key: key.into(),
                     }),
+                    suggestion: suggestion.as_ref().map(|started| suggestions::sent_label(started.origin.as_ref())),
                 })
             }
             Entry::Compacted => items.push(Item::Compacted),
@@ -126,6 +128,36 @@ pub fn entry_items(
                         confirming_discard: current && conversation.plan_view.confirming_discard,
                         notice: current.then(|| conversation.plan_view.notice.clone().map(Into::into)).flatten(),
                     }));
+                }
+                // The follow-ups a settled turn filed: cards wait for the run, so they never
+                // appear above a reply still being written.
+                if !turn.live {
+                    let view = &conversation.suggestion_view;
+                    let cards: Vec<crate::suggestion::Item> = turn
+                        .steps
+                        .iter()
+                        .filter_map(|step| match step {
+                            Step::Tool(tool) => suggestions::card_from_step(tool),
+                            _ => None,
+                        })
+                        .map(|card| {
+                            let state = if view.dismissed.contains(&card.id) {
+                                crate::suggestion::State::Dismissed
+                            } else if let Some((chat, name)) = view.links.get(&card.id) {
+                                crate::suggestion::State::OpenedIn { chat: chat.clone(), name: name.clone().into() }
+                            } else if conversation.started.contains(&card.id) {
+                                crate::suggestion::State::StartedHere
+                            } else if view.queued.contains(&card.id) {
+                                crate::suggestion::State::Queued
+                            } else {
+                                crate::suggestion::State::Open
+                            };
+                            crate::suggestion::Item::new(card, state, open)
+                        })
+                        .collect();
+                    if !cards.is_empty() {
+                        items.push(Item::Suggestions(crate::suggestion::Tray { cards }));
+                    }
                 }
                 for notice in &turn.notices {
                     items.push(Item::Notice { text: notice.clone().into(), failed: false });
@@ -612,6 +644,13 @@ pub fn tool_row(tool: &ToolStep, cwd: &Path, live: bool) -> WorkRow {
             ("Recalled memory", Target::Code(names.join(", ").into()), None, ok.map(|text| Detail::Text(text.to_string().into())))
         }
         wack_core::memory::MEMORY_FORGET => ("Forgot memory", Target::Code(text_field(input, "name").unwrap_or("").into()), None, None),
+        // The brief opens with the row; the card under the turn's answer is what the user acts on.
+        wack_core::suggest::SUGGEST_TASK => (
+            "Suggest",
+            Target::Words(text_field(input, "title").unwrap_or("").into()),
+            None,
+            text_field(input, "description").map(|description| Detail::Text(description.to_string().into())),
+        ),
         // An MCP tool is named by its server and its own name: `mcp__github__create_issue` reads
         // "Used github · create_issue". What it returned is its detail.
         name if mcp_parts(name).is_some() => {

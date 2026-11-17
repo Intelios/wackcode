@@ -33,7 +33,8 @@ pub use title::AutoTitleConfig;
 pub use runner::{CommandEvent, CommandInfo, CommandSession, CommandStatus, Runner};
 pub use usage::{RunRecorder, UsageStatus, UsageWriter};
 pub use store::{
-    Chat, CommandKind, Connection, Model, ModelChoice, NewConnection, Project, Reasoning, Resolved, Store, Ui, title_from,
+    Chat, CommandKind, Connection, Model, ModelChoice, NewConnection, Project, Reasoning, Resolved, Store, SuggestionOrigin, Ui,
+    title_from,
 };
 
 // What the UI needs from the layers below, so it depends on the engine alone.
@@ -62,6 +63,10 @@ pub mod plan {
 /// The todo list as the session saves it.
 pub mod todo {
     pub use wack_agent::todo::{Status, TODO, TODO_STATE, Task, TodoList, clean};
+}
+
+pub mod suggest {
+    pub use wack_agent::suggest::{SUGGESTIONS_STATE, SUGGEST_TASK};
 }
 
 /// Shell commands the agent runs, which outlive its runs: a chat owns one registry.

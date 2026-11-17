@@ -246,6 +246,17 @@ pub struct ModelChoice {
     pub effort: Option<Reasoning>,
 }
 
+/// Which suggested task on which chat a new chat was started from. The origin chat's card
+/// reads it back to say "Opened in …"; a chat the user deleted simply isn't there, which
+/// re-opens the card.
+#[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
+pub struct SuggestionOrigin {
+    /// The chat whose transcript holds the suggestion card.
+    pub chat: String,
+    /// The `suggest_task` tool-call id, which is the suggestion's identity.
+    pub suggestion: String,
+}
+
 #[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
 pub struct Chat {
     pub id: String,
@@ -266,6 +277,12 @@ pub struct Chat {
     /// Where the chat's panes are, as the UI wrote it. The engine keeps it without reading it.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub layout: Option<serde_json::Value>,
+    /// Suggested-task ids the user dismissed in this chat. Card state only.
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub dismissed_suggestions: Vec<String>,
+    /// The suggested task this chat was started from, if any (`suggestion.rs`).
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub origin: Option<SuggestionOrigin>,
 }
 
 /// How the window was left. The window itself opens on a fresh new chat, as version 2 did, so
@@ -828,13 +845,15 @@ impl Store {
             .and_then(|chat| self.project(&chat.project))
     }
 
-    /// Lists a new chat. Its session file is created by its first run.
+    /// Lists a new chat. Its session file is created by its first run. `origin` records the
+    /// suggested task it was started from, for the card that sent it here.
     pub fn create_chat(
         &mut self,
         project: &str,
         title: &str,
         choice: ModelChoice,
         mode: AgentMode,
+        origin: Option<SuggestionOrigin>,
     ) -> Result<Chat, String> {
         if self.project(project).is_none() {
             return Err("That project is gone.".to_string());
@@ -851,10 +870,24 @@ impl Store {
             choice,
             mode,
             layout: None,
+            dismissed_suggestions: Vec::new(),
+            origin,
         };
         self.state.chats.push(chat.clone());
         self.save()?;
         Ok(chat)
+    }
+
+    /// Dismisses a suggested task in `chat` (or restores it): card state, saved with the chat.
+    pub fn set_suggestion_dismissed(&mut self, id: &str, suggestion: &str, dismissed: bool) -> Result<(), String> {
+        let chat = self.state.chats.iter_mut().find(|chat| chat.id == id).ok_or("That chat is gone.")?;
+        let listed = chat.dismissed_suggestions.iter().any(|listed| listed == suggestion);
+        match (dismissed, listed) {
+            (true, false) => chat.dismissed_suggestions.push(suggestion.to_string()),
+            (false, true) => chat.dismissed_suggestions.retain(|listed| listed != suggestion),
+            _ => return Ok(()),
+        }
+        self.save()
     }
 
     pub fn session_path(&self, chat: &Chat) -> PathBuf {
@@ -1184,10 +1217,10 @@ mod tests {
 
         store.set_pinned(&project.id, true).unwrap();
         let first = store
-            .create_chat(&project.id, "First", ModelChoice::default(), AgentMode::Build)
+            .create_chat(&project.id, "First", ModelChoice::default(), AgentMode::Build, None)
             .unwrap();
         let second = store
-            .create_chat(&project.id, "Second", ModelChoice::default(), AgentMode::Build)
+            .create_chat(&project.id, "Second", ModelChoice::default(), AgentMode::Build, None)
             .unwrap();
         assert_ne!(first.id, second.id);
         store.touch_chat(&first.id).unwrap();
@@ -1219,7 +1252,7 @@ mod tests {
         let mut store = Store::open(folder.path()).unwrap();
         let project = store.add_project(work.path()).unwrap();
         let chat = store
-            .create_chat(&project.id, "Doomed", ModelChoice::default(), AgentMode::Build)
+            .create_chat(&project.id, "Doomed", ModelChoice::default(), AgentMode::Build, None)
             .unwrap();
         let path = store.session_path(&chat);
         fs::create_dir_all(path.parent().unwrap()).unwrap();
@@ -1227,6 +1260,38 @@ mod tests {
         store.delete_chat(&chat.id).unwrap();
         assert!(!path.exists());
         assert!(store.chat(&chat.id).is_none());
+    }
+
+    #[test]
+    fn a_chat_records_dismissed_suggestions_and_its_origin() {
+        let folder = tempfile::tempdir().unwrap();
+        let work = tempfile::tempdir().unwrap();
+        let mut store = Store::open(folder.path()).unwrap();
+        let project = store.add_project(work.path()).unwrap();
+        let origin = store
+            .create_chat(&project.id, "Origin", ModelChoice::default(), AgentMode::Build, None)
+            .unwrap();
+        let started = store
+            .create_chat(
+                &project.id,
+                "Fix the flash",
+                ModelChoice::default(),
+                AgentMode::Plan,
+                Some(SuggestionOrigin { chat: origin.id.clone(), suggestion: "sug-1".into() }),
+            )
+            .unwrap();
+        assert_eq!(started.origin.as_ref().unwrap().chat, origin.id);
+        assert_eq!(started.origin.as_ref().unwrap().suggestion, "sug-1");
+
+        store.set_suggestion_dismissed(&origin.id, "sug-2", true).unwrap();
+        store.set_suggestion_dismissed(&origin.id, "sug-3", true).unwrap();
+        store.set_suggestion_dismissed(&origin.id, "sug-3", false).unwrap();
+
+        let reopened = Store::open(folder.path()).unwrap();
+        let origin = reopened.chat(&origin.id).unwrap();
+        assert_eq!(origin.dismissed_suggestions, ["sug-2"], "restored suggestions do not stay dismissed");
+        let started = reopened.chat(&started.id).unwrap();
+        assert_eq!(started.origin.as_ref().unwrap().suggestion, "sug-1");
     }
 
     #[test]
@@ -1295,7 +1360,7 @@ mod tests {
             effort: None,
         };
         let chat = store
-            .create_chat(&project.id, "Uses first", picked.clone(), AgentMode::Build)
+            .create_chat(&project.id, "Uses first", picked.clone(), AgentMode::Build, None)
             .unwrap();
 
         store.set_connection_enabled(&first.id, false).unwrap();
@@ -1329,7 +1394,7 @@ mod tests {
         let mut store = Store::open(folder.path()).unwrap();
         let project = store.add_project(work.path()).unwrap();
         let choice = ModelChoice { effort: Some(Reasoning::Ultra), ..ModelChoice::default() };
-        let chat = store.create_chat(&project.id, "Plan it", choice, AgentMode::Plan).unwrap();
+        let chat = store.create_chat(&project.id, "Plan it", choice, AgentMode::Plan, None).unwrap();
         store.set_mode(&chat.id, AgentMode::UltraPlan).unwrap();
         store.set_planning_unrestricted(true).unwrap();
 

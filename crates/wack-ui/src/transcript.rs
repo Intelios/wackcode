@@ -33,8 +33,8 @@ use crate::{
 #[derive(Clone, Debug)]
 pub enum Item {
     /// What the user sent. A slash command shows as `command`, with `text` (the prompt the model
-    /// got) behind its name.
-    Prompt { text: SharedString, steered: bool, command: Option<CommandShown> },
+    /// got) behind its name. `suggestion` captions a message that started a suggested task.
+    Prompt { text: SharedString, steered: bool, command: Option<CommandShown>, suggestion: Option<SharedString> },
     Work(Work),
     Reply(Rc<Vec<markdown::Block>>),
     /// Facts about a finished turn: time, tokens.
@@ -45,6 +45,8 @@ pub enum Item {
     Compacted,
     /// A proposed plan: the transcript's hero card.
     Plan(crate::plan_card::PlanCard),
+    /// The follow-ups a settled turn filed, under its answer.
+    Suggestions(crate::suggestion::Tray),
 }
 
 /// A slash command as the user typed it.
@@ -270,6 +272,7 @@ fn gap_above(item: &Item, previous: Option<&Item>) -> f32 {
         (_, Item::Prompt { steered: true, .. }) => 24.,
         (_, Item::Prompt { .. }) => 44.,
         (_, Item::Footer(_)) => 12.,
+        (_, Item::Suggestions(_)) => 14.,
         (Some(Item::Prompt { .. }), _) => 16.,
         _ => 18.,
     }
@@ -278,7 +281,7 @@ fn gap_above(item: &Item, previous: Option<&Item>) -> f32 {
 /// One transcript item, with the space it keeps from the one before.
 pub fn item(item: &Item, previous: Option<&Item>, theme: &Theme, handlers: &Handlers) -> AnyElement {
     let body = match item {
-        Item::Prompt { text, steered, command } => {
+        Item::Prompt { text, steered, command, suggestion } => {
             let bubble = div()
                 .max_w(relative(BUBBLE_SHARE))
                 .px(px(14.))
@@ -305,6 +308,19 @@ pub fn item(item: &Item, previous: Option<&Item>, theme: &Theme, handlers: &Hand
                     prompt.child(div().pr(px(6.)).typography(Type::Small).text_color(theme.text_faint).child("Sent while working"))
                 })
                 .child(bubble)
+                .when_some(suggestion.as_ref(), |prompt, caption| {
+                    prompt.child(
+                        div()
+                            .pr(px(6.))
+                            .flex()
+                            .items_center()
+                            .gap(px(5.))
+                            .typography(Type::Small)
+                            .text_color(theme.text_dim)
+                            .child(Icon::Bulb.view(px(11.), theme.accent_text))
+                            .child(caption.clone()),
+                    )
+                })
                 .when_some(command.as_ref().filter(|command| command.open), |prompt, command| {
                     prompt.child(sent_prompt(&command.key, text, theme))
                 })
@@ -313,6 +329,7 @@ pub fn item(item: &Item, previous: Option<&Item>, theme: &Theme, handlers: &Hand
         Item::Work(work) => work_log(work, theme, handlers).into_any_element(),
         Item::Reply(blocks) => reply(blocks, theme, handlers).into_any_element(),
         Item::Plan(card) => crate::plan_card::plan_card(card, theme, handlers).into_any_element(),
+        Item::Suggestions(tray) => crate::suggestion::tray(tray, theme, handlers).into_any_element(),
         Item::Footer(text) => div().typography(Type::Small).text_color(theme.text_faint).child(text.clone()).into_any_element(),
         Item::Notice { text, failed } => div()
             .typography(Type::Ui)

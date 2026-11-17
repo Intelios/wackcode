@@ -21,6 +21,7 @@ use crate::{
     plan::{PLAN_MODE_COMPLETE, PLAN_MODE_ENTER, policy},
     registry::Registry,
     session::Session,
+    suggest::SUGGEST_TASK,
     tasks::{STOP_TASK, Tasks, TasksFeature, WAIT_FOR_TASKS, WATCH},
     todo::TODO,
     tool::{Tool, ToolSpec},
@@ -28,8 +29,8 @@ use crate::{
 };
 
 /// Tools only the chat itself has: spawning (so children never nest), talking to the user, the
-/// chat's plan and todo list, and the project's memory.
-const PARENT_ONLY: [&str; 6] = [super::AGENT, super::AGENT_MESSAGE, ASK_USER_QUESTION, TODO, PLAN_MODE_ENTER, PLAN_MODE_COMPLETE];
+/// chat's plan and todo list and task cards, and the project's memory.
+const PARENT_ONLY: [&str; 7] = [super::AGENT, super::AGENT_MESSAGE, ASK_USER_QUESTION, TODO, PLAN_MODE_ENTER, PLAN_MODE_COMPLETE, SUGGEST_TASK];
 /// The shell family. A role that makes no edits keeps it: helpers must be able to grep, build and
 /// run tests.
 const SHELL: [&str; 4] = ["bash", WATCH, STOP_TASK, WAIT_FOR_TASKS];

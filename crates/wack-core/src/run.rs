@@ -387,7 +387,7 @@ mod tests {
         assert!(seen.lock().unwrap().contains(&RunEvent::Agent(Event::State { key: PLAN_STATE.into(), value: waiting.to_value() })));
         assert_eq!(provider.requests().len(), 1);
         let names: Vec<String> = provider.requests()[0].tools.iter().map(|tool| tool.name.clone()).collect();
-        assert_eq!(names[10..], ["ask_user_question", "todo", "plan_mode_enter", "plan_mode_complete"]);
+        assert_eq!(names[10..], ["ask_user_question", "todo", "plan_mode_enter", "plan_mode_complete", "suggest_task"]);
 
         // With Web Fetch on, the tool waits behind tool_search, after everything always loaded.
         let provider = ScriptedProvider::new([say("ok")]);

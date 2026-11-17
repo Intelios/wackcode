@@ -1300,6 +1300,17 @@ impl AppState {
         if let Err(message) = self.store.delete_chat(id) {
             self.notice = Some(message.into());
         }
+        // A chat a suggestion card linked to is gone: the card is actionable again.
+        if let Some(project) = &project {
+            let project = project.clone();
+            for (chat_id, session) in self.sessions.clone() {
+                if self.store.chat(&chat_id).is_some_and(|chat| chat.project == project) {
+                    let chat = self.store.chat(&chat_id).unwrap().clone();
+                    let view = self.suggestion_view(&chat);
+                    session.update(cx, |session, cx| session.sync_suggestion_view(view, cx));
+                }
+            }
+        }
         if self.selection == Selection::Chat(id.to_string()) {
             match project {
                 Some(project) => self.select(Selection::NewChat(project), cx),
@@ -1379,7 +1390,7 @@ impl AppState {
             Job::Command { command, .. } => title_from(&command.line()),
             _ => title_from(&text),
         };
-        let chat = match self.store.create_chat(&project, &title, choice, self.new_chat_mode) {
+        let chat = match self.store.create_chat(&project, &title, choice, self.new_chat_mode, None) {
             Ok(chat) => chat,
             Err(message) => {
                 self.notice = Some(message.into());
@@ -1965,7 +1976,7 @@ impl AppState {
                         session.steer(text, cx);
                     } else {
                         session.queue.push(text);
-                        cx.notify();
+                        session.sync_suggestion_queue(cx);
                     }
                 });
                 clear(cx);
@@ -2053,11 +2064,124 @@ impl AppState {
             return;
         };
         let text = session.update(cx, |session, cx| {
-            cx.notify();
-            (index < session.queue.len()).then(|| session.queue.remove(index))
+            let text = (index < session.queue.len()).then(|| session.queue.remove(index));
+            session.sync_suggestion_queue(cx);
+            text
         });
         if let Some(text) = text {
             restore(&session, vec![text], cx);
+        }
+    }
+
+    /// What the cards of `chat`'s settled turns read their state from: dismissals and opened
+    /// chats from the store; the chat itself fills in started and queued ids.
+    fn suggestion_view(&self, chat: &Chat) -> crate::suggestions::View {
+        let chats = self.store.chats(&chat.project);
+        crate::suggestions::View {
+            dismissed: chat.dismissed_suggestions.iter().cloned().collect(),
+            queued: Default::default(),
+            links: crate::suggestions::links(&chats, &chat.id),
+        }
+    }
+
+    /// A suggested-task card's Start: in this chat or in one of its own, in `mode`. The chat on
+    /// screen is the one that acted, as with the plan card's actions.
+    pub fn start_suggestion(&mut self, id: &str, target: crate::actions::SuggestionTarget, mode: AgentMode, cx: &mut Context<Self>) {
+        let Selection::Chat(chat_id) = self.selection.clone() else {
+            return;
+        };
+        let Some(chat) = self.store.chat(&chat_id).cloned() else {
+            return;
+        };
+        let Some(session) = self.sessions.get(&chat.id).cloned() else {
+            return;
+        };
+        let Some(card) = session.read(cx).suggestion(id) else {
+            return;
+        };
+        match target {
+            crate::actions::SuggestionTarget::New => self.start_suggestion_chat(&chat, &card, mode, cx),
+            crate::actions::SuggestionTarget::Here => {
+                // "Plan it here" switches the chat to Plan: its mode is its own, and stays that way.
+                if chat.mode != mode {
+                    self.set_chat_mode(&chat.id, mode, cx);
+                }
+                let text = crate::suggestions::compose(&card, None);
+                if session.read(cx).running() {
+                    // Queued behind the run, like a message typed while it works: the card
+                    // reads Queued until the queue sends it.
+                    self.literal = Some((Some(chat.id.clone()), text.clone()));
+                    session.update(cx, |session, cx| {
+                        session.queue.push(text);
+                        session.sync_suggestion_queue(cx);
+                    });
+                } else {
+                    self.run(&chat.id, Job::Prompt(text), cx);
+                }
+            }
+        }
+    }
+
+    /// A suggested task's new chat: the origin's project, model and effort — it is the same
+    /// work — named after the suggestion, with the origin recorded so the card can link back to
+    /// it. It opens in a background tab: the user stays in the chat they were reading.
+    fn start_suggestion_chat(&mut self, origin: &Chat, card: &crate::suggestions::Card, mode: AgentMode, cx: &mut Context<Self>) {
+        let origin_of = wack_core::SuggestionOrigin { chat: origin.id.clone(), suggestion: card.id.to_string() };
+        let chat = match self
+            .store
+            .create_chat(&origin.project, &card.title, origin.choice.clone(), mode, Some(origin_of))
+        {
+            Ok(chat) => chat,
+            Err(message) => {
+                self.note(&origin.id, &message, cx);
+                return;
+            }
+        };
+        self.open_projects.insert(origin.project.clone());
+        if !self.tabs.contains(&chat.id) {
+            self.tabs.push(chat.id.clone());
+        }
+        let text = crate::suggestions::compose(card, Some(crate::suggestions::Origin { chat: origin.id.clone(), name: origin.title.clone() }));
+        self.run(&chat.id, Job::Prompt(text), cx);
+        self.start_title(&chat.id, &card.title, cx);
+        // The card that sent it now links to the chat it opened.
+        if let Some(session) = self.sessions.get(&origin.id) {
+            let view = self.suggestion_view(origin);
+            session.update(cx, |session, cx| session.sync_suggestion_view(view, cx));
+        }
+    }
+
+    /// Folds a suggested task away, or brings it back.
+    pub fn dismiss_suggestion(&mut self, id: &str, dismissed: bool, cx: &mut Context<Self>) {
+        let Selection::Chat(chat_id) = self.selection.clone() else {
+            return;
+        };
+        if let Err(message) = self.store.set_suggestion_dismissed(&chat_id, id, dismissed) {
+            self.note(&chat_id, &message, cx);
+            return;
+        }
+        let Some(session) = self.sessions.get(&chat_id).cloned() else {
+            return;
+        };
+        let Some(chat) = self.store.chat(&chat_id).cloned() else {
+            return;
+        };
+        let view = self.suggestion_view(&chat);
+        session.update(cx, |session, cx| session.sync_suggestion_view(view, cx));
+    }
+
+    /// Copies the message a Start would send, for pasting anywhere.
+    pub fn copy_suggestion(&mut self, id: &str, cx: &mut Context<Self>) {
+        let Selection::Chat(chat_id) = self.selection.clone() else {
+            return;
+        };
+        if let Some(card) = self
+            .sessions
+            .get(&chat_id)
+            .and_then(|session| session.read(cx).suggestion(id))
+        {
+            cx.write_to_clipboard(gpui::ClipboardItem::new_string(crate::suggestions::compose(&card, None)));
+            self.note(&chat_id, "Suggested task copied as a prompt.", cx);
         }
     }
 
@@ -2146,7 +2270,7 @@ impl AppState {
             let holding = session.awaiting_plan().is_some();
             let after = after_run(matches!(result, Ok(Outcome::Done)), holding, steering, queue);
             session.queue = after.queue;
-            cx.notify();
+            session.sync_suggestion_queue(cx);
             (after.unsent, after.next)
         });
         if !unsent.is_empty() {
@@ -2171,6 +2295,11 @@ impl AppState {
     /// Sends a message that waited for a run to end, resolving a `/command` in it now. False when
     /// it could not be sent, the reason in the transcript.
     fn send_queued(&mut self, chat: &str, text: &str, cx: &mut Context<Self>) -> bool {
+        // A queued suggested task's title may start with `/`: it was recorded literal when it
+        // queued, so it sends as written rather than trying to resolve a command.
+        if self.literal.take().is_some_and(|(from, literal)| from.as_deref() == Some(chat) && literal == text) {
+            return self.run(chat, Job::Prompt(text.to_string()), cx);
+        }
         let Some(cwd) = self.sessions.get(chat).map(|session| session.read(cx).cwd().to_path_buf()) else {
             return false;
         };
@@ -2205,6 +2334,9 @@ impl AppState {
         let tasks_folder = self.store.tasks_folder(chat);
         let session = cx.new(|cx| ChatSession::load(&chat.id, cwd, &path, layout, runner, commands, tasks_folder, cx));
         let id = chat.id.clone();
+        // Cards read their dismissals and opened links from the store as it stands now.
+        let view = self.suggestion_view(chat);
+        session.update(cx, |session, cx| session.sync_suggestion_view(view, cx));
         self.chat_tasks.insert(id.clone(), session.read(cx).tasks.clone());
         self.chat_agents.insert(id.clone(), session.read(cx).agents.clone());
         let composer = session.read(cx).composer.clone();

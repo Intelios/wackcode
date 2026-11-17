@@ -11,6 +11,8 @@ use gpui::{AssetSource, Hsla, Pixels, SharedString, Styled, Svg, svg};
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub enum Icon {
+    /// A flagged problem, on a suggestion card.
+    Alert,
     ArrowUp,
     /// A skill.
     Book,
@@ -19,6 +21,8 @@ pub enum Icon {
     /// Plan mode.
     Brain,
     Branch,
+    /// A suggested task, and the tray's mark.
+    Bulb,
     Check,
     ChevronDown,
     ChevronRight,
@@ -48,6 +52,8 @@ pub enum Icon {
     Sidebar,
     /// One of WackCode's own slash commands.
     Slash,
+    /// A touch of polish, on a suggestion card.
+    Spark,
     Stop,
     Terminal,
     Trash,
@@ -55,11 +61,13 @@ pub enum Icon {
 
 /// Every icon file, by asset path. One list, so a missing file fails the test below.
 const FILES: &[(&str, &[u8])] = &[
+    ("icons/alert.svg", include_bytes!("../assets/icons/alert.svg")),
     ("icons/arrow-up.svg", include_bytes!("../assets/icons/arrow-up.svg")),
     ("icons/book.svg", include_bytes!("../assets/icons/book.svg")),
     ("icons/bookmark.svg", include_bytes!("../assets/icons/bookmark.svg")),
     ("icons/brain.svg", include_bytes!("../assets/icons/brain.svg")),
     ("icons/branch.svg", include_bytes!("../assets/icons/branch.svg")),
+    ("icons/bulb.svg", include_bytes!("../assets/icons/bulb.svg")),
     ("icons/check.svg", include_bytes!("../assets/icons/check.svg")),
     ("icons/chevron-down.svg", include_bytes!("../assets/icons/chevron-down.svg")),
     ("icons/chevron-right.svg", include_bytes!("../assets/icons/chevron-right.svg")),
@@ -84,6 +92,7 @@ const FILES: &[(&str, &[u8])] = &[
     ("icons/settings.svg", include_bytes!("../assets/icons/settings.svg")),
     ("icons/sidebar.svg", include_bytes!("../assets/icons/sidebar.svg")),
     ("icons/slash.svg", include_bytes!("../assets/icons/slash.svg")),
+    ("icons/spark.svg", include_bytes!("../assets/icons/spark.svg")),
     ("icons/stop.svg", include_bytes!("../assets/icons/stop.svg")),
     ("icons/terminal.svg", include_bytes!("../assets/icons/terminal.svg")),
     ("icons/trash.svg", include_bytes!("../assets/icons/trash.svg")),
@@ -92,10 +101,12 @@ const FILES: &[(&str, &[u8])] = &[
 impl Icon {
     pub fn path(self) -> &'static str {
         match self {
+            Icon::Alert => "icons/alert.svg",
             Icon::ArrowUp => "icons/arrow-up.svg",
             Icon::Book => "icons/book.svg",
             Icon::Brain => "icons/brain.svg",
             Icon::Branch => "icons/branch.svg",
+            Icon::Bulb => "icons/bulb.svg",
             Icon::Check => "icons/check.svg",
             Icon::ChevronDown => "icons/chevron-down.svg",
             Icon::ChevronRight => "icons/chevron-right.svg",
@@ -121,6 +132,7 @@ impl Icon {
             Icon::Settings => "icons/settings.svg",
             Icon::Sidebar => "icons/sidebar.svg",
             Icon::Slash => "icons/slash.svg",
+            Icon::Spark => "icons/spark.svg",
             Icon::Stop => "icons/stop.svg",
             Icon::Terminal => "icons/terminal.svg",
             Icon::Trash => "icons/trash.svg",
@@ -191,6 +203,7 @@ mod tests {
             Icon::Search,
             Icon::Settings,
             Icon::Sidebar,
+            Icon::Spark,
             Icon::Stop,
             Icon::Terminal,
             Icon::Trash,

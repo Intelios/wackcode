@@ -27,11 +27,14 @@ use wack_core::{
     todo::{TODO_STATE, TodoList},
 };
 
+use crate::suggestions::{self, Started, View as SuggestionView};
+
 #[derive(Clone, Debug, PartialEq)]
 pub enum Entry {
     /// What the user sent. For a slash command `text` is the expanded prompt the model got and
-    /// `command` what the user typed, which the transcript shows instead.
-    Prompt { text: String, steered: bool, command: Option<CommandUse> },
+    /// `command` what the user typed, which the transcript shows instead. `suggestion` is the
+    /// suggested task the message started, its tail already split from `text`.
+    Prompt { text: String, steered: bool, command: Option<CommandUse>, suggestion: Option<Started> },
     Turn(Turn),
     /// The older conversation was summarised here.
     Compacted,
@@ -151,6 +154,12 @@ pub struct Conversation {
     /// The chat's sub-agents as its registry has them now, by the call that started each one's
     /// latest round. Kept by the chat, not folded from events: they work outside the run.
     pub agents: std::collections::HashMap<String, AgentInfo>,
+    /// Suggested tasks this chat's own messages started, by suggestion id. Read from the
+    /// transcript the way version 2 did, so it is right after a relaunch too.
+    pub started: std::collections::HashSet<String>,
+    /// What cards' state comes from besides the transcript — dismissals, queue and opened
+    /// chats — kept by the chat, which knows the store and its queue.
+    pub suggestion_view: SuggestionView,
     /// MCP notes saved before the message of the run they belong to, held for its turn.
     held_notices: Vec<String>,
 }
@@ -443,7 +452,17 @@ impl Conversation {
             self.entries.pop();
         }
         self.close_turn(if steered { at } else { None });
-        self.entries.push(Entry::Prompt { text: text.to_string(), steered, command });
+        // A message that started a suggested task carries a generated tail: it never shows, its
+        // words are the prompt, and the suggestion reads as started here.
+        let (text, suggestion) = match command {
+            Some(_) => (text.to_string(), None),
+            None => suggestions::split(text),
+        };
+        if let Some(started) = &suggestion {
+            self.started.insert(started.id.clone());
+            self.suggestion_view.queued.remove(&started.id);
+        }
+        self.entries.push(Entry::Prompt { text, steered, command, suggestion });
         let mut turn = Turn::new(at, live);
         turn.notices = std::mem::take(&mut self.held_notices);
         self.entries.push(Entry::Turn(turn));
@@ -514,6 +533,17 @@ impl Conversation {
             Event::Notice(text) => turn.notices.push(text.clone()),
             Event::Steered(_) | Event::Question { .. } | Event::Noted { .. } => {}
         }
+    }
+
+    /// The suggested task a call of this chat filed, by its tool-call id.
+    pub fn suggestion(&self, id: &str) -> Option<suggestions::Card> {
+        self.entries.iter().find_map(|entry| match entry {
+            Entry::Turn(turn) => turn.steps.iter().find_map(|step| match step {
+                Step::Tool(tool) if tool.id == id => suggestions::card_from_step(tool),
+                _ => None,
+            }),
+            _ => None,
+        })
     }
 
     /// The run ended.
@@ -792,6 +822,39 @@ mod tests {
         }
         let Entry::Turn(first) = &live.entries[1] else { panic!() };
         assert_eq!(first.reply, "Started it.", "the earlier reply stays a reply");
+    }
+
+    #[test]
+    fn a_message_that_started_a_suggestion_keeps_its_words_and_records_the_start() {
+        let card = suggestions::Card {
+            id: "sug-1".into(),
+            kind: suggestions::Kind::Bug,
+            title: "Fix the flash".into(),
+            description: "The queue row blinks.".into(),
+        };
+        let text = suggestions::compose(&card, None);
+
+        let mut live = Conversation::default();
+        live.send(&text, 10);
+        let replayed = Conversation::from_history(&[at(Message::user(&text), 10, None)]);
+        for conversation in [&live, &replayed] {
+            assert!(matches!(
+                conversation.entries.first(),
+                Some(Entry::Prompt { text: prompt, suggestion: Some(started), .. })
+                    if prompt.as_str() == "Fix the flash\n\nThe queue row blinks." && started.id == "sug-1"
+            ));
+            assert!(conversation.started.contains("sug-1"), "a replay finds the start too");
+        }
+
+        // A slash command never splits, so a suggested title leading with '/' stays a command's text.
+        let command = CommandUse { name: "pdf".into(), args: String::new(), kind: wack_core::skills::Kind::Skill };
+        let mut conversation = Conversation::default();
+        conversation.send_command(&text, command, 10);
+        assert!(matches!(
+            conversation.entries.first(),
+            Some(Entry::Prompt { text: prompt, suggestion: None, .. }) if prompt == &text
+        ));
+        assert!(conversation.started.is_empty());
     }
 
     #[test]

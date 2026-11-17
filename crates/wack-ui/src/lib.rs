@@ -38,6 +38,8 @@ pub mod shell;
 pub mod sidebar;
 pub mod skills_page;
 pub mod specimen;
+pub mod suggestion;
+pub mod suggestions;
 pub mod tags;
 pub mod text_field;
 pub mod theme;

@@ -42,9 +42,10 @@ use wack_core::{
 };
 
 use crate::{
-    conversation::{Conversation, Entry},
+    conversation::{Conversation, Entry, Step},
     panes::{ChatPanes, Layout, PaneKind, PaneModel},
     question::{self, Draft},
+    suggestions::{self, View as SuggestionView},
     text_field::{TextField, TextFieldEvent},
     transcript::Item,
     typography::Type,
@@ -325,11 +326,17 @@ impl ChatSession {
         }
         let from = self.conversation.entries.len();
         let compacting = matches!(job, Job::Compact(_));
+        let started_before = self.conversation.started.len();
         match &job {
             Job::Prompt(text) => self.conversation.send(text, now_millis()),
             Job::Command { text, command } => self.conversation.send_command(text, command.clone(), now_millis()),
             Job::Compact(_) => self.conversation.begin_compaction(),
             Job::Wake => self.conversation.wake(now_millis()),
+        }
+        if self.conversation.started.len() != started_before {
+            // The message just sent started a suggested task: its card on the earlier turn
+            // reads started now (and is out of the queue, which `begin` already dropped).
+            self.refresh_suggestions();
         }
 
         // What was done before this run folds away.
@@ -553,6 +560,56 @@ impl ChatSession {
     /// The project folder the chat works in.
     pub fn cwd(&self) -> &std::path::Path {
         &self.cwd
+    }
+
+    /// The suggested task a call of this chat filed, by its tool-call id.
+    pub fn suggestion(&self, id: &str) -> Option<suggestions::Card> {
+        self.conversation.suggestion(id)
+    }
+
+    /// Brings the cards' outside state up to date — dismissals and opened chats from the
+    /// store — filling in this chat's queue.
+    pub fn sync_suggestion_view(&mut self, mut view: SuggestionView, cx: &mut Context<Self>) {
+        view.queued = self.queued_suggestions();
+        if view != self.conversation.suggestion_view {
+            self.conversation.suggestion_view = view;
+            self.refresh_suggestions();
+            cx.notify();
+        }
+    }
+
+    /// The send queue moved: cards it holds a suggestion for read as queued.
+    pub fn sync_suggestion_queue(&mut self, cx: &mut Context<Self>) {
+        let queued = self.queued_suggestions();
+        if queued != self.conversation.suggestion_view.queued {
+            self.conversation.suggestion_view.queued = queued;
+            self.refresh_suggestions();
+            cx.notify();
+        }
+    }
+
+    /// Suggested tasks waiting in the send queue, by id.
+    fn queued_suggestions(&self) -> HashSet<String> {
+        self.queue
+            .iter()
+            .filter_map(|text| suggestions::split(text).1.map(|started| started.id))
+            .collect()
+    }
+
+    /// Rebuilds the entries whose turns hold suggestion cards.
+    fn refresh_suggestions(&mut self) {
+        let entries: Vec<usize> = self
+            .conversation
+            .entries
+            .iter()
+            .enumerate()
+            .filter_map(|(index, entry)| {
+                matches!(entry, Entry::Turn(turn) if turn.steps.iter().any(|step| matches!(step, Step::Tool(tool) if tool.name == wack_core::suggest::SUGGEST_TASK))).then_some(index)
+            })
+            .collect();
+        for index in entries {
+            self.refresh_entry(index);
+        }
     }
 
     /// The text of the latest finished reply, for `/copy`.
@@ -790,6 +847,8 @@ impl ChatSession {
             let holds = self.items[start..start + span].iter().any(|item| match item {
                 Item::Work(work) => work.key.as_ref() == key || work.rows.iter().any(|row| row.key.as_ref() == key),
                 Item::News(row) => row.key.as_ref() == key,
+                Item::Prompt { command: Some(command), .. } => command.key.as_ref() == key,
+                Item::Suggestions(tray) => tray.cards.iter().any(|card| card.holds(key)),
                 _ => false,
             });
             if holds {

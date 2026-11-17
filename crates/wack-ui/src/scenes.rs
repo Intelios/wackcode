@@ -128,6 +128,29 @@ pub fn all() -> Vec<Scene> {
             },
         },
         Scene {
+            name: "suggestions",
+            description: "The suggested-task tray under a settled turn: open, queued, started, opened-in and dismissed cards.",
+            size: size(px(1180.), px(1240.)),
+            build: |_, cx| {
+                cx.new(|_| {
+                    Shell::showing_tabs(
+                        fixtures::sidebar(Selected::Finished),
+                        Screen::Chat {
+                            title: fixtures::FINISHED_TITLE.into(),
+                            project: fixtures::project(),
+                            body: Body::Items(fixtures::suggestions_turn()),
+                            composer: fixtures::composer_after_turn(crate::composer::Input::Drawn {
+                                text: None,
+                                placeholder: crate::chat::FOLLOW_UP_PLACEHOLDER.into(),
+                            }),
+                        },
+                        fixtures::strip(Some(fixtures::FINISHED_TITLE)),
+                    )
+                })
+                .into()
+            },
+        },
+        Scene {
             name: "chat-panes",
             description: "A chat with Changes beside the transcript and a terminal below, at a wide window.",
             size: size(px(1480.), px(940.)),

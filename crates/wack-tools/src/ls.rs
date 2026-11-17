@@ -33,6 +33,7 @@ impl Tool for Ls {
             hint: "list what is in a folder".into(),
             guidelines: Vec::new(),
             ends_run: false,
+            together: false,
         }
     }
 

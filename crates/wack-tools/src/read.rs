@@ -37,6 +37,7 @@ impl Tool for Read {
             hint: "read a file's contents".into(),
             guidelines: Vec::new(),
             ends_run: false,
+            together: false,
         }
     }
 

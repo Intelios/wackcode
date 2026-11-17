@@ -31,6 +31,7 @@ impl Tool for Look {
             hint: "Reads a file.".into(),
             guidelines: Vec::new(),
             ends_run: false,
+            together: false,
         }
     }
 
@@ -218,4 +219,184 @@ async fn stopping_the_parent_stops_the_child_it_waits_for() {
     tokio::time::timeout(Duration::from_secs(5), child.ended()).await.expect("the child stopped");
     assert_eq!(agents.list()[0].status, Status::Stopped { by: StoppedBy::User });
     assert!(Path::new(&agents.list()[0].session).exists());
+}
+
+/// Waits until the test opens it, for children that must still be working at a given moment.
+struct Gate(Arc<tokio::sync::Semaphore>);
+
+#[async_trait]
+impl Tool for Gate {
+    fn spec(&self) -> ToolSpec {
+        ToolSpec { name: "gate".into(), ..Look.spec() }
+    }
+
+    async fn run(&self, _input: Value, _context: &ToolContext<'_>) -> Result<String, String> {
+        let _pass = self.0.acquire().await.map_err(|_| "closed".to_string())?;
+        Ok("through".into())
+    }
+}
+
+/// Passes only once two calls are waiting in it at the same time.
+struct Meet(Arc<tokio::sync::Barrier>);
+
+#[async_trait]
+impl Tool for Meet {
+    fn spec(&self) -> ToolSpec {
+        ToolSpec { name: "meet".into(), ..Look.spec() }
+    }
+
+    async fn run(&self, _input: Value, _context: &ToolContext<'_>) -> Result<String, String> {
+        tokio::time::timeout(Duration::from_secs(5), self.0.wait()).await.map(|_| "met".to_string()).map_err(|_| "alone".to_string())
+    }
+}
+
+/// A parent with extra tools its children can use, and a role of the user's that may use them.
+fn parent_with(steps: Vec<Step>, child: ScriptedProvider, extra: Vec<Arc<dyn Tool>>) -> Parent {
+    let mut parent = parent(steps, child.clone(), AgentMode::Build, None);
+    let roles = tempfile::tempdir().unwrap();
+    std::fs::write(roles.path().join("helper.md"), "---\ndescription: Helps\ntools: [read, gate, meet]\n---\nHelp.").unwrap();
+    let catalog = definition::load(&[crate::skills::Root { path: roles.path().into(), label: "Yours".into() }], &Default::default());
+    let setup = AgentsSetup {
+        catalog: catalog.agents,
+        delegation: Delegation::Auto,
+        chat: ChildModel { provider: Arc::new(child), settings: settings("m"), recorder: None },
+        helper: None,
+        agents: parent.agents.clone(),
+    };
+    let session = Session::open(&parent.folder.path().join("sessions/chat-1.jsonl")).unwrap();
+    let kit = Kit::new(&session, Some(AgentMode::Build), false, None).with_agents(&session, setup);
+    let mut tools: Vec<Arc<dyn Tool>> = vec![Arc::new(Look)];
+    tools.extend(extra);
+    tools.extend(kit.agent_tools(&tools));
+    let agent = Agent::new(Arc::new(parent.provider.clone()), Arc::new(Registry::new(tools).unwrap()), session, &Profile::code(), settings("p"));
+    parent.agent = kit.attach(agent);
+    parent
+}
+
+fn helper(id: &str, prompt: &str, background: bool) -> (String, String, Value) {
+    let mut input = json!({ "agent": "helper", "description": prompt, "prompt": prompt });
+    if background {
+        input["background"] = json!(true);
+    }
+    (id.to_string(), AGENT.to_string(), input)
+}
+
+fn calls(list: &[(String, String, Value)]) -> Step {
+    let borrowed: Vec<(&str, &str, Value)> = list.iter().map(|(id, name, input)| (id.as_str(), name.as_str(), input.clone())).collect();
+    call(&borrowed)
+}
+
+#[tokio::test]
+async fn agents_started_in_one_reply_work_at_the_same_time() {
+    // Each child waits for the other in `meet`: run one after the other, both would be alone.
+    let child = ScriptedProvider::new([
+        call(&[("m1", "meet", json!({}))]),
+        call(&[("m2", "meet", json!({}))]),
+        say("first done"),
+        say("second done"),
+    ]);
+    let meet: Arc<dyn Tool> = Arc::new(Meet(Arc::new(tokio::sync::Barrier::new(2))));
+    let mut parent = parent_with(vec![calls(&[helper("p1", "one", false), helper("p2", "two", false)]), say("both")], child, vec![meet]);
+    parent.run("Go", &Control::new()).await.unwrap();
+    let results = parent.results();
+    assert_eq!(results.len(), 2);
+    assert!(results.iter().all(|(text, is_error)| !is_error && text.contains("done")), "{results:?}");
+    let saved = std::fs::read_to_string(parent.folder.path().join("sessions/chat-1/a1.jsonl")).unwrap();
+    assert!(saved.contains("met") && !saved.contains("alone"));
+}
+
+#[tokio::test]
+async fn a_background_report_arrives_as_a_note_and_wakes_the_parent() {
+    let gate = Arc::new(tokio::sync::Semaphore::new(0));
+    let child = ScriptedProvider::new([call(&[("g", "gate", json!({}))]), say("Found it.")]);
+    let mut parent = parent_with(
+        vec![calls(&[helper("p1", "look", true)]), say("It's working; I'll report back."), say("The agent found it.")],
+        child,
+        vec![Arc::new(Gate(gate.clone()))],
+    );
+    parent.run("Go", &Control::new()).await.unwrap();
+    let (started, is_error) = &parent.results()[0];
+    assert!(!is_error && started.starts_with("Started agent a1 (helper) in the background."));
+    assert_eq!(parent.agents.active().len(), 1);
+
+    gate.add_permits(1);
+    parent.agents.get("a1").unwrap().ended().await;
+    assert!(parent.agents.wakes());
+    assert_eq!(parent.agent.wake(&Control::new(), &|_| {}).await, Ok(Outcome::Done));
+    let last = parent.provider.requests().last().unwrap().clone();
+    let note = last.messages.iter().rev().find(|message| message.text().contains("finished in the background")).unwrap().text();
+    assert!(note.contains("Agent a1 (helper · look) finished in the background. Its report:\n\nFound it."), "{note}");
+    assert!(!parent.agents.has_news(), "told once");
+}
+
+#[tokio::test]
+async fn the_user_can_move_a_waited_for_agent_to_the_background() {
+    let gate = Arc::new(tokio::sync::Semaphore::new(0));
+    let child = ScriptedProvider::new([call(&[("g", "gate", json!({}))]), say("Done at last.")]);
+    let mut parent = parent_with(vec![calls(&[helper("p1", "slow", false)]), say("ok")], child, vec![Arc::new(Gate(gate.clone()))]);
+    let agents = parent.agents.clone();
+    tokio::spawn(async move {
+        while agents.active().first().is_none_or(|info| info.tool_calls == 0) {
+            tokio::time::sleep(Duration::from_millis(5)).await;
+        }
+        assert!(agents.background_foreground());
+    });
+    parent.run("Go", &Control::new()).await.unwrap();
+    let (moved, _) = &parent.results()[0];
+    assert!(moved.starts_with("The user moved agent a1 (helper) to the background"), "{moved}");
+    gate.add_permits(1);
+    parent.agents.get("a1").unwrap().ended().await;
+    assert!(parent.agents.take_news()[0].text.contains("Done at last."));
+}
+
+#[tokio::test]
+async fn past_six_at_once_agents_queue_and_stop_all_reaches_the_queue() {
+    let gate = Arc::new(tokio::sync::Semaphore::new(0));
+    let steps: Vec<Step> = (0..6).map(|index| call(&[(&format!("g{index}"), "gate", json!({}))])).collect();
+    let child = ScriptedProvider::new(steps);
+    let starts: Vec<(String, String, Value)> = (0..7).map(|index| helper(&format!("p{index}"), "wait", true)).collect();
+    let mut parent = parent_with(vec![calls(&starts), say("All started.")], child, vec![Arc::new(Gate(gate))]);
+    parent.run("Go", &Control::new()).await.unwrap();
+    let agents = parent.agents.clone();
+    tokio::time::timeout(Duration::from_secs(5), async {
+        while agents.list().iter().filter(|info| info.status == Status::Running && info.tool_calls == 1).count() < 6 {
+            tokio::time::sleep(Duration::from_millis(5)).await;
+        }
+    })
+    .await
+    .unwrap();
+    assert_eq!(agents.list()[6].status, Status::Queued);
+
+    agents.stop_all();
+    for info in agents.list() {
+        agents.get(&info.id).unwrap().ended().await;
+    }
+    assert!(agents.list().iter().all(|info| info.status == Status::Stopped { by: StoppedBy::User }));
+    assert!(!agents.wakes(), "the user stopped them: their reports don't wake the chat");
+    assert_eq!(agents.take_news().len(), 7, "each stopped agent still reports once");
+}
+
+#[tokio::test]
+async fn waiting_for_tasks_also_waits_for_an_agent_in_the_background() {
+    let gate = Arc::new(tokio::sync::Semaphore::new(0));
+    let child = ScriptedProvider::new([call(&[("g", "gate", json!({}))]), say("Found it.")]);
+    let mut parent = parent_with(
+        vec![
+            calls(&[helper("p1", "look", true)]),
+            call(&[("w", crate::tasks::WAIT_FOR_TASKS, json!({}))]),
+            say("It found it."),
+        ],
+        child,
+        vec![Arc::new(Gate(gate.clone())), Arc::new(crate::tasks::WaitForTasks)],
+    );
+    let opener = gate.clone();
+    tokio::spawn(async move {
+        tokio::time::sleep(Duration::from_millis(50)).await;
+        opener.add_permits(1);
+    });
+    assert_eq!(parent.run("Go", &Control::new()).await, Ok(Outcome::Done));
+    let (waited, is_error) = &parent.results()[1];
+    assert!(!is_error, "{waited}");
+    assert!(waited.contains("Agent a1 (helper · look) finished in the background. Its report:\n\nFound it."), "{waited}");
+    assert!(!parent.agents.has_news(), "handed over once, by the wait");
 }

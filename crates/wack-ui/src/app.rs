@@ -2072,7 +2072,7 @@ impl AppState {
         }
     }
 
-    /// A background task in an idle chat has news: the chat wakes so the model can act on it,
+    /// A background task or sub-agent in an idle chat has news: the chat wakes so the model can act on it,
     /// unless something is waiting on the user (a plan to review, a queued message), the user
     /// stopped the last run, or it has already woken [`MAX_WAKES`] times since they last wrote.
     /// The news is never lost: it waits for the next run, and the tasks pill shows it.
@@ -2080,18 +2080,24 @@ impl AppState {
         let Some(session) = self.sessions.get(chat).cloned() else {
             return;
         };
-        let may = {
+        // A sub-agent's report doesn't count against the cap: each answers an agent the model
+        // started, and how many may start between the user's messages is capped instead.
+        let (may, counted) = {
             let session = session.read(cx);
-            !session.running()
-                && session.tasks.wakes()
+            let agents = session.agents.wakes();
+            let tasks = session.tasks.wakes() && session.wakes < MAX_WAKES;
+            let may = !session.running()
+                && (agents || tasks)
                 && session.awaiting_plan().is_none()
                 && session.queue.is_empty()
                 && session.asking.is_none()
-                && !session.wake_paused
-                && session.wakes < MAX_WAKES
+                && !session.wake_paused;
+            (may, !agents)
         };
         if may {
-            session.update(cx, |session, _| session.wakes += 1);
+            if counted {
+                session.update(cx, |session, _| session.wakes += 1);
+            }
             self.run(chat, Job::Wake, cx);
         }
     }
@@ -2194,7 +2200,7 @@ impl AppState {
                     ChatEvent::Finished(result) => app.finished(&id, result, cx),
                     ChatEvent::LayoutChanged => app.layout_changed(&id, cx),
                     ChatEvent::ModeChanged(mode) => app.set_chat_mode(&id, *mode, cx),
-                    ChatEvent::TasksNews => app.wake(&id, cx),
+                    ChatEvent::TasksNews | ChatEvent::AgentsNews => app.wake(&id, cx),
                 }
             }),
             cx.subscribe(&composer, {

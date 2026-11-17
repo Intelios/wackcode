@@ -41,6 +41,7 @@ impl Tool for Find {
             hint: "find files and folders by name or glob".into(),
             guidelines: Vec::new(),
             ends_run: false,
+            together: false,
         }
     }
 

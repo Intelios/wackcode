@@ -285,6 +285,7 @@ impl Tool for Todo {
                 "You can emit several `todo` calls in one response — create all known tasks at once instead of one per turn. A task created in the same batch can't be referenced by id (e.g. as a blockedBy target) until the next turn.".into(),
             ],
             ends_run: false,
+            together: false,
         }
     }
 

@@ -64,6 +64,7 @@ impl Tool for Bash {
                 "A server or watcher can stay up across turns: start it with bash's run_in_background, and stop it with {STOP_TASK} once it is no longer needed. You are told when a background command finishes, so never poll it, sleep while it runs, or start a second copy."
             )],
             ends_run: false,
+            together: false,
         }
     }
 

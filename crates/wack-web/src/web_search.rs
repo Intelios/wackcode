@@ -51,6 +51,7 @@ impl Tool for WebSearch {
             hint: "search the web for current or external information".into(),
             guidelines: Vec::new(),
             ends_run: false,
+            together: false,
         }
     }
 

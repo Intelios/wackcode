@@ -100,6 +100,7 @@ impl Tool for StopTask {
             hint: "stop a background command or watch by its ID".into(),
             guidelines: Vec::new(),
             ends_run: false,
+            together: false,
         }
     }
 
@@ -128,21 +129,23 @@ impl Tool for WaitForTasks {
         ToolSpec {
             name: WAIT_FOR_TASKS.into(),
             description: format!(
-                "Pauses until one of your background commands or watches reports something (finishes, or prints watched lines), then returns what arrived and what is still running. Call it only when you have no other work and cannot go on without the result; otherwise carry on, or end your turn: you are told when tasks report, even after your turn has ended. It waits at most {} seconds, and only once per reply.",
+                "Pauses until one of your background commands, watches or agents reports something (a command finishes or prints watched lines, an agent finishes), then returns what arrived and what is still running. Call it only when you have no other work and cannot go on without the result; otherwise carry on, or end your turn: you are told when they report, even after your turn has ended. It waits at most {} seconds, and only once per reply.",
                 WAIT_LIMIT.as_secs()
             ),
             input_schema: json!({ "type": "object", "properties": {} }),
             loading: Loading::Always,
             parallel_safe: false,
-            hint: "pause until a background command reports, when there is nothing else to do".into(),
+            hint: "pause until a background command or agent reports, when there is nothing else to do".into(),
             guidelines: Vec::new(),
             ends_run: false,
+            together: false,
         }
     }
 
     async fn run(&self, _input: Value, context: &ToolContext<'_>) -> Result<String, String> {
-        let tasks = &context.tasks;
-        if tasks.running().is_empty() && !tasks.has_news() {
+        let (tasks, agents) = (&context.tasks, &context.agents);
+        let agents_working = || agents.active().into_iter().filter(|info| info.background).collect::<Vec<_>>();
+        if tasks.running().is_empty() && !tasks.has_news() && agents_working().is_empty() && !agents.has_news() {
             return Err("Nothing is running in the background, so there is nothing to wait for.".to_string());
         }
         let reply = tasks.inner.replies.load(Ordering::SeqCst);
@@ -153,12 +156,17 @@ impl Tool for WaitForTasks {
             );
         }
         let started = Instant::now();
-        tokio::select! {
-            () = tasks.news() => {}
-            () = tokio::time::sleep(WAIT_LIMIT) => {}
-            () = context.cancel.cancelled() => return Err("Stopped by the user while waiting. The tasks are still running.".to_string()),
+        if !tasks.has_news() && !agents.has_news() {
+            tokio::select! {
+                () = tasks.news() => {}
+                () = agents.news() => {}
+                () = tokio::time::sleep(WAIT_LIMIT) => {}
+                () = context.cancel.cancelled() => return Err("Stopped by the user while waiting. The tasks are still running.".to_string()),
+            }
         }
-        let news = tasks.take_news();
+        // An agent's report is handed over here rather than as a note: it leaves the inbox once.
+        let mut news = tasks.take_news();
+        news.extend(agents.take_news());
         let mut parts = Vec::new();
         if news.is_empty() {
             parts.push(format!("Nothing reported in {}.", elapsed(started.elapsed())));
@@ -167,7 +175,8 @@ impl Tool for WaitForTasks {
             parts.extend(news.into_iter().map(|note| note.text));
         }
         let running = tasks.running();
-        if running.is_empty() {
+        let working = agents_working();
+        if running.is_empty() && working.is_empty() {
             parts.push("Nothing else is running.".to_string());
         } else {
             let mut list = vec!["Still running:".to_string()];
@@ -175,6 +184,10 @@ impl Tool for WaitForTasks {
                 let info = task.info();
                 let last = if info.last_line.trim().is_empty() { String::new() } else { format!(" — last line: {}", info.last_line.trim()) };
                 list.push(format!("- {} (`{}`), for {}{last}", info.id, first_line(&info.command), elapsed(task.elapsed())));
+            }
+            for info in working {
+                let since = agents.get(&info.id).map(|child| elapsed(child.elapsed())).unwrap_or_default();
+                list.push(format!("- agent {} ({} · {}), for {since}", info.id, info.role, info.description));
             }
             parts.push(list.join("\n"));
         }
@@ -223,6 +236,7 @@ impl Tool for Watch {
             hint: "run a command in the background and be told each line it prints (watch a server for errors)".into(),
             guidelines: Vec::new(),
             ends_run: false,
+            together: false,
         }
     }
 

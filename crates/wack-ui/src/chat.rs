@@ -18,6 +18,9 @@
 //! - The chat's shell tasks (`tasks`) live here, not in a run, so a server the agent started
 //!   keeps running between turns; dropping the chat stops them. When one has news for the model
 //!   the chat tells the app ([`ChatEvent::TasksNews`]), which decides whether to wake it.
+//! - The chat's sub-agents (`agents`) live here too, so one working in the background outlives
+//!   the run that started it. Stop (Esc) stops every one of them: an agent left running only
+//!   spends tokens. A report waiting for the model is [`ChatEvent::AgentsNews`].
 //! - A question the agent asks (`asking`) is answered exactly once: answering, cancelling,
 //!   stopping or the run ending all clear it. Its drafts live here, so switching chats keeps them.
 
@@ -34,6 +37,7 @@ use gpui_tokio::Tokio;
 use wack_core::{
     Control, Event, HistoryEntry, Job, Outcome, RunEvent, RunSetup, Runner,
     tasks::{Signal, Tasks},
+    agents::{Agents, Signal as AgentSignal},
     ask::{Answer, Question},
 };
 
@@ -61,6 +65,8 @@ pub enum ChatEvent {
     ModeChanged(wack_core::AgentMode),
     /// A background task has news for the model.
     TasksNews,
+    /// A sub-agent in the background reported.
+    AgentsNews,
 }
 
 pub struct ChatSession {
@@ -110,7 +116,10 @@ pub struct ChatSession {
     /// paused because the user stopped the last run.
     pub wakes: u32,
     pub wake_paused: bool,
+    /// Sub-agents the agent started, which outlive its runs.
+    pub agents: Agents,
     _tasks_watch: Task<()>,
+    _agents_watch: Task<()>,
 }
 
 /// A question the agent is waiting on, and the answers so far.
@@ -192,6 +201,8 @@ impl ChatSession {
         let tasks = Tasks::new(tasks_folder);
         let tasks_watch = watch_tasks(&tasks, cx);
         panes.set_tasks(tasks.clone());
+        let agents = Agents::new();
+        let agents_watch = watch_agents(&agents, cx);
         let mut chat = Self {
             id: id.to_string(),
             cwd,
@@ -221,7 +232,9 @@ impl ChatSession {
             mcp_starting: Vec::new(),
             wakes: 0,
             wake_paused: false,
+            agents,
             _tasks_watch: tasks_watch,
+            _agents_watch: agents_watch,
         };
         chat.refresh_from(0);
         chat.panes.sync(cx, |_, cx| cx.notify());
@@ -296,6 +309,9 @@ impl ChatSession {
         });
         let mut setup = setup;
         setup.tasks = Some(self.tasks.clone());
+        if let Some(agents) = setup.agents.as_mut() {
+            agents.agents = self.agents.clone();
+        }
         let run = Tokio::spawn(cx, wack_core::run(setup, job, control.clone(), sink));
         let events = cx.spawn(async move |this, cx| {
             while let Some(first) = receiver.next().await {
@@ -333,12 +349,14 @@ impl ChatSession {
         cx.notify();
     }
 
+    /// Stops the run and every sub-agent, in the foreground or the background.
     pub fn stop(&mut self, cx: &mut Context<Self>) {
+        self.agents.stop_all();
         if let Some(run) = &self.run {
             run.control.stop();
             self.close_question(cx);
-            cx.notify();
         }
+        cx.notify();
     }
 
     /// The agent asked: shows the card, and gives it focus.
@@ -686,9 +704,11 @@ impl ChatSession {
         })
     }
 
-    /// Moves the command the agent is waiting on to the background (⌘B). False when none is.
+    /// Moves the command or the sub-agents the agent is waiting on to the background (⌘B).
+    /// False when it waits on none.
     pub fn background_command(&mut self, cx: &mut Context<Self>) -> bool {
         let moved = self.tasks.background_foreground();
+        let moved = self.agents.background_foreground() || moved;
         cx.notify();
         moved
     }
@@ -809,6 +829,42 @@ fn watch_tasks(tasks: &Tasks, cx: &mut Context<ChatSession>) -> Task<()> {
                 return;
             }
             // Output can arrive in a flood: redraw at most ten times a second.
+            cx.background_executor().timer(Duration::from_millis(100)).await;
+        }
+    })
+}
+
+/// Redraws the chat as its sub-agents work, and tells the app when one in the background has
+/// reported. While any works, it also redraws each second, so their times keep counting.
+fn watch_agents(agents: &Agents, cx: &mut Context<ChatSession>) -> Task<()> {
+    let (sender, mut receiver) = mpsc::unbounded::<AgentSignal>();
+    agents.set_observer(move |signal| {
+        let _ = sender.unbounded_send(signal);
+    });
+    cx.spawn(async move |this, cx| {
+        loop {
+            let first = futures::select_biased! {
+                signal = receiver.next() => match signal {
+                    Some(signal) => Some(signal),
+                    None => return,
+                },
+                () = futures::FutureExt::fuse(cx.background_executor().timer(Duration::from_secs(1))) => None,
+            };
+            let mut news = first == Some(AgentSignal::News);
+            while let Ok(signal) = receiver.try_recv() {
+                news |= signal == AgentSignal::News;
+            }
+            let kept = this.update(cx, |chat, cx| {
+                if first.is_some() || !chat.agents.active().is_empty() {
+                    cx.notify();
+                }
+                if news {
+                    cx.emit(ChatEvent::AgentsNews);
+                }
+            });
+            if kept.is_err() {
+                return;
+            }
             cx.background_executor().timer(Duration::from_millis(100)).await;
         }
     })

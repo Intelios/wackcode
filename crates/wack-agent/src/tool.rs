@@ -8,6 +8,7 @@ use tokio_util::sync::CancellationToken;
 
 use crate::{
     agent::{Control, Event, EventSink},
+    agents::Agents,
     ask::{Answer, Question},
     tasks::Tasks,
 };
@@ -38,6 +39,10 @@ pub struct ToolSpec {
     pub guidelines: Vec<String>,
     /// A call that succeeds ends the run: its result is saved and the model is not asked again.
     pub ends_run: bool,
+    /// Calls run side by side with their neighbours that are also `together` or `parallel_safe`,
+    /// though the tool may change things: each call does separate work the model asked for at
+    /// once (sub-agents). Unlike `parallel_safe`, it says nothing to Plan mode.
+    pub together: bool,
 }
 
 /// What a running tool is given.
@@ -52,12 +57,14 @@ pub struct ToolContext<'a> {
     pub user: User<'a>,
     /// The chat's shell tasks, which outlive the run.
     pub tasks: Tasks,
+    /// The chat's sub-agents, so a wait can include the ones in the background.
+    pub agents: Agents,
 }
 
 impl ToolContext<'static> {
     /// A context with nobody on the other end, for running a tool outside a run.
     pub fn detached(cwd: impl Into<PathBuf>) -> Self {
-        Self { call_id: String::new(), cwd: cwd.into(), cancel: CancellationToken::new(), user: User::nobody(), tasks: Tasks::scratch() }
+        Self { call_id: String::new(), cwd: cwd.into(), cancel: CancellationToken::new(), user: User::nobody(), tasks: Tasks::scratch(), agents: Agents::new() }
     }
 }
 

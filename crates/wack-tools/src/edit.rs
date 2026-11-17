@@ -49,6 +49,7 @@ impl Tool for Edit {
             hint: "change parts of an existing file by exact text replacement".into(),
             guidelines: Vec::new(),
             ends_run: false,
+            together: false,
         }
     }
 

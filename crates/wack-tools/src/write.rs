@@ -32,6 +32,7 @@ impl Tool for Write {
             hint: "create a file or replace one entirely".into(),
             guidelines: Vec::new(),
             ends_run: false,
+            together: false,
         }
     }
 

@@ -59,6 +59,7 @@ impl Tool for Grep {
             hint: "search file contents by regular expression".into(),
             guidelines: Vec::new(),
             ends_run: false,
+            together: false,
         }
     }
 

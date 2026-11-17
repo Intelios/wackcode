@@ -313,6 +313,7 @@ impl Tool for Enter {
             hint: "switch this chat into Plan or Ultra Plan when the work needs decisions settled first".into(),
             guidelines: vec!["Plan when useful.".into()],
             ends_run: false,
+            together: false,
         }
     }
 
@@ -358,6 +359,7 @@ impl Tool for Complete {
             hint: "submit the finished plan for the user's review, while Plan mode is on".into(),
             guidelines: Vec::new(),
             ends_run: true,
+            together: false,
         }
     }
 
@@ -392,6 +394,7 @@ mod tests {
             hint: String::new(),
             guidelines: Vec::new(),
             ends_run: false,
+            together: false,
         }
     }
 

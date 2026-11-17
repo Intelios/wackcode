@@ -38,6 +38,7 @@ use wack_llm::{
 };
 
 use crate::{
+    agents::Agents,
     ask::{Answer, Question},
     commands::CommandUse,
     compaction::{self, Summary},
@@ -279,6 +280,7 @@ pub struct Agent {
     system: Vec<SystemPart>,
     cwd: PathBuf,
     tasks: Tasks,
+    agents: Agents,
     recorder: Option<Arc<dyn Recorder>>,
 }
 
@@ -310,6 +312,7 @@ impl Agent {
             system,
             cwd,
             tasks: Tasks::scratch(),
+            agents: Agents::new(),
             recorder: None,
         }
     }
@@ -326,6 +329,12 @@ impl Agent {
     /// has a registry of its own that goes with it.
     pub fn with_tasks(mut self, tasks: Tasks) -> Self {
         self.tasks = tasks;
+        self
+    }
+
+    /// The chat's sub-agents, which tools may wait on. Without them, a run has none.
+    pub fn with_agents(mut self, agents: Agents) -> Self {
+        self.agents = agents;
         self
     }
 
@@ -596,7 +605,7 @@ impl Agent {
         }
 
         let features = &self.features;
-        let (cwd, tasks) = (&self.cwd, &self.tasks);
+        let (cwd, tasks, agents) = (&self.cwd, &self.tasks, &self.agents);
         let run_one = |index: usize| {
             let (id, name, input) = &calls[index];
             let plan = &plans[index];
@@ -606,6 +615,7 @@ impl Agent {
                 cancel: control.cancel.clone(),
                 user: User::new(control.clone(), events),
                 tasks: tasks.clone(),
+                agents: agents.clone(),
             };
             async move {
                 let context = &context;
@@ -634,9 +644,10 @@ impl Agent {
             }
         };
 
-        // Calls run in the model's order. Neighbours that are all safe to run side by side do;
-        // anything that changes state runs alone, after what came before it has finished.
-        let safe = |index: usize| matches!(&plans[index], Planned::Run { spec, .. } if spec.parallel_safe);
+        // Calls run in the model's order. Neighbours that are all safe to run side by side do, and
+        // so do calls made to run together (sub-agents); anything else that changes state runs
+        // alone, after what came before it has finished.
+        let safe = |index: usize| matches!(&plans[index], Planned::Run { spec, .. } if spec.parallel_safe || spec.together);
         let mut results = Vec::with_capacity(calls.len());
         let mut index = 0;
         while index < calls.len() {
@@ -765,6 +776,7 @@ mod tests {
             hint: format!("use {name} for {name} things"),
             guidelines: Vec::new(),
             ends_run: false,
+            together: false,
         }
     }
 

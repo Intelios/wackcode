@@ -392,10 +392,12 @@ async fn agent(args: &mut Args, folder: &Path) -> Result<ExitCode, String> {
     let control = if listening { Control::with_user() } else { Control::new() };
     let asking = Arc::new(asking::Asking::default());
     let stopper = control.clone();
+    let children = agents.clone();
     tokio::spawn(async move {
         if tokio::signal::ctrl_c().await.is_ok() {
             eprintln!("\nStopping. Press Ctrl-C again to quit at once.");
             stopper.stop();
+            children.stop_all();
         }
         if tokio::signal::ctrl_c().await.is_ok() {
             std::process::exit(130);
@@ -470,29 +472,39 @@ async fn agent(args: &mut Args, folder: &Path) -> Result<ExitCode, String> {
     // While commands run in the background the agent is not done: each report wakes it, as the
     // app would, up to MAX_WAKES times.
     let mut wakes = 0;
+    // Sub-agents in the background wake it the same way; their reports don't count against the
+    // cap, which their own start budget bounds.
+    let news = || tasks.has_news() || agents.has_news();
+    let working = || tasks.running().len() + agents.active().len();
     while matches!(outcome, Ok(Outcome::Done)) && !control.stopped() {
-        if !tasks.has_news() {
-            let running = tasks.running().len();
+        if !news() {
+            let running = working();
             if running == 0 {
                 break;
             }
             printer.finish();
-            eprintln!("{}", print::dim(&format!("Waiting on {running} background command{} — Ctrl-C stops {}.", if running == 1 { "" } else { "s" }, if running == 1 { "it" } else { "them" })));
-            while !tasks.has_news() && !control.stopped() && !tasks.running().is_empty() {
+            eprintln!("{}", print::dim(&format!("Waiting on {running} in the background — Ctrl-C stops {}.", if running == 1 { "it" } else { "them" })));
+            while !news() && !control.stopped() && working() > 0 {
                 tokio::select! {
                     () = tasks.news() => {}
+                    () = agents.news() => {}
                     () = tokio::time::sleep(std::time::Duration::from_millis(200)) => {}
                 }
             }
-            if !tasks.has_news() {
+            if control.stopped() {
+                agents.stop_all();
+            }
+            if !news() {
                 break;
             }
         }
-        if wakes == MAX_WAKES {
-            eprintln!("{}", print::dim(&format!("Background commands reported {MAX_WAKES} times in a row; stopping here.")));
-            break;
+        if !agents.has_news() {
+            if wakes == MAX_WAKES {
+                eprintln!("{}", print::dim(&format!("Background commands reported {MAX_WAKES} times in a row; stopping here.")));
+                break;
+            }
+            wakes += 1;
         }
-        wakes += 1;
         outcome = agent.wake(&control, &|event| printer.event(event)).await;
     }
     agents.stop_all();

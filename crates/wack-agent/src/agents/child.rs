@@ -13,7 +13,7 @@ use std::{
 use serde_json::Value;
 use wack_llm::{Provider, Role};
 
-use super::{AgentDef, Child, MAX_REPORT_CHARS, Status, StoppedBy, prompt::CHILD_PROMPT};
+use super::{AgentDef, Agents, Child, MAX_REPORT_CHARS, Status, StoppedBy, prompt::CHILD_PROMPT};
 use crate::{
     agent::{Agent, Control, Event, Feature, Outcome, Profile, Settings, Verdict},
     ask::ASK_USER_QUESTION,
@@ -74,9 +74,15 @@ pub(crate) struct Launch {
     pub ledger_id: String,
 }
 
-/// Starts `child`'s run on its own task. Its end is recorded on `child`, whatever happens.
-pub(crate) fn start(child: Arc<Child>, launch: Launch, control: Control) {
+/// Starts `child`'s run on its own task once one of the chat's places is free. Its end is
+/// recorded on `child`, whatever happens.
+pub(crate) fn start(child: Arc<Child>, agents: Agents, launch: Launch, control: Control) {
     tokio::spawn(async move {
+        let Some(_slot) = agents.slot(&control).await else {
+            child.finish(Status::Stopped { by: StoppedBy::User }, Err("It was stopped before it started.".to_string()));
+            return;
+        };
+        child.step(|live| live.status = Status::Running);
         let (status, report) = match run(&child, launch, &control).await {
             Ok(ended) => ended,
             Err(message) => (Status::Failed { message: message.clone() }, Err(format!("The agent could not start: {message}"))),
@@ -292,6 +298,7 @@ mod tests {
                 hint: String::new(),
                 guidelines: Vec::new(),
                 ends_run: false,
+                together: false,
             }
         }
 

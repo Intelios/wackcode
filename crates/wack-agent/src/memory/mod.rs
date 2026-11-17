@@ -91,6 +91,7 @@ impl Tool for Save {
                 "Updating beats accumulating: pass the existing note's name to rewrite it, and retire notes that no longer hold with memory_forget.".into(),
             ],
             ends_run: false,
+            together: false,
         }
     }
 
@@ -139,6 +140,7 @@ impl Tool for Recall {
                 "Recall a note when its index line looks relevant to the request; the title and description are only a summary of the body.".into(),
             ],
             ends_run: false,
+            together: false,
         }
     }
 
@@ -194,6 +196,7 @@ impl Tool for Forget {
             hint: "retire a saved memory note".into(),
             guidelines: Vec::new(),
             ends_run: false,
+            together: false,
         }
     }
 

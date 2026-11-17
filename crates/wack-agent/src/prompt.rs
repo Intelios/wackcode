@@ -200,6 +200,7 @@ mod tests {
             hint: format!("what {name} is for"),
             guidelines: vec![format!("Use {name} with care.")],
             ends_run: false,
+            together: false,
         }
     }
 

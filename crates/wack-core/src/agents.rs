@@ -15,13 +15,19 @@ use std::{
 };
 
 use serde::{Deserialize, Serialize};
+pub use wack_agent::{Agents, Delegation};
 use wack_agent::{
-    Agents, AgentsSetup, ChildModel, Delegation, Settings,
+    AgentsSetup, ChildModel, Settings,
     agents::definition::{self, Catalog},
     skills::Root,
 };
 
 use crate::store::{ModelChoice, Reasoning, Resolved, Store};
+
+// What the UI needs of sub-agents, so it depends on the engine alone.
+pub use wack_agent::agents::{
+    AGENT, AGENTS_STATE, Activity, AgentDef, AgentInfo, ModelPref, NOTE_PREFIX, Signal, Status, StoppedBy,
+};
 
 const LIBRARY_LABEL: &str = "Your agents";
 

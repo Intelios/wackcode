@@ -238,6 +238,7 @@ impl Tool for AskUserQuestion {
                 "Do not use ask_user_question for facts discoverable from the repository, trivial decisions, or confirmations of an obvious next step.".into(),
             ],
             ends_run: false,
+            together: false,
         }
     }
 

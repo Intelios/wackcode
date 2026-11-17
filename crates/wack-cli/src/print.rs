@@ -217,14 +217,14 @@ pub fn watch_agents(agents: &Agents) {
                     println!("    {}", dim(&format!("· {} {}", activity.tool, activity.target)));
                 }
             }
-            if !*ended && !child.status.running() {
+            if !*ended && !child.status.active() {
                 *ended = true;
                 let how = match &child.status {
                     AgentStatus::Done => "done".to_string(),
                     AgentStatus::Failed { message } => format!("failed: {message}"),
                     AgentStatus::Stopped { .. } => "stopped".to_string(),
                     AgentStatus::Interrupted => "interrupted".to_string(),
-                    AgentStatus::Running => unreachable!(),
+                    AgentStatus::Queued | AgentStatus::Running => unreachable!("it has ended"),
                 };
                 println!("  {}", paint("36", &format!("↳ {} {how} · {} tool calls", child.id, child.tool_calls)));
             }

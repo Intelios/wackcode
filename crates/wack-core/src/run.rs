@@ -158,6 +158,10 @@ pub async fn run(
         kit = kit.with_tasks(&session, tasks);
     }
     if let Some(agents) = setup.agents {
+        // A message from the user lets sub-agents start again.
+        if matches!(job, Job::Prompt(_) | Job::Command { .. }) {
+            agents.agents.reset_budget();
+        }
         kit = kit.with_agents(&session, agents);
     }
     let mut tools = wack_tools::core_tools();

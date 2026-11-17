@@ -101,6 +101,7 @@ impl Tool for McpTool {
             hint: hint(&self.server_name, &self.decl),
             guidelines: Vec::new(),
             ends_run: false,
+            together: false,
         }
     }
 

@@ -1,4 +1,5 @@
-//! `agent`: the parent model's way to start a sub-agent and wait for its report.
+//! `agent`: the parent model's way to start a sub-agent, and either wait for its report or let it
+//! work in the background and report when it ends.
 
 use std::{path::PathBuf, sync::Arc};
 
@@ -6,7 +7,7 @@ use async_trait::async_trait;
 use serde_json::{Value, json};
 
 use super::{
-    AgentsSetup, Delegation, ModelPref, Waiting, child_tools, children_folder,
+    AgentsSetup, Delegation, MAX_PER_MESSAGE, ModelPref, Waiting, child_tools, children_folder,
     child::{self, Launch},
     prompt,
 };
@@ -48,7 +49,8 @@ impl Tool for AgentTool {
                 "properties": {
                     "agent": { "type": "string", "enum": names, "description": "Which agent to start." },
                     "description": { "type": "string", "description": "A short label for the task, three to five words, shown to the user." },
-                    "prompt": { "type": "string", "description": "The complete brief: the goal, the context and paths it needs, and the report you want back. The agent sees nothing else." }
+                    "prompt": { "type": "string", "description": "The complete brief: the goal, the context and paths it needs, and the report you want back. The agent sees nothing else." },
+                    "background": { "type": "boolean", "description": "Return at once and let the agent work while you do other things. Its report arrives as a message when it ends. Leave this out when your next step needs the report." }
                 },
                 "required": ["agent", "description", "prompt"],
                 "additionalProperties": false
@@ -58,6 +60,7 @@ impl Tool for AgentTool {
             hint: prompt::AGENT_HINT.to_string(),
             guidelines: prompt::guidelines(self.setup.delegation == Delegation::OnRequest),
             ends_run: false,
+            together: true,
         }
     }
 
@@ -85,10 +88,17 @@ impl Tool for AgentTool {
             ModelPref::Helper => self.setup.helper.clone().unwrap_or_else(|| self.setup.chat.clone()),
             ModelPref::Chat => self.setup.chat.clone(),
         };
+        let agents = &self.setup.agents;
+        if !agents.spend() {
+            return Err(format!(
+                "You have started {MAX_PER_MESSAGE} agents since the user's last message, the most allowed. Carry on with what you have, or ask the user before starting more."
+            ));
+        }
+        let background = input["background"].as_bool() == Some(true);
         let description = if description.is_empty() { def.name.clone() } else { description.to_string() };
         let control = Control::new();
         let folder = children_folder(&self.parent_session);
-        let child = self.setup.agents.add(&folder, &def.name, &description, &context.call_id, &model.settings.model, def.edits(), control.clone());
+        let child = agents.add(&folder, &def.name, &description, &context.call_id, &model.settings.model, def.edits(), background, control.clone());
         let chat = self.parent_session.file_stem().map(|stem| stem.to_string_lossy().into_owned()).unwrap_or_default();
         let launch = Launch {
             tools: child_tools(def, &self.pool),
@@ -100,10 +110,33 @@ impl Tool for AgentTool {
             planning,
             ledger_id: format!("{chat}/{}", child.id),
         };
-        child::start(child.clone(), launch, control);
+        child::start(child.clone(), agents.clone(), launch, control);
+        if background {
+            return Ok(started_in_background(&child.id, &def.name));
+        }
         let waiting = Waiting(child.clone());
-        waiting.0.ended().await;
+        tokio::select! {
+            () = child.ended() => {}
+            () = child.detached() => {}
+        }
         drop(waiting);
+        // Moving and ending decide under one lock: a child that moved reports as a note.
+        if child.in_background() {
+            return Ok(moved_to_background(&child.id, &def.name));
+        }
         child.take_report().unwrap_or_else(|| Err("The agent's report was already delivered.".to_string()))
     }
+}
+
+fn started_in_background(id: &str, role: &str) -> String {
+    format!(
+        "Started agent {id} ({role}) in the background. Its report will arrive as a message when it finishes. Carry on with other work meanwhile; don't poll for it or guess what it will say."
+    )
+}
+
+/// The result of a call whose child the user moved to the background (⌘B).
+pub fn moved_to_background(id: &str, role: &str) -> String {
+    format!(
+        "The user moved agent {id} ({role}) to the background; it is still working. Its report will arrive as a message when it finishes. Carry on with other work meanwhile; don't poll for it or guess what it will say."
+    )
 }

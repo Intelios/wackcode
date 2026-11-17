@@ -12,7 +12,7 @@ use std::{path::PathBuf, sync::Arc};
 
 use crate::{
     agent::{Agent, Feature},
-    agents::{AgentTool, AgentsSetup, Delegation},
+    agents::{AgentTool, AgentsFeature, AgentsSetup, Delegation},
     ask::AskUserQuestion,
     memory::Memory,
     plan::{AgentMode, Plan},
@@ -32,8 +32,9 @@ pub struct Kit {
     skills: Option<String>,
     /// The chat's shell tasks, which outlive the run, and what the session said of them.
     tasks: Option<(Tasks, TasksFeature)>,
-    /// Sub-agents, with the session file their sessions go beside.
-    agents: Option<(AgentsSetup, PathBuf)>,
+    /// Sub-agents, with the session file their sessions go beside, and what the session said of
+    /// them.
+    agents: Option<(AgentsSetup, PathBuf, AgentsFeature)>,
     unrestricted: bool,
 }
 
@@ -67,14 +68,15 @@ impl Kit {
     /// Lets the chat start sub-agents. Their tools come from [`Kit::agent_tools`], once the
     /// chat's other tools are assembled.
     pub fn with_agents(mut self, session: &Session, setup: AgentsSetup) -> Self {
-        self.agents = Some((setup, session.path().to_path_buf()));
+        let feature = AgentsFeature::new(session, setup.agents.clone());
+        self.agents = Some((setup, session.path().to_path_buf(), feature));
         self
     }
 
     /// The sub-agent tools, given every other tool the chat has (children get their share of
     /// those). Nothing when sub-agents are off or no role is switched on.
     pub fn agent_tools(&self, pool: &[Arc<dyn Tool>]) -> Vec<Arc<dyn Tool>> {
-        let Some((setup, session)) = &self.agents else { return Vec::new() };
+        let Some((setup, session, _)) = &self.agents else { return Vec::new() };
         if setup.delegation == Delegation::Off || setup.catalog.is_empty() {
             return Vec::new();
         }
@@ -98,6 +100,9 @@ impl Kit {
         if let Some((_, feature)) = &self.tasks {
             features.push(Box::new(feature.clone()));
         }
+        if let Some((_, _, feature)) = &self.agents {
+            features.push(Box::new(feature.clone()));
+        }
         features
     }
 
@@ -111,6 +116,9 @@ impl Kit {
         }
         if let Some((tasks, _)) = &self.tasks {
             agent = agent.with_tasks(tasks.clone());
+        }
+        if let Some((setup, _, _)) = &self.agents {
+            agent = agent.with_agents(setup.agents.clone());
         }
         self.features().into_iter().fold(agent, Agent::with_feature)
     }

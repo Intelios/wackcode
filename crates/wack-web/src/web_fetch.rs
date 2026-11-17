@@ -132,6 +132,7 @@ impl Tool for WebFetch {
             hint: "read a public web page by URL, as Markdown".into(),
             guidelines: Vec::new(),
             ends_run: false,
+            together: false,
         }
     }
 

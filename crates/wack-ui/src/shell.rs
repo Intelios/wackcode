@@ -170,6 +170,9 @@ pub struct Shell {
     clear: Option<motion::Ease>,
     /// Whether the Build/Run command editor popover was open on the last frame.
     had_command_editor: bool,
+    /// Whether a Settings editor was open at the last frame: when one closes, however it closed
+    /// (a button, ↩ in a field, a delete), its field is gone and the shell takes the keys again.
+    had_settings_editor: bool,
 }
 
 impl Shell {
@@ -201,6 +204,7 @@ impl Shell {
             paddling: false,
             clear: None,
             had_command_editor: false,
+            had_settings_editor: false,
         }
     }
 
@@ -222,6 +226,7 @@ impl Shell {
             paddling: false,
             clear: None,
             had_command_editor: false,
+            had_settings_editor: false,
         }
     }
 
@@ -675,12 +680,9 @@ impl Shell {
         .detach();
     }
 
-    /// Once the memory or skill editor has closed, the shell takes the keys again.
+    /// Once an editor (memory, skill, command or MCP server) has closed, the shell takes the keys again.
     fn refocus_if_closed(&mut self, window: &mut Window, cx: &mut Context<Self>) {
-        let open = self.app().is_some_and(|app| {
-            let app = app.read(cx);
-            app.memory.editor.is_some() || app.skills.editor.is_some() || app.templates.editor.is_some()
-        });
+        let open = self.app().is_some_and(|app| settings_editor_open(app.read(cx)));
         if !open && let Some(focus) = self.focus.clone() {
             window.defer(cx, move |window, cx| window.focus(&focus, cx));
         }
@@ -733,6 +735,11 @@ impl Shell {
     }
 }
 
+/// Whether one of Settings' editors (memory, skill, command, search provider or MCP server) is open.
+fn settings_editor_open(app: &AppState) -> bool {
+    app.memory.editor.is_some() || app.skills.editor.is_some() || app.templates.editor.is_some() || app.web.editor.is_some() || app.mcp_settings.editor.is_some()
+}
+
 impl Render for Shell {
     fn render(&mut self, window: &mut Window, cx: &mut Context<Self>) -> impl IntoElement {
         let theme = Theme::get(cx).clone();
@@ -742,6 +749,11 @@ impl Render for Shell {
             self.focus_composer(window, cx);
         }
         self.had_command_editor = command_editor_open;
+        let settings_editor_open = self.app().is_some_and(|app| settings_editor_open(app.read(cx)));
+        if self.had_settings_editor && !settings_editor_open {
+            self.refocus_if_closed(window, cx);
+        }
+        self.had_settings_editor = settings_editor_open;
         // A question card takes focus as it arrives, and gives it back to the composer as it goes.
         if let Some(session) = self.current_session(cx)
             && let Some(handle) = session.update(cx, |session, _| session.focus_request.take())

@@ -39,7 +39,7 @@ use gpui::{
 
 use crate::{
     actions::{
-        self, ActivatePane, AddFolder, Back, ChooseBackdrop, ChooseEffort, SlideEffort, ToggleTodos, ToggleWaiting, ChooseFocus, ClearCommandOutput, CloseCommandEditor, CycleAgentMode, SetAgentMode, PickOption, ShowQuestion, NextQuestion, PreviousQuestion, SubmitAnswers, CancelQuestion, WrapUpQuestion, ShowDoneTodos, DiscardPlan, KeepPlan, ConfirmDiscardPlan, ApprovePlan, SavePlan, CopyPlan, ToggleUnrestrictedPlanning, ToggleWebFetch, ToggleWebSearch, ToggleRouteFetch, CloseSearchEditor, SaveSearchProvider, TestSearchProvider, AskDeleteSearchProvider, ConfirmDeleteSearchProvider, CancelDeleteSearchProvider, ResetWebUsage, ChooseSearchProvider, AddSearchProvider, EditSearchProvider, ChooseSearchKey, ChooseSearchMethod, AddMcpServer, EditMcpServer, ToggleMcpServer, ToggleMcpTool, ExpandMcpServer, TestMcpServer, AskDeleteMcpServer, RemoveMcpEntry, ChooseMcpTransport, ChooseMcpScope, ToggleMcpProject, CloseMcpEditor, SaveMcpServer, TestMcpDraft, AddMcpEntry, ConfirmDeleteMcpServer, CancelDeleteMcpServer, ConfirmUnrestrictedPlanning, CancelUnrestrictedPlanning, ToggleMemory, SwitchProjectMemory, NewMemory, EditMemory, ChooseMemoryKind, SaveMemory, CloseMemoryEditor, AskDeleteMemory, AskRemoveMemoryFolder, ConfirmMemoryDelete, CancelMemoryDelete, RevealMemory, ToggleUsageRecording, RevealUsageFolder,
+        self, ActivatePane, AddFolder, Back, ChooseBackdrop, ChooseEffort, SlideEffort, ToggleTodos, ToggleWaiting, ChooseFocus, ClearCommandOutput, CloseCommandEditor, CycleAgentMode, SetAgentMode, PickOption, ShowQuestion, NextQuestion, PreviousQuestion, SubmitAnswers, CancelQuestion, WrapUpQuestion, ShowDoneTodos, DiscardPlan, KeepPlan, ConfirmDiscardPlan, ApprovePlan, SavePlan, CopyPlan, ToggleUnrestrictedPlanning, ToggleWebFetch, ToggleWebSearch, ToggleRouteFetch, CloseSearchEditor, SaveSearchProvider, TestSearchProvider, AskDeleteSearchProvider, ConfirmDeleteSearchProvider, CancelDeleteSearchProvider, ResetWebUsage, ChooseSearchProvider, AddSearchProvider, EditSearchProvider, ChooseSearchKey, ChooseSearchMethod, AddMcpServer, EditMcpServer, ToggleMcpServer, ToggleMcpTool, ExpandMcpServer, TestMcpServer, AskDeleteMcpServer, RemoveMcpEntry, ChooseMcpTransport, ChooseMcpScope, ToggleMcpProject, CloseMcpEditor, SaveMcpServer, TestMcpDraft, AddMcpEntry, ConfirmDeleteMcpServer, CancelDeleteMcpServer, ConfirmUnrestrictedPlanning, CancelUnrestrictedPlanning, ToggleMemory, SwitchProjectMemory, NewMemory, EditMemory, ChooseMemoryKind, SaveMemory, CloseMemoryEditor, AskDeleteMemory, AskRemoveMemoryFolder, ConfirmMemoryDelete, CancelMemoryDelete, RevealMemory, ToggleCommitAttribution, ToggleUsageRecording, RevealUsageFolder,
         ChooseBlur, ChooseDim, ChooseFormat, OpenCommandEditor, OpenConnectionForm, CloseConnectionForm, SwitchConnection, ChooseMode, ChooseModel, ChooseTexture, ChooseTheme, CloseChatTab, CloseMenu, ClosePane,
         ClosePaneId, CloseSettings, CloseTab, Compact, DeleteChat, DiscardConnection, EditConnection, ToggleConnectionKey, EqualizeSplit, FocusNext, FocusPrevious, MovePane, AddModelRow, RemoveModelRow, SaveCommandEditor, SaveConnection,
         NewChat, NewChatIn, NewTerminal, NewTerminalWith, NextTab, OpenEffortMenu, OpenModelMenu, OpenSettings,
@@ -1204,6 +1204,9 @@ impl Render for Shell {
                 .on_action(cx.listener(|shell, _: &ToggleUsageRecording, _, cx| {
                     shell.with_app(cx, |app, cx| app.toggle_usage_recording(cx))
                 }))
+                .on_action(cx.listener(|shell, _: &ToggleCommitAttribution, _, cx| {
+                    shell.with_app(cx, |app, cx| app.toggle_commit_attribution(cx))
+                }))
                 .on_action(cx.listener(|_, action: &RevealUsageFolder, _, _| crate::memory_page::reveal(&action.path)))
                 .on_action(cx.listener(|shell, action: &SwitchSkill, _, cx| {
                     let (key, on) = (action.key.clone(), action.on);
@@ -1744,6 +1747,10 @@ fn live_view(app: &AppState, cx: &App) -> (SidebarData, Screen, StripData) {
                     crate::titles_card::TitlesData::new(store.auto_title(), store.connections(), app.title_models_open, app.title_error.clone()),
                     cx,
                 ),
+                git: crate::git_page::GitData {
+                    commit_attribution: store.git_config().commit_attribution,
+                    error: app.git_error.clone(),
+                },
                 integrations: crate::integrations_page::IntegrationsData { status: store.usage().status() },
                 web: app.web_data(cx),
                 mcp: app.mcp_data(),

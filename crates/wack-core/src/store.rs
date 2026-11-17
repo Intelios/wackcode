@@ -337,6 +337,9 @@ struct State {
     /// Settings › Sub-agents.
     #[serde(default)]
     agents: crate::agents::AgentsConfig,
+    /// Settings › Git.
+    #[serde(default)]
+    git: crate::git::GitConfig,
 }
 
 fn recording_on() -> bool {
@@ -1000,6 +1003,20 @@ impl Store {
     /// Settings › Integrations: whether TokenTrail's ledger is being recorded.
     pub fn usage_recording(&self) -> bool {
         self.state.record_usage
+    }
+
+    /// Settings › Git.
+    pub fn git_config(&self) -> &crate::git::GitConfig {
+        &self.state.git
+    }
+
+    /// Saves Settings › Git. Applies from each chat's next run.
+    pub fn set_git_config(&mut self, config: crate::git::GitConfig) -> Result<(), String> {
+        if self.state.git == config {
+            return Ok(());
+        }
+        self.state.git = config;
+        self.save()
     }
 
     /// The ledger's writer.
@@ -1705,5 +1722,23 @@ mod tests {
         let old: Model = serde_json::from_str(r#"{"id":"old"}"#).unwrap();
         assert_eq!(old.choices(), vec![Reasoning::Off]);
         assert_eq!(serde_json::to_string(&old).unwrap(), r#"{"id":"old"}"#);
+    }
+
+    #[test]
+    fn commit_attribution_defaults_on_and_round_trips_off() {
+        let folder = tempfile::tempdir().unwrap();
+        // A state.json saved before Settings › Git existed loads with attribution on.
+        fs::write(folder.path().join("state.json"), "{}").unwrap();
+        let mut store = Store::open(folder.path()).unwrap();
+        assert!(store.git_config().commit_attribution);
+
+        // An empty `git` object also defaults to on.
+        fs::write(folder.path().join("state.json"), r#"{"git":{}}"#).unwrap();
+        let store_empty = Store::open(folder.path()).unwrap();
+        assert!(store_empty.git_config().commit_attribution);
+
+        store.set_git_config(crate::GitConfig { commit_attribution: false }).unwrap();
+        let reopened = Store::open(folder.path()).unwrap();
+        assert!(!reopened.git_config().commit_attribution);
     }
 }

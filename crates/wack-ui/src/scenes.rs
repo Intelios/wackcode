@@ -588,6 +588,7 @@ pub fn all() -> Vec<Scene> {
         skills: Default::default(),
         commands: Default::default(),
         subagents: Default::default(),
+        git: Default::default(),
         integrations: Default::default(),
         web: Default::default(),
         mcp: Default::default(),
@@ -636,6 +637,24 @@ pub fn all() -> Vec<Scene> {
             description: "Settings › Commands: a command's editor, its preview expanding sample arguments.",
             size: size(px(1180.), px(1100.)),
             build: |_, cx| commands_scene(true, cx),
+        },
+        Scene {
+            name: "settings-git",
+            description: "Settings › Git: commit co-author attribution enabled, with the trailer preview and notes.",
+            size: size(px(1180.), px(1000.)),
+            build: |_, cx| git_scene(true, None, cx),
+        },
+        Scene {
+            name: "settings-git-off",
+            description: "Settings › Git with commit co-author attribution switched off: the trailer line struck through.",
+            size: size(px(1180.), px(1000.)),
+            build: |_, cx| git_scene(false, None, cx),
+        },
+        Scene {
+            name: "settings-git-backdrop",
+            description: "Settings › Git over a backdrop.",
+            size: size(px(1180.), px(1000.)),
+            build: |_, cx| git_scene(true, Some(over(fixtures::backdrop(wack_core::Texture::None), cx)), cx),
         },
         Scene {
             name: "settings-integrations",
@@ -1356,6 +1375,7 @@ fn providers_scene(state: Providers, sidebar_hidden: bool, cx: &mut App) -> AnyV
         skills: Default::default(),
         commands: Default::default(),
         subagents: Default::default(),
+        git: Default::default(),
         integrations: Default::default(),
         web: Default::default(),
         mcp: Default::default(),
@@ -1379,6 +1399,7 @@ fn settings_scene(backdrop: Option<crate::backdrop::Picture>, cx: &mut App) -> A
         skills: Default::default(),
         commands: Default::default(),
         subagents: Default::default(),
+        git: Default::default(),
         integrations: Default::default(),
         web: Default::default(),
         mcp: Default::default(),
@@ -1518,6 +1539,7 @@ fn subagents_scene(scene: SubagentsScene, backdrop: Option<crate::backdrop::Pict
         skills: Default::default(),
         commands: Default::default(),
         subagents: state.data(&config, &connections, titles, cx),
+        git: Default::default(),
         integrations: Default::default(),
         web: Default::default(),
         mcp: Default::default(),
@@ -1666,6 +1688,7 @@ fn memory_scene(scene: MemoryScene, backdrop: Option<crate::backdrop::Picture>, 
         skills: Default::default(),
         commands: Default::default(),
         subagents: Default::default(),
+        git: Default::default(),
         integrations: Default::default(),
         web: Default::default(),
         mcp: Default::default(),
@@ -1888,6 +1911,7 @@ fn skills_scene(scene: SkillsScene, backdrop: bool, cx: &mut App) -> AnyView {
         skills: state.data(cx),
         commands: Default::default(),
         subagents: Default::default(),
+        git: Default::default(),
         integrations: Default::default(),
         web: Default::default(),
         mcp: Default::default(),
@@ -1942,6 +1966,7 @@ fn commands_scene(editing: bool, cx: &mut App) -> AnyView {
         skills: Default::default(),
         commands: state.data(cx),
         subagents: Default::default(),
+        git: Default::default(),
         integrations: Default::default(),
         web: Default::default(),
         mcp: Default::default(),
@@ -2065,6 +2090,7 @@ fn mcp_scene(scene: McpScene, backdrop: Option<crate::backdrop::Picture>, cx: &m
         skills: Default::default(),
         commands: Default::default(),
         subagents: Default::default(),
+        git: Default::default(),
         integrations: Default::default(),
         web: Default::default(),
         mcp,
@@ -2187,6 +2213,7 @@ fn web_scene(scene: WebScene, backdrop: Option<crate::backdrop::Picture>, cx: &m
         skills: Default::default(),
         commands: Default::default(),
         subagents: Default::default(),
+        git: Default::default(),
         integrations: Default::default(),
         web,
         mcp: Default::default(),
@@ -2242,7 +2269,35 @@ fn integrations_scene(scene: UsageScene, backdrop: Option<crate::backdrop::Pictu
         skills: Default::default(),
         commands: Default::default(),
         subagents: Default::default(),
+        git: Default::default(),
         integrations: crate::integrations_page::IntegrationsData { status },
+        web: Default::default(),
+        mcp: Default::default(),
+    };
+    cx.new(|_| {
+        let shell = Shell::showing(fixtures::sidebar(Selected::None), Screen::Settings(Box::new(data)));
+        match backdrop {
+            Some(picture) => shell.with_backdrop(picture),
+            None => shell,
+        }
+    })
+    .into()
+}
+
+/// Settings › Git, drawn over `backdrop` when there is one.
+fn git_scene(commit_attribution: bool, backdrop: Option<crate::backdrop::Picture>, cx: &mut App) -> AnyView {
+    let form = ProviderForm::new(cx);
+    let data = SettingsData {
+        section: Section::Git,
+        providers: ProvidersData::new(&fixtures::connections(), |_| true, &form, cx),
+        appearance: fixtures::appearance(backdrop.clone(), cx),
+        tools: Default::default(),
+        memory: Default::default(),
+        skills: Default::default(),
+        commands: Default::default(),
+        subagents: Default::default(),
+        git: crate::git_page::GitData { commit_attribution, error: None },
+        integrations: Default::default(),
         web: Default::default(),
         mcp: Default::default(),
     };

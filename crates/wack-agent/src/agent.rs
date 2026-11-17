@@ -82,6 +82,9 @@ pub struct Settings {
     /// Ultra: the user asked for the most thorough work the model can do. It adds an instruction
     /// to the system prompt; the effort itself is `effort`, which the caller sets to the top.
     pub ultra: bool,
+    /// Ask the model to end each commit message it writes with a `Co-authored-by` trailer naming
+    /// the active model and WackCode Agent (`prompt::co_author_trailer`).
+    pub commit_attribution: bool,
 }
 
 pub enum Verdict {
@@ -299,7 +302,8 @@ impl Agent {
     ) -> Self {
         let cwd = session.cwd().to_path_buf();
         let specs: Vec<_> = registry.specs().collect();
-        let mut system = prompt::system(&profile.prompt, &cwd, &prompt::today(), &specs);
+        let co_author = settings.commit_attribution.then(|| prompt::co_author_label(&settings.model));
+        let mut system = prompt::system(&profile.prompt, &cwd, &prompt::today(), &specs, co_author.as_deref());
         if settings.ultra {
             system.push(SystemPart { text: prompt::ULTRA_PROMPT.to_string() });
         }
@@ -816,7 +820,14 @@ mod tests {
         let build = |memory: Option<std::path::PathBuf>, ultra: bool| {
             let kit = Kit::new(&session, None, false, memory);
             let names: Vec<String> = kit.tools().iter().map(|tool| tool.spec().name).collect();
-            let settings = Settings { model: "m".into(), effort: None, max_output_tokens: None, context_window: None, ultra };
+            let settings = Settings {
+                model: "m".into(),
+                effort: None,
+                max_output_tokens: None,
+                context_window: None,
+                ultra,
+                commit_attribution: false,
+            };
             let registry = Arc::new(Registry::new(kit.tools()).unwrap());
             let provider = Arc::new(ScriptedProvider::new(Vec::new()));
             let session = Session::open(session.path()).unwrap();
@@ -936,7 +947,14 @@ mod tests {
     ) -> Rig {
         let folder = tempfile::tempdir().unwrap();
         let session = Session::create(&folder.path().join("chat.jsonl"), folder.path()).unwrap();
-        let settings = Settings { model: "test-model".into(), effort: None, max_output_tokens: None, context_window, ultra: false };
+        let settings = Settings {
+            model: "test-model".into(),
+            effort: None,
+            max_output_tokens: None,
+            context_window,
+            ultra: false,
+            commit_attribution: false,
+        };
         let agent = Agent::new(
             Arc::new(provider.clone()),
             Arc::new(Registry::new(tools).unwrap()),
@@ -1352,7 +1370,14 @@ mod tests {
         drop(rig.agent);
 
         let provider = ScriptedProvider::new(vec![say("Picking up where I left off.")]);
-        let settings = Settings { model: "test-model".into(), effort: None, max_output_tokens: None, context_window: None, ultra: false };
+        let settings = Settings {
+            model: "test-model".into(),
+            effort: None,
+            max_output_tokens: None,
+            context_window: None,
+            ultra: false,
+            commit_attribution: false,
+        };
         let session = Session::open(&path).unwrap();
         assert_eq!(session.cwd(), cwd);
         let mut agent = Agent::new(
@@ -1642,7 +1667,14 @@ mod tests {
             let kit = Kit::new(&session, Some(mode), false, None);
             let mut tools: Vec<Arc<dyn Tool>> = vec![alone, Arc::new(Echo("echo", Loading::Always))];
             tools.extend(kit.tools());
-            let settings = Settings { model: "m".into(), effort: None, max_output_tokens: None, context_window: None, ultra: false };
+            let settings = Settings {
+                model: "m".into(),
+                effort: None,
+                max_output_tokens: None,
+                context_window: None,
+                ultra: false,
+                commit_attribution: false,
+            };
             let agent = Agent::new(Arc::new(provider.clone()), Arc::new(Registry::new(tools).unwrap()), session, &Profile::code(), settings);
             kit.attach(agent)
         };
@@ -1842,5 +1874,42 @@ mod tests {
         assert!(notes[0].text.contains("gone1234") && notes[0].text.contains("stopped when WackCode quit"), "{}", notes[0].text);
         assert!(feature.notes(&session).is_empty(), "told once");
         assert_eq!(feature.state_to_save()[0].1, json!([]));
+    }
+
+    #[tokio::test]
+    async fn commit_attribution_follows_each_runs_model_and_setting() {
+        let folder = tempfile::tempdir().unwrap();
+        let path = folder.path().join("chat.jsonl");
+        let provider = ScriptedProvider::new([say("1"), say("2"), say("3"), say("4")]);
+        let run_once = |session: Session, model: &str, attribution: bool| {
+            let settings = Settings {
+                model: model.into(),
+                effort: None,
+                max_output_tokens: None,
+                context_window: None,
+                ultra: false,
+                commit_attribution: attribution,
+            };
+            let mut agent = Agent::new(
+                Arc::new(provider.clone()),
+                Arc::new(Registry::new(Vec::new()).unwrap()),
+                session,
+                &Profile::code(),
+                settings,
+            );
+            async move { agent.run("Commit it.", &Control::new(), &|_| {}).await.unwrap() }
+        };
+
+        run_once(Session::create(&path, folder.path()).unwrap(), "zai-org/GLM-5.3-Flash", true).await;
+        run_once(Session::open(&path).unwrap(), "Second <model>", true).await;
+        run_once(Session::open(&path).unwrap(), "Second <model>", false).await;
+        run_once(Session::open(&path).unwrap(), "Second <model>", true).await;
+
+        let guide_of = |index: usize| provider.requests()[index].system[1].text.clone();
+        assert!(guide_of(0).contains(&prompt::co_author_trailer("GLM-5.3-Flash")));
+        assert!(guide_of(1).contains(&prompt::co_author_trailer("Second model")));
+        assert!(!guide_of(2).contains("Co-authored-by"));
+        assert!(!guide_of(2).contains("Commit attribution"));
+        assert!(guide_of(3).contains(&prompt::co_author_trailer("Second model")));
     }
 }

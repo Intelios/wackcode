@@ -566,13 +566,14 @@ pub enum Section {
     Skills,
     Commands,
     Subagents,
+    Git,
     Integrations,
     Mcp,
     Web,
 }
 
 impl Section {
-    pub const ALL: [Section; 10] = [
+    pub const ALL: [Section; 11] = [
         Section::Appearance,
         Section::Providers,
         Section::Tools,
@@ -580,6 +581,7 @@ impl Section {
         Section::Skills,
         Section::Commands,
         Section::Subagents,
+        Section::Git,
         Section::Integrations,
         Section::Mcp,
         Section::Web,
@@ -594,6 +596,7 @@ impl Section {
             Section::Skills => "Skills",
             Section::Commands => "Commands",
             Section::Subagents => "Sub-agents",
+            Section::Git => "Git",
             Section::Integrations => "Integrations",
             Section::Mcp => "MCP servers",
             Section::Web => "Web",
@@ -609,6 +612,7 @@ impl Section {
             Section::Skills => "section-skills",
             Section::Commands => "section-commands",
             Section::Subagents => "section-subagents",
+            Section::Git => "section-git",
             Section::Integrations => "section-integrations",
             Section::Mcp => "section-mcp",
             Section::Web => "section-web",
@@ -627,7 +631,7 @@ const GROUPS: [(&str, &[Entry]); 4] = [
     ("Models", &[(Some(Section::Providers), "Providers"), (None, "Prompts")]),
     (
         "Agent",
-        &[(Some(Section::Tools), "Tools"), (Some(Section::Memory), "Memory"), (Some(Section::Skills), "Skills"), (Some(Section::Commands), "Commands"), (Some(Section::Subagents), "Sub-agents"), (None, "Git")],
+        &[(Some(Section::Tools), "Tools"), (Some(Section::Memory), "Memory"), (Some(Section::Skills), "Skills"), (Some(Section::Commands), "Commands"), (Some(Section::Subagents), "Sub-agents"), (Some(Section::Git), "Git")],
     ),
     (
         "Reach",
@@ -646,6 +650,7 @@ pub struct SettingsData {
     pub skills: crate::skills_page::SkillsData,
     pub commands: crate::commands_page::CommandsData,
     pub subagents: crate::subagents_page::SubagentsData,
+    pub git: crate::git_page::GitData,
     pub integrations: crate::integrations_page::IntegrationsData,
     pub web: crate::web_page::WebData,
     pub mcp: crate::mcp_page::McpData,
@@ -756,6 +761,7 @@ pub fn page(data: SettingsData, inline_nav: bool, narrow: bool, stack_form: bool
         Section::Skills => crate::skills_page::page(data.skills, theme),
         Section::Commands => crate::commands_page::page(data.commands, theme),
         Section::Subagents => crate::subagents_page::page(data.subagents, theme),
+        Section::Git => crate::git_page::page(data.git, theme).into_any_element(),
         Section::Integrations => crate::integrations_page::page(data.integrations, theme).into_any_element(),
         Section::Mcp => crate::mcp_page::page(data.mcp, theme),
         Section::Web => crate::web_page::page(data.web, theme),

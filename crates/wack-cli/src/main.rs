@@ -435,6 +435,7 @@ async fn agent(args: &mut Args, folder: &Path) -> Result<ExitCode, String> {
         max_output_tokens: None,
         context_window: model.context_window,
         ultra: effort.is_ultra(),
+        commit_attribution: store.git_config().commit_attribution,
     };
     let agent = Agent::new(Arc::new(store.provider(connection)?), registry, session, &Profile::code(), settings);
     let agent = match usage {

@@ -113,6 +113,7 @@ impl Store {
                 max_output_tokens: None,
                 context_window: resolved.model.context_window,
                 ultra: resolved.effort.is_ultra(),
+                commit_attribution: self.git_config().commit_attribution,
             },
             mode: chat.mode,
             unrestricted_planning: self.planning_unrestricted(),
@@ -258,6 +259,7 @@ mod tests {
                 max_output_tokens: None,
                 context_window: None,
                 ultra: false,
+                commit_attribution: false,
             },
             mode: AgentMode::Build,
             unrestricted_planning: false,
@@ -409,5 +411,31 @@ mod tests {
             _ => None,
         });
         assert_eq!(last, Some(PlanState::default()));
+    }
+
+    #[test]
+    fn run_setup_propagates_commit_attribution() {
+        let folder = tempfile::tempdir().unwrap();
+        let work = tempfile::tempdir().unwrap();
+        let mut store = Store::open(folder.path()).unwrap();
+        store
+            .add_connection(
+                crate::NewConnection {
+                    name: "Testing".into(),
+                    format: wack_llm::WireFormat::OpenaiChat,
+                    base_url: "https://example.invalid/v1".into(),
+                    models: vec![crate::Model::new("zai-org/GLM-5.3-Flash", None)],
+                },
+                "k",
+            )
+            .unwrap();
+        let project = store.add_project(work.path()).unwrap();
+        let chat = store
+            .create_chat(&project.id, "Commit", crate::ModelChoice::default(), AgentMode::Build, None)
+            .unwrap();
+
+        assert!(store.run_setup(&chat).unwrap().settings.commit_attribution);
+        store.set_git_config(crate::GitConfig { commit_attribution: false }).unwrap();
+        assert!(!store.run_setup(&chat).unwrap().settings.commit_attribution);
     }
 }

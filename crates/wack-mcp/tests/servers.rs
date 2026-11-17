@@ -215,7 +215,14 @@ async fn run(hub: &Hub, specs: &[ServerSpec], folder: &Path, steps: Vec<wack_llm
     let assembly = assemble(hub, specs, folder, &control.stop_token(), starting_sink).await;
     let provider = ScriptedProvider::new(steps);
     let registry = Arc::new(Registry::new(assembly.tools).unwrap());
-    let settings = Settings { model: "m".into(), effort: None, max_output_tokens: None, context_window: None, ultra: false };
+    let settings = Settings {
+        model: "m".into(),
+        effort: None,
+        max_output_tokens: None,
+        context_window: None,
+        ultra: false,
+        commit_attribution: false,
+    };
     let mut agent = Agent::new(Arc::new(provider.clone()), registry, session, &Profile::code(), settings);
     if let Some(feature) = assembly.feature {
         agent = agent.with_feature(Box::new(feature));

@@ -28,6 +28,7 @@ pub mod web;
 pub mod web_usage;
 
 pub use appearance::{Appearance, Backdrop, Mode, Texture, ThemeName};
+pub use git::GitConfig;
 pub use run::{Job, RunEvent, RunSetup, discard_plan, run, save_plan};
 pub use title::AutoTitleConfig;
 pub use runner::{CommandEvent, CommandInfo, CommandSession, CommandStatus, Runner};
@@ -39,6 +40,7 @@ pub use store::{
 
 // What the UI needs from the layers below, so it depends on the engine alone.
 pub use wack_agent::{AgentMode, Control, Event, HistoryEntry, Outcome, Recorder, TOOL_SEARCH, history};
+pub use wack_agent::prompt::{WACKCODE_COAUTHOR_EMAIL, co_author_label, co_author_trailer};
 pub use wack_llm::{Message, RetryNotice, Role, Usage, WireFormat};
 pub use wack_web::{WEB_FETCH, WEB_SEARCH};
 

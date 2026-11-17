@@ -50,7 +50,14 @@ impl Recorder for Calls {
 }
 
 fn settings(model: &str) -> Settings {
-    Settings { model: model.into(), effort: None, max_output_tokens: None, context_window: None, ultra: false }
+    Settings {
+        model: model.into(),
+        effort: None,
+        max_output_tokens: None,
+        context_window: None,
+        ultra: false,
+        commit_attribution: false,
+    }
 }
 
 struct Parent {
@@ -579,4 +586,45 @@ async fn an_agent_the_app_already_restored_is_still_announced_as_interrupted() {
     assert_eq!(notes.len(), 1);
     assert!(notes[0].text.contains("was stopped when WackCode quit") && notes[0].text.contains("agent_message"));
     assert!(crate::agent::Feature::notes(&feature, &session).is_empty(), "told once");
+}
+
+#[tokio::test]
+async fn fresh_subagents_omit_commit_attribution_while_conversation_copies_keep_the_parents_prompt() {
+    let folder = tempfile::tempdir().unwrap();
+    let session = Session::create(&folder.path().join("sessions/chat-1.jsonl"), folder.path()).unwrap();
+    let agents = Agents::new();
+    let child = ScriptedProvider::new([say("Explored."), say("Copied.")]);
+    let parent_provider = ScriptedProvider::new([
+        call(&[("p1", AGENT, json!({ "agent": "explore", "description": "Explore", "prompt": "Look" }))]),
+        call(&[("p2", AGENT, json!({ "description": "Copy", "prompt": "Commit", "with_conversation": true }))]),
+        say("Done."),
+    ]);
+    let setup = AgentsSetup {
+        catalog: definition::builtins(),
+        delegation: Delegation::Auto,
+        chat: ChildModel { provider: Arc::new(child.clone()), settings: settings("chat-model"), recorder: None },
+        helper: None,
+        agents: agents.clone(),
+    };
+    let kit = Kit::new(&session, Some(AgentMode::Build), false, None).with_agents(&session, setup);
+    let mut tools: Vec<Arc<dyn Tool>> = vec![Arc::new(Look)];
+    tools.extend(kit.tools());
+    tools.extend(kit.agent_tools(&tools));
+    let parent_settings = Settings { commit_attribution: true, ..settings("parent-model") };
+    let agent = Agent::new(
+        Arc::new(parent_provider.clone()),
+        Arc::new(Registry::new(tools).unwrap()),
+        session,
+        &Profile::code(),
+        parent_settings,
+    );
+    let mut agent = kit.attach(agent);
+    assert_eq!(agent.run("Go", &Control::new(), &|_| {}).await, Ok(Outcome::Done));
+
+    let fresh_child = &child.requests()[0];
+    assert!(!fresh_child.system.iter().any(|part| part.text.contains("Commit attribution")));
+
+    let copy_child = &child.requests()[1];
+    assert_eq!(copy_child.system, parent_provider.requests()[0].system);
+    assert!(copy_child.system[1].text.contains("Co-authored-by: parent-model (WackCode)"));
 }

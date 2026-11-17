@@ -8,6 +8,27 @@ use std::{
     process::Command,
 };
 
+use serde::{Deserialize, Serialize};
+
+/// Settings › Git. On unless the user switched it off.
+#[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
+pub struct GitConfig {
+    /// Coding chats end their commits with a `Co-authored-by` trailer naming the active model
+    /// and the WackCode Agent GitHub App.
+    #[serde(default = "commit_attribution_default")]
+    pub commit_attribution: bool,
+}
+
+fn commit_attribution_default() -> bool {
+    true
+}
+
+impl Default for GitConfig {
+    fn default() -> Self {
+        Self { commit_attribution: true }
+    }
+}
+
 /// What `git diff` compares against in a repository with no commits yet.
 const EMPTY_TREE: &str = "4b825dc642cb6eb9a060e54bf8d69288fbee4904";
 /// An untracked file larger than this is not read to count or show its lines.
@@ -305,5 +326,15 @@ mod tests {
         assert!(file_diff(root, file("blob.bin")).unwrap().starts_with("Binary files"));
         let renamed = file_diff(root, file("new name.txt")).unwrap();
         assert!(renamed.contains("rename from old name.txt"), "{renamed}");
+    }
+
+    #[test]
+    fn git_config_defaults_on_and_round_trips_off() {
+        assert!(GitConfig::default().commit_attribution);
+        let empty: GitConfig = serde_json::from_str("{}").unwrap();
+        assert!(empty.commit_attribution);
+        let off: GitConfig = serde_json::from_str(r#"{"commit_attribution":false}"#).unwrap();
+        assert!(!off.commit_attribution);
+        assert_eq!(serde_json::to_string(&off).unwrap(), r#"{"commit_attribution":false}"#);
     }
 }

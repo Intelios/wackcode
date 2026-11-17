@@ -303,6 +303,7 @@ impl Store {
                 max_output_tokens: None,
                 context_window: resolved.model.context_window,
                 ultra: false,
+                commit_attribution: false,
             },
             recorder: Some(self.usage_recorder(&resolved.connection, session, workspace)),
         })
@@ -377,6 +378,7 @@ mod tests {
         let connection = store.connections()[0].id.clone();
         let chat = store.child_model(&store.resolve(&ModelChoice::default()).unwrap(), "chat-1", folder.path()).unwrap();
         assert_eq!(chat.settings.model, "big");
+        assert!(!chat.settings.commit_attribution);
 
         let setup = store.agents_setup(chat.clone(), "chat-1", folder.path(), Agents::new()).unwrap();
         assert!(setup.helper.is_none());

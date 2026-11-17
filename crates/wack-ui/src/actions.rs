@@ -125,6 +125,8 @@ actions!(
         CancelDeleteMcpServer,
         /// Settings › Integrations: turns the usage ledger's recording on or off.
         ToggleUsageRecording,
+        /// Settings › Git: turns commit co-author attribution on or off.
+        ToggleCommitAttribution,
         /// Adds a picture to the backdrop's library, and shows it.
         ChooseBackdrop,
         /// Settings › Memory: the master switch.

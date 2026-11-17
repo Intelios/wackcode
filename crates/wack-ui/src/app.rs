@@ -153,6 +153,8 @@ pub struct AppState {
     template_subscriptions: Vec<Subscription>,
     pub subagents: crate::subagents_page::SubagentsState,
     subagent_subscriptions: Vec<Subscription>,
+    /// Settings › Git's last save failure, if any.
+    pub git_error: Option<SharedString>,
     /// Long-lived Build and Run PTY commands keyed by `(canonical_cwd, kind)`.
     runs: Runner,
     command_event_tx: mpsc::UnboundedSender<CommandEvent>,
@@ -316,6 +318,7 @@ impl AppState {
             template_subscriptions: Vec::new(),
             subagents: Default::default(),
             subagent_subscriptions: Vec::new(),
+            git_error: None,
             runs,
             command_event_tx,
             new_chat_panes: HashMap::new(),
@@ -929,6 +932,14 @@ impl AppState {
         cx.notify();
     }
 
+    /// Settings › Git: whether coding chats end their commits with a Co-authored-by trailer.
+    pub fn toggle_commit_attribution(&mut self, cx: &mut Context<Self>) {
+        let mut config = self.store.git_config().clone();
+        config.commit_attribution = !config.commit_attribution;
+        self.git_error = self.store.set_git_config(config).err().map(Into::into);
+        cx.notify();
+    }
+
     /// Changes how the app looks; the theme follows at once.
     pub fn set_appearance(&mut self, change: impl FnOnce(&mut Appearance), cx: &mut Context<Self>) {
         let mut appearance = self.store.appearance().clone();
@@ -1203,6 +1214,9 @@ impl AppState {
                 }
                 if self.settings_section == Section::Subagents {
                     self.refresh_subagents();
+                }
+                if self.settings_section == Section::Git {
+                    self.git_error = None;
                 }
             }
             Selection::Welcome => {}
@@ -1724,6 +1738,9 @@ impl AppState {
         }
         if section == Section::Subagents {
             self.refresh_subagents();
+        }
+        if section == Section::Git {
+            self.git_error = None;
         }
         cx.notify();
     }

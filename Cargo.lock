@@ -7155,6 +7155,22 @@ dependencies = [
 ]
 
 [[package]]
+name = "wack-browser"
+version = "3.0.0-dev.0"
+dependencies = [
+ "cef",
+ "libc",
+ "objc2 0.6.5",
+ "objc2-app-kit 0.3.2",
+ "objc2-foundation 0.3.2",
+ "serde",
+ "serde_json",
+ "tokio",
+ "url",
+ "wack-web",
+]
+
+[[package]]
 name = "wack-cli"
 version = "3.0.0-dev.0"
 dependencies = [
@@ -7183,6 +7199,7 @@ dependencies = [
  "url",
  "uuid",
  "wack-agent",
+ "wack-browser",
  "wack-llm",
  "wack-mcp",
  "wack-tools",
@@ -7242,18 +7259,22 @@ name = "wack-ui"
 version = "3.0.0-dev.0"
 dependencies = [
  "async-channel",
+ "base64 0.22.1",
  "futures",
  "gpui",
  "gpui_tokio",
  "image",
+ "objc2 0.6.5",
  "objc2-app-kit 0.3.2",
  "objc2-foundation 0.3.2",
  "pulldown-cmark",
+ "raw-window-handle",
  "serde",
  "serde_json",
  "syntect",
  "tokio",
  "unicode-segmentation",
+ "wack-browser",
  "wack-core",
 ]
 

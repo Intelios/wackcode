@@ -6,7 +6,7 @@
 
 mod convert;
 mod fetch;
-mod guard;
+pub mod guard;
 pub mod search;
 mod web_fetch;
 mod web_search;

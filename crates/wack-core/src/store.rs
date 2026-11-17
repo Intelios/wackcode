@@ -903,6 +903,11 @@ impl Store {
     }
 
     /// Where a chat's background commands write their output (`v3/tasks/<chat>/`).
+    /// The browser's folder: its profile (the user's site sign-ins) and its log. Private (0700).
+    pub fn browser_folder(&self) -> PathBuf {
+        self.folder.join("browser")
+    }
+
     pub fn tasks_folder(&self, chat: &Chat) -> PathBuf {
         self.folder.join("tasks").join(&chat.id)
     }

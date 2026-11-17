@@ -8,6 +8,7 @@ pub mod appearance_page;
 #[cfg(feature = "automation")]
 pub mod automation;
 pub mod backdrop;
+pub mod browser;
 pub mod button;
 pub mod chat;
 pub mod colour;

@@ -119,6 +119,8 @@ pub struct ChatSession {
     pub wake_paused: bool,
     /// Sub-agents the agent started, which outlive its runs.
     pub agents: Agents,
+    /// The chat's browser tabs, which outlive its runs and the Browser pane.
+    pub tabs: wack_browser::ChatTabs,
     _tasks_watch: Task<()>,
     _agents_watch: Task<()>,
 }
@@ -177,6 +179,7 @@ impl ChatSession {
         runner: Runner,
         commands: (Option<String>, Option<String>),
         tasks_folder: PathBuf,
+        browser: Arc<dyn wack_browser::Backend>,
         cx: &mut Context<Self>,
     ) -> Self {
         let mut context_tokens = None;
@@ -240,6 +243,7 @@ impl ChatSession {
             wakes: 0,
             wake_paused: false,
             agents,
+            tabs: wack_browser::ChatTabs::new(Some(browser)),
             _tasks_watch: tasks_watch,
             _agents_watch: agents_watch,
         };
@@ -354,6 +358,7 @@ impl ChatSession {
         });
         let mut setup = setup;
         setup.tasks = Some(self.tasks.clone());
+        setup.browser = Some(self.tabs.clone());
         if let Some(agents) = setup.agents.as_mut() {
             agents.agents = self.agents.clone();
         }

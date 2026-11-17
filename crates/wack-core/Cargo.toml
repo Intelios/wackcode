@@ -11,6 +11,7 @@ wack-llm.workspace = true
 wack-tools.workspace = true
 wack-web.workspace = true
 wack-mcp.workspace = true
+wack-browser.workspace = true
 serde.workspace = true
 serde_json.workspace = true
 uuid.workspace = true

@@ -15,6 +15,12 @@
 //! {"cmd":"key","keys":"cmd-n enter"}              space-separated keystrokes
 //! {"cmd":"resize","width":900,"height":600}
 //! {"cmd":"appearance","theme":"light"}            or "dark"
+//! {"cmd":"browser","action":"open","url":"https://example.com"}   a tab of the chat in front, as the agent
+//! {"cmd":"browser","action":"eval","expression":"document.title"}   in the agent's newest tab, or "tab"
+//! {"cmd":"browser","action":"screenshot","path":"/abs/page.png"}   the page itself, through DevTools
+//! {"cmd":"browser","action":"state"}                     every tab's address, title, console and network
+//! {"cmd":"browser","action":"dialog","accept":true,"text":"reply"}   answers the page's dialog
+//! {"cmd":"browser","action":"close"}
 //! {"cmd":"quit"}
 //! ```
 //!
@@ -87,7 +93,26 @@ enum Command {
     Appearance {
         theme: String,
     },
+    Browser(BrowserArgs),
     Quit,
+}
+
+/// `{"cmd":"browser",…}`: what to do, and the fields that action reads.
+#[derive(Deserialize)]
+struct BrowserArgs {
+    action: String,
+    #[serde(default)]
+    url: Option<String>,
+    #[serde(default)]
+    expression: Option<String>,
+    #[serde(default)]
+    path: Option<PathBuf>,
+    #[serde(default)]
+    tab: Option<u64>,
+    #[serde(default)]
+    accept: bool,
+    #[serde(default)]
+    text: Option<String>,
 }
 
 fn one() -> usize {
@@ -335,6 +360,7 @@ async fn run(command: Command, cx: &mut AsyncApp) -> Result<Value, String> {
             settle(window, cx).await;
             Ok(json!({ "ok": true }))
         }
+        Command::Browser(args) => browser(window, cx, args).await,
         Command::Quit => {
             cx.update(|cx| cx.quit());
             Ok(json!({ "ok": true }))
@@ -400,4 +426,75 @@ async fn settle_briefly(window: AnyWindowHandle, cx: &mut AsyncApp) {
 async fn settle(window: AnyWindowHandle, cx: &mut AsyncApp) {
     on_window(window, cx, |window, _| window.refresh()).ok();
     cx.background_executor().timer(SETTLE).await;
+}
+
+/// Drives the engine as the agent would, before the Browser pane and the tools exist to.
+async fn browser(window: AnyWindowHandle, cx: &mut AsyncApp, args: BrowserArgs) -> Result<Value, String> {
+    let BrowserArgs { action, url, expression, path, tab, accept, text } = args;
+    use base64::Engine as _;
+    use wack_browser::{ChatTabs, Owner};
+
+    let tabs: ChatTabs = on_window(window, cx, |window, cx| {
+        window.root::<crate::shell::Shell>().flatten().and_then(|shell| shell.read(cx).current_tabs(cx))
+    })?
+    .ok_or("Open a chat first: browser tabs belong to a chat.")?;
+    let target = || tab.or_else(|| tabs.latest_of(&Owner::Agent).map(|tab| tab.id)).ok_or("No agent tab is open.");
+    match action.as_str() {
+        "open" => {
+            let url = url.ok_or("\"open\" needs a \"url\".")?;
+            let opened = tabs.open(Owner::Agent, &url).await?;
+            opened.set_agent_driving(true);
+            Ok(json!({ "ok": true, "tab": opened.id }))
+        }
+        "eval" => {
+            let expression = expression.ok_or("\"eval\" needs an \"expression\".")?;
+            let params = json!({ "expression": expression, "returnByValue": true, "awaitPromise": true });
+            let result = tabs.cdp(target()?, "Runtime.evaluate", params).await?;
+            Ok(json!({ "ok": true, "result": result }))
+        }
+        "screenshot" => {
+            let path = path.ok_or("\"screenshot\" needs a \"path\".")?;
+            if !path.is_absolute() {
+                return Err("The screenshot path must be absolute.".into());
+            }
+            let started = std::time::Instant::now();
+            let shot = tabs.cdp(target()?, "Page.captureScreenshot", json!({ "format": "png" })).await?;
+            let data = shot["data"].as_str().ok_or("The page sent no image.")?;
+            let png = base64::engine::general_purpose::STANDARD.decode(data).map_err(|e| format!("The image was damaged: {e}"))?;
+            std::fs::write(&path, &png).map_err(|e| format!("Could not write {}: {e}", path.display()))?;
+            Ok(json!({ "ok": true, "path": path, "bytes": png.len(), "ms": started.elapsed().as_millis() as u64 }))
+        }
+        "state" => {
+            let list: Vec<Value> = tabs
+                .tabs()
+                .iter()
+                .map(|tab| {
+                    let state = tab.state();
+                    json!({
+                        "tab": tab.id,
+                        "owner": format!("{:?}", tab.owner),
+                        "live": tab.is_live(),
+                        "url": state.url,
+                        "title": state.title,
+                        "loading": state.loading,
+                        "page": state.page,
+                        "dialog": state.dialog.as_ref().map(|d| d.message.clone()),
+                        "load_error": state.load_error,
+                        "console": state.console.iter().map(|(_, e)| format!("[{}] {}", e.level.name(), e.text)).collect::<Vec<_>>(),
+                        "network": state.network.iter().map(|(_, e)| format!("{} {} {:?} {:?}", e.method, e.url, e.status, e.failed)).collect::<Vec<_>>(),
+                    })
+                })
+                .collect();
+            Ok(json!({ "ok": true, "tabs": list }))
+        }
+        "dialog" => {
+            tabs.answer_dialog(target()?, accept, text).await?;
+            Ok(json!({ "ok": true }))
+        }
+        "close" => {
+            tabs.close(target()?);
+            Ok(json!({ "ok": true }))
+        }
+        other => Err(format!("Unknown browser action \"{other}\": use open, eval, screenshot, state, dialog or close.")),
+    }
 }

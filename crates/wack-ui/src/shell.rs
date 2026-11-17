@@ -189,6 +189,7 @@ impl Shell {
             Err(message) => Source::Failed(message.into()),
         };
         motion::follow_system(cx);
+        crate::browser::attach(window);
         let activation = cx.observe_window_activation(window, |_, window, cx| {
             if window.is_window_active() {
                 motion::follow_system(cx);
@@ -257,6 +258,12 @@ impl Shell {
     pub fn with_backdrop(mut self, picture: Picture) -> Self {
         self.scene_backdrop = Some(picture);
         self
+    }
+
+    /// The browser tabs of the chat in front, for the automation socket.
+    #[cfg(feature = "automation")]
+    pub fn current_tabs(&self, cx: &App) -> Option<wack_browser::ChatTabs> {
+        Some(self.app()?.read(cx).current_chat()?.read(cx).tabs.clone())
     }
 
     fn app(&self) -> Option<Entity<AppState>> {

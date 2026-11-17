@@ -108,6 +108,8 @@ pub struct AppState {
     /// Where closing Settings goes back to.
     before_settings: Selection,
     sessions: HashMap<String, Entity<ChatSession>>,
+    /// The browser engine, shared by every chat's tabs. It starts on first use (browser.rs).
+    browser: std::sync::Arc<dyn wack_browser::Backend>,
     /// Each open chat's shell tasks, so quitting can stop them without a window context.
     chat_tasks: HashMap<String, wack_core::tasks::Tasks>,
     /// Each open chat's sub-agents, likewise.
@@ -284,11 +286,13 @@ impl AppState {
             }
         })
         .detach();
+        let browser = crate::browser::engine(&store);
         let mut app = Self {
             store,
             before_settings: selection.clone(),
             selection: Selection::Welcome,
             sessions: HashMap::new(),
+            browser,
             chat_tasks: HashMap::new(),
             chat_agents: HashMap::new(),
             session_subscriptions: HashMap::new(),
@@ -2349,7 +2353,8 @@ impl AppState {
         let layout = Layout::from_saved(chat.layout.as_ref());
         let runner = self.runs.clone();
         let tasks_folder = self.store.tasks_folder(chat);
-        let session = cx.new(|cx| ChatSession::load(&chat.id, cwd, &path, layout, runner, commands, tasks_folder, cx));
+        let browser = self.browser.clone();
+        let session = cx.new(|cx| ChatSession::load(&chat.id, cwd, &path, layout, runner, commands, tasks_folder, browser, cx));
         let id = chat.id.clone();
         // Cards read their dismissals and opened links from the store as it stands now.
         let view = self.suggestion_view(chat);
@@ -2869,6 +2874,7 @@ impl AppState {
         for thread in stopping {
             let _ = thread.join();
         }
+        wack_browser::cef::shutdown();
     }
 
     fn open_command_pane(&mut self, kind: CommandKind, cx: &mut Context<Self>) {

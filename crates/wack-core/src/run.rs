@@ -63,6 +63,9 @@ pub struct RunSetup {
     /// Sub-agents (Settings › Sub-agents), or `None` when they are off. Its registry is the
     /// chat's, which the app swaps in so children outlive the run.
     pub agents: Option<wack_agent::AgentsSetup>,
+    /// The chat's browser tabs, which outlive the run. `None` offers no browser; the app hands
+    /// the chat's own.
+    pub browser: Option<wack_browser::ChatTabs>,
 }
 
 pub enum Job {
@@ -127,6 +130,7 @@ impl Store {
             mcp_servers: self.mcp_specs_for(&project.path),
             mcp_hub: None,
             agents: self.agents_setup(children, &chat.id, &project.path, wack_agent::Agents::new()),
+            browser: None,
         })
     }
 }
@@ -274,6 +278,7 @@ mod tests {
             mcp_servers: Vec::new(),
             mcp_hub: None,
             agents: None,
+            browser: None,
         }
     }
 

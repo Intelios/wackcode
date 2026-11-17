@@ -80,7 +80,9 @@ impl Kit {
         if setup.delegation == Delegation::Off || setup.catalog.is_empty() {
             return Vec::new();
         }
-        vec![Arc::new(AgentTool::new(setup.clone(), pool.to_vec(), self.plan.clone(), self.unrestricted, self.skills.clone(), session.clone()))]
+        let agent = AgentTool::new(setup.clone(), pool.to_vec(), self.plan.clone(), self.unrestricted, self.skills.clone(), session.clone());
+        let messages = agent.messages();
+        vec![Arc::new(agent), Arc::new(messages)]
     }
 
     /// The tools these features add to a chat's own, in the order the model is shown them.

@@ -191,7 +191,8 @@ fn summary(name: &str, input: &Value) -> String {
         "stop_task" => field("id"),
         "read" | "write" | "edit" | "ls" => field("path"),
         "grep" | "find" => field("pattern"),
-        wack_agent::agents::AGENT => Some(format!("{} · {}", field("agent").unwrap_or_default(), field("description").unwrap_or_default())),
+        wack_agent::agents::AGENT => Some(format!("{} · {}", field("agent").unwrap_or_else(|| "copy".into()), field("description").unwrap_or_default())),
+        wack_agent::agents::AGENT_MESSAGE => Some(format!("{} · {}", field("agent_id").unwrap_or_default(), field("message").unwrap_or_default())),
         _ => None,
     }
     .unwrap_or_else(|| if input.as_object().is_some_and(|object| object.is_empty()) { String::new() } else { input.to_string() });
@@ -202,13 +203,14 @@ fn summary(name: &str, input: &Value) -> String {
 
 /// Prints each sub-agent's start, steps and end, indented under the call that started it.
 pub fn watch_agents(agents: &Agents) {
-    let seen: Mutex<HashMap<String, (u32, bool)>> = Mutex::default();
+    let seen: Mutex<HashMap<(String, u32), (u32, bool)>> = Mutex::default();
     let listed = agents.clone();
     agents.set_observer(move |_| {
         let mut seen = seen.lock().unwrap();
         for child in listed.list() {
-            let (steps, ended) = seen.entry(child.id.clone()).or_insert_with(|| {
-                println!("  {}", paint("36", &format!("↳ {} {} · {}", child.id, child.role, child.description)));
+            let (steps, ended) = seen.entry((child.id.clone(), child.round)).or_insert_with(|| {
+                let round = if child.round > 1 { format!(" (round {})", child.round) } else { String::new() };
+                println!("  {}", paint("36", &format!("↳ {} {} · {}{round}", child.id, child.role, child.description)));
                 (0, false)
             });
             if child.tool_calls > *steps {

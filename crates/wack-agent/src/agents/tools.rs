@@ -1,5 +1,11 @@
-//! `agent`: the parent model's way to start a sub-agent, and either wait for its report or let it
-//! work in the background and report when it ends.
+//! The parent model's tools for sub-agents.
+//!
+//! - `agent` starts a child and either waits for its report or lets it work in the background
+//!   and report when it ends. With `with_conversation` the child starts from a copy of the
+//!   conversation instead of a fresh brief.
+//! - `agent_message` talks to a child the chat already has: a working one reads the message
+//!   before its next step; a finished one works another round in its own session, with all it
+//!   learned, under its role's rules as they are now (access revoked since is not kept).
 
 use std::{path::PathBuf, sync::Arc};
 
@@ -7,8 +13,8 @@ use async_trait::async_trait;
 use serde_json::{Value, json};
 
 use super::{
-    AgentsSetup, Delegation, MAX_PER_MESSAGE, ModelPref, Waiting, child_tools, children_folder,
-    child::{self, Launch},
+    AgentDef, AgentsSetup, Child, ChildModel, Delegation, MAX_PER_MESSAGE, ModelPref, Waiting, child_tools, children_folder,
+    child::{self, Launch, Start},
     prompt,
 };
 use crate::{
@@ -18,10 +24,14 @@ use crate::{
 };
 
 pub const AGENT: &str = "agent";
+pub const AGENT_MESSAGE: &str = "agent_message";
+/// The role name a child started from a copy of the conversation is listed under.
+pub const COPY_ROLE: &str = "copy";
 
-pub struct AgentTool {
+/// What both tools share: the roles, the models, the parent's tools and mode.
+struct Shared {
     setup: AgentsSetup,
-    /// Every tool the parent has; each child gets its role's share.
+    /// Every tool the parent has but these; each child gets its role's share.
     pool: Vec<Arc<dyn Tool>>,
     /// The parent's mode, read when a child starts.
     plan: Plan,
@@ -31,88 +41,60 @@ pub struct AgentTool {
     parent_session: PathBuf,
 }
 
-impl AgentTool {
-    pub fn new(setup: AgentsSetup, pool: Vec<Arc<dyn Tool>>, plan: Plan, unrestricted: bool, skills: Option<String>, parent_session: PathBuf) -> Self {
-        Self { setup, pool, plan, unrestricted, skills, parent_session }
-    }
-}
-
-#[async_trait]
-impl Tool for AgentTool {
-    fn spec(&self) -> ToolSpec {
-        let names: Vec<&str> = self.setup.catalog.iter().map(|agent| agent.name.as_str()).collect();
-        ToolSpec {
-            name: AGENT.to_string(),
-            description: prompt::agent_description(&self.setup.catalog),
-            input_schema: json!({
-                "type": "object",
-                "properties": {
-                    "agent": { "type": "string", "enum": names, "description": "Which agent to start." },
-                    "description": { "type": "string", "description": "A short label for the task, three to five words, shown to the user." },
-                    "prompt": { "type": "string", "description": "The complete brief: the goal, the context and paths it needs, and the report you want back. The agent sees nothing else." },
-                    "background": { "type": "boolean", "description": "Return at once and let the agent work while you do other things. Its report arrives as a message when it ends. Leave this out when your next step needs the report." }
-                },
-                "required": ["agent", "description", "prompt"],
-                "additionalProperties": false
-            }),
-            loading: Loading::Always,
-            parallel_safe: false,
-            hint: prompt::AGENT_HINT.to_string(),
-            guidelines: prompt::guidelines(self.setup.delegation == Delegation::OnRequest),
-            ends_run: false,
-            together: true,
-        }
+impl Shared {
+    fn planning(&self) -> bool {
+        self.plan.mode().planning() && !self.unrestricted
     }
 
-    async fn run(&self, input: Value, context: &ToolContext<'_>) -> Result<String, String> {
-        let name = input["agent"].as_str().unwrap_or_default().trim();
-        let brief = input["prompt"].as_str().unwrap_or_default().trim();
-        let description = input["description"].as_str().unwrap_or_default().trim();
-        let Some(def) = self.setup.catalog.iter().find(|agent| agent.name == name) else {
-            let names: Vec<&str> = self.setup.catalog.iter().map(|agent| agent.name.as_str()).collect();
-            return Err(format!("There is no agent named \"{name}\". Choose one of: {}.", names.join(", ")));
-        };
-        if brief.is_empty() {
-            return Err("The prompt is empty. Give the agent a complete brief.".to_string());
-        }
-        let planning = self.plan.mode().planning() && !self.unrestricted;
-        if planning && def.edits() {
-            let readers: Vec<&str> = self.setup.catalog.iter().filter(|agent| !agent.edits()).map(|agent| agent.name.as_str()).collect();
-            return Err(format!(
-                "Plan mode only starts agents that make no edits ({}). {} can edit files.",
-                if readers.is_empty() { "none are switched on".to_string() } else { readers.join(", ") },
-                def.name
-            ));
-        }
-        let model = match def.model {
+    fn model(&self, def: &AgentDef) -> ChildModel {
+        match def.model {
             ModelPref::Helper => self.setup.helper.clone().unwrap_or_else(|| self.setup.chat.clone()),
             ModelPref::Chat => self.setup.chat.clone(),
-        };
-        let agents = &self.setup.agents;
-        if !agents.spend() {
-            return Err(format!(
-                "You have started {MAX_PER_MESSAGE} agents since the user's last message, the most allowed. Carry on with what you have, or ask the user before starting more."
-            ));
         }
-        let background = input["background"].as_bool() == Some(true);
-        let description = if description.is_empty() { def.name.clone() } else { description.to_string() };
-        let control = Control::new();
-        let folder = children_folder(&self.parent_session);
-        let child = agents.add(&folder, &def.name, &description, &context.call_id, &model.settings.model, def.edits(), background, control.clone());
+    }
+
+    fn role(&self, name: &str) -> Result<&AgentDef, String> {
+        self.setup.catalog.iter().find(|agent| agent.name == name).ok_or_else(|| {
+            let names: Vec<&str> = self.setup.catalog.iter().map(|agent| agent.name.as_str()).collect();
+            format!("There is no agent named \"{name}\". Choose one of: {}.", names.join(", "))
+        })
+    }
+
+    /// `Err` when Plan mode keeps this role from working.
+    fn check_planning(&self, def: &AgentDef) -> Result<(), String> {
+        if !self.planning() || !def.edits() {
+            return Ok(());
+        }
+        let readers: Vec<&str> = self.setup.catalog.iter().filter(|agent| !agent.edits()).map(|agent| agent.name.as_str()).collect();
+        Err(format!(
+            "Plan mode only starts agents that make no edits ({}). {} can edit files.",
+            if readers.is_empty() { "none are switched on".to_string() } else { readers.join(", ") },
+            def.name
+        ))
+    }
+
+    fn ledger_id(&self, child: &str) -> String {
         let chat = self.parent_session.file_stem().map(|stem| stem.to_string_lossy().into_owned()).unwrap_or_default();
-        let launch = Launch {
-            tools: child_tools(def, &self.pool),
-            def: def.clone(),
-            brief: brief.to_string(),
-            model,
-            cwd: context.cwd.clone(),
-            skills: self.skills.clone(),
-            planning,
-            ledger_id: format!("{chat}/{}", child.id),
-        };
-        child::start(child.clone(), agents.clone(), launch, control);
+        format!("{chat}/{child}")
+    }
+
+    fn spend(&self) -> Result<(), String> {
+        if self.setup.agents.spend() {
+            return Ok(());
+        }
+        Err(format!(
+            "You have started {MAX_PER_MESSAGE} agents since the user's last message, the most allowed. Carry on with what you have, or ask the user before starting more."
+        ))
+    }
+
+    /// Starts `child`, then waits for its report, or returns at once for one in the background.
+    async fn launch(&self, child: Arc<Child>, launch: Launch, control: Control, background: bool) -> Result<String, String> {
+        child::start(child.clone(), self.setup.agents.clone(), launch, control);
         if background {
-            return Ok(started_in_background(&child.id, &def.name));
+            return Ok(format!(
+                "Agent {} ({}) is working in the background. Its report will arrive as a message when it finishes. Carry on with other work meanwhile; don't poll for it or guess what it will say.",
+                child.id, child.role
+            ));
         }
         let waiting = Waiting(child.clone());
         tokio::select! {
@@ -122,16 +104,198 @@ impl Tool for AgentTool {
         drop(waiting);
         // Moving and ending decide under one lock: a child that moved reports as a note.
         if child.in_background() {
-            return Ok(moved_to_background(&child.id, &def.name));
+            return Ok(moved_to_background(&child.id, &child.role));
         }
         child.take_report().unwrap_or_else(|| Err("The agent's report was already delivered.".to_string()))
     }
 }
 
-fn started_in_background(id: &str, role: &str) -> String {
-    format!(
-        "Started agent {id} ({role}) in the background. Its report will arrive as a message when it finishes. Carry on with other work meanwhile; don't poll for it or guess what it will say."
-    )
+pub struct AgentTool(Arc<Shared>);
+
+impl AgentTool {
+    pub fn new(setup: AgentsSetup, pool: Vec<Arc<dyn Tool>>, plan: Plan, unrestricted: bool, skills: Option<String>, parent_session: PathBuf) -> Self {
+        Self(Arc::new(Shared { setup, pool, plan, unrestricted, skills, parent_session }))
+    }
+
+    /// `agent_message`, sharing this tool's roles and models.
+    pub fn messages(&self) -> AgentMessage {
+        AgentMessage(self.0.clone())
+    }
+}
+
+fn str_input<'a>(input: &'a Value, key: &str) -> &'a str {
+    input[key].as_str().unwrap_or_default().trim()
+}
+
+#[async_trait]
+impl Tool for AgentTool {
+    fn spec(&self) -> ToolSpec {
+        let setup = &self.0.setup;
+        let names: Vec<&str> = setup.catalog.iter().map(|agent| agent.name.as_str()).collect();
+        ToolSpec {
+            name: AGENT.to_string(),
+            description: prompt::agent_description(&setup.catalog),
+            input_schema: json!({
+                "type": "object",
+                "properties": {
+                    "agent": { "type": "string", "enum": names, "description": "Which agent to start. Not needed with with_conversation." },
+                    "description": { "type": "string", "description": "A short label for the task, three to five words, shown to the user." },
+                    "prompt": { "type": "string", "description": "The complete brief: the goal, the context and paths it needs, and the report you want back. A fresh agent sees nothing else. With with_conversation, a directive: what to do now." },
+                    "background": { "type": "boolean", "description": "Return at once and let the agent work while you do other things. Its report arrives as a message when it ends. Leave this out when your next step needs the report." },
+                    "with_conversation": { "type": "boolean", "description": "Start the agent from a copy of this conversation instead of a fresh context, with your tools and model: for a side task that needs what you already know, whose working you don't need to keep. Cheaper than briefing a fresh agent when the context is large." }
+                },
+                "required": ["description", "prompt"],
+                "additionalProperties": false
+            }),
+            loading: Loading::Always,
+            parallel_safe: false,
+            hint: prompt::AGENT_HINT.to_string(),
+            guidelines: prompt::guidelines(setup.delegation == Delegation::OnRequest),
+            ends_run: false,
+            together: true,
+        }
+    }
+
+    async fn run(&self, input: Value, context: &ToolContext<'_>) -> Result<String, String> {
+        let shared = &self.0;
+        let brief = str_input(&input, "prompt");
+        if brief.is_empty() {
+            return Err("The prompt is empty. Give the agent a complete brief.".to_string());
+        }
+        let background = input["background"].as_bool() == Some(true);
+        let copy = input["with_conversation"].as_bool() == Some(true);
+        let (def, model) = if copy {
+            // A copy is the parent's twin: its tools, model and settings, with General's limits.
+            let settings = context.seen.settings.ok_or("This chat can't copy its conversation.")?;
+            let model = ChildModel { settings: settings.clone(), ..shared.setup.chat.clone() };
+            (definition_for_copy(&shared.setup), model)
+        } else {
+            let def = shared.role(str_input(&input, "agent"))?.clone();
+            shared.check_planning(&def)?;
+            let model = shared.model(&def);
+            (def, model)
+        };
+        shared.spend()?;
+        let description = match str_input(&input, "description") {
+            "" => def.name.clone(),
+            description => description.to_string(),
+        };
+        let control = Control::new();
+        let folder = children_folder(&shared.parent_session);
+        let child = shared.setup.agents.add(&folder, &def.name, &description, &context.call_id, &model.settings.model, def.edits(), background, control.clone());
+        let start = if copy {
+            let registry = context.seen.registry.ok_or("This chat can't copy its conversation.")?;
+            Start::Copy {
+                system: context.seen.system.to_vec(),
+                messages: context.seen.messages.to_vec(),
+                loaded: context.seen.loaded.to_vec(),
+                registry: registry.clone(),
+                settings: model.settings.clone(),
+                call_id: context.call_id.clone(),
+                directive: brief.to_string(),
+            }
+        } else {
+            Start::Fresh { brief: brief.to_string(), tools: child_tools(&def, &shared.pool) }
+        };
+        let launch = Launch {
+            def,
+            start,
+            model,
+            cwd: context.cwd.clone(),
+            skills: shared.skills.clone(),
+            planning: shared.planning(),
+            ledger_id: shared.ledger_id(&child.id),
+        };
+        shared.launch(child, launch, control, background).await
+    }
+}
+
+/// The limits a copy of the conversation works under: General's, named as a copy.
+fn definition_for_copy(setup: &AgentsSetup) -> AgentDef {
+    let general = super::definition::builtins().into_iter().find(|agent| agent.name == "general").expect("General is built in");
+    let max_turns = setup.catalog.iter().find(|agent| agent.name == "general").map_or(general.max_turns, |agent| agent.max_turns);
+    AgentDef { name: COPY_ROLE.to_string(), description: "A copy of the conversation.".to_string(), tools: None, max_turns, ..general }
+}
+
+pub struct AgentMessage(Arc<Shared>);
+
+#[async_trait]
+impl Tool for AgentMessage {
+    fn spec(&self) -> ToolSpec {
+        ToolSpec {
+            name: AGENT_MESSAGE.to_string(),
+            description: "Send a message to one of this chat's agents, by its id (a1, a2…). One still working reads it before its next step, and this returns at once. One that has finished, was stopped or was interrupted works another round with everything it learned, and this waits for its new report (or returns at once with background). Use it for feedback on a report, a follow-up question, or to finish work an agent left, instead of briefing a new agent from scratch.".to_string(),
+            input_schema: json!({
+                "type": "object",
+                "properties": {
+                    "agent_id": { "type": "string", "description": "The agent's id, as its report or start gave it (a1, a2…)." },
+                    "message": { "type": "string", "description": "What to tell it. It remembers its own task and work, so say what's new." },
+                    "background": { "type": "boolean", "description": "For a finished agent: return at once; its new report arrives as a message." }
+                },
+                "required": ["agent_id", "message"],
+                "additionalProperties": false
+            }),
+            loading: Loading::Always,
+            parallel_safe: false,
+            hint: "message one of this chat's agents: steer one that's working, or give one that finished another round".to_string(),
+            guidelines: Vec::new(),
+            ends_run: false,
+            together: true,
+        }
+    }
+
+    async fn run(&self, input: Value, context: &ToolContext<'_>) -> Result<String, String> {
+        let shared = &self.0;
+        let id = str_input(&input, "agent_id");
+        let message = str_input(&input, "message");
+        if message.is_empty() {
+            return Err("The message is empty.".to_string());
+        }
+        let agents = &shared.setup.agents;
+        let child = agents.get(id).ok_or_else(|| {
+            let known: Vec<String> = agents.list().into_iter().map(|info| info.id).collect();
+            if known.is_empty() {
+                "This chat has no agents yet. Start one with agent.".to_string()
+            } else {
+                format!("There is no agent {id} in this chat. Its agents: {}.", known.join(", "))
+            }
+        })?;
+        if child.active() {
+            child.steer(message);
+            return Ok(format!("Sent to agent {id}, which is still working: it reads the message before its next step. Its report will come as before."));
+        }
+        let background = input["background"].as_bool() == Some(true);
+        let (def, model, tools, system) = if child.role == COPY_ROLE {
+            // A copy keeps its parent's tools, so its requests still match the parent's.
+            let settings = context.seen.settings.ok_or("This chat can't continue a copy of its conversation.")?;
+            let registry = context.seen.registry.ok_or("This chat can't continue a copy of its conversation.")?;
+            let model = ChildModel { settings: settings.clone(), ..shared.setup.chat.clone() };
+            let tools = registry.specs().filter_map(|spec| registry.get(&spec.name).map(|(_, tool)| tool.clone())).collect();
+            (definition_for_copy(&shared.setup), model, tools, Some(context.seen.system.to_vec()))
+        } else {
+            let def = shared
+                .role(&child.role)
+                .map_err(|_| format!("Agent {id}'s role, {}, is no longer switched on, so it can't work another round.", child.role))?
+                .clone();
+            shared.check_planning(&def)?;
+            let model = shared.model(&def);
+            let tools = child_tools(&def, &shared.pool);
+            (def, model, tools, None)
+        };
+        shared.spend()?;
+        let control = Control::new();
+        let child = agents.resume(id, &context.call_id, &model.settings.model, background, control.clone())?;
+        let launch = Launch {
+            def,
+            start: Start::Continue { message: message.to_string(), tools, system },
+            model,
+            cwd: context.cwd.clone(),
+            skills: shared.skills.clone(),
+            planning: shared.planning(),
+            ledger_id: shared.ledger_id(id),
+        };
+        shared.launch(child, launch, control, background).await
+    }
 }
 
 /// The result of a call whose child the user moved to the background (⌘B).

@@ -34,5 +34,5 @@ pub use plan::AgentMode;
 pub use registry::{Registry, TOOL_SEARCH};
 pub use session::{HistoryEntry, Note, Session, history};
 pub use tasks::{Tasks, SECRET_ENV};
-pub use tool::{Loading, Tool, ToolContext, ToolSpec, User};
+pub use tool::{Loading, Seen, Tool, ToolContext, ToolSpec, User};
 pub use usage::{CallOutcome, ModelCall, Purpose, Recorder};

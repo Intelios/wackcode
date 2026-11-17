@@ -58,7 +58,7 @@ use crate::{agent::Control, session::Note};
 pub use child::{ChildModel, child_tools};
 pub use definition::{AgentDef, Catalog, ModelPref};
 pub use feature::{AGENTS_STATE, AgentsFeature};
-pub use tools::{AGENT, AgentTool};
+pub use tools::{AGENT, AGENT_MESSAGE, AgentMessage, AgentTool};
 
 /// The longest report handed back to the parent; the rest is cut.
 pub const MAX_REPORT_CHARS: usize = 50_000;
@@ -134,6 +134,10 @@ pub struct Activity {
     pub target: String,
 }
 
+fn first_round() -> u32 {
+    1
+}
+
 /// What the app and the session know of a child.
 #[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
 pub struct AgentInfo {
@@ -142,6 +146,14 @@ pub struct AgentInfo {
     pub description: String,
     /// The parent's call that started it.
     pub call_id: String,
+    /// Its rounds so far: a finished child given a follow-up works another round, in the same
+    /// session.
+    #[serde(default = "first_round")]
+    pub round: u32,
+    /// The call that started this round, when it is not the first: an `agent_message`, or empty
+    /// for one the user started.
+    #[serde(default, skip_serializing_if = "String::is_empty")]
+    pub round_call_id: String,
     pub session: PathBuf,
     pub model: String,
     /// Whether its role can change files.
@@ -218,6 +230,8 @@ pub struct Child {
     pub role: String,
     pub description: String,
     pub call_id: String,
+    pub round: u32,
+    pub round_call_id: String,
     pub session: PathBuf,
     pub model: String,
     pub edits: bool,
@@ -252,6 +266,8 @@ impl Child {
             role: self.role.clone(),
             description: self.description.clone(),
             call_id: self.call_id.clone(),
+            round: self.round,
+            round_call_id: self.round_call_id.clone(),
             session: self.session.clone(),
             model: self.model.clone(),
             edits: self.edits,
@@ -280,6 +296,11 @@ impl Child {
 
     pub fn in_background(&self) -> bool {
         self.live().background
+    }
+
+    /// Hands the working child a message, read before its next step.
+    pub fn steer(&self, text: &str) {
+        self.control.steer(text);
     }
 
     /// The user stops the child. Its report says so, and is quiet: the user knows.
@@ -509,6 +530,8 @@ impl Agents {
             role: role.to_string(),
             description: description.to_string(),
             call_id: call_id.to_string(),
+            round: 1,
+            round_call_id: String::new(),
             model: model.to_string(),
             edits,
             started: Instant::now(),
@@ -541,6 +564,50 @@ impl Agents {
         child
     }
 
+    /// Starts another round for a child that has ended, in the same session: a fresh entry with
+    /// its id, in its place in the list. `call_id` is the call that asked for it, empty when the
+    /// user did; then its report is quiet and comes as a note.
+    pub(crate) fn resume(&self, id: &str, call_id: &str, model: &str, background: bool, control: Control) -> Result<Arc<Child>, String> {
+        let mut children = self.inner.children.lock().unwrap_or_else(|e| e.into_inner());
+        let index = children.iter().position(|child| child.id == id).ok_or_else(|| format!("There is no agent {id} in this chat."))?;
+        let old = children[index].clone();
+        if old.active() {
+            return Err(format!("Agent {id} is still working."));
+        }
+        let by_user = call_id.is_empty();
+        let child = Arc::new(Child {
+            id: old.id.clone(),
+            role: old.role.clone(),
+            description: old.description.clone(),
+            call_id: old.call_id.clone(),
+            round: old.round + 1,
+            round_call_id: call_id.to_string(),
+            session: old.session.clone(),
+            model: model.to_string(),
+            edits: old.edits,
+            started: Instant::now(),
+            started_at: now_millis(),
+            control,
+            live: Mutex::new(Live {
+                status: Status::Queued,
+                ended_at: None,
+                background: background || by_user,
+                quiet: by_user,
+                tool_calls: 0,
+                context_tokens: 0,
+                activity: None,
+                report: None,
+            }),
+            ended: watch::channel(false).0,
+            detached: Notify::new(),
+            registry: Arc::downgrade(&self.inner),
+        });
+        children[index] = child.clone();
+        drop(children);
+        self.inner.signal(Signal::Changed);
+        Ok(child)
+    }
+
     /// A place to run in, waiting while [`MAX_RUNNING`] others work. `None` if `control` stops
     /// first.
     pub(crate) async fn slot(&self, control: &Control) -> Option<tokio::sync::OwnedSemaphorePermit> {
@@ -561,6 +628,8 @@ impl Child {
             role: info.role,
             description: info.description,
             call_id: info.call_id,
+            round: info.round,
+            round_call_id: info.round_call_id,
             session: info.session,
             model: info.model,
             edits: info.edits,

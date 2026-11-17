@@ -29,7 +29,7 @@ impl AgentsFeature {
             .map(|info| Note {
                 tag: format!("{NOTE_PREFIX}{}:interrupted", info.id),
                 text: format!(
-                    "Agent {} ({} · {}) was stopped when WackCode quit, before it reported. What it did is in its session, {}. Start a new agent if you still need its work.",
+                    "Agent {} ({} · {}) was stopped when WackCode quit, before it reported. If you still need its work, continue it with agent_message: it picks up where it was, with what it had learned. Its session is {}.",
                     info.id,
                     info.role,
                     info.description,

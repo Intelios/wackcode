@@ -316,7 +316,7 @@ async fn a_background_report_arrives_as_a_note_and_wakes_the_parent() {
     );
     parent.run("Go", &Control::new()).await.unwrap();
     let (started, is_error) = &parent.results()[0];
-    assert!(!is_error && started.starts_with("Started agent a1 (helper) in the background."));
+    assert!(!is_error && started.starts_with("Agent a1 (helper) is working in the background."));
     assert_eq!(parent.agents.active().len(), 1);
 
     gate.add_permits(1);
@@ -399,4 +399,135 @@ async fn waiting_for_tasks_also_waits_for_an_agent_in_the_background() {
     assert!(!is_error, "{waited}");
     assert!(waited.contains("Agent a1 (helper · look) finished in the background. Its report:\n\nFound it."), "{waited}");
     assert!(!parent.agents.has_news(), "handed over once, by the wait");
+}
+
+#[tokio::test]
+async fn a_finished_agent_works_another_round_with_what_it_learned() {
+    let child = ScriptedProvider::new([say("The loop is in agent.rs."), say("It compacts at 80%.")]);
+    let mut parent = parent_with(
+        vec![
+            calls(&[helper("p1", "Find the loop", false)]),
+            call(&[("p2", AGENT_MESSAGE, json!({ "agent_id": "a1", "message": "When does it compact?" }))]),
+            say("Thanks."),
+        ],
+        child.clone(),
+        Vec::new(),
+    );
+    parent.run("Go", &Control::new()).await.unwrap();
+    let (followed, is_error) = &parent.results()[1];
+    assert!(!is_error && followed.starts_with("It compacts at 80%."), "{followed}");
+    // The second round continued the same session: its request carried the first round.
+    let second = &child.requests()[1];
+    let texts: Vec<String> = second.messages.iter().map(|message| message.text()).collect();
+    assert_eq!(texts, ["Find the loop", "The loop is in agent.rs.", "When does it compact?"]);
+    let info = &parent.agents.list()[0];
+    assert_eq!((info.round, info.round_call_id.as_str(), info.call_id.as_str()), (2, "p2", "p1"));
+}
+
+#[tokio::test]
+async fn a_message_steers_a_working_agent_and_unknown_ids_are_explained() {
+    let gate = Arc::new(tokio::sync::Semaphore::new(0));
+    let child = ScriptedProvider::new([call(&[("g", "gate", json!({}))]), say("Checked both.")]);
+    let mut parent = parent_with(
+        vec![
+            calls(&[helper("p1", "Check", true)]),
+            call(&[("p2", AGENT_MESSAGE, json!({ "agent_id": "a1", "message": "Also check the tests." }))]),
+            call(&[("p3", AGENT_MESSAGE, json!({ "agent_id": "a9", "message": "Hello?" }))]),
+            say("Waiting."),
+        ],
+        child.clone(),
+        vec![Arc::new(Gate(gate.clone()))],
+    );
+    parent.run("Go", &Control::new()).await.unwrap();
+    let results = parent.results();
+    assert!(results[1].0.starts_with("Sent to agent a1, which is still working"), "{:?}", results[1]);
+    assert!(results[2].1 && results[2].0.contains("There is no agent a9 in this chat. Its agents: a1."));
+    gate.add_permits(1);
+    parent.agents.get("a1").unwrap().ended().await;
+    // The message rode along with the gate's result.
+    let after_gate = child.requests()[1].messages.last().unwrap().clone();
+    assert!(format!("{after_gate:?}").contains("Also check the tests."));
+}
+
+#[tokio::test]
+async fn a_copy_of_the_conversation_sends_exactly_what_the_parent_sends() {
+    let child = ScriptedProvider::new([say("Side task done.")]);
+    let mut parent = parent_with(
+        vec![
+            call(&[
+                ("p1", AGENT, json!({ "description": "Side task", "prompt": "Rename the helper.", "with_conversation": true })),
+                ("p2", "read", json!({ "path": "x" })),
+            ]),
+            say("Both done."),
+        ],
+        child.clone(),
+        Vec::new(),
+    );
+    parent.run("Do the main thing", &Control::new()).await.unwrap();
+    // The two calls ran side by side, so the read may answer first.
+    let results = parent.results();
+    assert!(results.iter().any(|(text, is_error)| !is_error && text.starts_with("Side task done.")), "{results:?}");
+
+    let parent_request = &parent.provider.requests()[0];
+    let copy_request = &child.requests()[0];
+    // The cached prefix is the same: instructions, tools, model, and the conversation so far.
+    assert_eq!(copy_request.system, parent_request.system);
+    assert_eq!(copy_request.tools, parent_request.tools);
+    assert_eq!(copy_request.model, parent_request.model);
+    assert_eq!(copy_request.messages[..parent_request.messages.len()], parent_request.messages[..]);
+    // Then the parent's reply, every call in it answered, and the directive.
+    let opening = copy_request.messages.last().unwrap();
+    let text = format!("{opening:?}");
+    assert!(text.contains("This call started you."));
+    assert!(text.contains("This call is your parent's, not yours"));
+    assert!(text.contains("Rename the helper."));
+    assert_eq!(parent.agents.list()[0].role, super::tools::COPY_ROLE);
+}
+
+#[tokio::test]
+async fn a_copy_cannot_use_the_parents_own_tools() {
+    let child = ScriptedProvider::new([
+        call(&[("c1", AGENT, json!({ "agent": "helper", "description": "Nested", "prompt": "Go deeper" }))]),
+        say("Did it myself."),
+    ]);
+    let mut parent = parent_with(
+        vec![call(&[("p1", AGENT, json!({ "description": "Side", "prompt": "Do it", "with_conversation": true }))]), say("ok")],
+        child.clone(),
+        Vec::new(),
+    );
+    parent.run("Go", &Control::new()).await.unwrap();
+    let refused = format!("{:?}", child.requests()[1].messages.last().unwrap());
+    assert!(refused.contains("As a sub-agent you can't use agent"), "{refused}");
+    assert_eq!(parent.agents.list().len(), 1, "it started no agent of its own");
+}
+
+#[tokio::test]
+async fn an_agent_whose_role_was_switched_off_cannot_work_another_round() {
+    let mut parent = parent(
+        vec![call(&[("p1", AGENT_MESSAGE, json!({ "agent_id": "a1", "message": "More, please." }))]), say("ok")],
+        ScriptedProvider::new([]),
+        AgentMode::Build,
+        None,
+    );
+    parent.agents.restore(vec![AgentInfo {
+        id: "a1".into(),
+        role: "helper".into(),
+        description: "Help".into(),
+        call_id: "old".into(),
+        round: 1,
+        round_call_id: String::new(),
+        session: parent.folder.path().join("sessions/chat-1/a1.jsonl"),
+        model: "m".into(),
+        edits: false,
+        started_at: 0,
+        ended_at: Some(1),
+        status: Status::Done,
+        background: false,
+        tool_calls: 0,
+        context_tokens: 0,
+        activity: None,
+    }]);
+    parent.run("Go", &Control::new()).await.unwrap();
+    let (refused, is_error) = &parent.results()[0];
+    assert!(*is_error && refused.contains("Agent a1's role, helper, is no longer switched on"), "{refused}");
 }

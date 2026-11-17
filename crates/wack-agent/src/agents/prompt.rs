@@ -59,6 +59,7 @@ pub fn guidelines(on_request: bool) -> Vec<String> {
         when_guideline(on_request),
         "Brief a sub-agent like a capable colleague who has just walked in: the goal and why it matters, what you already know or have ruled out, the exact paths, and what shape and length of report you want. It can't see this conversation.".to_string(),
         "Never hand over understanding: \"based on what you find, fix it\" leaves the judgment to someone who knows less than you. Investigate, decide, then delegate specific work, or delegate the investigation and decide yourself.".to_string(),
+        "Each agent keeps its context after it reports. For feedback or a follow-up, use `agent_message` with its id rather than briefing a new agent. For a side task that needs what you already know, `with_conversation` starts an agent from a copy of this conversation instead of a fresh brief.".to_string(),
         "A sub-agent's report describes what it believes it did. Check claims that matter (read the diff, run the test) before you rely on them or pass them on.".to_string(),
         "To run agents at the same time, start them in one reply. Set `background` when you have other work to do meanwhile: the call returns at once and the agent's report arrives as a message when it finishes. Never poll, sleep or guess an agent's result; if the user asks, say it's still working.".to_string(),
         "Give agents that edit files separate files from each other and from your own work, and don't redo work you delegated.".to_string(),

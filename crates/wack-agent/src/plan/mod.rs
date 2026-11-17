@@ -244,8 +244,9 @@ impl Feature for Plan {
             || MEMORY_TOOLS.contains(&name)
             // Stopping or waiting on a background command changes nothing in the project.
             || [STOP_TASK, WAIT_FOR_TASKS].contains(&name)
-            // `agent` judges for itself: only roles that make no edits start, gated as planning.
-            || name == crate::agents::AGENT
+            // The sub-agent tools judge for themselves: only roles that make no edits work, gated
+            // as planning.
+            || [crate::agents::AGENT, crate::agents::AGENT_MESSAGE].contains(&name)
         {
             return Verdict::Allow;
         }

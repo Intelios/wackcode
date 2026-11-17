@@ -2,12 +2,16 @@
 
 use std::path::PathBuf;
 
+use std::sync::Arc;
+
 use async_trait::async_trait;
 use serde_json::Value;
+use wack_llm::{Message, SystemPart};
 use tokio_util::sync::CancellationToken;
 
 use crate::{
-    agent::{Control, Event, EventSink},
+    agent::{Control, Event, EventSink, Settings},
+    registry::Registry,
     agents::Agents,
     ask::{Answer, Question},
     tasks::Tasks,
@@ -59,12 +63,27 @@ pub struct ToolContext<'a> {
     pub tasks: Tasks,
     /// The chat's sub-agents, so a wait can include the ones in the background.
     pub agents: Agents,
+    /// The run this call came from, as the model sees it.
+    pub seen: Seen<'a>,
+}
+
+/// What the model sent to make this call: its instructions, its tools and the conversation,
+/// ending with the reply that made the call. A sub-agent that starts from a copy of the
+/// conversation sends the same, so the provider's prompt cache holds.
+#[derive(Clone, Copy, Default)]
+pub struct Seen<'a> {
+    pub system: &'a [SystemPart],
+    pub messages: &'a [Message],
+    pub registry: Option<&'a Arc<Registry>>,
+    /// Deferred tools the conversation has loaded.
+    pub loaded: &'a [String],
+    pub settings: Option<&'a Settings>,
 }
 
 impl ToolContext<'static> {
     /// A context with nobody on the other end, for running a tool outside a run.
     pub fn detached(cwd: impl Into<PathBuf>) -> Self {
-        Self { call_id: String::new(), cwd: cwd.into(), cancel: CancellationToken::new(), user: User::nobody(), tasks: Tasks::scratch(), agents: Agents::new() }
+        Self { call_id: String::new(), cwd: cwd.into(), cancel: CancellationToken::new(), user: User::nobody(), tasks: Tasks::scratch(), agents: Agents::new(), seen: Seen::default() }
     }
 }
 

@@ -11,7 +11,7 @@ use std::{
 };
 
 use serde_json::Value;
-use wack_llm::{Provider, Role};
+use wack_llm::{Block, Message, Provider, Role, SystemPart};
 
 use super::{AgentDef, Agents, Child, MAX_REPORT_CHARS, Status, StoppedBy, prompt::CHILD_PROMPT};
 use crate::{
@@ -29,7 +29,7 @@ use crate::{
 
 /// Tools only the chat itself has: spawning (so children never nest), talking to the user, the
 /// chat's plan and todo list, and the project's memory.
-const PARENT_ONLY: [&str; 5] = [super::AGENT, ASK_USER_QUESTION, TODO, PLAN_MODE_ENTER, PLAN_MODE_COMPLETE];
+const PARENT_ONLY: [&str; 6] = [super::AGENT, super::AGENT_MESSAGE, ASK_USER_QUESTION, TODO, PLAN_MODE_ENTER, PLAN_MODE_COMPLETE];
 /// The shell family. A role that makes no edits keeps it: helpers must be able to grep, build and
 /// run tests.
 const SHELL: [&str; 4] = ["bash", WATCH, STOP_TASK, WAIT_FOR_TASKS];
@@ -59,12 +59,24 @@ pub fn child_tools(def: &AgentDef, pool: &[Arc<dyn Tool>]) -> Vec<Arc<dyn Tool>>
         .collect()
 }
 
+/// How a child's session begins.
+pub(crate) enum Start {
+    /// A new session, with the role's prompt and tools; the brief is its first message.
+    Fresh { brief: String, tools: Vec<Arc<dyn Tool>> },
+    /// The child's own session, as its last round left it; `message` starts the next. A copy
+    /// of the conversation keeps sending its parent's instructions (`system`).
+    Continue { message: String, tools: Vec<Arc<dyn Tool>>, system: Option<Vec<SystemPart>> },
+    /// A copy of the parent's conversation, sent with exactly the parent's instructions, tools
+    /// and settings so the prompt cache holds. The copy ends with the parent's open calls
+    /// answered and the directive.
+    Copy { system: Vec<SystemPart>, messages: Vec<Message>, loaded: Vec<String>, registry: Arc<Registry>, settings: Settings, call_id: String, directive: String },
+}
+
 /// What a child is started with.
 pub(crate) struct Launch {
     pub def: AgentDef,
-    pub brief: String,
+    pub start: Start,
     pub model: ChildModel,
-    pub tools: Vec<Arc<dyn Tool>>,
     pub cwd: PathBuf,
     /// The skills index, as its parent's prompt has it.
     pub skills: Option<String>,
@@ -92,36 +104,98 @@ pub(crate) fn start(child: Arc<Child>, agents: Agents, launch: Launch, control: 
 }
 
 async fn run(child: &Arc<Child>, launch: Launch, control: &Control) -> Result<(Status, Result<String, String>), String> {
-    let Launch { def, brief, model, tools, cwd, skills, planning, ledger_id } = launch;
-    let session = Session::create(&child.session, &cwd)?;
-    let registry = Arc::new(Registry::new(tools)?);
-    let profile = Profile { name: def.name.clone(), prompt: format!("{CHILD_PROMPT}\n\n# Your role\n\n{}", def.prompt) };
-    // Ultra is the chat's own setting: a child never runs with its instruction.
-    let settings = Settings { ultra: false, ..model.settings };
-    let tasks = Tasks::scratch();
-    let tasks_feature = TasksFeature::new(&session, tasks.clone());
+    let Launch { def, start, model, cwd, skills, planning, ledger_id } = launch;
     let limited = Arc::new(AtomicBool::new(false));
+    let copy = matches!(start, Start::Copy { .. });
     let rules = Rules {
         planning,
+        copy,
         cwd: cwd.clone(),
         max_turns: def.max_turns,
         replies: AtomicU32::new(0),
         control: control.clone(),
         limited: limited.clone(),
     };
-    let mut agent = Agent::new(model.provider, registry, session, &profile, settings).with_tasks(tasks).with_feature(Box::new(tasks_feature)).with_feature(Box::new(rules));
-    if let Some(skills) = skills {
-        agent = agent.with_system_part(skills);
-    }
+    let tasks = Tasks::scratch();
+    let profile = Profile { name: def.name.clone(), prompt: format!("{CHILD_PROMPT}\n\n# Your role\n\n{}", def.prompt) };
+    // Ultra is the chat's own setting: a child never runs with its instruction, except a copy,
+    // which sends exactly what its parent does.
+    let settings = Settings { ultra: false, ..model.settings.clone() };
+    let (mut agent, prompt) = match start {
+        Start::Fresh { brief, tools } => {
+            let session = Session::create(&child.session, &cwd)?;
+            let mut agent = Agent::new(model.provider.clone(), Arc::new(Registry::new(tools)?), session, &profile, settings);
+            if let Some(skills) = skills {
+                agent = agent.with_system_part(skills);
+            }
+            (agent, Some(brief))
+        }
+        Start::Continue { message, tools, system: Some(system) } => {
+            let session = Session::open(&child.session)?;
+            let agent = Agent::new(model.provider.clone(), Arc::new(Registry::new(tools)?), session, &Profile::code(), model.settings.clone()).with_system(system);
+            (agent, Some(message))
+        }
+        Start::Continue { message, tools, system: None } => {
+            let session = Session::open(&child.session)?;
+            let mut agent = Agent::new(model.provider.clone(), Arc::new(Registry::new(tools)?), session, &profile, settings);
+            if let Some(skills) = skills {
+                agent = agent.with_system_part(skills);
+            }
+            (agent, Some(message))
+        }
+        Start::Copy { system, messages, loaded, registry, settings, call_id, directive } => {
+            let mut session = Session::create(&child.session, &cwd)?;
+            for name in &loaded {
+                session.load_tool(name)?;
+            }
+            let opening = messages.last().cloned();
+            for message in messages {
+                session.push(message, None)?;
+            }
+            session.push(answer_open_calls(opening.as_ref(), &call_id, &directive), None)?;
+            let agent = Agent::new(model.provider.clone(), registry, session, &Profile::code(), settings).with_system(system);
+            (agent, None)
+        }
+    };
+    let tasks_feature = TasksFeature::new(agent.session(), tasks.clone());
+    agent = agent.with_tasks(tasks).with_feature(Box::new(tasks_feature)).with_feature(Box::new(rules));
     if let Some(recorder) = model.recorder {
         agent = agent.with_recorder(Arc::new(ForSubagent { inner: recorder, id: ledger_id }));
     }
     let observer = child.clone();
     let sink = move |event: Event| observe(&observer, event);
-    let outcome = agent.run(&brief, control, &sink).await;
+    let outcome = match prompt {
+        Some(prompt) => agent.run(&prompt, control, &sink).await,
+        None => agent.carry_on(control, &sink).await,
+    };
     let text = last_reply(agent.session());
     Ok(ending(child, outcome, text, limited.load(Ordering::SeqCst), def.max_turns))
 }
+
+/// The message that turns a copy of the parent's conversation into the child's: an answer to
+/// every call in the parent's last reply (each needs one before anything else is sent), then the
+/// directive.
+fn answer_open_calls(reply: Option<&Message>, call_id: &str, directive: &str) -> Message {
+    let mut content: Vec<Block> = reply
+        .into_iter()
+        .flat_map(|reply| reply.tool_uses())
+        .map(|(id, _, _)| Block::ToolResult {
+            tool_use_id: id.to_string(),
+            content: if id == call_id {
+                COPY_STARTED.to_string()
+            } else {
+                "This call is your parent's, not yours: it runs separately, and you won't see its result.".to_string()
+            },
+            is_error: false,
+        })
+        .collect();
+    content.push(Block::Text { text: format!("{COPY_DIRECTIVE}\n\n{directive}") });
+    Message { role: Role::User, content }
+}
+
+/// The started call's answer, in a copy of the conversation.
+const COPY_STARTED: &str = "This call started you. You are a sub-agent working from a copy of the conversation above, not the agent that made the call: that agent carries on separately.";
+const COPY_DIRECTIVE: &str = "You are a sub-agent started from a copy of this conversation. Carry out the task below on your own, then end with a report for the agent that started you: it sees only your final message. Don't start other agents, don't ask the user anything, and don't take on work beyond the task.\n\nYour task:";
 
 /// Keeps the child's counters and latest activity up to date for whoever watches.
 fn observe(child: &Child, event: Event) {
@@ -211,10 +285,12 @@ pub(crate) fn duration(elapsed: Duration) -> String {
     }
 }
 
-/// A child's own rules: its step limit, and Plan mode's read-only gate when its parent was
-/// planning.
+/// A child's own rules: its step limit, Plan mode's read-only gate when its parent was planning,
+/// and, for a copy of the conversation (which has all its parent's tools, so the request matches),
+/// a refusal of the tools only the parent may use.
 struct Rules {
     planning: bool,
+    copy: bool,
     cwd: PathBuf,
     max_turns: u32,
     replies: AtomicU32,
@@ -233,10 +309,15 @@ impl Feature for Rules {
                 self.max_turns
             ));
         }
+        let name = tool.name.as_str();
+        if self.copy && (PARENT_ONLY.contains(&name) || MEMORY_TOOLS.contains(&name)) {
+            return Verdict::Deny(format!(
+                "As a sub-agent you can't use {name}: it belongs to the agent that started you. Do the work with your other tools, and put anything for the user in your report."
+            ));
+        }
         if !self.planning {
             return Verdict::Allow;
         }
-        let name = tool.name.as_str();
         if name == "bash" || name == WATCH {
             let command = input["command"].as_str().unwrap_or_default();
             return match policy::blocked_segment(command, Some(&self.cwd)) {

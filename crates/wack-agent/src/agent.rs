@@ -46,7 +46,7 @@ use crate::{
     registry::{Registry, TOOL_SEARCH},
     session::{Note, Session},
     tasks::Tasks,
-    tool::{Loading, Tool, ToolContext, ToolSpec, User},
+    tool::{Loading, Seen, Tool, ToolContext, ToolSpec, User},
     usage::{self, CallOutcome, Purpose, Recorder},
 };
 
@@ -389,6 +389,23 @@ impl Agent {
         self.turns(control, events).await
     }
 
+    /// Carries on from the session as it is, adding nothing: for a session that already ends
+    /// with what the model should answer (a sub-agent started from a copy of a conversation).
+    pub async fn carry_on(&mut self, control: &Control, events: EventSink<'_>) -> Result<Outcome, String> {
+        for feature in &self.features {
+            feature.on_run_start();
+        }
+        self.save_state(events)?;
+        self.turns(control, events).await
+    }
+
+    /// Sends `system` as the system prompt instead of the one built from the profile: for a
+    /// sub-agent that must send exactly what its parent sends.
+    pub fn with_system(mut self, system: Vec<SystemPart>) -> Self {
+        self.system = system;
+        self
+    }
+
     /// Asks the model and runs its tools until it stops.
     async fn turns(&mut self, control: &Control, events: EventSink<'_>) -> Result<Outcome, String> {
         let mut compacted_for_overflow = false;
@@ -606,6 +623,13 @@ impl Agent {
 
         let features = &self.features;
         let (cwd, tasks, agents) = (&self.cwd, &self.tasks, &self.agents);
+        let seen = Seen {
+            system: &self.system,
+            messages: self.session.messages(),
+            registry: Some(&self.registry),
+            loaded: self.session.loaded_tools(),
+            settings: Some(&self.settings),
+        };
         let run_one = |index: usize| {
             let (id, name, input) = &calls[index];
             let plan = &plans[index];
@@ -616,6 +640,7 @@ impl Agent {
                 user: User::new(control.clone(), events),
                 tasks: tasks.clone(),
                 agents: agents.clone(),
+                seen,
             };
             async move {
                 let context = &context;

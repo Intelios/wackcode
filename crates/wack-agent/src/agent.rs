@@ -42,11 +42,12 @@ use crate::{
     ask::{Answer, Question},
     commands::CommandUse,
     compaction::{self, Summary},
+    images,
     prompt,
     registry::{Registry, TOOL_SEARCH},
     session::{Note, Session},
     tasks::Tasks,
-    tool::{Loading, Seen, Tool, ToolContext, ToolSpec, User},
+    tool::{Loading, Seen, Tool, ToolContext, ToolOutput, ToolSpec, User},
     usage::{self, CallOutcome, Purpose, Recorder},
 };
 
@@ -79,6 +80,9 @@ pub struct Settings {
     /// The model's context size in tokens, when known. Without it compaction still happens, but
     /// only once the provider refuses a request as too long.
     pub context_window: Option<u64>,
+    /// The model reads pictures. When it does not, tools' pictures are left out of its requests
+    /// and their results say so (`images::prepare`).
+    pub accepts_images: bool,
     /// Ultra: the user asked for the most thorough work the model can do. It adds an instruction
     /// to the system prompt; the effort itself is `effort`, which the caller sets to the top.
     pub ultra: bool,
@@ -582,6 +586,7 @@ impl Agent {
             max_output_tokens: self.settings.max_output_tokens,
             effort: self.settings.effort,
         };
+        images::prepare(&mut request.messages, self.settings.accepts_images);
         for feature in &self.features {
             feature.before_request(&mut request);
         }
@@ -649,7 +654,7 @@ impl Agent {
             async move {
                 let context = &context;
                 let result = match plan {
-                    Planned::Settled(result) => result.clone(),
+                    Planned::Settled(result) => result.clone().map(ToolOutput::from),
                     Planned::Run { .. } if control.stopped() => Err(STOPPED.to_string()),
                     // Judged now, not when the reply arrived: an earlier call in this reply may
                     // have changed what is allowed.
@@ -664,12 +669,12 @@ impl Agent {
                         }
                     },
                 };
-                let (content, is_error) = match result {
-                    Ok(content) => (content, false),
-                    Err(content) => (content, true),
+                let (content, images, is_error) = match result {
+                    Ok(ToolOutput { text, images }) => (text, images, false),
+                    Err(content) => (content, Vec::new(), true),
                 };
                 events(Event::ToolResult { id: id.clone(), name: name.clone(), content: content.clone(), is_error });
-                Block::ToolResult { tool_use_id: id.clone(), content, is_error }
+                Block::ToolResult { tool_use_id: id.clone(), content, is_error, images }
             }
         };
 
@@ -825,6 +830,7 @@ mod tests {
                 effort: None,
                 max_output_tokens: None,
                 context_window: None,
+                accepts_images: true,
                 ultra,
                 commit_attribution: false,
             };
@@ -858,8 +864,8 @@ mod tests {
             spec(self.0, self.1, true)
         }
 
-        async fn run(&self, input: Value, _: &ToolContext<'_>) -> Result<String, String> {
-            Ok(input["text"].as_str().unwrap_or("ok").to_string())
+        async fn run(&self, input: Value, _: &ToolContext<'_>) -> Result<ToolOutput, String> {
+            Ok(input["text"].as_str().unwrap_or("ok").to_string().into())
         }
     }
 
@@ -872,9 +878,9 @@ mod tests {
             spec("together", Loading::Always, true)
         }
 
-        async fn run(&self, _: Value, _: &ToolContext<'_>) -> Result<String, String> {
+        async fn run(&self, _: Value, _: &ToolContext<'_>) -> Result<ToolOutput, String> {
             self.0.wait().await;
-            Ok("met".to_string())
+            Ok("met".to_string().into())
         }
     }
 
@@ -891,12 +897,12 @@ mod tests {
             spec("alone", Loading::Always, false)
         }
 
-        async fn run(&self, _: Value, _: &ToolContext<'_>) -> Result<String, String> {
+        async fn run(&self, _: Value, _: &ToolContext<'_>) -> Result<ToolOutput, String> {
             let inside = self.inside.fetch_add(1, Ordering::SeqCst) + 1;
             self.most.fetch_max(inside, Ordering::SeqCst);
             tokio::time::sleep(Duration::from_millis(5)).await;
             self.inside.fetch_sub(1, Ordering::SeqCst);
-            Ok("ran".to_string())
+            Ok("ran".to_string().into())
         }
     }
 
@@ -921,7 +927,7 @@ mod tests {
             spec("forever", Loading::Always, false)
         }
 
-        async fn run(&self, _: Value, _: &ToolContext<'_>) -> Result<String, String> {
+        async fn run(&self, _: Value, _: &ToolContext<'_>) -> Result<ToolOutput, String> {
             let _guard = Guard(self.abandoned.clone());
             self.started.notify_one();
             std::future::pending().await
@@ -952,6 +958,7 @@ mod tests {
             effort: None,
             max_output_tokens: None,
             context_window,
+            accepts_images: true,
             ultra: false,
             commit_attribution: false,
         };
@@ -1375,6 +1382,7 @@ mod tests {
             effort: None,
             max_output_tokens: None,
             context_window: None,
+            accepts_images: true,
             ultra: false,
             commit_attribution: false,
         };
@@ -1441,8 +1449,8 @@ mod tests {
             ToolSpec { ends_run: true, ..spec("finish", Loading::Always, false) }
         }
 
-        async fn run(&self, input: Value, _: &ToolContext<'_>) -> Result<String, String> {
-            if input["fail"] == true { Err("Not yet.".to_string()) } else { Ok("Submitted.".to_string()) }
+        async fn run(&self, input: Value, _: &ToolContext<'_>) -> Result<ToolOutput, String> {
+            if input["fail"] == true { Err("Not yet.".to_string()) } else { Ok("Submitted.".into()) }
         }
     }
 
@@ -1477,9 +1485,9 @@ mod tests {
             spec("asks", Loading::Always, false)
         }
 
-        async fn run(&self, _: Value, context: &ToolContext<'_>) -> Result<String, String> {
+        async fn run(&self, _: Value, context: &ToolContext<'_>) -> Result<ToolOutput, String> {
             if !context.user.present() {
-                return Ok("nobody".to_string());
+                return Ok("nobody".to_string().into());
             }
             let question = Question {
                 id: "colour".into(),
@@ -1488,7 +1496,7 @@ mod tests {
                 options: Vec::new(),
                 multi_select: false,
             };
-            Ok(format!("{:?}", context.user.ask(vec![question], true).await))
+            Ok(format!("{:?}", context.user.ask(vec![question], true).await).into())
         }
     }
 
@@ -1549,9 +1557,9 @@ mod tests {
             spec("lock", Loading::Always, false)
         }
 
-        async fn run(&self, _: Value, _: &ToolContext<'_>) -> Result<String, String> {
+        async fn run(&self, _: Value, _: &ToolContext<'_>) -> Result<ToolOutput, String> {
             self.0.store(true, Ordering::SeqCst);
-            Ok("Locked.".to_string())
+            Ok("Locked.".to_string().into())
         }
     }
 
@@ -1672,6 +1680,7 @@ mod tests {
                 effort: None,
                 max_output_tokens: None,
                 context_window: None,
+                accepts_images: true,
                 ultra: false,
                 commit_attribution: false,
             };
@@ -1771,9 +1780,9 @@ mod tests {
             spec("tell", Loading::Always, false)
         }
 
-        async fn run(&self, _: Value, context: &ToolContext<'_>) -> Result<String, String> {
+        async fn run(&self, _: Value, context: &ToolContext<'_>) -> Result<ToolOutput, String> {
             context.tasks.tell(Note { tag: "task:t1:end".into(), text: "Task t1 finished.".into() });
-            Ok("told".to_string())
+            Ok("told".to_string().into())
         }
     }
 
@@ -1887,6 +1896,7 @@ mod tests {
                 effort: None,
                 max_output_tokens: None,
                 context_window: None,
+                accepts_images: true,
                 ultra: false,
                 commit_attribution: attribution,
             };
@@ -1911,5 +1921,59 @@ mod tests {
         assert!(!guide_of(2).contains("Co-authored-by"));
         assert!(!guide_of(2).contains("Commit attribution"));
         assert!(guide_of(3).contains(&prompt::co_author_trailer("Second model")));
+    }
+
+    /// Returns a picture beside its text, as a browser screenshot will.
+    struct Shot;
+
+    #[async_trait]
+    impl Tool for Shot {
+        fn spec(&self) -> ToolSpec {
+            spec("shot", Loading::Always, true)
+        }
+
+        async fn run(&self, _: Value, _: &ToolContext<'_>) -> Result<ToolOutput, String> {
+            let image = wack_llm::Image { media_type: "image/png".into(), data: "iVBORw0KGgo=".into() };
+            Ok(ToolOutput::with_images("The page.", vec![image]))
+        }
+    }
+
+    fn sent_result(request: &Request) -> (String, usize) {
+        request
+            .messages
+            .iter()
+            .flat_map(|message| &message.content)
+            .find_map(|block| match block {
+                Block::ToolResult { content, images, .. } => Some((content.clone(), images.len())),
+                _ => None,
+            })
+            .unwrap()
+    }
+
+    #[tokio::test]
+    async fn a_tools_picture_reaches_the_model_and_survives_reopening_the_session() {
+        let steps = vec![call(&[("s1", "shot", json!({}))]), say("I see it.")];
+        let mut rig = rig(steps, vec![Arc::new(Shot)]);
+        assert_eq!(rig.run("look", &Control::new()).await, Ok(Outcome::Done));
+        assert_eq!(sent_result(&rig.provider.requests()[1]), ("The page.".to_string(), 1));
+        // The transcript gets the text; the picture travels only in the conversation.
+        assert_eq!(rig.results(), [("The page.".to_string(), false)]);
+
+        let reopened = Session::open(rig.agent.session().path()).unwrap();
+        assert_eq!(reopened.messages(), rig.agent.session().messages());
+        assert!(matches!(&reopened.messages()[2].content[0], Block::ToolResult { images, .. } if images.len() == 1));
+    }
+
+    #[tokio::test]
+    async fn a_model_without_images_is_told_the_picture_was_left_out_but_the_session_keeps_it() {
+        let steps = vec![call(&[("s1", "shot", json!({}))]), say("Noted.")];
+        let mut rig = rig(steps, vec![Arc::new(Shot)]);
+        rig.agent.settings.accepts_images = false;
+        assert_eq!(rig.run("look", &Control::new()).await, Ok(Outcome::Done));
+        let (text, images) = sent_result(&rig.provider.requests()[1]);
+        assert_eq!(images, 0);
+        assert_eq!(text, "The page.\n[1 image left out: this model does not accept images.]");
+        // Saved as it came, so a model that reads pictures sees it after a switch.
+        assert!(matches!(&rig.agent.session().messages()[2].content[0], Block::ToolResult { images, .. } if images.len() == 1));
     }
 }

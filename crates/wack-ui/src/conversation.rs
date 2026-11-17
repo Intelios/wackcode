@@ -278,7 +278,7 @@ impl Conversation {
                     .content
                     .iter()
                     .filter_map(|block| match block {
-                        Block::ToolResult { tool_use_id, content, is_error } => Some((tool_use_id, content, *is_error)),
+                        Block::ToolResult { tool_use_id, content, is_error, .. } => Some((tool_use_id, content, *is_error)),
                         _ => None,
                     })
                     .collect();
@@ -649,7 +649,7 @@ mod tests {
     fn results(pairs: &[(&str, &str)], steered: Option<&str>) -> Message {
         let mut content: Vec<Block> = pairs
             .iter()
-            .map(|(id, text)| Block::ToolResult { tool_use_id: (*id).into(), content: (*text).into(), is_error: false })
+            .map(|(id, text)| Block::ToolResult { tool_use_id: (*id).into(), content: (*text).into(), is_error: false, images: Vec::new() })
             .collect();
         if let Some(text) = steered {
             content.push(Block::Text { text: text.into() });

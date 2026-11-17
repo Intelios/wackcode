@@ -220,6 +220,7 @@ async fn run(hub: &Hub, specs: &[ServerSpec], folder: &Path, steps: Vec<wack_llm
         effort: None,
         max_output_tokens: None,
         context_window: None,
+        accepts_images: true,
         ultra: false,
         commit_attribution: false,
     };

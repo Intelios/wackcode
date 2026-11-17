@@ -80,17 +80,22 @@ fn push_message(message: &Message, out: &mut Vec<Value>) {
         }
         Role::User => {
             // Tool results are their own messages here and must come straight after the call.
+            // They hold text only, so a result's pictures follow in the user message after the
+            // last of them (nothing may come between two tool messages), labelled with the call
+            // they answer and ahead of any words the user sent mid-run.
             let mut parts = Vec::new();
             for block in &message.content {
                 match block {
-                    Block::ToolResult { tool_use_id, content, .. } => {
+                    Block::ToolResult { tool_use_id, content, images, .. } => {
                         out.push(json!({ "role": "tool", "tool_call_id": tool_use_id, "content": content }));
+                        if !images.is_empty() {
+                            let noun = if images.len() == 1 { "image" } else { "images" };
+                            parts.push(json!({ "type": "text", "text": format!("The {noun} returned by tool call {tool_use_id}:") }));
+                            parts.extend(images.iter().map(|image| image_url(&image.data_url())));
+                        }
                     }
                     Block::Text { text } if !text.is_empty() => parts.push(json!({ "type": "text", "text": text })),
-                    Block::Image { media_type, data } => parts.push(json!({
-                        "type": "image_url",
-                        "image_url": { "url": format!("data:{media_type};base64,{data}") },
-                    })),
+                    Block::Image { media_type, data } => parts.push(image_url(&format!("data:{media_type};base64,{data}"))),
                     _ => {}
                 }
             }
@@ -101,6 +106,10 @@ fn push_message(message: &Message, out: &mut Vec<Value>) {
             }
         }
     }
+}
+
+fn image_url(url: &str) -> Value {
+    json!({ "type": "image_url", "image_url": { "url": url } })
 }
 
 #[derive(Default)]
@@ -224,7 +233,7 @@ mod tests {
                 Message {
                     role: Role::User,
                     content: vec![
-                        Block::ToolResult { tool_use_id: "c1".into(), content: "a.rs".into(), is_error: false },
+                        Block::ToolResult { tool_use_id: "c1".into(), content: "a.rs".into(), is_error: false, images: vec![] },
                         Block::Text { text: "also check b".into() },
                     ],
                 },
@@ -241,6 +250,47 @@ mod tests {
         assert_eq!(messages[4]["content"], "also check b");
         assert_eq!(body["max_tokens"], 100);
         assert!(super::body(&request, true).get("max_completion_tokens").is_some());
+    }
+
+    #[test]
+    fn tool_result_images_follow_every_tool_message_and_precede_the_users_words() {
+        let image = |data: &str| crate::Image { media_type: "image/png".into(), data: data.into() };
+        let request = Request {
+            model: "m".into(),
+            system: vec![],
+            messages: vec![
+                Message {
+                    role: Role::Assistant,
+                    content: vec![
+                        Block::ToolUse { id: "c1".into(), name: "shot".into(), input: json!({}) },
+                        Block::ToolUse { id: "c2".into(), name: "shot".into(), input: json!({}) },
+                    ],
+                },
+                Message {
+                    role: Role::User,
+                    content: vec![
+                        Block::ToolResult { tool_use_id: "c1".into(), content: "One.".into(), is_error: false, images: vec![image("AA")] },
+                        Block::ToolResult { tool_use_id: "c2".into(), content: "Two.".into(), is_error: false, images: vec![image("BB"), image("CC")] },
+                        Block::Text { text: "and hurry".into() },
+                    ],
+                },
+            ],
+            tools: vec![],
+            max_output_tokens: None,
+            effort: None,
+        };
+        let body = body(&request, true);
+        let messages = body["messages"].as_array().unwrap();
+        let roles: Vec<_> = messages.iter().map(|message| message["role"].as_str().unwrap()).collect();
+        assert_eq!(roles, ["assistant", "tool", "tool", "user"]);
+        assert_eq!(messages[1]["content"], "One.");
+        let parts = messages[3]["content"].as_array().unwrap();
+        let kinds: Vec<_> = parts.iter().map(|part| part["type"].as_str().unwrap()).collect();
+        assert_eq!(kinds, ["text", "image_url", "text", "image_url", "image_url", "text"]);
+        assert_eq!(parts[0]["text"], "The image returned by tool call c1:");
+        assert_eq!(parts[1]["image_url"]["url"], "data:image/png;base64,AA");
+        assert_eq!(parts[2]["text"], "The images returned by tool call c2:");
+        assert_eq!(parts[5]["text"], "and hurry");
     }
 
     const STREAM: &str = r#"data: {"choices":[{"delta":{"role":"assistant","reasoning_content":"Think."}}]}

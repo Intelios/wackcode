@@ -75,11 +75,16 @@ pub enum Block {
         name: String,
         input: Value,
     },
+    /// `images` are a tool's pictures (a screenshot) beside its text. Older session lines have
+    /// none, and a result without any is written exactly as before, so the field is optional both
+    /// ways. Every format can carry them; whether a model is sent them is the agent's call.
     ToolResult {
         tool_use_id: String,
         content: String,
         #[serde(default)]
         is_error: bool,
+        #[serde(default, skip_serializing_if = "Vec::is_empty")]
+        images: Vec<Image>,
     },
     Image {
         media_type: String,
@@ -90,6 +95,21 @@ pub enum Block {
         format: WireFormat,
         value: Value,
     },
+}
+
+/// A picture a tool returned, as the providers take it inline.
+#[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
+pub struct Image {
+    /// `image/png`, `image/jpeg`, `image/gif` or `image/webp`: what every format accepts.
+    pub media_type: String,
+    /// Base64.
+    pub data: String,
+}
+
+impl Image {
+    pub fn data_url(&self) -> String {
+        format!("data:{};base64,{}", self.media_type, self.data)
+    }
 }
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Serialize, Deserialize)]

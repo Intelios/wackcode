@@ -181,7 +181,7 @@ impl Session {
         };
         let content: Vec<Block> = last
             .tool_uses()
-            .map(|(id, _, _)| Block::ToolResult { tool_use_id: id.to_string(), content: INTERRUPTED.to_string(), is_error: true })
+            .map(|(id, _, _)| Block::ToolResult { tool_use_id: id.to_string(), content: INTERRUPTED.to_string(), is_error: true, images: Vec::new() })
             .collect();
         if content.is_empty() {
             return Ok(());
@@ -501,6 +501,30 @@ mod tests {
             })
             .collect();
         assert_eq!(kinds, ["note contract:plan", "message one", "state todo", "state todo", "compacted", "note contract:normal"]);
+    }
+
+    #[test]
+    fn tool_result_pictures_round_trip_and_older_lines_still_load() {
+        let folder = tempfile::tempdir().unwrap();
+        let path = folder.path().join("chat.jsonl");
+        let mut session = Session::create(&path, folder.path()).unwrap();
+        session.push(tool_call(), None).unwrap();
+        let image = wack_llm::Image { media_type: "image/png".into(), data: "AAAA".into() };
+        let result = Message {
+            role: Role::User,
+            content: vec![Block::ToolResult { tool_use_id: "t1".into(), content: "Shot.".into(), is_error: false, images: vec![image] }],
+        };
+        session.push(result.clone(), None).unwrap();
+        // A result without pictures is written exactly as before the field existed.
+        session.push(Message { role: Role::User, content: vec![Block::Text { text: "next".into() }] }, None).unwrap();
+        let file = std::fs::read_to_string(&path).unwrap();
+        assert_eq!(file.matches("\"images\"").count(), 1);
+        assert_eq!(Session::open(&path).unwrap().messages()[1], result);
+
+        let old = r#"{"type":"tool_result","tool_use_id":"t1","content":"ok","is_error":false}"#;
+        let block: Block = serde_json::from_str(old).unwrap();
+        assert_eq!(block, Block::ToolResult { tool_use_id: "t1".into(), content: "ok".into(), is_error: false, images: Vec::new() });
+        assert_eq!(serde_json::to_string(&block).unwrap(), old);
     }
 
     #[test]

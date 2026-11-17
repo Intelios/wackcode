@@ -1,7 +1,7 @@
 use async_trait::async_trait;
 use serde::Deserialize;
 use serde_json::{Value, json};
-use wack_agent::{Loading, Tool, ToolContext, ToolSpec};
+use wack_agent::{Loading, Tool, ToolContext, ToolOutput, ToolSpec};
 
 use crate::text::{parse, resolve};
 
@@ -36,7 +36,7 @@ impl Tool for Write {
         }
     }
 
-    async fn run(&self, input: Value, context: &ToolContext<'_>) -> Result<String, String> {
+    async fn run(&self, input: Value, context: &ToolContext<'_>) -> Result<ToolOutput, String> {
         let input: Input = parse(input)?;
         let path = resolve(&context.cwd, &input.path);
         if let Some(folder) = path.parent() {
@@ -46,7 +46,7 @@ impl Tool for Write {
         tokio::fs::write(&path, &input.content).await.map_err(|error| format!("Could not write {}: {error}.", input.path))?;
         let verb = if existed { "Replaced" } else { "Created" };
         let lines = input.content.lines().count();
-        Ok(format!("{verb} {} ({lines} {}).", input.path, if lines == 1 { "line" } else { "lines" }))
+        Ok(format!("{verb} {} ({lines} {}).", input.path, if lines == 1 { "line" } else { "lines" }).into())
     }
 }
 
@@ -59,9 +59,9 @@ mod tests {
     async fn creates_folders_and_replaces_files() {
         let folder = tempfile::tempdir().unwrap();
         let context = ToolContext::detached(folder.path().to_path_buf());
-        let created = Write.run(json!({ "path": "src/deep/a.rs", "content": "one\ntwo\n" }), &context).await.unwrap();
+        let created = Write.run(json!({ "path": "src/deep/a.rs", "content": "one\ntwo\n" }), &context).await.unwrap().text;
         assert_eq!(created, "Created src/deep/a.rs (2 lines).");
-        let replaced = Write.run(json!({ "path": "src/deep/a.rs", "content": "three" }), &context).await.unwrap();
+        let replaced = Write.run(json!({ "path": "src/deep/a.rs", "content": "three" }), &context).await.unwrap().text;
         assert!(replaced.starts_with("Replaced"));
         assert_eq!(std::fs::read_to_string(folder.path().join("src/deep/a.rs")).unwrap(), "three");
     }

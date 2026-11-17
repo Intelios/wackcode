@@ -56,6 +56,8 @@ pub struct ModelField {
     pub reasoning: bool,
     /// The efforts ticked while Reasoning is on, low to high.
     pub efforts: Vec<Reasoning>,
+    /// Kept from the saved model, which the editor has no switch for yet; a new row accepts.
+    pub accepts_images: bool,
 }
 
 /// What switching Reasoning on starts a model with, as version 2 did.
@@ -135,11 +137,12 @@ impl ProviderForm {
         for model in &connection.models {
             let context = model.context_window.map(tokens_text);
             self.add_model(&model.id, context.as_deref(), cx);
-            if let Some(row) = self.models.last_mut()
-                && model.reasons()
-            {
-                row.reasoning = true;
-                row.efforts = model.levels();
+            if let Some(row) = self.models.last_mut() {
+                row.accepts_images = model.accepts_images;
+                if model.reasons() {
+                    row.reasoning = true;
+                    row.efforts = model.levels();
+                }
             }
         }
         if self.models.is_empty() {
@@ -272,6 +275,7 @@ impl ProviderForm {
             context: cx.new(|cx| TextField::new(Type::Ui, "200k", cx)),
             reasoning: false,
             efforts: Vec::new(),
+            accepts_images: true,
         }
     }
 
@@ -289,6 +293,7 @@ impl ProviderForm {
                     id: text(&row.id),
                     context: text(&row.context),
                     efforts: if row.reasoning { saved_efforts(&row.efforts) } else { Vec::new() },
+                    accepts_images: row.accepts_images,
                 })
                 .filter(|model| !model.id.is_empty() || !model.context.is_empty())
                 .collect(),
@@ -324,6 +329,7 @@ impl ProviderForm {
                 id: row.id.clone(),
                 context_window,
                 efforts: row.efforts.clone(),
+                accepts_images: row.accepts_images,
             });
         }
         if models.is_empty() {
@@ -402,6 +408,7 @@ struct ModelValue {
     id: String,
     context: String,
     efforts: Vec<Reasoning>,
+    accepts_images: bool,
 }
 
 /// "200000", "200k", "1M", "1.5m" in tokens.

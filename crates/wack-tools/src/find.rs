@@ -1,7 +1,7 @@
 use async_trait::async_trait;
 use serde::Deserialize;
 use serde_json::{Value, json};
-use wack_agent::{Loading, Tool, ToolContext, ToolSpec};
+use wack_agent::{Loading, Tool, ToolContext, ToolOutput, ToolSpec};
 
 use crate::{
     grep::{glob_matcher, glob_matches},
@@ -45,7 +45,7 @@ impl Tool for Find {
         }
     }
 
-    async fn run(&self, input: Value, context: &ToolContext<'_>) -> Result<String, String> {
+    async fn run(&self, input: Value, context: &ToolContext<'_>) -> Result<ToolOutput, String> {
         let input: Input = parse(input)?;
         let root = resolve(&context.cwd, input.path.as_deref().unwrap_or("."));
         if !root.is_dir() {
@@ -83,6 +83,7 @@ impl Tool for Find {
         })
         .await
         .map_err(|error| format!("The search failed: {error}."))?
+        .map(ToolOutput::from)
     }
 }
 
@@ -103,7 +104,7 @@ mod tests {
             std::fs::write(root.join(file), "").unwrap();
         }
         let context = ToolContext::detached(root.to_path_buf());
-        let find = |input: Value| Find.run(input, &context);
+        let find = |input: Value| async { Find.run(input, &context).await.map(|output| output.text) };
 
         assert_eq!(find(json!({ "pattern": "*.rs" })).await.unwrap(), "src/main.rs\nsrc/ui/view.rs");
         assert_eq!(find(json!({ "pattern": "src/*.rs" })).await.unwrap(), "src/main.rs\nsrc/ui/view.rs", "a star crosses folders, as in a shell's **");

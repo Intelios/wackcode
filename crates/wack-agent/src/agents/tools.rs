@@ -20,7 +20,7 @@ use super::{
 use crate::{
     agent::Control,
     plan::Plan,
-    tool::{Loading, Tool, ToolContext, ToolSpec},
+    tool::{Loading, Tool, ToolContext, ToolOutput, ToolSpec},
 };
 
 pub const AGENT: &str = "agent";
@@ -156,7 +156,7 @@ impl Tool for AgentTool {
         }
     }
 
-    async fn run(&self, input: Value, context: &ToolContext<'_>) -> Result<String, String> {
+    async fn run(&self, input: Value, context: &ToolContext<'_>) -> Result<ToolOutput, String> {
         let shared = &self.0;
         let brief = str_input(&input, "prompt");
         if brief.is_empty() {
@@ -206,7 +206,7 @@ impl Tool for AgentTool {
             planning: shared.planning(),
             ledger_id: shared.ledger_id(&child.id),
         };
-        shared.launch(child, launch, control, background).await
+        shared.launch(child, launch, control, background).await.map(ToolOutput::from)
     }
 }
 
@@ -244,7 +244,7 @@ impl Tool for AgentMessage {
         }
     }
 
-    async fn run(&self, input: Value, context: &ToolContext<'_>) -> Result<String, String> {
+    async fn run(&self, input: Value, context: &ToolContext<'_>) -> Result<ToolOutput, String> {
         let shared = &self.0;
         let id = str_input(&input, "agent_id");
         let message = str_input(&input, "message");
@@ -265,7 +265,7 @@ impl Tool for AgentMessage {
         let message = if from_user { self::from_user(message) } else { message.to_string() };
         if child.active() {
             child.steer(&message);
-            return Ok(format!("Sent to agent {id}, which is still working: it reads the message before its next step. Its report will come as before."));
+            return Ok(format!("Sent to agent {id}, which is still working: it reads the message before its next step. Its report will come as before.").into());
         }
         let background = input["background"].as_bool() == Some(true);
         let (def, model, tools, system) = if child.role == COPY_ROLE {
@@ -300,7 +300,7 @@ impl Tool for AgentMessage {
             planning: shared.planning(),
             ledger_id: shared.ledger_id(id),
         };
-        shared.launch(child, launch, control, background).await
+        shared.launch(child, launch, control, background).await.map(ToolOutput::from)
     }
 }
 

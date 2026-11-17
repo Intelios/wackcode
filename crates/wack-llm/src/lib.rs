@@ -22,7 +22,7 @@ use async_trait::async_trait;
 pub use error::{ErrorKind, LlmError};
 pub use http::HttpProvider;
 pub use model::{
-    Block, Delta, Effort, Message, Request, Response, Role, StopReason, SystemPart, ToolDef, Usage, WireFormat,
+    Block, Delta, Effort, Image, Message, Request, Response, Role, StopReason, SystemPart, ToolDef, Usage, WireFormat,
 };
 pub use retry::{RetryNotice, stream_with_retry};
 

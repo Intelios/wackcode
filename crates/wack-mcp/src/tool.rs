@@ -18,7 +18,7 @@ use std::{collections::HashSet, path::Path, sync::Arc};
 use async_trait::async_trait;
 use serde_json::{Value, json};
 use tokio_util::sync::CancellationToken;
-use wack_agent::{Feature, Loading, Note, Session, Tool, ToolContext, ToolSpec};
+use wack_agent::{Feature, Loading, Note, Session, Tool, ToolContext, ToolOutput, ToolSpec};
 
 use crate::{
     convert::{parameters, result_text, tool_name},
@@ -105,7 +105,7 @@ impl Tool for McpTool {
         }
     }
 
-    async fn run(&self, input: Value, context: &ToolContext<'_>) -> Result<String, String> {
+    async fn run(&self, input: Value, context: &ToolContext<'_>) -> Result<ToolOutput, String> {
         let spec = self.server.spec();
         if spec.tool_disabled(&self.decl.name) {
             return Err(format!("{} is switched off in Settings › MCP servers.", self.name));
@@ -135,7 +135,7 @@ impl Tool for McpTool {
         }
         let arguments = if input.is_object() { input } else { json!({}) };
         let result = connection.call(tool, arguments, &context.cancel).await?;
-        result_text(&result).map_err(|error| spec.redact(&error))
+        result_text(&result).map(ToolOutput::from).map_err(|error| spec.redact(&error))
     }
 }
 

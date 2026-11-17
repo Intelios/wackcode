@@ -957,7 +957,7 @@ pub fn agents_registry(folder: &Path) -> wack_core::agents::Agents {
     let mut push = |message: Message, ago: u64| lines.push(json!({ "type": "message", "message": message, "at": now - ago }));
     push(Message::user("Find every ceiling on how long a retry may wait: constants, config, and anything that clamps a Retry-After. Report each with file:line and whether a server's value can skip it."), 84_000);
     let assistant = |blocks: Vec<Block>| Message { role: Role::Assistant, content: blocks };
-    let result = |id: &str, content: &str| Message { role: Role::User, content: vec![Block::ToolResult { tool_use_id: id.into(), content: content.into(), is_error: false }] };
+    let result = |id: &str, content: &str| Message { role: Role::User, content: vec![Block::ToolResult { tool_use_id: id.into(), content: content.into(), is_error: false, images: Vec::new() }] };
     let tool = |id: &str, name: &str, input: serde_json::Value| Block::ToolUse { id: id.into(), name: name.into(), input };
     push(assistant(vec![Block::Text { text: "Starting from the retry module, then everything that calls it.".into() }, tool("g1", "grep", json!({ "pattern": "Backoff|MAX_WAIT|ceiling", "path": "crates" }))]), 80_000);
     push(result("g1", "crates/wack-llm/src/retry.rs:12:const MAX_WAIT: Duration = Duration::from_secs(60);\ncrates/wack-llm/src/retry.rs:19:    pub fn next(&mut self) -> Duration {\ncrates/wack-core/src/title.rs:57:    let wait = Backoff::once();"), 79_000);

@@ -19,7 +19,7 @@ use std::sync::{
 use async_trait::async_trait;
 use serde_json::{Value, json};
 
-use crate::tool::{Loading, Tool, ToolContext, ToolSpec};
+use crate::tool::{Loading, Tool, ToolContext, ToolOutput, ToolSpec};
 
 pub const ASK_USER_QUESTION: &str = "ask_user_question";
 /// The longest free-form answer the card accepts.
@@ -242,17 +242,17 @@ impl Tool for AskUserQuestion {
         }
     }
 
-    async fn run(&self, input: Value, context: &ToolContext<'_>) -> Result<String, String> {
+    async fn run(&self, input: Value, context: &ToolContext<'_>) -> Result<ToolOutput, String> {
         let questions = match normalize(&input) {
             Ok(questions) => questions,
-            Err(error) => return Ok(cancelled(&format!("Error: {error}."))),
+            Err(error) => return Ok(cancelled(&format!("Error: {error}.")).into()),
         };
         let offer_wrap_up = (self.interviewing)();
         if offer_wrap_up && self.wrap_up_requested.load(Ordering::SeqCst) {
-            return Ok(WRAP_UP_INSTRUCTION.to_string());
+            return Ok(WRAP_UP_INSTRUCTION.to_string().into());
         }
         if !context.user.present() {
-            return Ok(cancelled("Interactive UI is not available, so the questions could not be shown."));
+            return Ok(cancelled("Interactive UI is not available, so the questions could not be shown.").into());
         }
         Ok(match context.user.ask(questions.clone(), offer_wrap_up).await {
             Answer::WrapUp => {
@@ -261,7 +261,7 @@ impl Tool for AskUserQuestion {
             }
             Answer::Cancelled => cancelled("The user dismissed the questions without answering."),
             Answer::Answered(answers) => format_answers(&questions, &answers),
-        })
+        }.into())
     }
 }
 
@@ -333,9 +333,9 @@ mod tests {
     async fn with_nobody_to_ask_the_model_is_told_to_carry_on() {
         let tool = AskUserQuestion::new(Arc::new(|| false));
         let context = ToolContext::detached("/tmp");
-        let result = tool.run(input(), &context).await.unwrap();
+        let result = tool.run(input(), &context).await.unwrap().text;
         assert!(result.starts_with("Interactive UI is not available"));
-        let result = tool.run(json!({ "questions": "x" }), &context).await.unwrap();
+        let result = tool.run(json!({ "questions": "x" }), &context).await.unwrap().text;
         assert_eq!(result, format!("Error: questions must be an array. {CANCEL_ADVICE}"));
     }
 }

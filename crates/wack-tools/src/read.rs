@@ -1,7 +1,7 @@
 use async_trait::async_trait;
 use serde::Deserialize;
 use serde_json::{Value, json};
-use wack_agent::{Loading, Tool, ToolContext, ToolSpec};
+use wack_agent::{Loading, Tool, ToolContext, ToolOutput, ToolSpec};
 
 use crate::text::{MAX_BYTES, MAX_LINES, cut, looks_binary, parse, resolve};
 
@@ -41,7 +41,7 @@ impl Tool for Read {
         }
     }
 
-    async fn run(&self, input: Value, context: &ToolContext<'_>) -> Result<String, String> {
+    async fn run(&self, input: Value, context: &ToolContext<'_>) -> Result<ToolOutput, String> {
         let input: Input = parse(input)?;
         let path = resolve(&context.cwd, &input.path);
         let size = tokio::fs::metadata(&path).await.map_err(|error| format!("Could not read {}: {error}.", input.path))?;
@@ -58,7 +58,7 @@ impl Tool for Read {
         let text = String::from_utf8_lossy(&bytes);
         let lines: Vec<&str> = text.lines().collect();
         if lines.is_empty() {
-            return Ok("(The file is empty.)".to_string());
+            return Ok("(The file is empty.)".to_string().into());
         }
         let start = input.offset.unwrap_or(1).max(1) - 1;
         if start >= lines.len() {
@@ -86,7 +86,7 @@ impl Tool for Read {
         if end < lines.len() {
             shown.push_str(&format!("\n[Lines {}-{} of {}. Continue with offset={}.]", start + 1, end, lines.len(), end + 1));
         }
-        Ok(shown)
+        Ok(shown.into())
     }
 }
 
@@ -106,8 +106,8 @@ mod tests {
         std::fs::write(folder.path().join("a.txt"), &body).unwrap();
         let context = context(&folder);
 
-        assert_eq!(Read.run(json!({ "path": "a.txt" }), &context).await.unwrap(), body);
-        let part = Read.run(json!({ "path": "a.txt", "offset": 4, "limit": 2 }), &context).await.unwrap();
+        assert_eq!(Read.run(json!({ "path": "a.txt" }), &context).await.unwrap().text, body);
+        let part = Read.run(json!({ "path": "a.txt", "offset": 4, "limit": 2 }), &context).await.unwrap().text;
         assert_eq!(part, "line 4\nline 5\n\n[Lines 4-5 of 10. Continue with offset=6.]");
         assert!(Read.run(json!({ "path": "a.txt", "offset": 11 }), &context).await.unwrap_err().contains("only 10 lines"));
     }
@@ -117,7 +117,7 @@ mod tests {
         let folder = tempfile::tempdir().unwrap();
         let body: String = (1..=5_000).map(|line| format!("{line} {}\n", "x".repeat(40))).collect();
         std::fs::write(folder.path().join("big.txt"), body).unwrap();
-        let shown = Read.run(json!({ "path": "big.txt" }), &context(&folder)).await.unwrap();
+        let shown = Read.run(json!({ "path": "big.txt" }), &context(&folder)).await.unwrap().text;
         assert!(shown.len() <= MAX_BYTES + 100);
         let next: usize = shown.rsplit_once("offset=").unwrap().1.trim_end_matches(".]").parse().unwrap();
         assert!(shown.contains(&format!("\n{} x", next - 1)) && !shown.contains(&format!("\n{next} x")));
@@ -133,6 +133,6 @@ mod tests {
         assert!(Read.run(json!({ "path": "." }), &context).await.unwrap_err().contains("is a folder"));
         assert!(Read.run(json!({ "path": "missing.txt" }), &context).await.is_err());
         assert!(Read.run(json!({ "file": "a" }), &context).await.unwrap_err().contains("input is wrong"));
-        assert_eq!(Read.run(json!({ "path": "empty.txt" }), &context).await.unwrap(), "(The file is empty.)");
+        assert_eq!(Read.run(json!({ "path": "empty.txt" }), &context).await.unwrap().text, "(The file is empty.)");
     }
 }

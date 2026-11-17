@@ -83,9 +83,20 @@ fn push_message(message: &Message, out: &mut Vec<Value>) {
                 let arguments = if input.is_object() { input.to_string() } else { "{}".to_string() };
                 out.push(json!({ "type": "function_call", "call_id": id, "name": name, "arguments": arguments }));
             }
-            (Block::ToolResult { tool_use_id, content, .. }, _) => {
+            (Block::ToolResult { tool_use_id, content, images, .. }, _) => {
                 flush(&mut parts, out);
-                out.push(json!({ "type": "function_call_output", "call_id": tool_use_id, "output": content }));
+                // With pictures the output is a list of input items; without, the plain string.
+                let output = if images.is_empty() {
+                    json!(content)
+                } else {
+                    let mut items = Vec::new();
+                    if !content.is_empty() {
+                        items.push(json!({ "type": "input_text", "text": content }));
+                    }
+                    items.extend(images.iter().map(|image| json!({ "type": "input_image", "image_url": image.data_url() })));
+                    Value::Array(items)
+                };
+                out.push(json!({ "type": "function_call_output", "call_id": tool_use_id, "output": output }));
             }
             (Block::Opaque { format: WireFormat::OpenaiResponses, value }, _) => {
                 flush(&mut parts, out);
@@ -235,7 +246,7 @@ mod tests {
                 },
                 Message {
                     role: Role::User,
-                    content: vec![Block::ToolResult { tool_use_id: "call_1".into(), content: "a.rs".into(), is_error: false }],
+                    content: vec![Block::ToolResult { tool_use_id: "call_1".into(), content: "a.rs".into(), is_error: false, images: vec![] }],
                 },
             ],
             tools: vec![],
@@ -248,6 +259,27 @@ mod tests {
         assert_eq!(kinds, ["message", "reasoning", "message", "function_call", "function_call_output"]);
         assert_eq!(body["store"], false);
         assert_eq!(body["reasoning"]["effort"], "xhigh");
+        assert_eq!(body["input"][4]["output"], "a.rs");
+    }
+
+    #[test]
+    fn tool_result_images_are_input_images_in_the_output() {
+        let image = crate::Image { media_type: "image/jpeg".into(), data: "BBBB".into() };
+        let request = Request {
+            model: "m".into(),
+            system: vec![],
+            messages: vec![Message {
+                role: Role::User,
+                content: vec![Block::ToolResult { tool_use_id: "call_1".into(), content: "Shot.".into(), is_error: false, images: vec![image] }],
+            }],
+            tools: vec![],
+            max_output_tokens: None,
+            effort: None,
+        };
+        let body = body(&request);
+        let output = &body["input"][0]["output"];
+        assert_eq!(output[0], json!({"type": "input_text", "text": "Shot."}));
+        assert_eq!(output[1], json!({"type": "input_image", "image_url": "data:image/jpeg;base64,BBBB"}));
     }
 
     const STREAM: &str = r#"data: {"type":"response.output_item.added","item":{"type":"function_call","id":"fc_1","call_id":"call_1","name":"read","arguments":""}}

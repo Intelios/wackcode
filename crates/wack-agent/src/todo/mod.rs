@@ -25,7 +25,7 @@ pub use reducer::{Action, Op};
 use crate::{
     agent::Feature,
     session::Session,
-    tool::{Loading, Tool, ToolContext, ToolSpec},
+    tool::{Loading, Tool, ToolContext, ToolOutput, ToolSpec},
 };
 
 pub const TODO: &str = "todo";
@@ -289,11 +289,11 @@ impl Tool for Todo {
         }
     }
 
-    async fn run(&self, input: Value, _: &ToolContext<'_>) -> Result<String, String> {
+    async fn run(&self, input: Value, _: &ToolContext<'_>) -> Result<ToolOutput, String> {
         let (action, input) = normalize(&input)?;
         let mut list = self.list.lock().unwrap();
         let op = reducer::apply(&mut list, action, &input);
-        Ok(format::content(&op, &list))
+        Ok(format::content(&op, &list).into())
     }
 }
 
@@ -322,10 +322,10 @@ mod tests {
         assert!(todo.summary_sections().is_empty());
 
         let context = ToolContext::detached("/tmp");
-        let created = todo.run(json!({ "action": "create", "subject": "Write the parser" }), &context).await.unwrap();
+        let created = todo.run(json!({ "action": "create", "subject": "Write the parser" }), &context).await.unwrap().text;
         assert_eq!(created, "Created #1: Write the parser (pending)");
         // A rule broken is reported in the result, not as a failed call.
-        assert_eq!(todo.run(json!({ "action": "get", "id": 9 }), &context).await.unwrap(), "Error: #9 not found");
+        assert_eq!(todo.run(json!({ "action": "get", "id": 9 }), &context).await.unwrap().text, "Error: #9 not found");
         assert!(todo.run(json!({ "action": "explode" }), &context).await.is_err());
         todo.run(json!({ "action": "update", "id": 1, "status": "in_progress", "activeForm": "writing the parser" }), &context).await.unwrap();
 

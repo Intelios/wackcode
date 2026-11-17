@@ -6,7 +6,7 @@ use regex::RegexBuilder;
 use serde::Deserialize;
 use serde_json::{Value, json};
 use tokio_util::sync::CancellationToken;
-use wack_agent::{Loading, Tool, ToolContext, ToolSpec};
+use wack_agent::{Loading, Tool, ToolContext, ToolOutput, ToolSpec};
 
 use crate::{
     text::{MAX_BYTES, cut, display, looks_binary, parse, resolve},
@@ -63,7 +63,7 @@ impl Tool for Grep {
         }
     }
 
-    async fn run(&self, input: Value, context: &ToolContext<'_>) -> Result<String, String> {
+    async fn run(&self, input: Value, context: &ToolContext<'_>) -> Result<ToolOutput, String> {
         let input: Input = parse(input)?;
         let root = resolve(&context.cwd, input.path.as_deref().unwrap_or("."));
         let cancel = context.cancel.clone();
@@ -71,6 +71,7 @@ impl Tool for Grep {
         tokio::task::spawn_blocking(move || search(&input, &root, &cancel))
             .await
             .map_err(|error| format!("The search failed: {error}."))?
+            .map(ToolOutput::from)
     }
 }
 
@@ -182,7 +183,7 @@ mod tests {
 
     async fn grep(folder: &tempfile::TempDir, input: Value) -> String {
         let context = ToolContext::detached(folder.path().to_path_buf());
-        Grep.run(input, &context).await.unwrap()
+        Grep.run(input, &context).await.unwrap().text
     }
 
     #[tokio::test]

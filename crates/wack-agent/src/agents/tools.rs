@@ -260,8 +260,11 @@ impl Tool for AgentMessage {
                 format!("There is no agent {id} in this chat. Its agents: {}.", known.join(", "))
             }
         })?;
+        // A call with no id is the user's own, from the agent's pane.
+        let from_user = context.call_id.is_empty();
+        let message = if from_user { self::from_user(message) } else { message.to_string() };
         if child.active() {
-            child.steer(message);
+            child.steer(&message);
             return Ok(format!("Sent to agent {id}, which is still working: it reads the message before its next step. Its report will come as before."));
         }
         let background = input["background"].as_bool() == Some(true);
@@ -282,12 +285,15 @@ impl Tool for AgentMessage {
             let tools = child_tools(&def, &shared.pool);
             (def, model, tools, None)
         };
-        shared.spend()?;
+        // The user's own follow-ups don't count against the agent's budget.
+        if !from_user {
+            shared.spend()?;
+        }
         let control = Control::new();
         let child = agents.resume(id, &context.call_id, &model.settings.model, background, control.clone())?;
         let launch = Launch {
             def,
-            start: Start::Continue { message: message.to_string(), tools, system },
+            start: Start::Continue { message, tools, system },
             model,
             cwd: context.cwd.clone(),
             skills: shared.skills.clone(),
@@ -296,6 +302,11 @@ impl Tool for AgentMessage {
         };
         shared.launch(child, launch, control, background).await
     }
+}
+
+/// A message the user sent an agent from its pane, as the agent reads it.
+pub(crate) fn from_user(text: &str) -> String {
+    format!("The user, who can see your work in WackCode, sends you this message:\n\n{text}")
 }
 
 /// The result of a call whose child the user moved to the background (⌘B).

@@ -110,6 +110,8 @@ pub struct AppState {
     sessions: HashMap<String, Entity<ChatSession>>,
     /// Each open chat's shell tasks, so quitting can stop them without a window context.
     chat_tasks: HashMap<String, wack_core::tasks::Tasks>,
+    /// Each open chat's sub-agents, likewise.
+    chat_agents: HashMap<String, wack_core::agents::Agents>,
     session_subscriptions: HashMap<String, Vec<Subscription>>,
     /// Projects whose chats the sidebar lists.
     open_projects: HashSet<String>,
@@ -284,6 +286,7 @@ impl AppState {
             selection: Selection::Welcome,
             sessions: HashMap::new(),
             chat_tasks: HashMap::new(),
+            chat_agents: HashMap::new(),
             session_subscriptions: HashMap::new(),
             open_projects: HashSet::new(),
             branches: HashMap::new(),
@@ -1312,6 +1315,9 @@ impl AppState {
         if let Some(tasks) = self.chat_tasks.remove(chat) {
             std::thread::spawn(move || tasks.terminate_all());
         }
+        if let Some(agents) = self.chat_agents.remove(chat) {
+            std::thread::spawn(move || agents.terminate_all());
+        }
         self.titling.remove(chat);
         self.title_swaps.remove(chat);
         if self.renaming.as_ref().is_some_and(|renaming| renaming.chat == chat) {
@@ -2189,6 +2195,7 @@ impl AppState {
         let session = cx.new(|cx| ChatSession::load(&chat.id, cwd, &path, layout, runner, commands, tasks_folder, cx));
         let id = chat.id.clone();
         self.chat_tasks.insert(id.clone(), session.read(cx).tasks.clone());
+        self.chat_agents.insert(id.clone(), session.read(cx).agents.clone());
         let composer = session.read(cx).composer.clone();
         let mode = chat.mode;
         composer.update(cx, |composer, cx| composer.set_placeholder(placeholder(mode, false), cx));
@@ -2694,6 +2701,8 @@ impl AppState {
     pub fn shutdown_runs(&self) {
         let tasks: Vec<_> = self.chat_tasks.values().cloned().collect();
         let mut stopping: Vec<_> = tasks.into_iter().map(|tasks| std::thread::spawn(move || tasks.terminate_all())).collect();
+        let agents: Vec<_> = self.chat_agents.values().cloned().collect();
+        stopping.extend(agents.into_iter().map(|agents| std::thread::spawn(move || agents.terminate_all())));
         let mcp = self.mcp.clone();
         stopping.push(std::thread::spawn(move || mcp.terminate_all()));
         self.runs.terminate_all();

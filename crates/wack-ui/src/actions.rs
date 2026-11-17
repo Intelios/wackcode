@@ -28,6 +28,8 @@ actions!(
         ToggleTasks,
         /// Show the Tasks pane.
         ToggleTasksPane,
+        /// Show the Agents pane: the chat's sub-agents and their work.
+        ToggleAgentsPane,
         /// Summarise the current chat's older messages now.
         Compact,
         /// Step back: closes a menu or Settings, or stops the run.
@@ -498,6 +500,20 @@ pub struct ShowTask {
     pub id: gpui::SharedString,
 }
 
+/// Shows a sub-agent's work in the Agents pane.
+#[derive(Clone, Debug, PartialEq, Action)]
+#[action(namespace = wackcode, no_json)]
+pub struct ShowAgent {
+    pub id: gpui::SharedString,
+}
+
+/// Stops one sub-agent for the user.
+#[derive(Clone, Debug, PartialEq, Action)]
+#[action(namespace = wackcode, no_json)]
+pub struct StopAgent {
+    pub id: gpui::SharedString,
+}
+
 /// Takes a queued message back into the composer.
 #[derive(Clone, Debug, PartialEq, Action)]
 #[action(namespace = wackcode, no_json)]
@@ -754,6 +770,7 @@ pub fn init(cx: &mut App) {
         KeyBinding::new("ctrl-cmd-s", ToggleSidebar, Some(CONTEXT)),
         KeyBinding::new("cmd-shift-g", ToggleChanges, Some(CONTEXT)),
         KeyBinding::new("cmd-b", MoveToBackground, Some(CONTEXT)),
+        KeyBinding::new("cmd-shift-a", ToggleAgentsPane, Some(CONTEXT)),
         KeyBinding::new("ctrl-`", ToggleTerminal, Some(CONTEXT)),
         // macOS may report ⌃⇧` as either.
         KeyBinding::new("ctrl-shift-`", NewTerminal, Some(CONTEXT)),

@@ -1,14 +1,19 @@
 //! Turns a [`Conversation`] into the rows the transcript draws: what each tool call says in the
 //! work log, the diff an edit opens into, how long a turn took. Pure, so it is tested here.
 
-use std::{collections::HashSet, path::Path, rc::Rc};
+use std::{
+    collections::{HashMap, HashSet},
+    path::Path,
+    rc::Rc,
+};
 
 use serde_json::Value;
+use wack_core::agents::{AGENT, AGENT_MESSAGE, AgentInfo, Status, StoppedBy};
 
 use crate::{
     conversation::{Conversation, Entry, News, Step, ToolStep, Turn, TurnEnd},
     markdown,
-    transcript::{CommandShown, Detail, Diff, DiffLine, Item, LineKind, Meta, Target, Work, WorkRow},
+    transcript::{AgentLine, AgentState, CommandShown, Detail, Diff, DiffLine, Item, LineKind, Meta, Target, Work, WorkRow},
 };
 
 /// Diff and output details show at most this many lines.
@@ -92,7 +97,7 @@ pub fn entry_items(
                         .steps
                         .iter()
                         .enumerate()
-                        .map(|(step, item)| step_row(item, &format!("{key}-{step}"), cwd, turn.live, open))
+                        .map(|(step, item)| step_row(item, &format!("{key}-{step}"), cwd, turn.live, open, &conversation.agents, now))
                         .collect();
                     items.push(Item::Work(Work {
                         open: turn.live || open.contains(&key),
@@ -165,7 +170,8 @@ pub fn summary(turn: &Turn, now: u64) -> String {
 /// What a log did, counted: "2 reads · 1 search · 1 edit · 1 command". Thoughts, notes and
 /// smaller tools are left out; empty when nothing counted.
 pub fn tally(rows: &[WorkRow]) -> String {
-    const KINDS: [(&[&str], &str, &str); 9] = [
+    const KINDS: [(&[&str], &str, &str); 10] = [
+        (&[AGENT_VERB], "agent", "agents"),
         (&["Used skill"], "skill", "skills"),
         (&["Read"], "read", "reads"),
         (&["Fetched"], "page", "pages"),
@@ -210,6 +216,7 @@ pub fn activity(rows: &[WorkRow]) -> Option<String> {
         "Recalled memory" => "Recalling memory",
         "Forgot memory" => "Forgetting memory",
         "Waited" => "Waiting",
+        AGENT_VERB => "Waiting on",
         "Stopped" => "Stopping",
         other => other,
     };
@@ -280,7 +287,7 @@ pub fn count(value: u64) -> String {
     }
 }
 
-fn step_row(step: &Step, key: &str, cwd: &Path, live: bool, open: &HashSet<String>) -> WorkRow {
+fn step_row(step: &Step, key: &str, cwd: &Path, live: bool, open: &HashSet<String>, agents: &HashMap<String, AgentInfo>, now: u64) -> WorkRow {
     let mut row = match step {
         Step::Thought(text) => WorkRow {
             key: key.to_string().into(),
@@ -289,6 +296,7 @@ fn step_row(step: &Step, key: &str, cwd: &Path, live: bool, open: &HashSet<Strin
             meta: Meta::None,
             detail: (text.trim().contains('\n') || text.trim().len() > 120).then(|| Detail::Text(text.trim().to_string().into())),
             open: false,
+            agent: None,
         },
         Step::Note(text) => WorkRow {
             key: key.to_string().into(),
@@ -297,6 +305,7 @@ fn step_row(step: &Step, key: &str, cwd: &Path, live: bool, open: &HashSet<Strin
             meta: Meta::None,
             detail: None,
             open: false,
+            agent: None,
         },
         Step::Event(text) => WorkRow {
             key: key.to_string().into(),
@@ -305,7 +314,9 @@ fn step_row(step: &Step, key: &str, cwd: &Path, live: bool, open: &HashSet<Strin
             meta: Meta::None,
             detail: None,
             open: false,
+            agent: None,
         },
+        Step::Tool(tool) if is_agent_row(tool, agents) => agent_row(tool, agents.get(&tool.id), live, now),
         Step::Tool(tool) => tool_row(tool, cwd, live),
         Step::Task(news) => news_row(news, key),
     };
@@ -328,6 +339,9 @@ fn background_note(result: &str) -> Option<&'static str> {
 
 /// A background task's news as a row: what happened to which command, with the lines it quoted.
 pub fn news_row(news: &News, key: &str) -> WorkRow {
+    if let Some(id) = news.agent() {
+        return agent_news_row(news, id, key);
+    }
     let first = first_line(&news.text);
     // The command is quoted in backticks; a watch's news names its description in brackets.
     let subject = first.split('`').nth(1).map(str::to_string);
@@ -374,7 +388,7 @@ pub fn news_row(news: &News, key: &str) -> WorkRow {
             }
         }
     };
-    WorkRow { key: key.to_string().into(), verb: verb.into(), target, meta, detail, open: false }
+    WorkRow { key: key.to_string().into(), verb: verb.into(), target, meta, detail, open: false, agent: None }
 }
 
 fn first_line(text: &str) -> String {
@@ -625,7 +639,7 @@ pub fn tool_row(tool: &ToolStep, cwd: &Path, live: bool) -> WorkRow {
             _ => (success_meta.map(|text| Meta::Note(text.into())).unwrap_or(Meta::None), detail),
         },
     };
-    WorkRow { key: tool.id.clone().into(), verb: verb.to_string().into(), target, meta, detail, open: false }
+    WorkRow { key: tool.id.clone().into(), verb: verb.to_string().into(), target, meta, detail, open: false, agent: None }
 }
 
 /// An MCP tool's server and its own name, from `mcp__<server>__<tool>`.
@@ -712,6 +726,186 @@ pub fn line_diff(old: &str, new: &str) -> Vec<DiffLine> {
     lines
 }
 
+// -------------------------------------------------------------------------------------------------
+// Sub-agents
+
+/// The verb an agent's row counts under, and reads as in the status pill.
+pub const AGENT_VERB: &str = "Agent";
+
+/// Whether a call is drawn as an agent's row: every `agent` call, and an `agent_message` that
+/// started a round (one sent to a working agent is a plain row).
+fn is_agent_row(tool: &ToolStep, agents: &HashMap<String, AgentInfo>) -> bool {
+    match tool.name.as_str() {
+        AGENT => true,
+        AGENT_MESSAGE => {
+            agents.contains_key(&tool.id)
+                || tool.result.as_ref().is_some_and(|result| !result.text.starts_with("Sent to agent"))
+        }
+        _ => false,
+    }
+}
+
+/// "explore" reads "Explore".
+fn role_name(role: &str) -> String {
+    let mut chars = role.chars();
+    chars.next().map(|first| first.to_uppercase().chain(chars).collect()).unwrap_or_default()
+}
+
+/// An agent's call as its row: live from the registry while its latest round is this call's,
+/// otherwise read back from what the call returned.
+fn agent_row(tool: &ToolStep, info: Option<&AgentInfo>, live: bool, now: u64) -> WorkRow {
+    let input = &tool.input;
+    let given = |name: &str| text_field(input, name).map(str::trim).filter(|text| !text.is_empty()).map(str::to_string);
+    let footer = tool.result.as_ref().and_then(|result| report_footer(&result.text));
+    let copy = input.as_ref().and_then(|input| input.get("with_conversation")).and_then(Value::as_bool) == Some(true);
+    let role = info
+        .map(|info| info.role.clone())
+        .or_else(|| given("agent"))
+        .or_else(|| footer.as_ref().map(|(_, role, _)| role.clone()))
+        .unwrap_or_else(|| if copy { "copy".into() } else { "agent".into() });
+    let task = match tool.name.as_str() {
+        AGENT_MESSAGE => given("message").map(|text| first_line(&text)),
+        _ => given("description"),
+    }
+    .or_else(|| info.map(|info| info.description.clone()))
+    .unwrap_or_default();
+    let id = info
+        .map(|info| info.id.clone())
+        .or_else(|| footer.as_ref().map(|(id, _, _)| id.clone()))
+        .or_else(|| given("agent_id"))
+        .unwrap_or_default();
+    let (state, words) = match info {
+        Some(info) => (agent_state(info), live_words(info, now)),
+        None => saved_state(tool, footer.as_ref(), live),
+    };
+    let round = info.map(|info| info.round).unwrap_or(if tool.name == AGENT_MESSAGE { 2 } else { 1 });
+    let meta = match state {
+        _ if state.working() => Meta::Running,
+        AgentState::Failed => Meta::Failed("failed".into()),
+        _ => Meta::None,
+    };
+    WorkRow {
+        key: tool.id.clone().into(),
+        verb: AGENT_VERB.into(),
+        target: Target::Words(format!("{} · {task}", role_name(&role)).into()),
+        meta,
+        detail: None,
+        open: false,
+        agent: Some(AgentLine { id: id.into(), role: role_name(&role).into(), task: task.into(), state, words: words.into(), round }),
+    }
+}
+
+fn agent_state(info: &AgentInfo) -> AgentState {
+    match &info.status {
+        Status::Queued => AgentState::Queued,
+        Status::Running if info.background => AgentState::Background,
+        Status::Running => AgentState::Working,
+        Status::Done => AgentState::Done,
+        Status::Failed { .. } => AgentState::Failed,
+        Status::Stopped { .. } => AgentState::Stopped,
+        Status::Interrupted => AgentState::Interrupted,
+    }
+}
+
+/// What an agent's row says under its task, from the registry.
+fn live_words(info: &AgentInfo, now: u64) -> String {
+    let took = duration(info.ended_at.unwrap_or(now).saturating_sub(info.started_at));
+    let counts = format!("{} · {}", plural(info.tool_calls as usize, "tool", "tools"), tokens(info.context_tokens));
+    let round = if info.round > 1 { format!("round {} · ", info.round) } else { String::new() };
+    match &info.status {
+        Status::Queued => format!("{round}Waiting for a free place"),
+        Status::Running => {
+            let doing = info.activity.as_ref().map(|activity| doing(&activity.tool, &activity.target)).unwrap_or_else(|| "Starting".into());
+            format!("{round}{doing} · {counts} · {took}")
+        }
+        Status::Done => format!("{round}{counts} · {took}"),
+        Status::Failed { message } => format!("{round}{}", first_line(message)),
+        Status::Stopped { by: StoppedBy::Limit } => format!("{round}Used all its steps · {counts} · {took}"),
+        Status::Stopped { .. } => format!("{round}By you · {counts} · {took}"),
+        Status::Interrupted => format!("{round}Stopped when WackCode quit"),
+    }
+}
+
+/// An agent's state and words read back from its call alone, for a call the registry no longer
+/// knows (an older round, or a chat from before agents were listed).
+fn saved_state(tool: &ToolStep, footer: Option<&(String, String, String)>, live: bool) -> (AgentState, String) {
+    let Some(result) = &tool.result else {
+        return if live { (AgentState::Working, "Starting".into()) } else { (AgentState::Stopped, "Stopped".into()) };
+    };
+    let counts = footer.map(|(_, _, counts)| counts.clone()).unwrap_or_default();
+    if result.text.contains("is working in the background") || result.text.starts_with("The user moved agent") {
+        (AgentState::Done, "Reported in the background".into())
+    } else if result.is_error {
+        (AgentState::Failed, if counts.is_empty() { first_line(&result.text) } else { counts })
+    } else {
+        (AgentState::Done, counts)
+    }
+}
+
+/// The footer a report ends with, `[agent a3 · explore · 14 tool calls · 38k tokens · 1m 12s]`,
+/// as its id, its role and the rest.
+fn report_footer(text: &str) -> Option<(String, String, String)> {
+    let line = text.trim_end().lines().last()?;
+    let inner = line.strip_prefix("[agent ")?.strip_suffix(']')?;
+    let mut parts = inner.splitn(3, " · ");
+    let id = parts.next()?.to_string();
+    let role = parts.next()?.to_string();
+    Some((id, role, parts.next().unwrap_or_default().replace("tool calls", "tools").replace("tool call", "tool")))
+}
+
+/// What a step reads as while an agent takes it: "Reading theme.rs", "Running cargo test".
+fn doing(tool: &str, target: &str) -> String {
+    let file = target.rsplit('/').next().unwrap_or(target);
+    match tool {
+        "read" => format!("Reading {file}"),
+        "write" => format!("Writing {file}"),
+        "edit" => format!("Editing {file}"),
+        "bash" | "watch" => format!("Running {target}"),
+        "grep" => format!("Searching {target}"),
+        "find" => format!("Finding {target}"),
+        "ls" if matches!(target, "" | "." | "./") => "Looking around".into(),
+        "ls" => format!("Looking in {file}"),
+        wack_core::WEB_FETCH => format!("Reading {}", target.split('/').nth(2).unwrap_or(target)),
+        wack_core::WEB_SEARCH => format!("Searching the web for {target}"),
+        name => match mcp_parts(name) {
+            Some((server, tool)) => format!("Using {server} · {tool}"),
+            None => format!("Using {name}"),
+        },
+    }
+}
+
+fn tokens(count: u64) -> String {
+    match count {
+        0..1_000 => format!("{count} tokens"),
+        _ => format!("{}k tokens", (count + 500) / 1_000),
+    }
+}
+
+/// A sub-agent's report as a row of its own: who reported, and the report behind it.
+fn agent_news_row(news: &News, id: &str, key: &str) -> WorkRow {
+    // "Agent a1 (explore · Find the loop) finished in the background. Its report:\n\n…"
+    let first = first_line(&news.text);
+    let named = first.split_once('(').and_then(|(_, rest)| rest.split_once(')')).map(|(named, _)| named.to_string()).unwrap_or_default();
+    let (role, task) = named.split_once(" · ").map(|(role, task)| (role.to_string(), task.to_string())).unwrap_or((named.clone(), String::new()));
+    let report = news.text.split_once("Its report:").map(|(_, report)| report.trim().to_string());
+    let (verb, meta) = if news.tag.ends_with(":interrupted") {
+        ("Stopped", Meta::Note("when WackCode quit".into()))
+    } else if first.contains("without a report") {
+        ("Ended", Meta::Failed("no report".into()))
+    } else {
+        ("Reported", Meta::Success(format!("agent {id}").into()))
+    };
+    WorkRow {
+        key: key.to_string().into(),
+        verb: verb.into(),
+        target: Target::Words(format!("{} · {task}", role_name(&role)).into()),
+        meta,
+        detail: report.map(|report| Detail::Text(report.into())),
+        open: false,
+        agent: None,
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use serde_json::json;
@@ -729,6 +923,7 @@ mod tests {
             meta: if running { Meta::Running } else { Meta::None },
             detail: None,
             open: false,
+            agent: None,
         };
         let read = row("Read", Target::Code("crates/wack-llm/src/sse.rs".into()), false);
         let edit = row("Edited", Target::Code("crates/wack-llm/src/retry.rs".into()), true);
@@ -747,6 +942,7 @@ mod tests {
             meta: Meta::None,
             detail: None,
             open: false,
+            agent: None,
         };
         let rows = [row("Thought"), row("Read"), row("Read"), row("Searched"), row("Found"), row("Edited"), row("Wrote"), row("Ran"), row("")];
         assert_eq!(tally(&rows), "2 reads · 2 searches · 2 edits · 1 command");
@@ -965,5 +1161,75 @@ mod tests {
         assert!(matches!(&watched.meta, Meta::Note(text) if text.as_ref() == "2 lines"));
         let lost = news("task:ab12:lost", "Background task ab12 (`npm run dev`) is no longer running: it was stopped when WackCode quit.");
         assert_eq!(lost.verb.as_ref(), "Lost");
+    }
+
+    fn info(status: Status, background: bool) -> AgentInfo {
+        AgentInfo {
+            id: "a2".into(),
+            role: "explore".into(),
+            description: "Find the loop".into(),
+            call_id: "t".into(),
+            round: 1,
+            round_call_id: String::new(),
+            session: "/s/a2.jsonl".into(),
+            model: "m".into(),
+            edits: false,
+            started_at: 1_000,
+            ended_at: (!status.active()).then_some(73_000),
+            status,
+            background,
+            tool_calls: 12,
+            context_tokens: 31_400,
+            activity: Some(wack_core::agents::Activity { tool: "read".into(), target: "/repo/src/theme.rs".into() }),
+        }
+    }
+
+    #[test]
+    fn an_agents_row_reads_live_from_the_registry() {
+        let call = tool(AGENT, json!({ "agent": "explore", "description": "Find the loop", "prompt": "Where?" }), None);
+        let row = agent_row(&call, Some(&info(Status::Running, false)), true, 49_000);
+        let line = row.agent.clone().unwrap();
+        assert_eq!((line.id.as_ref(), line.role.as_ref(), line.task.as_ref(), line.state), ("a2", "Explore", "Find the loop", AgentState::Working));
+        assert_eq!(line.words.as_ref(), "Reading theme.rs · 12 tools · 31k tokens · 48s");
+        assert!(matches!(row.meta, Meta::Running));
+        assert_eq!(activity(&[row]).as_deref(), Some("Waiting on Explore · Find the loop"));
+
+        let done = agent_row(&call, Some(&info(Status::Done, false)), false, 99_000);
+        assert_eq!(done.agent.as_ref().unwrap().words.as_ref(), "12 tools · 31k tokens · 1m 12s");
+        let background = agent_row(&call, Some(&info(Status::Running, true)), false, 2_000);
+        assert_eq!(background.agent.unwrap().state, AgentState::Background);
+        assert_eq!(tally(&[done]), "1 agent");
+    }
+
+    #[test]
+    fn an_agents_row_without_the_registry_reads_back_from_its_report() {
+        let report = "Found it.\n\n[agent a3 · review · 4 tool calls · 9k tokens · 21s]";
+        let call = tool(AGENT, json!({ "agent": "review", "description": "Check the diff", "prompt": "Look" }), Some((report, false)));
+        let line = agent_row(&call, None, false, 0).agent.unwrap();
+        assert_eq!((line.id.as_ref(), line.state, line.words.as_ref()), ("a3", AgentState::Done, "4 tools · 9k tokens · 21s"));
+        // A copy names itself so.
+        let copy = tool(AGENT, json!({ "description": "Side task", "prompt": "Do it", "with_conversation": true }), None);
+        assert_eq!(agent_row(&copy, None, true, 0).agent.unwrap().role.as_ref(), "Copy");
+        // A message to an agent still working is a plain row; one that started a round is an agent's.
+        let agents = HashMap::new();
+        let steer = tool(AGENT_MESSAGE, json!({ "agent_id": "a1", "message": "Also the tests" }), Some(("Sent to agent a1, which is still working: …", false)));
+        assert!(!is_agent_row(&steer, &agents));
+        let round = tool(AGENT_MESSAGE, json!({ "agent_id": "a1", "message": "Now the tests" }), Some(("Done.\n\n[agent a1 · explore · 2 tool calls · 3k tokens · 9s]", false)));
+        assert!(is_agent_row(&round, &agents));
+        assert_eq!(agent_row(&round, None, false, 0).agent.unwrap().task.as_ref(), "Now the tests");
+    }
+
+    #[test]
+    fn a_background_report_is_a_row_of_its_own_with_the_report_behind_it() {
+        let news = News {
+            tag: "agent:a1".into(),
+            text: "Agent a1 (explore · Find the loop) finished in the background. Its report:\n\nIt's in agent.rs.\n\n[agent a1 · explore · 3 tool calls · 2k tokens · 8s]".into(),
+        };
+        let row = news_row(&news, "news-4");
+        assert_eq!(row.verb.as_ref(), "Reported");
+        assert!(matches!(&row.target, Target::Words(text) if text.as_ref() == "Explore · Find the loop"));
+        assert!(matches!(&row.detail, Some(Detail::Text(text)) if text.starts_with("It's in agent.rs.")));
+        let lost = News { tag: "agent:a1:interrupted".into(), text: "Agent a1 (explore · Find the loop) was stopped when WackCode quit, before it reported.".into() };
+        assert_eq!(news_row(&lost, "n").verb.as_ref(), "Stopped");
     }
 }

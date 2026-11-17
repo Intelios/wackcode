@@ -44,7 +44,7 @@ use crate::{
         ClosePaneId, CloseSettings, CloseTab, Compact, DeleteChat, DiscardConnection, EditConnection, ToggleConnectionKey, EqualizeSplit, FocusNext, FocusPrevious, MovePane, AddModelRow, RemoveModelRow, SaveCommandEditor, SaveConnection,
         NewChat, NewChatIn, NewTerminal, NewTerminalWith, NextTab, OpenEffortMenu, OpenModelMenu, OpenSettings,
         OpenSettingsSection, PinProject, PreviousTab, RemoveConnection, RemovePicture, ShowCommandOutput, ShowPicture, RemoveProject, ResetDockSize,
-        PickCommand, SelectChat, Send, Stop, StopCommand, MoveToBackground, ToggleTasks, ToggleTasksPane, StopTask, ShowTask, ToggleChanges, ToggleProject, ToggleSidebar, ToggleTerminal, TriggerProjectCommand, Unqueue,
+        PickCommand, SelectChat, Send, Stop, StopCommand, MoveToBackground, ToggleTasks, ToggleTasksPane, StopTask, ShowTask, ToggleAgentsPane, ShowAgent, StopAgent, ToggleChanges, ToggleProject, ToggleSidebar, ToggleTerminal, TriggerProjectCommand, Unqueue,
         ToggleAutoTitles, ToggleTitleModels, ChooseTitleModel, RenameChat, RenameChatAt, CancelRename, ToggleModelReasoning,
         ToggleModelEffort, SwitchSkill, SwitchSkillFolder, RemoveSkillFolder, OpenSkill, CopySkill, ChooseSkillUse, NewSkill, SaveSkill,
         CloseSkill, AskDeleteSkill, ConfirmSkillDelete, CancelSkillDelete, AddSkillFolder, ImportSkills, SwitchSlashCommand, OpenSlashCommand,
@@ -1319,6 +1319,16 @@ impl Render for Shell {
                     shell.with_session(cx, |session, cx| session.stop_task(id, cx));
                 }))
                 .on_action(cx.listener(|shell, _: &ToggleTasksPane, window, cx| shell.toggle_pane(PaneKind::Tasks, window, cx)))
+                .on_action(cx.listener(|shell, _: &ToggleAgentsPane, window, cx| shell.toggle_pane(PaneKind::Agents, window, cx)))
+                .on_action(cx.listener(|shell, action: &ShowAgent, _, cx| {
+                    let id = action.id.to_string();
+                    shell.change_layout(cx, |layout| layout.open(PaneKind::Agents));
+                    shell.with_session(cx, |session, cx| session.panes.select_agent(&id, cx));
+                }))
+                .on_action(cx.listener(|shell, action: &StopAgent, _, cx| {
+                    let id = action.id.to_string();
+                    shell.with_session(cx, |session, cx| session.stop_agent(&id, cx));
+                }))
                 .on_action(cx.listener(|shell, action: &ShowTask, _, cx| {
                     let id = action.id.to_string();
                     shell.change_layout(cx, |layout| layout.open(PaneKind::Tasks));
@@ -1697,6 +1707,7 @@ fn live_view(app: &AppState, cx: &App) -> (SidebarData, Screen, StripData) {
                         tasks: Vec::new(),
                         tasks_open: false,
                         foreground: false,
+                        agents: 0,
                     },
                     notice: app.notice.clone(),
                 }
@@ -1752,7 +1763,8 @@ fn live_view(app: &AppState, cx: &App) -> (SidebarData, Screen, StripData) {
                     waiting_open: state.waiting_open,
                     tasks: task_lines(&state.tasks),
                     tasks_open: state.tasks_open,
-                    foreground: state.tasks.has_foreground(),
+                    foreground: state.tasks.has_foreground() || state.agents.active().iter().any(|info| !info.background),
+                    agents: state.agents.active().len(),
                 },
             }
         }

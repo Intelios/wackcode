@@ -8,7 +8,7 @@ use wack_core::{CommandKind, CommandSession, CommandStatus};
 
 use crate::{
     composer::{ComposerData, Input},
-    panes::{ChangesPane, ChatPanes, Dock, Edge, Layout, PaneKind, PaneModel, RunPane, Target, TasksPane, TerminalPane},
+    panes::{AgentsPane, ChangesPane, ChatPanes, Dock, Edge, Layout, PaneKind, PaneModel, RunPane, Target, TasksPane, TerminalPane},
     run_button::{CommandButtonData, CommandEditorData},
     settings::{ProviderForm, ProvidersData, Section, SettingsData},
     fixtures::{self, Selected},
@@ -1131,6 +1131,61 @@ pub fn all() -> Vec<Scene> {
             },
         },
         Scene {
+            name: "chat-agents",
+            description: "Four agents sent out together: one reported, two working (one in the background), one queued; the agents pill.",
+            size: WINDOW,
+            build: |_, cx| {
+                cx.new(|_| {
+                    Shell::showing_tabs(
+                        fixtures::sidebar(Selected::Working),
+                        Screen::Chat {
+                            title: fixtures::WORKING_TITLE.into(),
+                            project: fixtures::project(),
+                            body: Body::Items(fixtures::agent_turn()),
+                            composer: fixtures::composer_agents(),
+                        },
+                        fixtures::strip(Some(fixtures::WORKING_TITLE)),
+                    )
+                })
+                .into()
+            },
+        },
+        Scene {
+            name: "chat-agents-ended",
+            description: "Agents that failed, were stopped and were interrupted by a quit, and a background report waking the chat.",
+            size: size(px(1180.), px(1000.)),
+            build: |_, cx| {
+                cx.new(|_| {
+                    Shell::showing_tabs(
+                        fixtures::sidebar(Selected::Finished),
+                        Screen::Chat {
+                            title: fixtures::FINISHED_TITLE.into(),
+                            project: fixtures::project(),
+                            body: Body::Items(fixtures::agent_ends()),
+                            composer: fixtures::composer_after_turn(Input::Drawn { text: None, placeholder: crate::chat::FOLLOW_UP_PLACEHOLDER.into() }),
+                        },
+                        fixtures::strip(Some(fixtures::FINISHED_TITLE)),
+                    )
+                })
+                .into()
+            },
+        },
+        Scene {
+            name: "agents-pane",
+            description: "The Agents pane in the right dock, on an Explore agent at work.",
+            size: size(px(1480.), px(940.)),
+            build: |_, cx| agents_scene(None, cx),
+        },
+        Scene {
+            name: "agents-pane-backdrop",
+            description: "The Agents pane over a backdrop.",
+            size: size(px(1480.), px(940.)),
+            build: |_, cx| {
+                let picture = over(fixtures::backdrop(wack_core::Texture::None), cx);
+                agents_scene(Some(picture), cx)
+            },
+        },
+        Scene {
             name: "build-run-narrow",
             description: "Smallest window (716pt): compact icon-only Build and Run strip buttons.",
             size: size(px(716.), px(720.)),
@@ -1335,6 +1390,42 @@ fn panes_scene(layout: Layout, ids: &[u32], sidebar_hidden: bool, cx: &mut App) 
             fixtures::strip(Some(fixtures::FINISHED_TITLE)),
         )
         .with_panes(panes, sidebar_hidden)
+    })
+    .into()
+}
+
+/// A chat with its agents at work and the Agents pane open on the one exploring.
+fn agents_scene(backdrop: Option<crate::backdrop::Picture>, cx: &mut App) -> AnyView {
+    cx.new(|cx| {
+        let mut layout = Layout::default();
+        let id = layout.open(PaneKind::Agents);
+        layout.right_width = Some(560.);
+        let mut panes = ChatPanes::new(layout, "/Users/you/Documents/GitHub/wackcode".into());
+        let agents = fixtures::agents_registry(&std::env::temp_dir().join("wackcode-gallery-agents"));
+        panes.insert(
+            id,
+            PaneModel::Agents(cx.new(|cx| {
+                let mut pane = AgentsPane::new(agents, "/Users/you/Documents/GitHub/wackcode".into(), cx);
+                pane.selected = Some("a2".into());
+                pane
+            })),
+            cx,
+        );
+        let shell = Shell::showing_tabs(
+            fixtures::sidebar(Selected::Working),
+            Screen::Chat {
+                title: fixtures::WORKING_TITLE.into(),
+                project: fixtures::project(),
+                body: Body::Items(fixtures::agent_turn()),
+                composer: fixtures::composer_agents(),
+            },
+            fixtures::strip(Some(fixtures::WORKING_TITLE)),
+        )
+        .with_panes(panes, false);
+        match backdrop {
+            Some(picture) => shell.with_backdrop(picture),
+            None => shell,
+        }
     })
     .into()
 }

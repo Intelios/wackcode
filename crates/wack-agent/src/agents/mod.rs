@@ -55,7 +55,7 @@ use tokio::sync::{Notify, Semaphore, watch};
 
 use crate::{agent::Control, session::Note};
 
-pub use child::{ChildModel, child_tools};
+pub use child::{COPY_DIRECTIVE, ChildModel, child_tools};
 pub use definition::{AgentDef, Catalog, ModelPref};
 pub use feature::{AGENTS_STATE, AgentsFeature};
 pub use tools::{AGENT, AGENT_MESSAGE, AgentMessage, AgentTool};
@@ -195,6 +195,7 @@ impl Default for Agents {
         Self {
             inner: Arc::new(Inner {
                 children: Mutex::default(),
+                messenger: Mutex::default(),
                 inbox: Mutex::default(),
                 news: Notify::new(),
                 observer: Mutex::default(),
@@ -207,6 +208,9 @@ impl Default for Agents {
 
 struct Inner {
     children: Mutex<Vec<Arc<Child>>>,
+    /// The latest run's `agent_message`, and its folder: how the user's own follow-ups reach a
+    /// child between runs.
+    messenger: Mutex<Option<(Arc<tools::AgentMessage>, PathBuf)>>,
     /// Each report for the model, and whether it should wake the chat.
     inbox: Mutex<VecDeque<(Note, bool)>>,
     news: Notify,
@@ -438,6 +442,16 @@ impl Agents {
         }
     }
 
+    /// Stops every child and waits briefly (from a plain thread, at quit) for them to end, so the
+    /// commands they started are killed with them.
+    pub fn terminate_all(&self) {
+        self.stop_all();
+        let deadline = Instant::now() + Duration::from_secs(2);
+        while !self.active().is_empty() && Instant::now() < deadline {
+            std::thread::sleep(Duration::from_millis(20));
+        }
+    }
+
     /// Moves every child a call is waiting on to the background (⌘B). True when any moved.
     pub fn background_foreground(&self) -> bool {
         // Every one moves, so no short-circuit.
@@ -453,6 +467,36 @@ impl Agents {
     /// Counts one more child against [`MAX_PER_MESSAGE`]. False when none may start.
     pub(crate) fn spend(&self) -> bool {
         self.inner.started.fetch_update(Ordering::SeqCst, Ordering::SeqCst, |started| (started < MAX_PER_MESSAGE).then_some(started + 1)).is_ok()
+    }
+
+    /// Lets the user message this chat's agents with what `messenger` knows (its roles, models
+    /// and tools), working in `cwd`. Each run hands over its own.
+    pub(crate) fn set_messenger(&self, messenger: Arc<tools::AgentMessage>, cwd: PathBuf) {
+        *self.inner.messenger.lock().unwrap_or_else(|e| e.into_inner()) = Some((messenger, cwd));
+    }
+
+    /// A message from the user to one of the chat's agents, from its pane. A working agent reads
+    /// it before its next step; one that has ended works another round in the background, and
+    /// its report reaches the model quietly with its next request. Returns at once.
+    pub async fn message_from_user(&self, id: &str, text: &str) -> Result<String, String> {
+        let messenger = self.inner.messenger.lock().unwrap_or_else(|e| e.into_inner()).clone();
+        let child = self.get(id).ok_or_else(|| format!("There is no agent {id} in this chat."))?;
+        if child.active() {
+            child.steer(&tools::from_user(text));
+            return Ok(format!("Sent to agent {id}."));
+        }
+        let (messenger, cwd) = messenger.ok_or("Send a message in the chat first: its agents can work another round once it has run.")?;
+        let context = crate::tool::ToolContext {
+            call_id: String::new(),
+            cwd,
+            cancel: tokio_util::sync::CancellationToken::new(),
+            user: crate::tool::User::nobody(),
+            tasks: crate::tasks::Tasks::scratch(),
+            agents: self.clone(),
+            seen: crate::tool::Seen::default(),
+        };
+        use crate::tool::Tool as _;
+        messenger.run(serde_json::json!({ "agent_id": id, "message": text, "background": true }), &context).await
     }
 
     /// The reports waiting for the model, in the order they came. Empties the inbox.
@@ -500,6 +544,19 @@ impl Agents {
             self.inner.signal(Signal::Changed);
         }
         interrupted
+    }
+
+    /// Adds a child with no run behind it, standing as `info` says (live ones included): for
+    /// gallery scenes and tests.
+    pub fn insert_fixture(&self, info: AgentInfo) {
+        let activity = info.activity.clone();
+        let live = info.status.active();
+        let child = Child::restored(info, Arc::downgrade(&self.inner));
+        child.live().activity = activity;
+        if live {
+            child.ended.send_replace(false);
+        }
+        self.inner.children.lock().unwrap_or_else(|e| e.into_inner()).push(Arc::new(child));
     }
 
     /// Adds a queued child with the next free id, whose session goes in `folder`.

@@ -78,6 +78,42 @@ pub struct WorkRow {
     pub meta: Meta,
     pub detail: Option<Detail>,
     pub open: bool,
+    /// A sub-agent's call: drawn as a row of its own, which opens the agent's pane.
+    pub agent: Option<AgentLine>,
+}
+
+/// A sub-agent as its row in the work log shows it.
+#[derive(Clone, Debug, PartialEq)]
+pub struct AgentLine {
+    /// `a1`; empty while the call is still being written.
+    pub id: SharedString,
+    /// "Explore", or "Copy" for one started from the conversation.
+    pub role: SharedString,
+    /// What it was asked to do, in the parent's few words.
+    pub task: SharedString,
+    pub state: AgentState,
+    /// Its latest step and its counts: "Reading theme.rs · 12 tools · 31k tokens · 0:48".
+    pub words: SharedString,
+    /// Rounds after the first: "round 2".
+    pub round: u32,
+}
+
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum AgentState {
+    Queued,
+    Working,
+    /// Working, and the parent carried on: it reports later.
+    Background,
+    Done,
+    Failed,
+    Stopped,
+    Interrupted,
+}
+
+impl AgentState {
+    pub fn working(self) -> bool {
+        matches!(self, AgentState::Queued | AgentState::Working | AgentState::Background)
+    }
 }
 
 #[derive(Clone, Debug)]
@@ -385,6 +421,7 @@ fn row_icon(verb: &str, theme: &Theme) -> impl IntoElement {
         "Asked" => Some(Icon::Question),
         "Used skill" => Some(Icon::Book),
         "Saved memory" | "Updated memory" | "Recalled memory" | "Forgot memory" => Some(Icon::Bookmark),
+        "Reported" => Some(Icon::Duck),
         "" => None,
         _ => Some(Icon::Hammer),
     };
@@ -405,6 +442,9 @@ fn row_icon(verb: &str, theme: &Theme) -> impl IntoElement {
 }
 
 fn log_row(row: &WorkRow, theme: &Theme, handlers: &Handlers) -> AnyElement {
+    if let Some(agent) = &row.agent {
+        return agent_row(&row.key, agent, theme);
+    }
     if let Target::Note(text) = &row.target {
         return div()
             .py(px(4.))
@@ -464,6 +504,85 @@ fn log_row(row: &WorkRow, theme: &Theme, handlers: &Handlers) -> AnyElement {
             line.child(div().pt(px(4.)).pb(px(8.)).child(detail_view(detail, &row.key, theme)))
         })
         .into_any_element()
+}
+
+/// A sub-agent's row: its duck (paddling while it works), its role and task, how it stands, and a
+/// line of what it is doing or did. The whole row opens its work in the Agents pane.
+fn agent_row(key: &SharedString, agent: &AgentLine, theme: &Theme) -> AnyElement {
+    // A queued agent hasn't started: its duck waits, dimmed.
+    let working = matches!(agent.state, AgentState::Working | AgentState::Background);
+    let (word, colour) = agent_state_word(agent.state, theme);
+    let duck = div()
+        .flex_none()
+        .size(px(ICON))
+        .rounded_full()
+        .flex()
+        .items_center()
+        .justify_center()
+        .bg(if working { theme.accent_wash } else { theme.hover })
+        .child(if working {
+            crate::motion::paddling(div().child(Icon::Duck.view(px(12.), theme.accent_text))).into_any_element()
+        } else {
+            Icon::Duck.view(px(12.), theme.text_dim).into_any_element()
+        });
+    let id = agent.id.clone();
+    let hover = theme.hover;
+    div()
+        .id(key.clone())
+        .py(px(5.))
+        .pr(px(10.))
+        .rounded(px(14.))
+        .flex()
+        .items_start()
+        .gap(px(ROW_GAP))
+        .when(!agent.id.is_empty(), |row| {
+            row.cursor_pointer()
+                .hover(move |row| row.bg(hover))
+                .tooltip(crate::tooltip::tip("Show this agent's work"))
+                .on_click(move |_, window, cx| window.dispatch_action(Box::new(crate::actions::ShowAgent { id: id.clone() }), cx))
+        })
+        .child(duck)
+        .child(
+            div()
+                .flex_1()
+                .min_w_0()
+                .flex()
+                .flex_col()
+                .gap(px(1.))
+                .child(
+                    div()
+                        .h(px(ICON))
+                        .flex()
+                        .items_center()
+                        .gap(px(8.))
+                        .child(div().flex_none().typography(Type::UiStrong).text_color(theme.text).child(agent.role.clone()))
+                        .child(div().flex_1().min_w_0().truncate().typography(Type::Ui).text_color(theme.text_soft).child(agent.task.clone()))
+                        .when(!agent.id.is_empty(), |line| {
+                            line.child(div().flex_none().typography(Type::Small).font_family(MONO_FONT).text_color(theme.text_faint).child(agent.id.clone()))
+                        })
+                        .child(div().flex_none().typography(Type::Small).text_color(colour).child(word))
+                        .when(!agent.id.is_empty(), |line| line.child(Icon::ChevronRight.view(px(11.), theme.text_faint))),
+                )
+                .when(!agent.words.is_empty(), |text| {
+                    text.child(div().truncate().typography(Type::Small).text_color(theme.text_faint).child(agent.words.clone()))
+                }),
+        )
+        .tag("agent-row")
+        .into_any_element()
+}
+
+/// How an agent stands, in a word, and its colour: working in the accent, the ends in their
+/// fixed meanings.
+pub fn agent_state_word(state: AgentState, theme: &Theme) -> (&'static str, Hsla) {
+    match state {
+        AgentState::Queued => ("Queued", theme.text_faint),
+        AgentState::Working => ("Working", theme.accent_text),
+        AgentState::Background => ("In background", theme.accent_text),
+        AgentState::Done => ("Done", theme.success),
+        AgentState::Failed => ("Failed", theme.danger),
+        AgentState::Stopped => ("Stopped", theme.text_dim),
+        AgentState::Interrupted => ("Interrupted", theme.warning),
+    }
 }
 
 fn detail_view(detail: &Detail, key: &SharedString, theme: &Theme) -> AnyElement {

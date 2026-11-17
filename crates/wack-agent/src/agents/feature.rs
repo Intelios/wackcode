@@ -23,9 +23,12 @@ impl AgentsFeature {
     /// was working when the app quit.
     pub fn new(session: &Session, agents: Agents) -> Self {
         let saved: Vec<AgentInfo> = session.state(AGENTS_STATE).and_then(|value| serde_json::from_value(value.clone()).ok()).unwrap_or_default();
-        let orphans = agents
-            .restore(saved)
+        agents.restore(saved.clone());
+        // Those the session last saw working that aren't working now: a quit interrupted them.
+        // The app may have restored the list already, so this asks the registry, not `restore`.
+        let orphans = saved
             .into_iter()
+            .filter(|info| info.status.active() && agents.get(&info.id).is_some_and(|child| !child.active() && child.info().status == super::Status::Interrupted))
             .map(|info| Note {
                 tag: format!("{NOTE_PREFIX}{}:interrupted", info.id),
                 text: format!(

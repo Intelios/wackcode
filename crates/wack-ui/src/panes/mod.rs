@@ -1,4 +1,4 @@
-//! Panes: a chat's Changes and Terminal views beside and below its transcript.
+//! Panes: a chat's Changes, Terminal, Tasks and Agents views beside and below its transcript.
 //!
 //! `layout` is the tree of docks, splits and tab stacks, as data; `solve` turns it and the window
 //! size into rectangles. Both are pure and property-tested. `dock` draws them, and each pane's
@@ -10,6 +10,7 @@
 //! - A model is made the first time its pane is shown, so a saved layout full of terminals costs
 //!   nothing until the user looks at them.
 
+pub mod agents;
 pub mod changes;
 pub mod dock;
 pub mod grid;
@@ -22,8 +23,9 @@ pub mod terminal;
 use std::{collections::HashMap, path::PathBuf};
 
 use gpui::{App, AppContext, Entity, FocusHandle, SharedString, Subscription};
-use wack_core::{CommandKind, CommandSession, CommandStatus, Runner, tasks::Tasks};
+use wack_core::{CommandKind, CommandSession, CommandStatus, Runner, agents::Agents, tasks::Tasks};
 
+pub use agents::AgentsPane;
 pub use changes::ChangesPane;
 pub use layout::{Axis, Dock, Edge, Layout, Node, Pane, PaneId, PaneKind, Stack, Target};
 pub use run::RunPane;
@@ -38,6 +40,7 @@ pub enum PaneModel {
     Build(Entity<RunPane>),
     Run(Entity<RunPane>),
     Tasks(Entity<TasksPane>),
+    Agents(Entity<AgentsPane>),
 }
 
 impl PaneModel {
@@ -47,6 +50,7 @@ impl PaneModel {
             PaneModel::Terminal(pane) => pane.read(cx).focus.clone(),
             PaneModel::Build(pane) | PaneModel::Run(pane) => pane.read(cx).focus.clone(),
             PaneModel::Tasks(pane) => pane.read(cx).focus.clone(),
+            PaneModel::Agents(pane) => pane.read(cx).focus.clone(),
         }
     }
 }
@@ -59,6 +63,8 @@ pub struct ChatPanes {
     run_command: Option<String>,
     /// The chat's background commands, for its Tasks pane.
     tasks: Option<Tasks>,
+    /// The chat's sub-agents, for its Agents pane.
+    agents: Option<Agents>,
     models: HashMap<PaneId, (PaneModel, Subscription)>,
 }
 
@@ -71,12 +77,35 @@ impl ChatPanes {
             build_command: None,
             run_command: None,
             tasks: None,
+            agents: None,
             models: HashMap::new(),
         }
     }
 
     pub fn set_tasks(&mut self, tasks: Tasks) {
         self.tasks = Some(tasks);
+    }
+
+    pub fn set_agents(&mut self, agents: Agents) {
+        self.agents = Some(agents);
+    }
+
+    /// Shows an agent's work in the Agents pane, if one has been made.
+    pub fn select_agent(&self, id: &str, cx: &mut App) {
+        for (model, _) in self.models.values() {
+            if let PaneModel::Agents(pane) = model {
+                pane.update(cx, |pane, cx| pane.select(id.to_string(), cx));
+            }
+        }
+    }
+
+    /// Redraws the Agents pane: an agent took a step.
+    pub fn refresh_agents(&self, cx: &mut App) {
+        for (model, _) in self.models.values() {
+            if let PaneModel::Agents(pane) = model {
+                pane.update(cx, |_, cx| cx.notify());
+            }
+        }
     }
 
     /// Shows a task's output in the Tasks pane, if one has been made.
@@ -144,6 +173,10 @@ impl ChatPanes {
                     let tasks = self.tasks.clone().unwrap_or_else(Tasks::scratch);
                     PaneModel::Tasks(cx.new(|cx| TasksPane::new(tasks, cx)))
                 }
+                PaneKind::Agents => {
+                    let agents = self.agents.clone().unwrap_or_default();
+                    PaneModel::Agents(cx.new(|cx| AgentsPane::new(agents, folder, cx)))
+                }
             };
             let subscription = match &model {
                 PaneModel::Changes(entity) => {
@@ -159,6 +192,10 @@ impl ChatPanes {
                     cx.observe(entity, move |owner, _, cx| on_change(owner, cx))
                 }
                 PaneModel::Tasks(entity) => {
+                    let on_change = on_change.clone();
+                    cx.observe(entity, move |owner, _, cx| on_change(owner, cx))
+                }
+                PaneModel::Agents(entity) => {
                     let on_change = on_change.clone();
                     cx.observe(entity, move |owner, _, cx| on_change(owner, cx))
                 }
@@ -205,6 +242,7 @@ impl ChatPanes {
             PaneModel::Terminal(entity) => cx.observe(entity, |_, _, cx| cx.notify()),
             PaneModel::Build(entity) | PaneModel::Run(entity) => cx.observe(entity, |_, _, cx| cx.notify()),
             PaneModel::Tasks(entity) => cx.observe(entity, |_, _, cx| cx.notify()),
+            PaneModel::Agents(entity) => cx.observe(entity, |_, _, cx| cx.notify()),
         };
         self.models.insert(id, (model, subscription));
     }
@@ -236,6 +274,7 @@ impl ChatPanes {
             (PaneKind::Build, _) => "Build".into(),
             (PaneKind::Run, _) => "Run".into(),
             (PaneKind::Tasks, _) => "Tasks".into(),
+            (PaneKind::Agents, _) => "Agents".into(),
         }
     }
 
@@ -244,6 +283,7 @@ impl ChatPanes {
         match self.model(pane.id) {
             Some(PaneModel::Changes(changes)) => changes.read(cx).count().filter(|count| *count > 0).map(|count| count.to_string().into()),
             Some(PaneModel::Tasks(tasks)) => Some(tasks.read(cx).running()).filter(|count| *count > 0).map(|count| count.to_string().into()),
+            Some(PaneModel::Agents(agents)) => Some(agents.read(cx).working()).filter(|count| *count > 0).map(|count| count.to_string().into()),
             _ => None,
         }
     }

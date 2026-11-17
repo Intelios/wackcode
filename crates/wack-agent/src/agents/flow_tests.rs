@@ -531,3 +531,52 @@ async fn an_agent_whose_role_was_switched_off_cannot_work_another_round() {
     let (refused, is_error) = &parent.results()[0];
     assert!(*is_error && refused.contains("Agent a1's role, helper, is no longer switched on"), "{refused}");
 }
+
+#[tokio::test]
+async fn the_user_can_follow_up_from_the_pane_and_its_report_is_quiet() {
+    let child = ScriptedProvider::new([say("First report."), say("Second report.")]);
+    let mut parent = parent_with(vec![calls(&[helper("p1", "Look", false)]), say("ok")], child.clone(), Vec::new());
+    parent.run("Go", &Control::new()).await.unwrap();
+
+    let sent = parent.agents.message_from_user("a1", "Look at the tests too.").await.unwrap();
+    assert!(sent.contains("working in the background"), "{sent}");
+    parent.agents.get("a1").unwrap().ended().await;
+    let asked = child.requests()[1].messages.last().unwrap().text();
+    assert!(asked.starts_with("The user, who can see your work in WackCode, sends you this message:\n\nLook at the tests too."));
+    assert!(parent.agents.has_news() && !parent.agents.wakes(), "it rides along without waking the chat");
+    assert_eq!(parent.agents.list()[0].round_call_id, "");
+}
+
+#[tokio::test]
+async fn an_agent_the_app_already_restored_is_still_announced_as_interrupted() {
+    let folder = tempfile::tempdir().unwrap();
+    let path = folder.path().join("chat.jsonl");
+    let mut session = Session::create(&path, folder.path()).unwrap();
+    let working = AgentInfo {
+        id: "a1".into(),
+        role: "explore".into(),
+        description: "Look".into(),
+        call_id: "c".into(),
+        round: 1,
+        round_call_id: String::new(),
+        session: folder.path().join("chat/a1.jsonl"),
+        model: "m".into(),
+        edits: false,
+        started_at: 0,
+        ended_at: None,
+        status: Status::Running,
+        background: true,
+        tool_calls: 3,
+        context_tokens: 0,
+        activity: None,
+    };
+    session.set_state(AGENTS_STATE, serde_json::to_value(vec![working.clone()]).unwrap()).unwrap();
+    // The app restores the list as the chat opens, before any run.
+    let agents = Agents::new();
+    agents.restore(vec![working]);
+    let feature = AgentsFeature::new(&session, agents);
+    let notes = crate::agent::Feature::notes(&feature, &session);
+    assert_eq!(notes.len(), 1);
+    assert!(notes[0].text.contains("was stopped when WackCode quit") && notes[0].text.contains("agent_message"));
+    assert!(crate::agent::Feature::notes(&feature, &session).is_empty(), "told once");
+}

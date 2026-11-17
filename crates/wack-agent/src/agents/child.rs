@@ -195,7 +195,7 @@ fn answer_open_calls(reply: Option<&Message>, call_id: &str, directive: &str) ->
 
 /// The started call's answer, in a copy of the conversation.
 const COPY_STARTED: &str = "This call started you. You are a sub-agent working from a copy of the conversation above, not the agent that made the call: that agent carries on separately.";
-const COPY_DIRECTIVE: &str = "You are a sub-agent started from a copy of this conversation. Carry out the task below on your own, then end with a report for the agent that started you: it sees only your final message. Don't start other agents, don't ask the user anything, and don't take on work beyond the task.\n\nYour task:";
+pub const COPY_DIRECTIVE: &str = "You are a sub-agent started from a copy of this conversation. Carry out the task below on your own, then end with a report for the agent that started you: it sees only your final message. Don't start other agents, don't ask the user anything, and don't take on work beyond the task.\n\nYour task:";
 
 /// Keeps the child's counters and latest activity up to date for whoever watches.
 fn observe(child: &Child, event: Event) {
@@ -209,9 +209,10 @@ fn observe(child: &Child, event: Event) {
     }
 }
 
-/// What a tool call is pointed at, in a few words.
+/// What a call is pointed at, for the line that says what a child is doing: what it looks for
+/// before where it looks.
 fn target(input: &Value) -> String {
-    let text = ["path", "pattern", "query", "url", "command", "description"].iter().find_map(|key| input[key].as_str()).unwrap_or_default();
+    let text = ["pattern", "query", "url", "command", "path", "description"].iter().find_map(|key| input[key].as_str()).unwrap_or_default();
     let line = text.lines().next().unwrap_or_default().trim();
     let mut short: String = line.chars().take(120).collect();
     if short.len() < line.len() {

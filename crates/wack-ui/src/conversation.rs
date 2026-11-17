@@ -22,6 +22,7 @@ use wack_core::{
     plan::{PLAN_STATE, PlanState},
     skills::CommandUse,
     tasks::NOTE_PREFIX,
+    agents::{AgentInfo, NOTE_PREFIX as AGENT_NOTE_PREFIX},
     mcp_client::NOTE_PREFIX as MCP_NOTE_PREFIX,
     todo::{TODO_STATE, TodoList},
 };
@@ -43,12 +44,18 @@ pub enum Entry {
 /// A background task's news as the model read it.
 #[derive(Clone, Debug, PartialEq)]
 pub struct News {
-    /// `task:<id>:<what>`.
+    /// `task:<id>:<what>`, or `agent:<id>` for a sub-agent's report (`agent:<id>:interrupted`
+    /// for one a quit stopped).
     pub tag: String,
     pub text: String,
 }
 
 impl News {
+    /// The sub-agent this is from, if it is a sub-agent's.
+    pub fn agent(&self) -> Option<&str> {
+        self.tag.strip_prefix(AGENT_NOTE_PREFIX).map(|rest| rest.split(':').next().unwrap_or_default())
+    }
+
     /// The task's id, from the tag.
     pub fn task(&self) -> &str {
         self.tag.strip_prefix(NOTE_PREFIX).and_then(|rest| rest.split(':').next()).unwrap_or_default()
@@ -141,6 +148,9 @@ pub struct Conversation {
     pub awaiting: Option<usize>,
     pub todos: TodoList,
     pub plan_view: PlanView,
+    /// The chat's sub-agents as its registry has them now, by the call that started each one's
+    /// latest round. Kept by the chat, not folded from events: they work outside the run.
+    pub agents: std::collections::HashMap<String, AgentInfo>,
     /// MCP notes saved before the message of the run they belong to, held for its turn.
     held_notices: Vec<String>,
 }
@@ -239,7 +249,7 @@ impl Conversation {
                 }
                 HistoryEntry::Message { message, usage, at, command } => conversation.replay(message, *usage, *at, command.clone()),
                 HistoryEntry::State { key, value } => conversation.apply_state(key, value),
-                HistoryEntry::Note { tag, text, at } if tag.starts_with(NOTE_PREFIX) => {
+                HistoryEntry::Note { tag, text, at } if tag.starts_with(NOTE_PREFIX) || tag.starts_with(AGENT_NOTE_PREFIX) => {
                     conversation.news(News { tag: tag.clone(), text: text.clone() }, *at, false)
                 }
                 // A server that failed or stopped: the model was told, and the transcript says so.
@@ -467,7 +477,7 @@ impl Conversation {
             return;
         }
         if let Event::Noted { tag, text } = event {
-            if tag.starts_with(NOTE_PREFIX) {
+            if tag.starts_with(NOTE_PREFIX) || tag.starts_with(AGENT_NOTE_PREFIX) {
                 self.news(News { tag: tag.clone(), text: text.clone() }, Some(now), true);
             } else if tag.starts_with(MCP_NOTE_PREFIX) {
                 self.held_notices.push(text.clone());

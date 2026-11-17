@@ -28,6 +28,8 @@ pub enum PaneKind {
     Run,
     /// The commands the agent runs in the background.
     Tasks,
+    /// The chat's sub-agents and their work.
+    Agents,
 }
 
 impl PaneKind {
@@ -38,18 +40,19 @@ impl PaneKind {
             PaneKind::Build => "Build",
             PaneKind::Run => "Run",
             PaneKind::Tasks => "Tasks",
+            PaneKind::Agents => "Agents",
         }
     }
 
     /// One per chat: opening it again shows the one there is.
     pub fn single(self) -> bool {
-        matches!(self, PaneKind::Changes | PaneKind::Build | PaneKind::Run | PaneKind::Tasks)
+        matches!(self, PaneKind::Changes | PaneKind::Build | PaneKind::Run | PaneKind::Tasks | PaneKind::Agents)
     }
 
     /// Where a new pane of this kind opens.
     pub fn home(self) -> Dock {
         match self {
-            PaneKind::Changes => Dock::Right,
+            PaneKind::Changes | PaneKind::Agents => Dock::Right,
             PaneKind::Terminal | PaneKind::Build | PaneKind::Run | PaneKind::Tasks => Dock::Bottom,
         }
     }

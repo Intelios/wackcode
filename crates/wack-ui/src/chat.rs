@@ -179,10 +179,12 @@ impl ChatSession {
         cx: &mut Context<Self>,
     ) -> Self {
         let mut context_tokens = None;
+        let mut saved_agents = Vec::new();
         let conversation = if session_path.exists() {
             match wack_core::history(session_path) {
                 Ok(history) => {
                     context_tokens = last_context(&history);
+                    saved_agents = last_agents(&history);
                     Conversation::from_history(&history)
                 }
                 Err(message) => {
@@ -201,8 +203,12 @@ impl ChatSession {
         let tasks = Tasks::new(tasks_folder);
         let tasks_watch = watch_tasks(&tasks, cx);
         panes.set_tasks(tasks.clone());
+        // The agents the session last listed, so their rows and pane read right before any run;
+        // one that was working when the app quit reads as interrupted.
         let agents = Agents::new();
+        agents.restore(saved_agents);
         let agents_watch = watch_agents(&agents, cx);
+        panes.set_agents(agents.clone());
         let mut chat = Self {
             id: id.to_string(),
             cwd,
@@ -236,9 +242,41 @@ impl ChatSession {
             _tasks_watch: tasks_watch,
             _agents_watch: agents_watch,
         };
+        chat.conversation.agents = chat.agent_rows();
         chat.refresh_from(0);
         chat.panes.sync(cx, |_, cx| cx.notify());
         chat
+    }
+
+    /// The chat's agents by the call that started each one's latest round: what their rows read.
+    /// A round the user started from the pane has no call, so its agent's rows read as saved.
+    fn agent_rows(&self) -> std::collections::HashMap<String, wack_core::agents::AgentInfo> {
+        self.agents
+            .list()
+            .into_iter()
+            .filter_map(|info| {
+                let call = if info.round > 1 { info.round_call_id.clone() } else { info.call_id.clone() };
+                (!call.is_empty()).then_some((call, info))
+            })
+            .collect()
+    }
+
+    /// Brings the agents' rows up to date: those that changed, and those still working, whose
+    /// times count on.
+    fn sync_agents(&mut self) {
+        let rows = self.agent_rows();
+        let mut stale: Vec<String> = rows
+            .iter()
+            .filter(|(call, info)| info.status.active() || self.conversation.agents.get(*call) != Some(info))
+            .map(|(call, _)| call.clone())
+            .collect();
+        stale.extend(self.conversation.agents.keys().filter(|call| !rows.contains_key(*call)).cloned());
+        self.conversation.agents = rows;
+        for call in stale {
+            if let Some(index) = self.entry_holding(&call) {
+                self.refresh_entry(index);
+            }
+        }
     }
 
     /// Changes the panes' layout. When anything changed, makes models for panes now on screen,
@@ -713,6 +751,14 @@ impl ChatSession {
         moved
     }
 
+    /// Stops a sub-agent for the user; the agent is told, quietly.
+    pub fn stop_agent(&mut self, id: &str, cx: &mut Context<Self>) {
+        if let Some(child) = self.agents.get(id) {
+            child.stop();
+        }
+        cx.notify();
+    }
+
     /// Stops a background task for the user; the agent is told.
     pub fn stop_task(&mut self, id: String, cx: &mut Context<Self>) {
         let tasks = self.tasks.clone();
@@ -856,6 +902,8 @@ fn watch_agents(agents: &Agents, cx: &mut Context<ChatSession>) -> Task<()> {
             }
             let kept = this.update(cx, |chat, cx| {
                 if first.is_some() || !chat.agents.active().is_empty() {
+                    chat.sync_agents();
+                    chat.panes.refresh_agents(cx);
                     cx.notify();
                 }
                 if news {
@@ -868,6 +916,18 @@ fn watch_agents(agents: &Agents, cx: &mut Context<ChatSession>) -> Task<()> {
             cx.background_executor().timer(Duration::from_millis(100)).await;
         }
     })
+}
+
+/// The agents a saved chat last listed.
+fn last_agents(history: &[HistoryEntry]) -> Vec<wack_core::agents::AgentInfo> {
+    history
+        .iter()
+        .rev()
+        .find_map(|entry| match entry {
+            HistoryEntry::State { key, value } if key == wack_core::agents::AGENTS_STATE => serde_json::from_value(value.clone()).ok(),
+            _ => None,
+        })
+        .unwrap_or_default()
 }
 
 fn last_context(history: &[HistoryEntry]) -> Option<u64> {

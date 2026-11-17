@@ -1,0 +1,447 @@
+//! The Agents pane: the chat's sub-agents, and the work of the one picked.
+//!
+//! - The pane only looks and talks: the agents belong to the chat's registry, so closing the
+//!   pane never stops one. Stop here stops an agent for the user, and the field at the bottom sends
+//!   it a message (one working reads it before its next step; one that ended works another round,
+//!   whose report reaches the chat quietly).
+//! - An agent's work is its own session file, read back through the same pure pipeline as the
+//!   chat (`conversation.rs`, then `work.rs`), so it reads exactly like a chat. The file is read
+//!   again only when it has grown, so a pane left open costs nothing while nothing happens.
+//! - Every agent's work shows live as it saves each step: the pane redraws when the registry
+//!   says one changed (`ChatPanes::refresh_agents`).
+//! - An agent started from a copy of the conversation shows from its directive on, not the
+//!   copied chat.
+
+use std::{
+    collections::{HashMap, HashSet},
+    path::PathBuf,
+};
+
+use gpui::{Context, Entity, FocusHandle, Hsla, ScrollHandle, SharedString, Subscription, Window, div, prelude::*, px};
+use gpui_tokio::Tokio;
+use wack_core::{
+    HistoryEntry, Message,
+    agents::{AgentInfo, Agents, COPY_DIRECTIVE, Status},
+};
+
+use crate::{
+    actions::StopAgent,
+    conversation::Conversation,
+    icon::Icon,
+    tags::Tag,
+    text_field::{TextField, TextFieldEvent},
+    theme::Theme,
+    tooltip::tip,
+    transcript::{self, AgentState, Handlers, Item},
+    typography::{Type, Typography},
+    work::{self, ReplyCache},
+};
+
+/// The strip of agents scrolls past this, so many agents never crowd out the work.
+const STRIP_HEIGHT: f32 = 96.;
+const PILL_WIDTH: f32 = 220.;
+/// The sentence that opens a copy's directive, where its own work starts.
+fn copy_mark() -> &'static str {
+    COPY_DIRECTIVE.split_once(". ").map_or(COPY_DIRECTIVE, |(first, _)| first)
+}
+
+pub struct AgentsPane {
+    agents: Agents,
+    cwd: PathBuf,
+    /// The agent whose work shows; the newest when none was picked.
+    pub selected: Option<String>,
+    pub focus: FocusHandle,
+    /// Each agent's work as last read, with the size of its file then.
+    read: HashMap<String, (u64, Conversation)>,
+    replies: HashMap<String, ReplyCache>,
+    /// Rows the user opened, and work logs they folded.
+    open: HashSet<String>,
+    folded: HashSet<String>,
+    field: Entity<TextField>,
+    /// What the last message sent came to: a word, or why it couldn't go.
+    sent: Option<(SharedString, bool)>,
+    /// The work's scroll: it follows new steps while the reader is at the bottom, and starts at
+    /// the bottom (the latest step, or the report) when an agent is picked.
+    scroll: ScrollHandle,
+    _field: Subscription,
+}
+
+impl AgentsPane {
+    pub fn new(agents: Agents, cwd: PathBuf, cx: &mut Context<Self>) -> Self {
+        let field = cx.new(|cx| TextField::new(Type::Ui, "Message this agent", cx).multiline(4));
+        let subscription = cx.subscribe(&field, |pane, _, event: &TextFieldEvent, cx| {
+            if matches!(event, TextFieldEvent::Enter | TextFieldEvent::SendNow) {
+                pane.send(cx);
+            }
+        });
+        Self {
+            agents,
+            cwd,
+            selected: None,
+            focus: cx.focus_handle(),
+            read: HashMap::new(),
+            replies: HashMap::new(),
+            open: HashSet::new(),
+            folded: HashSet::new(),
+            field,
+            sent: None,
+            scroll: ScrollHandle::new(),
+            _field: subscription,
+        }
+    }
+
+    pub fn select(&mut self, id: String, cx: &mut Context<Self>) {
+        if self.selected.as_ref() != Some(&id) {
+            self.sent = None;
+            self.scroll.scroll_to_bottom();
+        }
+        self.selected = Some(id);
+        cx.notify();
+    }
+
+    /// How many are working, for the tab's count.
+    pub fn working(&self) -> usize {
+        self.agents.active().len()
+    }
+
+    fn picked(&self, list: &[AgentInfo]) -> Option<AgentInfo> {
+        self.selected
+            .as_ref()
+            .and_then(|id| list.iter().find(|info| &info.id == id))
+            .or_else(|| list.iter().rev().find(|info| info.status.active()))
+            .or_else(|| list.last())
+            .cloned()
+    }
+
+    /// Sends the field's text to the agent picked.
+    fn send(&mut self, cx: &mut Context<Self>) {
+        let text = self.field.read(cx).text().trim().to_string();
+        let list = self.agents.list();
+        let Some(info) = self.picked(&list) else { return };
+        if text.is_empty() {
+            return;
+        }
+        let agents = self.agents.clone();
+        let id = info.id.clone();
+        let work = Tokio::spawn(cx, async move { agents.message_from_user(&id, &text).await });
+        cx.spawn(async move |pane, cx| {
+            let result = work.await.unwrap_or_else(|_| Err("The message could not be sent.".into()));
+            let _ = pane.update(cx, |pane, cx| {
+                match result {
+                    Ok(_) => {
+                        pane.field.update(cx, |field, cx| field.set_text("", cx));
+                        pane.sent = Some(("Sent.".into(), false));
+                    }
+                    Err(message) => pane.sent = Some((message.into(), true)),
+                }
+                cx.notify();
+            });
+        })
+        .detach();
+    }
+
+    /// The agent's work as transcript items, reading its file again only when it has grown.
+    fn items(&mut self, info: &AgentInfo) -> Vec<Item> {
+        let size = std::fs::metadata(&info.session).map(|meta| meta.len()).unwrap_or(0);
+        let stale = self.read.get(&info.id).is_none_or(|(read, _)| *read != size);
+        if stale {
+            // Near the bottom (or nothing to scroll yet): keep up with what it does next.
+            let (offset, max) = (self.scroll.offset().y, self.scroll.max_offset().y);
+            if max - (-offset) < px(48.) {
+                self.scroll.scroll_to_bottom();
+            }
+            let history = wack_core::history(&info.session).unwrap_or_default();
+            let mut conversation = Conversation::from_history(&own_work(history));
+            // A turn still being written shows as working, as the chat's own does.
+            if info.status.active()
+                && let Some(crate::conversation::Entry::Turn(turn)) = conversation.entries.last_mut()
+            {
+                turn.live = true;
+            }
+            self.read.insert(info.id.clone(), (size, conversation));
+        }
+        let Some((_, conversation)) = self.read.get(&info.id) else { return Vec::new() };
+        let cache = self.replies.entry(info.id.clone()).or_default();
+        let mut items = work::items(conversation, &self.cwd, &self.open, wack_core::tasks::now_millis(), cache);
+        // Its work is the point here: logs show open unless folded.
+        for item in &mut items {
+            if let Item::Work(log) = item {
+                log.open = log.live || !self.folded.contains(log.key.as_ref());
+            }
+        }
+        items
+    }
+
+    fn toggle(&mut self, key: SharedString, cx: &mut Context<Self>) {
+        let key = key.to_string();
+        if key.starts_with("turn-") && !key[5..].contains('-') {
+            if !self.folded.remove(&key) {
+                self.folded.insert(key);
+            }
+        } else if !self.open.remove(&key) {
+            self.open.insert(key);
+        }
+        cx.notify();
+    }
+}
+
+/// A copy's history from its directive on, the directive standing as its first message; anyone
+/// else's whole.
+fn own_work(history: Vec<HistoryEntry>) -> Vec<HistoryEntry> {
+    let start = history.iter().rposition(|entry| matches!(entry, HistoryEntry::Message { message, .. } if message.text().contains(copy_mark())));
+    let Some(start) = start else { return history };
+    let mut own: Vec<HistoryEntry> = history.into_iter().skip(start).collect();
+    if let Some(HistoryEntry::Message { message, .. }) = own.first_mut() {
+        let text = message.text();
+        let directive = text.split_once("Your task:").map(|(_, task)| task.trim().to_string()).unwrap_or(text);
+        *message = Message::user(directive);
+    }
+    own
+}
+
+/// How an agent stands, as the row in the work log says it.
+fn state(info: &AgentInfo) -> AgentState {
+    match &info.status {
+        Status::Queued => AgentState::Queued,
+        Status::Running if info.background => AgentState::Background,
+        Status::Running => AgentState::Working,
+        Status::Done => AgentState::Done,
+        Status::Failed { .. } => AgentState::Failed,
+        Status::Stopped { .. } => AgentState::Stopped,
+        Status::Interrupted => AgentState::Interrupted,
+    }
+}
+
+fn role(info: &AgentInfo) -> String {
+    let mut chars = info.role.chars();
+    chars.next().map(|first| first.to_uppercase().chain(chars).collect()).unwrap_or_default()
+}
+
+fn took(info: &AgentInfo, now: u64) -> String {
+    work::duration(info.ended_at.unwrap_or(now).saturating_sub(info.started_at))
+}
+
+impl Render for AgentsPane {
+    fn render(&mut self, _window: &mut Window, cx: &mut Context<Self>) -> impl IntoElement {
+        let theme = Theme::get(cx).clone();
+        let now = wack_core::tasks::now_millis();
+        let list = self.agents.list();
+        let Some(selected) = self.picked(&list) else {
+            return div()
+                .track_focus(&self.focus)
+                .size_full()
+                .flex()
+                .flex_col()
+                .items_center()
+                .justify_center()
+                .gap(px(6.))
+                .child(Icon::Duck.view(px(18.), theme.text_faint))
+                .child(div().typography(Type::Ui).text_color(theme.text_dim).child("No agents yet"))
+                .child(
+                    div()
+                        .px(px(24.))
+                        .text_center()
+                        .typography(Type::Small)
+                        .text_color(theme.text_faint)
+                        .child("When the agent hands work to a sub-agent, its work shows here."),
+                )
+                .tag("agents-pane")
+                .into_any_element();
+        };
+
+        // A strip of pills, one per agent in the order they started, so the work below keeps the
+        // pane's whole width.
+        let mut rows = div().id("agents-list").flex_none().max_h(px(STRIP_HEIGHT)).overflow_y_scroll().px(px(10.)).py(px(8.)).border_b_1().border_color(theme.border).flex().flex_wrap().gap(px(6.));
+        for info in &list {
+            let picked = info.id == selected.id;
+            let (_, colour) = transcript::agent_state_word(state(info), &theme);
+            let id = info.id.clone();
+            let pane = cx.entity();
+            rows = rows.child(
+                div()
+                    .id(SharedString::from(format!("agent-row-{}", info.id)))
+                    .max_w(px(PILL_WIDTH))
+                    .h(px(26.))
+                    .px(px(10.))
+                    .rounded_full()
+                    .cursor_pointer()
+                    .flex()
+                    .items_center()
+                    .gap(px(6.))
+                    .border_1()
+                    .border_color(if picked { theme.border_strong } else { theme.border })
+                    .when(picked, |pill| pill.bg(theme.hover))
+                    .hover(|pill| pill.bg(theme.hover))
+                    .tooltip(tip(format!("{} · {} · {}", info.id, role(info), info.description)))
+                    .on_click(move |_, _, cx| pane.update(cx, |pane, cx| pane.select(id.clone(), cx)))
+                    .child(div().flex_none().size(px(6.)).rounded_full().bg(colour))
+                    .child(div().flex_none().typography(Type::Small).text_color(if picked { theme.text } else { theme.text_soft }).child(role(info)))
+                    .child(div().min_w_0().truncate().typography(Type::Small).text_color(theme.text_dim).child(info.description.clone()))
+                    .tag("agent-pill"),
+            );
+        }
+
+        let working = selected.status.active();
+        let running = selected.status == Status::Running;
+        let (word, colour) = transcript::agent_state_word(state(&selected), &theme);
+        let stop_id = SharedString::from(selected.id.clone());
+        let header = div()
+            .flex_none()
+            .px(px(14.))
+            .py(px(10.))
+            .border_b_1()
+            .border_color(theme.border)
+            .flex()
+            .flex_col()
+            .gap(px(4.))
+            .child(
+                div()
+                    .flex()
+                    .items_center()
+                    .gap(px(8.))
+                    .child(
+                        div()
+                            .flex_none()
+                            .size(px(24.))
+                            .rounded_full()
+                            .flex()
+                            .items_center()
+                            .justify_center()
+                            .bg(if running { theme.accent_wash } else { theme.hover })
+                            .child(if running {
+                                crate::motion::paddling(div().child(Icon::Duck.view(px(13.), theme.accent_text))).into_any_element()
+                            } else {
+                                Icon::Duck.view(px(13.), theme.text_dim).into_any_element()
+                            }),
+                    )
+                    .child(div().flex_1().min_w_0().truncate().typography(Type::UiStrong).text_color(theme.text).child(role(&selected)))
+                    .child(div().flex_none().typography(Type::Small).text_color(colour).child(word))
+                    .when(working, |line| {
+                        line.child(
+                            div()
+                                .id("stop-agent")
+                                .flex_none()
+                                .h(px(22.))
+                                .px(px(8.))
+                                .rounded_full()
+                                .bg(Hsla { a: 0.14, ..theme.danger })
+                                .cursor_pointer()
+                                .hover(|button| button.bg(Hsla { a: 0.22, ..theme.danger }))
+                                .flex()
+                                .items_center()
+                                .gap(px(5.))
+                                .tooltip(tip("Stop this agent; the chat is told"))
+                                .on_click(move |_, window, cx| window.dispatch_action(Box::new(StopAgent { id: stop_id.clone() }), cx))
+                                .child(Icon::Stop.view(px(10.), theme.danger))
+                                .child(div().typography(Type::Small).text_color(theme.danger).child("Stop"))
+                                .tag("stop-agent"),
+                        )
+                    }),
+            )
+            // The task wraps rather than cut off: it is what the agent was asked.
+            .child(div().typography(Type::Ui).text_color(theme.text_soft).child(selected.description.clone()))
+            .child(div().truncate().typography(Type::Small).text_color(theme.text_faint).child(format!(
+                "{} · {} · {} tool{} · {} · {}{}",
+                selected.id,
+                selected.model,
+                selected.tool_calls,
+                if selected.tool_calls == 1 { "" } else { "s" },
+                took(&selected, now),
+                if selected.edits { "edits files" } else { "no edits" },
+                if selected.round > 1 { format!(" · round {}", selected.round) } else { String::new() }
+            )));
+
+        let items = self.items(&selected);
+        let pane = cx.entity();
+        let handlers = Handlers {
+            toggle: std::rc::Rc::new(move |key, _, cx| pane.update(cx, |pane, cx| pane.toggle(key, cx))),
+            open_link: std::rc::Rc::new(|url, _, cx| {
+                if url.starts_with("https://") || url.starts_with("http://") {
+                    cx.open_url(&url);
+                }
+            }),
+        };
+        let mut work = div().px(px(16.)).py(px(14.)).flex().flex_col();
+        if items.is_empty() {
+            work = work.child(div().typography(Type::Small).text_color(theme.text_faint).child(if working { "Starting…" } else { "Nothing was saved of its work." }));
+        }
+        for (index, item) in items.iter().enumerate() {
+            let previous = index.checked_sub(1).and_then(|index| items.get(index));
+            work = work.child(transcript::item(item, previous, &theme, &handlers));
+        }
+
+        let note = self.sent.clone();
+        let footer = div()
+            .flex_none()
+            .px(px(12.))
+            .py(px(8.))
+            .border_t_1()
+            .border_color(theme.border)
+            .flex()
+            .flex_col()
+            .gap(px(4.))
+            .child(
+                div()
+                    .min_h(px(34.))
+                    .px(px(12.))
+                    .py(px(7.))
+                    .rounded(px(17.))
+                    .bg(theme.hover)
+                    .border_1()
+                    .border_color(theme.border)
+                    .child(self.field.clone()),
+            )
+            .child(div().px(px(6.)).typography(Type::Small).text_color(match &note {
+                Some((_, true)) => theme.danger,
+                _ => theme.text_faint,
+            }).child(match note {
+                Some((text, _)) => text,
+                None if working => "It reads your message before its next step.".into(),
+                None => "It works another round with what it learned; the chat hears its report.".into(),
+            }));
+
+        let detail = div()
+            .flex_1()
+            .min_h_0()
+            .w_full()
+            .flex()
+            .flex_col()
+            .child(header)
+            .child(div().id("agent-work").flex_1().min_h_0().overflow_y_scroll().track_scroll(&self.scroll).child(work))
+            .child(footer);
+
+        div().track_focus(&self.focus).size_full().flex().flex_col().child(rows).child(detail).tag("agents-pane").into_any_element()
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use wack_core::Role;
+
+    #[test]
+    fn a_copy_shows_from_its_directive_on() {
+        let message = |role: Role, text: &str| {
+            let mut message = Message::user(text);
+            message.role = role;
+            HistoryEntry::Message { message, usage: None, at: None, command: None }
+        };
+        let history = vec![
+            message(Role::User, "The parent's question"),
+            message(Role::Assistant, "The parent's answer"),
+            message(Role::User, &format!("{COPY_DIRECTIVE}\n\nRename it.")),
+            message(Role::Assistant, "Renamed."),
+        ];
+        let own = own_work(history);
+        let texts: Vec<String> = own
+            .iter()
+            .map(|entry| match entry {
+                HistoryEntry::Message { message, .. } => message.text(),
+                _ => String::new(),
+            })
+            .collect();
+        assert_eq!(texts, ["Rename it.", "Renamed."]);
+        let whole = own_work(vec![message(Role::User, "Brief"), message(Role::Assistant, "Report")]);
+        assert_eq!(whole.len(), 2);
+    }
+}

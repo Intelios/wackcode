@@ -36,6 +36,8 @@ pub struct Kit {
     /// them.
     agents: Option<(AgentsSetup, PathBuf, AgentsFeature)>,
     unrestricted: bool,
+    /// The session's working folder.
+    cwd: PathBuf,
 }
 
 impl Kit {
@@ -48,7 +50,7 @@ impl Kit {
             let index = memory.index();
             (memory, index)
         });
-        Self { plan: Plan::new(session, mode, unrestricted), todo: Todo::new(session), memory, skills: None, tasks: None, agents: None, unrestricted }
+        Self { plan: Plan::new(session, mode, unrestricted), todo: Todo::new(session), memory, skills: None, tasks: None, agents: None, unrestricted, cwd: session.cwd().to_path_buf() }
     }
 
     /// Lists `catalog`'s skills in the system prompt, for the model to load when a task matches.
@@ -81,8 +83,9 @@ impl Kit {
             return Vec::new();
         }
         let agent = AgentTool::new(setup.clone(), pool.to_vec(), self.plan.clone(), self.unrestricted, self.skills.clone(), session.clone());
-        let messages = agent.messages();
-        vec![Arc::new(agent), Arc::new(messages)]
+        let messages = Arc::new(agent.messages());
+        setup.agents.set_messenger(messages.clone(), self.cwd.clone());
+        vec![Arc::new(agent), messages]
     }
 
     /// The tools these features add to a chat's own, in the order the model is shown them.

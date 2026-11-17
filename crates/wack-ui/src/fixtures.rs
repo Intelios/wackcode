@@ -109,6 +109,7 @@ pub fn composer_empty(roomy: bool) -> ComposerData {
         tasks: Vec::new(),
         tasks_open: false,
         foreground: false,
+        agents: 0,
     }
 }
 
@@ -338,6 +339,7 @@ pub fn composer_foreground() -> ComposerData {
     ComposerData {
         working: true,
         foreground: true,
+        agents: 0,
         activity: Some(("Working  ·  2m 04s".into(), Some("Running cargo build --release".into()))),
         tasks: crate::shell::task_lines(&tasks()),
         ..composer_after_turn(drawn(None, crate::chat::FOLLOW_UP_PLACEHOLDER))
@@ -735,4 +737,158 @@ pub fn appearance(backdrop: Option<crate::backdrop::Picture>, cx: &mut gpui::App
         importing: false,
         notice: None,
     }
+}
+
+// -------------------------------------------------------------------------------------------------
+// Sub-agents
+// -------------------------------------------------------------------------------------------------
+
+const MAP_REPORT: &str = "Retry-After is read in one place, `crates/wack-llm/src/retry.rs:41` (`parse_retry_after`), and only for 429s. Three callers back off through it:\n\n- `HttpProvider::stream` (`crates/wack-llm/src/http.rs:212`) on a failed connect\n- `Compactor::summarise` (`crates/wack-agent/src/compact.rs:88`), which retries once\n- the title generator (`crates/wack-core/src/title.rs:57`), which gives up after one wait\n\nNone of them cap the wait: `Backoff::next` (`retry.rs:19`) is the only ceiling, and a server's Retry-After skips it.\n\n[agent a1 · explore · 14 tool calls · 38k tokens · 1m 12s]";
+
+/// One agent as the registry has it, `started` and `ended` milliseconds before `now`.
+#[allow(clippy::too_many_arguments)]
+fn agent_info(id: &str, role: &str, description: &str, call: &str, status: wack_core::agents::Status, background: bool, now: u64, started: u64, ended: Option<u64>, tools: u32, tokens: u64, activity: Option<(&str, &str)>, session: std::path::PathBuf) -> wack_core::agents::AgentInfo {
+    wack_core::agents::AgentInfo {
+        id: id.into(),
+        role: role.into(),
+        description: description.into(),
+        call_id: call.into(),
+        round: 1,
+        round_call_id: String::new(),
+        session,
+        model: if role == "general" { "claude-opus-5-5".into() } else { "claude-haiku-5-5".into() },
+        edits: role == "general",
+        started_at: now - started,
+        ended_at: ended.map(|ended| now - ended),
+        status,
+        background,
+        tool_calls: tools,
+        context_tokens: tokens,
+        activity: activity.map(|(tool, target)| wack_core::agents::Activity { tool: tool.into(), target: target.into() }),
+    }
+}
+
+/// The agents a chat sent out to look before changing the retry logic: one has reported, two
+/// are working (one in the background) and one waits for a place. `session` is where the second
+/// one's work is saved.
+pub fn agents(now: u64, session: std::path::PathBuf) -> Vec<wack_core::agents::AgentInfo> {
+    use wack_core::agents::Status;
+    let elsewhere = |id: &str| std::path::PathBuf::from(format!("/nowhere/{id}.jsonl"));
+    vec![
+        agent_info("a1", "explore", "Map the retry callers", "agent-1", Status::Done, false, now, 84_000, Some(12_000), 14, 38_400, None, elsewhere("a1")),
+        agent_info("a2", "explore", "Find the backoff ceilings", "agent-2", Status::Running, false, now, 84_000, None, 9, 21_700, Some(("grep", "Retry-After")), session),
+        agent_info("a3", "review", "Check the retry tests", "agent-3", Status::Running, true, now, 84_000, None, 6, 17_200, Some(("bash", "cargo test -p wack-llm retry")), elsewhere("a3")),
+        agent_info("a4", "general", "Draft the date parser", "agent-4", Status::Queued, false, now, 84_000, None, 0, 0, None, elsewhere("a4")),
+    ]
+}
+
+/// A turn that sent four agents out together, with the first one back.
+pub fn agent_turn() -> Vec<Item> {
+    let mut conversation = Conversation::default();
+    let now = START + 90_000;
+    conversation.send("Before I change the retry logic: find everything that depends on how we back off, and check the tests cover the date form.", START);
+    conversation.apply(&Event::Thinking("Three separate questions; they can run side by side while the parser gets drafted.".into()), START + 4_000);
+    let agent = |agent: &str, description: &str| json!({ "agent": agent, "description": description, "prompt": "…" });
+    call(&mut conversation, "agent-1", "agent", agent("explore", "Map the retry callers"), Some(MAP_REPORT), START + 6_000);
+    call(&mut conversation, "agent-2", "agent", agent("explore", "Find the backoff ceilings"), None, START + 6_000);
+    call(
+        &mut conversation,
+        "agent-3",
+        "agent",
+        json!({ "agent": "review", "description": "Check the retry tests", "prompt": "…", "background": true }),
+        Some("Agent a3 (review) is working in the background. Its report will arrive as a message when it finishes."),
+        START + 6_000,
+    );
+    call(&mut conversation, "agent-4", "agent", agent("general", "Draft the date parser"), None, START + 6_000);
+    conversation.agents = agents(now, "/nowhere/a2.jsonl".into()).into_iter().map(|info| (info.call_id.clone(), info)).collect();
+    items(&conversation, &[], now)
+}
+
+/// Agents that ended badly, and a report from the background waking the chat.
+pub fn agent_ends() -> Vec<Item> {
+    use wack_core::agents::{Status, StoppedBy};
+    let mut conversation = Conversation::default();
+    let nowhere = |id: &str| std::path::PathBuf::from(format!("/nowhere/{id}.jsonl"));
+    conversation.send("Review the retry change in the background, and port the date parser from the old client meanwhile.", START);
+    call(
+        &mut conversation,
+        "agent-1",
+        "agent",
+        json!({ "agent": "review", "description": "Review the retry change", "prompt": "…", "background": true }),
+        Some("Agent a1 (review) is working in the background. Its report will arrive as a message when it finishes."),
+        START + 3_000,
+    );
+    call(&mut conversation, "agent-2", "agent", json!({ "agent": "general", "description": "Port the date parser", "prompt": "…" }), Some("The connection dropped twice and the agent gave up before it changed anything."), START + 4_000);
+    conversation.apply(&Event::Text("The port didn't get anywhere: its agent lost the connection before changing a file. The review is still going; I'll pass on what it finds.".into()), START + 52_000);
+    conversation.finish(&Ok(Outcome::Done), START + 53_000);
+    conversation.wake(START + 140_000);
+    conversation.apply(
+        &Event::Noted {
+            tag: "agent:a1".into(),
+            text: "Agent a1 (review · Review the retry change) finished in the background. Its report:\n\n**Critical:** `retry.rs:44` trusts Retry-After without a ceiling, so a server asking for an hour stalls the chat for an hour.\n\n**Warning:** `retry.rs:52` parses HTTP dates in local time.\n\n[agent a1 · review · 11 tool calls · 26k tokens · 2m 16s]".into(),
+        },
+        START + 140_000,
+    );
+    conversation.apply(&Event::Text("The review found **one critical issue**: a server's Retry-After is trusted without a ceiling. Want me to cap it at the backoff limit?".into()), START + 146_000);
+    conversation.finish(&Ok(Outcome::Done), START + 147_000);
+    conversation.send("Yes, and look for anywhere else that reads it.", START + 200_000);
+    call(&mut conversation, "agent-3", "agent", json!({ "agent": "explore", "description": "Find other Retry-After reads", "prompt": "…" }), None, START + 204_000);
+    conversation.finish(&Ok(Outcome::Stopped), START + 231_000);
+    conversation.send("Carry on.", START + 900_000);
+    call(&mut conversation, "agent-4", "agent", json!({ "agent": "explore", "description": "Find other Retry-After reads", "prompt": "…" }), None, START + 902_000);
+    conversation.finish(&Ok(Outcome::Done), START + 930_000);
+    let now = START + 990_000;
+    let mut list = vec![
+        agent_info("a1", "review", "Review the retry change", "agent-1", Status::Done, true, now, 987_000, Some(850_000), 11, 26_100, None, nowhere("a1")),
+        agent_info("a2", "general", "Port the date parser", "agent-2", Status::Failed { message: "The connection dropped twice.".into() }, false, now, 986_000, Some(940_000), 3, 8_800, None, nowhere("a2")),
+        agent_info("a3", "explore", "Find other Retry-After reads", "agent-3", Status::Stopped { by: StoppedBy::User }, false, now, 786_000, Some(759_000), 5, 12_300, None, nowhere("a3")),
+        agent_info("a4", "explore", "Find other Retry-After reads", "agent-4", Status::Interrupted, false, now, 88_000, Some(60_000), 7, 15_900, None, nowhere("a4")),
+    ];
+    conversation.agents = list.drain(..).map(|info| (info.call_id.clone(), info)).collect();
+    let mut items = items(&conversation, &[], now);
+    for item in &mut items {
+        if let Item::Work(log) = item {
+            log.open = true;
+        }
+    }
+    items
+}
+
+/// The composer while the chat waits on its agents.
+pub fn composer_agents() -> ComposerData {
+    ComposerData {
+        working: true,
+        foreground: true,
+        agents: 3,
+        activity: Some(("Working  ·  1m 30s".into(), Some("Waiting on Explore · Find the backoff ceilings".into()))),
+        ..composer_after_turn(drawn(None, crate::chat::FOLLOW_UP_PLACEHOLDER))
+    }
+}
+
+/// The agents registry for the Agents pane, with the second agent's work saved under `folder`.
+pub fn agents_registry(folder: &Path) -> wack_core::agents::Agents {
+    use wack_core::llm::Block;
+    use wack_core::{Message, Role};
+    let now = wack_core::tasks::now_millis();
+    let path = folder.join("a2.jsonl");
+    let mut lines = vec![json!({ "type": "meta", "version": 1, "cwd": CWD, "created": now - 84_000 })];
+    let mut push = |message: Message, ago: u64| lines.push(json!({ "type": "message", "message": message, "at": now - ago }));
+    push(Message::user("Find every ceiling on how long a retry may wait: constants, config, and anything that clamps a Retry-After. Report each with file:line and whether a server's value can skip it."), 84_000);
+    let assistant = |blocks: Vec<Block>| Message { role: Role::Assistant, content: blocks };
+    let result = |id: &str, content: &str| Message { role: Role::User, content: vec![Block::ToolResult { tool_use_id: id.into(), content: content.into(), is_error: false }] };
+    let tool = |id: &str, name: &str, input: serde_json::Value| Block::ToolUse { id: id.into(), name: name.into(), input };
+    push(assistant(vec![Block::Text { text: "Starting from the retry module, then everything that calls it.".into() }, tool("g1", "grep", json!({ "pattern": "Backoff|MAX_WAIT|ceiling", "path": "crates" }))]), 80_000);
+    push(result("g1", "crates/wack-llm/src/retry.rs:12:const MAX_WAIT: Duration = Duration::from_secs(60);\ncrates/wack-llm/src/retry.rs:19:    pub fn next(&mut self) -> Duration {\ncrates/wack-core/src/title.rs:57:    let wait = Backoff::once();"), 79_000);
+    push(assistant(vec![tool("r1", "read", json!({ "path": format!("{CWD}/crates/wack-llm/src/retry.rs") })), tool("r2", "read", json!({ "path": format!("{CWD}/crates/wack-core/src/title.rs"), "offset": 40, "limit": 40 }))]), 70_000);
+    push(result("r1", &"x\n".repeat(118)), 69_000);
+    push(result("r2", &"x\n".repeat(40)), 69_000);
+    push(assistant(vec![Block::Text { text: "`MAX_WAIT` caps `Backoff::next` at 60 seconds, but `parse_retry_after` returns the server's value straight to the caller. Checking whether any caller clamps it.".into() }, tool("g2", "grep", json!({ "pattern": "Retry-After", "path": "crates" }))]), 41_000);
+    let body: String = lines.iter().map(|line| format!("{line}\n")).collect();
+    let _ = std::fs::create_dir_all(folder);
+    let _ = std::fs::write(&path, body);
+    let registry = wack_core::agents::Agents::new();
+    for info in agents(now, path) {
+        registry.insert_fixture(info);
+    }
+    registry
 }

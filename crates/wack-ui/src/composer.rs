@@ -39,7 +39,7 @@ use wack_core::{AgentMode, Reasoning};
 use crate::{
     actions::{
         ChooseEffort, ChooseModel, CloseMenu, Compact, MoveToBackground, OpenEffortMenu, OpenModelMenu, Send, SetAgentMode, ShowTask,
-        SlideEffort, Stop, StopTask, ToggleTasks, ToggleTodos, ToggleWaiting, Unqueue,
+        SlideEffort, Stop, StopTask, ToggleAgentsPane, ToggleTasks, ToggleTodos, ToggleWaiting, Unqueue,
     },
     app::Menu,
     icon::Icon,
@@ -96,8 +96,10 @@ pub struct ComposerData {
     /// Commands the agent started in the background: running ones first, then a few that ended.
     pub tasks: Vec<TaskLine>,
     pub tasks_open: bool,
-    /// The agent is waiting on a command in the foreground, which ⌘B would move.
+    /// The agent is waiting on a command or sub-agents in the foreground, which ⌘B would move.
     pub foreground: bool,
+    /// Sub-agents queued or working.
+    pub agents: usize,
 }
 
 /// A background command as its list above the composer shows it.
@@ -389,7 +391,7 @@ impl RenderOnce for Composer {
         // Moving the command the agent waits on to the background, beside what it is doing.
         let background_pill = (data.working && data.foreground).then(|| {
             status_pill("background-pill", false, true, &theme)
-                .tooltip(tip("Keep this command running in the background and let the agent carry on"))
+                .tooltip(tip("Keep it working in the background and let the agent carry on"))
                 .on_click(dispatch(MoveToBackground))
                 .child(div().typography(Type::Small).text_color(theme.text_soft).child("Background"))
                 .child(div().typography(Type::Small).text_color(theme.text_faint).child("⌘B"))
@@ -404,6 +406,15 @@ impl RenderOnce for Composer {
                 .when(!asking, |pill| pill.child(if data.tasks_open { Icon::ChevronDown } else { Icon::ChevronRight }.view(px(11.), theme.text_faint)))
                 .tag("tasks-pill")
         });
+        // Sub-agents at work: the pill opens the Agents pane.
+        let agents_pill = (data.agents > 0).then(|| {
+            status_pill("agents-pill", false, true, &theme)
+                .tooltip(tip("Show the agents' work (⌘⇧A)"))
+                .on_click(dispatch(ToggleAgentsPane))
+                .child(crate::motion::paddling(div().flex_none().child(Icon::Duck.view(px(11.), theme.accent_text))))
+                .child(div().typography(Type::Small).text_color(theme.text_soft).child(if data.agents == 1 { "1 agent".to_string() } else { format!("{} agents", data.agents) }))
+                .tag("agents-pill")
+        });
         if data.tasks_open && !asking && running_tasks > 0 {
             let mut rows = div().id("tasks").flex_shrink(1.).min_h(px(36.)).max_h(px(WAITING_MAX_HEIGHT)).overflow_y_scroll().flex().flex_col().gap(px(6.));
             for task in data.tasks {
@@ -411,7 +422,7 @@ impl RenderOnce for Composer {
             }
             column = column.child(rows);
         }
-        if activity_pill.is_some() || todo_pill.is_some() || waiting_pill.is_some() || tasks_pill.is_some() {
+        if activity_pill.is_some() || todo_pill.is_some() || waiting_pill.is_some() || tasks_pill.is_some() || agents_pill.is_some() {
             column = column.child(
                 div()
                     .flex_none()
@@ -423,6 +434,7 @@ impl RenderOnce for Composer {
                     .children(background_pill)
                     .children(todo_pill)
                     .child(div().flex_1())
+                    .children(agents_pill)
                     .children(tasks_pill)
                     .children(waiting_pill),
             );

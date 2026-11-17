@@ -96,7 +96,8 @@ Built so far:
 - Plan and Ultra Plan, the question card, the todo list and Ultra reasoning, ported from version 2 with its prompts and tested logic: the mode toggle and ⇧Tab, the interview with Write the plan now, the plan card (Approve & implement, Save PLAN.md, Copy, Discard), the todo list folding finished tasks, agent-initiated Plan, Settings › Tools' unrestricted planning, and `wack run --mode` / `--effort ultra`. Verified in the dev app against the Testing connection (Ultra Plan interview to plan to implementation, relaunch mid-plan, Discard, a Build run keeping a todo list) and headless.
 
 - Web Fetch (`wack-web`), ported from version 2: `web_fetch {url, offset}`, deferred and read-only, through one public-address guard enforced at the HTTP client's DNS resolver and on every redirect; Readability (`dom_smoothie`) then `htmd` to Markdown, text passed through, binaries refused, character-offset paging, a short page cache. On by default, switched in Settings › Tools. Verified headless against the Testing connection (a real page read, localhost refused).
-- Web Search and Settings › Web, ported from version 2: DeepSeek, Brave, Tavily, SearXNG and Custom (`wack-web/search.rs`, with v2's tests), `web_search {query, count, site, recency}` (deferred, read-only, offered only while search is on and the active provider can search), reading pages through DeepSeek or Tavily, own keys or a DeepSeek connection's, the local monthly meter (`wack-core/web_usage.rs`), and Settings › Web's overview and provider editor with Test search. Version 2's key reveal is ported for connections (Settings › Providers' eye) but not for search keys. Tested offline and against a local server; no paid search provider has been called. MCP comes next.
+- Web Search and Settings › Web, ported from version 2: DeepSeek, Brave, Tavily, SearXNG and Custom (`wack-web/search.rs`, with v2's tests), `web_search {query, count, site, recency}` (deferred, read-only, offered only while search is on and the active provider can search), reading pages through DeepSeek or Tavily, own keys or a DeepSeek connection's, the local monthly meter (`wack-core/web_usage.rs`), and Settings › Web's overview and provider editor with Test search. Version 2's key reveal is ported for connections (Settings › Providers' eye) but not for search keys. Tested offline and against a local server; no paid search provider has been called.
+- MCP (`wack-mcp`) and Settings › MCP servers: stdio, Streamable HTTP and legacy SSE servers, their environment variables and headers kept as secrets, a per-tool switch, All or chosen projects, Test connection (in the editor and on each row) and a row that says how its server stands; the transcript's "Used server · tool" rows, an `MCP call` count, "Starting MCP servers…" while a run waits, and a server's failure as a notice in the turn it happened in; `wack mcp list|test`. Tested against the fixture server (`crates/wack-mcp/fixture`) over all three transports, and in the dev app against the Testing connection: a server added in Settings, tested, then called from a chat in its project folder, and gone after quit.
 
 Known gaps in the agent core, to close as the features that need them arrive:
 
@@ -104,6 +105,7 @@ Known gaps in the agent core, to close as the features that need them arrive:
 - Tool results are text only: `read` refuses images.
 - Settings › Prompts (editing the built-in prompts, as version 2 allowed) is deferred; the prompt builders are written so overrides can slot in.
 - Planning's sub-agent gate returns with that feature.
+- MCP is tools only: no resources, prompts, sampling or OAuth sign-in (a token goes in a header). There is no context breakdown yet, so MCP tools have no group of their own to show in one.
 
 Known gaps in the harness:
 
@@ -119,6 +121,6 @@ Known gaps in identity:
 
 - The window's own controls follow macOS's light or dark, not the one chosen in Settings.
 
-The foundation (phases 0 to 4) is complete: the owner signed off its look on 2026-11-15. Features now return in this order, each with its own plan: Plan and Ultra Plan with the question dialog, todo list and Ultra reasoning (done); Memory (done); Build and Run (done); auto titles and renaming a chat (done); skills and slash commands (done); background shell jobs (done); the usage ledger writer (done); git; MCP and web tools; sub-agents and task suggestions; the browser pane, visual replies and canvas; the Chat area; computer use, the skill creator, signature motion and Liquid Glass.
+The foundation (phases 0 to 4) is complete: the owner signed off its look on 2026-11-15. Features now return in this order, each with its own plan: Plan and Ultra Plan with the question dialog, todo list and Ultra reasoning (done); Memory (done); Build and Run (done); auto titles and renaming a chat (done); skills and slash commands (done); background shell jobs (done); the usage ledger writer (done); git; MCP and web tools (done); sub-agents and task suggestions; the browser pane, visual replies and canvas; the Chat area; computer use, the skill creator, signature motion and Liquid Glass.
 
 Update this section as each piece lands.

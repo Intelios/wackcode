@@ -35,6 +35,7 @@ use crate::{
     chat::{ChatEvent, ChatSession, now_millis},
     memory_page::{MemoryConfirm, MemoryEditor, MemoryState},
     web_page::{EditorData as WebEditorData, TestOutcome, WebData, WebEditor, WebState},
+    mcp_page::{EditorData as McpEditorData, Live, McpData, McpEditor, McpState, ProbeOutcome, RowTest, ServerRow},
     skills_page::{SkillEditor, SkillsState, Viewing},
     commands_page::{CommandEditor, CommandsState},
     motion::TitleSwap,
@@ -138,6 +139,9 @@ pub struct AppState {
     pub web: WebState,
     /// Every MCP connection, shared by the chats of each project; ended on quit.
     mcp: wack_core::mcp_client::Hub,
+    /// Settings › MCP servers: the editor, the open row, and each server's last test.
+    pub mcp_settings: McpState,
+    mcp_subscriptions: Vec<Subscription>,
     web_subscriptions: Vec<Subscription>,
     /// Settings › Skills: the folders as last read, the editor, a skill on view.
     pub skills: SkillsState,
@@ -299,6 +303,8 @@ impl AppState {
             web: WebState::default(),
             web_subscriptions: Vec::new(),
             mcp,
+            mcp_settings: McpState::default(),
+            mcp_subscriptions: Vec::new(),
             skills: SkillsState::default(),
             skill_subscriptions: Vec::new(),
             templates: CommandsState::default(),
@@ -346,7 +352,8 @@ impl AppState {
                 cx.background_executor().timer(Duration::from_secs(5)).await;
                 if app
                     .update(cx, |app, cx| {
-                        if app.selection == Selection::Settings && app.settings_section == Section::Integrations {
+                        // The ledger's health and the MCP servers' connections change on their own.
+                        if app.selection == Selection::Settings && matches!(app.settings_section, Section::Integrations | Section::Mcp) {
                             cx.notify();
                         }
                     })
@@ -567,6 +574,337 @@ impl AppState {
                 TextFieldEvent::Enter | TextFieldEvent::SendNow => app.save_search_provider(cx),
                 TextFieldEvent::Changed => {
                     if let Some(editor) = app.web.editor.as_mut() {
+                        editor.error = None;
+                    }
+                    cx.notify();
+                }
+                TextFieldEvent::Moved | TextFieldEvent::Menu(_) => {}
+            }));
+        }
+    }
+
+    // ---------------------------------------------------------------------------------------------
+    // Settings › MCP servers
+
+    /// Closes connections to servers that were removed, switched off or changed.
+    fn mcp_changed(&mut self) {
+        self.mcp.retain(&self.store.mcp_live_keys());
+    }
+
+    fn project_names(&self) -> Vec<(String, SharedString)> {
+        self.store.projects().iter().map(|project| (project.id.clone(), project.name.clone().into())).collect()
+    }
+
+    /// Settings › MCP servers as the page draws it, with each server's connections as they stand.
+    pub fn mcp_data(&self) -> McpData {
+        use wack_core::mcp_client::State;
+        let names = self.project_names();
+        let states = self.mcp.states();
+        let servers = self
+            .store
+            .mcp_servers()
+            .iter()
+            .map(|server| {
+                let mine: Vec<&State> = states.iter().filter(|state| state.server == server.id).map(|state| &state.state).collect();
+                let connected: Vec<usize> = mine.iter().filter_map(|state| if let State::Connected { tools } = state { Some(*tools) } else { None }).collect();
+                let live = if let Some(tools) = connected.iter().max() {
+                    Live::Connected { tools: *tools, folders: connected.len() }
+                } else if mine.iter().any(|state| matches!(state, State::Connecting)) {
+                    Live::Connecting
+                } else if let Some(error) = mine.iter().find_map(|state| if let State::Failed(error) = state { Some(error.clone()) } else { None }) {
+                    Live::Failed(error.into())
+                } else {
+                    Live::Idle
+                };
+                ServerRow {
+                    server: server.clone(),
+                    live,
+                    reach: crate::mcp_page::reach(&server.projects, &names),
+                    test: self.mcp_settings.tests.get(&server.id).cloned(),
+                }
+            })
+            .collect();
+        let editor = self.mcp_settings.editor.as_ref().map(|editor| {
+            let confirming = editor.editing.is_some() && editor.editing == self.mcp_settings.confirming_delete;
+            McpEditorData::of(editor, names.clone(), confirming)
+        });
+        McpData {
+            servers,
+            expanded: self.mcp_settings.expanded.clone(),
+            confirming_delete: self.mcp_settings.confirming_delete.clone(),
+            editor,
+            error: self.mcp_settings.error.clone(),
+        }
+    }
+
+    /// The editor for a new server. Returns its name field.
+    pub fn add_mcp_server(&mut self, transport: wack_core::mcp::McpTransport, cx: &mut Context<Self>) -> Entity<TextField> {
+        let editor = McpEditor::new(&wack_core::mcp::McpDraft::new(transport), &[], cx);
+        self.open_mcp_editor(editor, cx)
+    }
+
+    pub fn edit_mcp_server(&mut self, id: &str, cx: &mut Context<Self>) -> Option<Entity<TextField>> {
+        let server = self.store.mcp_server(id)?.clone();
+        let saved = self.store.mcp_saved_names(id);
+        let editor = McpEditor::new(&wack_core::mcp::McpDraft::of(&server), &saved, cx);
+        Some(self.open_mcp_editor(editor, cx))
+    }
+
+    fn open_mcp_editor(&mut self, editor: McpEditor, cx: &mut Context<Self>) -> Entity<TextField> {
+        let name = editor.name.clone();
+        self.mcp_settings.editor = Some(editor);
+        self.mcp_settings.error = None;
+        self.mcp_settings.confirming_delete = None;
+        self.watch_mcp_editor(cx);
+        cx.notify();
+        name
+    }
+
+    pub fn close_mcp_editor(&mut self, cx: &mut Context<Self>) {
+        self.mcp_settings.editor = None;
+        self.mcp_settings.confirming_delete = None;
+        self.mcp_subscriptions.clear();
+        cx.notify();
+    }
+
+    fn mcp_editor(&mut self, change: impl FnOnce(&mut McpEditor), cx: &mut Context<Self>) {
+        if let Some(editor) = self.mcp_settings.editor.as_mut() {
+            change(editor);
+            editor.error = None;
+        }
+        cx.notify();
+    }
+
+    pub fn choose_mcp_transport(&mut self, transport: wack_core::mcp::McpTransport, cx: &mut Context<Self>) {
+        self.mcp_editor(|editor| editor.transport = transport, cx);
+    }
+
+    /// A new variable or header row. Returns its name field.
+    pub fn add_mcp_entry(&mut self, cx: &mut Context<Self>) -> Option<Entity<TextField>> {
+        let mut editor = self.mcp_settings.editor.take()?;
+        let field = editor.add_entry(cx);
+        self.mcp_settings.editor = Some(editor);
+        self.watch_mcp_editor(cx);
+        cx.notify();
+        Some(field)
+    }
+
+    pub fn remove_mcp_entry(&mut self, index: usize, cx: &mut Context<Self>) {
+        self.mcp_editor(
+            |editor| {
+                let entries = editor.entries_mut();
+                if index < entries.len() {
+                    entries.remove(index);
+                }
+            },
+            cx,
+        );
+        self.watch_mcp_editor(cx);
+    }
+
+    pub fn choose_mcp_scope(&mut self, only: bool, cx: &mut Context<Self>) {
+        use wack_core::mcp::Projects;
+        self.mcp_editor(
+            |editor| {
+                editor.projects = match (only, &editor.projects) {
+                    (false, _) => Projects::All,
+                    (true, Projects::Only(ids)) => Projects::Only(ids.clone()),
+                    (true, Projects::All) => Projects::Only(Vec::new()),
+                }
+            },
+            cx,
+        );
+    }
+
+    pub fn toggle_mcp_project(&mut self, id: &str, cx: &mut Context<Self>) {
+        self.mcp_editor(
+            |editor| {
+                if let wack_core::mcp::Projects::Only(ids) = &mut editor.projects {
+                    match ids.iter().position(|chosen| chosen == id) {
+                        Some(index) => {
+                            ids.remove(index);
+                        }
+                        None => ids.push(id.to_string()),
+                    }
+                }
+            },
+            cx,
+        );
+    }
+
+    /// Saves the editor's server, closes the editor and tests the connection in the background,
+    /// which lists its tools on its row.
+    pub fn save_mcp_server(&mut self, cx: &mut Context<Self>) {
+        let Some(editor) = self.mcp_settings.editor.as_ref() else {
+            return;
+        };
+        let result = editor.draft(cx).and_then(|draft| self.store.save_mcp_server(&draft));
+        match result {
+            Ok(id) => {
+                self.close_mcp_editor(cx);
+                self.mcp_changed();
+                self.mcp_settings.expanded = Some(id.clone());
+                self.test_mcp_server(&id, cx);
+            }
+            Err(message) => {
+                if let Some(editor) = self.mcp_settings.editor.as_mut() {
+                    editor.error = Some(message.into());
+                }
+                cx.notify();
+            }
+        }
+    }
+
+    /// Where Test connection starts a command: the home folder, since Settings has no project.
+    fn probe_folder() -> std::path::PathBuf {
+        std::env::var_os("HOME").map(std::path::PathBuf::from).unwrap_or_else(|| "/".into())
+    }
+
+    /// Connects to the draft as it stands, typed values or saved ones, and shows its tools.
+    pub fn test_mcp_draft(&mut self, cx: &mut Context<Self>) {
+        let Some(editor) = self.mcp_settings.editor.as_mut() else {
+            return;
+        };
+        let spec = editor.draft(cx).and_then(|draft| self.store.mcp_draft_spec(&draft));
+        let spec = match spec {
+            Ok(spec) => spec,
+            Err(message) => {
+                editor.test = Some(ProbeOutcome::Failed(message.into()));
+                cx.notify();
+                return;
+            }
+        };
+        editor.testing = true;
+        editor.test = None;
+        editor.test_serial += 1;
+        let (serial, editing) = (editor.test_serial, editor.editing.clone());
+        let hub = self.mcp.clone();
+        let work = Tokio::spawn(cx, async move {
+            let started = std::time::Instant::now();
+            let tools = hub.probe(&spec, &Self::probe_folder()).await?;
+            Ok::<_, String>((started.elapsed().as_millis() as u64, spec.fingerprint(), tools))
+        });
+        cx.spawn(async move |app, cx| {
+            let result = work.await.unwrap_or_else(|_| Err("The connection test stopped.".into()));
+            let _ = app.update(cx, |app, cx| {
+                // A saved server reached the same way keeps the tools for its row.
+                if let (Ok((_, fingerprint, tools)), Some(id)) = (&result, &editing) {
+                    let _ = app.store.set_mcp_tools(id, fingerprint, tools);
+                }
+                let Some(editor) = app.mcp_settings.editor.as_mut().filter(|editor| editor.test_serial == serial) else {
+                    return;
+                };
+                editor.testing = false;
+                editor.test = Some(match result {
+                    Ok((elapsed_ms, _, tools)) => ProbeOutcome::Found { elapsed_ms, tools: tools.iter().map(|tool| (tool.name.clone().into(), tool.read_only())).collect() },
+                    Err(message) => ProbeOutcome::Failed(message.into()),
+                });
+                cx.notify();
+            });
+        })
+        .detach();
+        cx.notify();
+    }
+
+    /// Connects to a saved server in a connection of its own and keeps its tools for its row.
+    pub fn test_mcp_server(&mut self, id: &str, cx: &mut Context<Self>) {
+        let Some(spec) = self.store.mcp_spec(id) else {
+            return;
+        };
+        if matches!(self.mcp_settings.tests.get(id), Some(RowTest::Testing)) {
+            return;
+        }
+        self.mcp_settings.tests.insert(id.to_string(), RowTest::Testing);
+        let hub = self.mcp.clone();
+        let work = Tokio::spawn(cx, async move {
+            let tools = hub.probe(&spec, &Self::probe_folder()).await?;
+            Ok::<_, String>((spec.fingerprint(), tools))
+        });
+        let id = id.to_string();
+        cx.spawn(async move |app, cx| {
+            let result = work.await.unwrap_or_else(|_| Err("The connection test stopped.".into()));
+            let _ = app.update(cx, |app, cx| {
+                let test = match result {
+                    Ok((fingerprint, tools)) => {
+                        let _ = app.store.set_mcp_tools(&id, &fingerprint, &tools);
+                        RowTest::Passed(tools.len())
+                    }
+                    Err(message) => RowTest::Failed(message.into()),
+                };
+                app.mcp_settings.tests.insert(id, test);
+                cx.notify();
+            });
+        })
+        .detach();
+        cx.notify();
+    }
+
+    fn mcp_result(&mut self, result: Result<(), String>, cx: &mut Context<Self>) {
+        self.mcp_settings.error = result.err().map(Into::into);
+        self.mcp_changed();
+        cx.notify();
+    }
+
+    pub fn toggle_mcp_server(&mut self, id: &str, cx: &mut Context<Self>) {
+        let Some(enabled) = self.store.mcp_server(id).map(|server| server.enabled) else {
+            return;
+        };
+        let result = self.store.set_mcp_server_enabled(id, !enabled);
+        self.mcp_result(result, cx);
+    }
+
+    pub fn toggle_mcp_tool(&mut self, id: &str, tool: &str, cx: &mut Context<Self>) {
+        let Some(off) = self.store.mcp_server(id).map(|server| server.disabled_tools.iter().any(|name| name == tool)) else {
+            return;
+        };
+        let result = self.store.set_mcp_tool_enabled(id, tool, off);
+        self.mcp_result(result, cx);
+    }
+
+    pub fn expand_mcp_server(&mut self, id: &str, cx: &mut Context<Self>) {
+        let open = self.mcp_settings.expanded.as_deref() != Some(id);
+        self.mcp_settings.expanded = open.then(|| id.to_string());
+        self.mcp_settings.confirming_delete = None;
+        cx.notify();
+    }
+
+    pub fn ask_delete_mcp_server(&mut self, id: Option<String>, cx: &mut Context<Self>) {
+        self.mcp_settings.confirming_delete = id;
+        cx.notify();
+    }
+
+    pub fn confirm_delete_mcp_server(&mut self, cx: &mut Context<Self>) {
+        let Some(id) = self.mcp_settings.confirming_delete.take() else {
+            return;
+        };
+        match self.store.delete_mcp_server(&id) {
+            Ok(()) => {
+                self.mcp_settings.tests.remove(&id);
+                if self.mcp_settings.expanded.as_deref() == Some(id.as_str()) {
+                    self.mcp_settings.expanded = None;
+                }
+                if self.mcp_settings.editor.as_ref().is_some_and(|editor| editor.editing.as_deref() == Some(id.as_str())) {
+                    self.close_mcp_editor(cx);
+                }
+                self.mcp_result(Ok(()), cx);
+            }
+            Err(message) => self.mcp_result(Err(message), cx),
+        }
+    }
+
+    fn watch_mcp_editor(&mut self, cx: &mut Context<Self>) {
+        self.mcp_subscriptions.clear();
+        let Some(editor) = self.mcp_settings.editor.as_ref() else {
+            return;
+        };
+        let args = editor.args.clone();
+        for field in editor.fields() {
+            let multiline = field == args;
+            self.mcp_subscriptions.push(cx.subscribe(&field, move |app, field, event: &TextFieldEvent, cx| match event {
+                TextFieldEvent::Enter if multiline => field.update(cx, |field, cx| field.insert_line_break(cx)),
+                TextFieldEvent::Enter | TextFieldEvent::SendNow => app.save_mcp_server(cx),
+                TextFieldEvent::Changed => {
+                    if let Some(editor) = app.mcp_settings.editor.as_mut() {
                         editor.error = None;
                     }
                     cx.notify();
@@ -803,6 +1141,7 @@ impl AppState {
                 Section::Providers => self.form.open.then(|| self.form.name.clone()),
                 Section::Memory => self.memory.editor.as_ref().map(|editor| editor.title.clone()),
                 Section::Web => self.web.editor.as_ref().map(|editor| editor.name.clone()),
+                Section::Mcp => self.mcp_settings.editor.as_ref().map(|editor| editor.name.clone()),
                 Section::Skills => self.skills.editor.as_ref().map(|editor| editor.name.clone()),
                 Section::Commands => self.templates.editor.as_ref().map(|editor| editor.name.clone()),
                 _ => None,

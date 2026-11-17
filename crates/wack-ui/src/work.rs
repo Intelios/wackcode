@@ -165,7 +165,7 @@ pub fn summary(turn: &Turn, now: u64) -> String {
 /// What a log did, counted: "2 reads · 1 search · 1 edit · 1 command". Thoughts, notes and
 /// smaller tools are left out; empty when nothing counted.
 pub fn tally(rows: &[WorkRow]) -> String {
-    const KINDS: [(&[&str], &str, &str); 8] = [
+    const KINDS: [(&[&str], &str, &str); 9] = [
         (&["Used skill"], "skill", "skills"),
         (&["Read"], "read", "reads"),
         (&["Fetched"], "page", "pages"),
@@ -173,6 +173,7 @@ pub fn tally(rows: &[WorkRow]) -> String {
         (&["Edited", "Wrote"], "edit", "edits"),
         (&["Ran", "Watching"], "command", "commands"),
         (&["Asked"], "question", "questions"),
+        (&["Used"], "MCP call", "MCP calls"),
         (&["Saved memory", "Updated memory", "Recalled memory", "Forgot memory"], "memory note", "memory notes"),
     ];
     KINDS
@@ -203,6 +204,7 @@ pub fn activity(rows: &[WorkRow]) -> Option<String> {
         "Looked for" => "Looking for",
         "Asked" => "Asking",
         "Used skill" => "Using skill",
+        "Used" => "Using",
         "Saved memory" => "Saving memory",
         "Updated memory" => "Updating memory",
         "Recalled memory" => "Recalling memory",
@@ -596,6 +598,12 @@ pub fn tool_row(tool: &ToolStep, cwd: &Path, live: bool) -> WorkRow {
             ("Recalled memory", Target::Code(names.join(", ").into()), None, ok.map(|text| Detail::Text(text.to_string().into())))
         }
         wack_core::memory::MEMORY_FORGET => ("Forgot memory", Target::Code(text_field(input, "name").unwrap_or("").into()), None, None),
+        // An MCP tool is named by its server and its own name: `mcp__github__create_issue` reads
+        // "Used github · create_issue". What it returned is its detail.
+        name if mcp_parts(name).is_some() => {
+            let (server, tool) = mcp_parts(name).unwrap_or_default();
+            ("Used", Target::Words(format!("{server} · {tool}").into()), None, ok.map(|text| Detail::Output(tail(text, DETAIL_LINES).into())))
+        }
         other => (
             other,
             Target::Code(input.as_ref().map(|input| input.to_string()).unwrap_or_default().into()),
@@ -618,6 +626,13 @@ pub fn tool_row(tool: &ToolStep, cwd: &Path, live: bool) -> WorkRow {
         },
     };
     WorkRow { key: tool.id.clone().into(), verb: verb.to_string().into(), target, meta, detail, open: false }
+}
+
+/// An MCP tool's server and its own name, from `mcp__<server>__<tool>`.
+fn mcp_parts(name: &str) -> Option<(&str, &str)> {
+    let rest = name.strip_prefix(wack_core::mcp_client::MCP_PREFIX)?;
+    let (server, tool) = rest.split_once("__")?;
+    (!server.is_empty() && !tool.is_empty()).then_some((server, tool))
 }
 
 /// `reply` without its `<proposed_plan>` block.
@@ -865,6 +880,22 @@ mod tests {
         assert_eq!(tally(std::slice::from_ref(&page)), "1 page");
         let running = tool_row(&tool("web_fetch", input, None), cwd, true);
         assert_eq!(activity(std::slice::from_ref(&running)).as_deref(), Some("Fetching docs.rs"));
+    }
+
+    #[test]
+    fn an_mcp_call_names_its_server_and_tool_and_counts_as_one() {
+        let cwd = Path::new("/p");
+        let row = tool_row(&tool("mcp__github__create_issue", json!({ "title": "Bug" }), Some(("Created #12", false))), cwd, false);
+        assert_eq!(row.verb.as_ref(), "Used");
+        assert!(matches!(&row.target, Target::Words(words) if words.as_ref() == "github · create_issue"));
+        assert!(matches!(&row.detail, Some(Detail::Output(text)) if text.as_ref() == "Created #12"));
+        assert_eq!(tally(&[row.clone(), row]), "2 MCP calls");
+        let running = tool_row(&tool("mcp__github__create_issue", json!({}), None), cwd, true);
+        assert_eq!(activity(&[running]).as_deref(), Some("Using github · create_issue"));
+        let failed = tool_row(&tool("mcp__github__create_issue", json!({}), Some(("MCP server \"GitHub\" is not connected.", true))), cwd, false);
+        assert!(matches!(failed.meta, Meta::Failed(_)));
+        // Not every double underscore is MCP.
+        assert_eq!(tool_row(&tool("mcp__", json!({}), None), cwd, false).verb.as_ref(), "mcp__");
     }
 
     #[test]

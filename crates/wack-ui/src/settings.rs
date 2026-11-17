@@ -574,11 +574,12 @@ pub enum Section {
     Skills,
     Commands,
     Integrations,
+    Mcp,
     Web,
 }
 
 impl Section {
-    pub const ALL: [Section; 8] = [
+    pub const ALL: [Section; 9] = [
         Section::Appearance,
         Section::Providers,
         Section::Tools,
@@ -586,6 +587,7 @@ impl Section {
         Section::Skills,
         Section::Commands,
         Section::Integrations,
+        Section::Mcp,
         Section::Web,
     ];
 
@@ -598,6 +600,7 @@ impl Section {
             Section::Skills => "Skills",
             Section::Commands => "Commands",
             Section::Integrations => "Integrations",
+            Section::Mcp => "MCP servers",
             Section::Web => "Web",
         }
     }
@@ -611,6 +614,7 @@ impl Section {
             Section::Skills => "section-skills",
             Section::Commands => "section-commands",
             Section::Integrations => "section-integrations",
+            Section::Mcp => "section-mcp",
             Section::Web => "section-web",
         }
     }
@@ -631,7 +635,7 @@ const GROUPS: [(&str, &[Entry]); 4] = [
     ),
     (
         "Reach",
-        &[(Some(Section::Integrations), "Integrations"), (None, "MCP servers"), (Some(Section::Web), "Web"), (None, "Computer use")],
+        &[(Some(Section::Integrations), "Integrations"), (Some(Section::Mcp), "MCP servers"), (Some(Section::Web), "Web"), (None, "Computer use")],
     ),
 ];
 
@@ -647,6 +651,7 @@ pub struct SettingsData {
     pub commands: crate::commands_page::CommandsData,
     pub integrations: crate::integrations_page::IntegrationsData,
     pub web: crate::web_page::WebData,
+    pub mcp: crate::mcp_page::McpData,
 }
 
 /// The title strip's words: `Settings › Providers`.
@@ -754,6 +759,7 @@ pub fn page(data: SettingsData, inline_nav: bool, narrow: bool, stack_form: bool
         Section::Skills => crate::skills_page::page(data.skills, theme),
         Section::Commands => crate::commands_page::page(data.commands, theme),
         Section::Integrations => crate::integrations_page::page(data.integrations, theme).into_any_element(),
+        Section::Mcp => crate::mcp_page::page(data.mcp, theme),
         Section::Web => crate::web_page::page(data.web, theme),
     };
     let footer = if section == Section::Providers {

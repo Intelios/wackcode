@@ -22,6 +22,7 @@ use wack_core::{
     plan::{PLAN_STATE, PlanState},
     skills::CommandUse,
     tasks::NOTE_PREFIX,
+    mcp_client::NOTE_PREFIX as MCP_NOTE_PREFIX,
     todo::{TODO_STATE, TodoList},
 };
 
@@ -140,6 +141,8 @@ pub struct Conversation {
     pub awaiting: Option<usize>,
     pub todos: TodoList,
     pub plan_view: PlanView,
+    /// MCP notes saved before the message of the run they belong to, held for its turn.
+    held_notices: Vec<String>,
 }
 
 impl Turn {
@@ -239,9 +242,12 @@ impl Conversation {
                 HistoryEntry::Note { tag, text, at } if tag.starts_with(NOTE_PREFIX) => {
                     conversation.news(News { tag: tag.clone(), text: text.clone() }, *at, false)
                 }
+                // A server that failed or stopped: the model was told, and the transcript says so.
+                HistoryEntry::Note { tag, text, .. } if tag.starts_with(MCP_NOTE_PREFIX) => conversation.held_notices.push(text.clone()),
                 HistoryEntry::Note { .. } => {}
             }
         }
+        conversation.flush_notices();
         conversation.close_turn(None);
         conversation
     }
@@ -276,6 +282,7 @@ impl Conversation {
                 }
             }
             Role::Assistant => {
+                self.flush_notices();
                 let Some(turn) = self.current() else {
                     return;
                 };
@@ -427,7 +434,21 @@ impl Conversation {
         }
         self.close_turn(if steered { at } else { None });
         self.entries.push(Entry::Prompt { text: text.to_string(), steered, command });
-        self.entries.push(Entry::Turn(Turn::new(at, live)));
+        let mut turn = Turn::new(at, live);
+        turn.notices = std::mem::take(&mut self.held_notices);
+        self.entries.push(Entry::Turn(turn));
+    }
+
+    /// Hands held MCP notes to the turn now going.
+    fn flush_notices(&mut self) {
+        if self.held_notices.is_empty() {
+            return;
+        }
+        let held = std::mem::take(&mut self.held_notices);
+        match self.current() {
+            Some(turn) => turn.notices.extend(held),
+            None => self.held_notices = held,
+        }
     }
 
     /// The user sent a message and a run is starting.
@@ -448,6 +469,9 @@ impl Conversation {
         if let Event::Noted { tag, text } = event {
             if tag.starts_with(NOTE_PREFIX) {
                 self.news(News { tag: tag.clone(), text: text.clone() }, Some(now), true);
+            } else if tag.starts_with(MCP_NOTE_PREFIX) {
+                self.held_notices.push(text.clone());
+                self.flush_notices();
             }
             return;
         }
@@ -771,5 +795,28 @@ mod tests {
         let conversation = Conversation::from_history(&history);
         assert!(matches!(&conversation.entries[2], Entry::News(_)));
         assert!(matches!(&conversation.entries[3], Entry::Prompt { text, .. } if text == "Start it again"));
+    }
+
+    #[test]
+    fn an_mcp_server_failure_is_a_notice_in_the_turn_it_happened_in() {
+        let failed = "MCP server \"GitHub\" isn't available: Command not found: npx. Check it in Settings › MCP servers.";
+        // Saved before the user's message: it belongs to the run that message started.
+        let history = vec![
+            at(Message::user("first"), 1, None),
+            at(assistant(vec![Block::Text { text: "Done.".into() }]), 2, None),
+            noted("mcp:mcp-1:0000000000000003", failed),
+            at(Message::user("second"), 3, None),
+            at(assistant(vec![Block::Text { text: "Again.".into() }]), 4, None),
+        ];
+        let replayed = Conversation::from_history(&history);
+        let turns = turns(&replayed);
+        assert!(turns[0].notices.is_empty());
+        assert_eq!(turns[1].notices, [failed]);
+
+        let mut live = Conversation::default();
+        live.send("second", 3);
+        live.apply(&Event::Noted { tag: "mcp:mcp-1:0000000000000003".into(), text: failed.into() }, 3);
+        live.apply(&Event::Text("Again.".into()), 4);
+        assert_eq!(live.last_turn().unwrap().notices, [failed]);
     }
 }

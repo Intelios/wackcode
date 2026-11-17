@@ -554,6 +554,7 @@ pub fn all() -> Vec<Scene> {
         commands: Default::default(),
         integrations: Default::default(),
         web: Default::default(),
+        mcp: Default::default(),
                 };
                 cx.new(|_| Shell::showing(fixtures::sidebar(Selected::None), Screen::Settings(Box::new(data)))).into()
             },
@@ -657,6 +658,42 @@ pub fn all() -> Vec<Scene> {
             description: "Settings › Web's editor for a Custom POST API whose Test search failed.",
             size: size(px(1180.), px(1400.)),
             build: |_, cx| web_scene(WebScene::Custom, None, cx),
+        },
+        Scene {
+            name: "settings-mcp",
+            description: "Settings › MCP servers: one connected and open with its tools (one off, two read-only), one scoped to a project and connecting, one that failed, one off.",
+            size: size(px(1180.), px(1250.)),
+            build: |_, cx| mcp_scene(McpScene::Servers, None, cx),
+        },
+        Scene {
+            name: "settings-mcp-empty",
+            description: "Settings › MCP servers before any server is added: the two ways to start.",
+            size: size(px(1180.), px(760.)),
+            build: |_, cx| mcp_scene(McpScene::Empty, None, cx),
+        },
+        Scene {
+            name: "settings-mcp-backdrop",
+            description: "Settings › MCP servers over a backdrop.",
+            size: size(px(1180.), px(1250.)),
+            build: |_, cx| mcp_scene(McpScene::Servers, Some(over(fixtures::backdrop(wack_core::Texture::None), cx)), cx),
+        },
+        Scene {
+            name: "settings-mcp-delete",
+            description: "Settings › MCP servers asking before it deletes a server.",
+            size: size(px(1180.), px(1000.)),
+            build: |_, cx| mcp_scene(McpScene::Deleting, None, cx),
+        },
+        Scene {
+            name: "settings-mcp-editor",
+            description: "Settings › MCP servers' editor for a command: arguments, a saved variable and a new one, two chosen projects, after a Test connection.",
+            size: size(px(1180.), px(1400.)),
+            build: |_, cx| mcp_scene(McpScene::EditorCommand, None, cx),
+        },
+        Scene {
+            name: "settings-mcp-editor-http",
+            description: "Settings › MCP servers' editor for a new server at a URL, with a header, whose Test connection was refused.",
+            size: size(px(1180.), px(1150.)),
+            build: |_, cx| mcp_scene(McpScene::EditorUrl, None, cx),
         },
         Scene {
             name: "settings-memory",
@@ -1237,6 +1274,7 @@ fn providers_scene(state: Providers, sidebar_hidden: bool, cx: &mut App) -> AnyV
         commands: Default::default(),
         integrations: Default::default(),
         web: Default::default(),
+        mcp: Default::default(),
     };
     cx.new(|_| {
         let shell = Shell::showing(fixtures::sidebar(Selected::None), Screen::Settings(Box::new(data)));
@@ -1258,6 +1296,7 @@ fn settings_scene(backdrop: Option<crate::backdrop::Picture>, cx: &mut App) -> A
         commands: Default::default(),
         integrations: Default::default(),
         web: Default::default(),
+        mcp: Default::default(),
     };
     cx.new(|_| {
         let shell = Shell::showing(fixtures::sidebar(Selected::None), Screen::Settings(Box::new(data)));
@@ -1435,6 +1474,7 @@ fn memory_scene(scene: MemoryScene, backdrop: Option<crate::backdrop::Picture>, 
         commands: Default::default(),
         integrations: Default::default(),
         web: Default::default(),
+        mcp: Default::default(),
     };
     cx.new(|_| {
         let shell = Shell::showing(fixtures::sidebar(Selected::None), Screen::Settings(Box::new(data)));
@@ -1655,6 +1695,7 @@ fn skills_scene(scene: SkillsScene, backdrop: bool, cx: &mut App) -> AnyView {
         commands: Default::default(),
         integrations: Default::default(),
         web: Default::default(),
+        mcp: Default::default(),
     };
     cx.new(|_| {
         let shell = Shell::showing(fixtures::sidebar(Selected::None), Screen::Settings(Box::new(data)));
@@ -1707,6 +1748,7 @@ fn commands_scene(editing: bool, cx: &mut App) -> AnyView {
         commands: state.data(cx),
         integrations: Default::default(),
         web: Default::default(),
+        mcp: Default::default(),
     };
     cx.new(|_| Shell::showing(fixtures::sidebar(Selected::None), Screen::Settings(Box::new(data)))).into()
 }
@@ -1720,6 +1762,124 @@ enum UsageScene {
     Paused,
     /// A write failed: records waiting, one lost, and the failure itself.
     Attention,
+}
+
+#[derive(Clone, Copy, PartialEq)]
+enum McpScene {
+    Empty,
+    Servers,
+    Deleting,
+    EditorCommand,
+    EditorUrl,
+}
+
+/// Settings › MCP servers, drawn over `backdrop` when there is one.
+fn mcp_scene(scene: McpScene, backdrop: Option<crate::backdrop::Picture>, cx: &mut App) -> AnyView {
+    use wack_core::mcp::{McpDraft, McpServer, McpToolInfo, McpTransport as Transport, Projects, SecretEntry};
+    use crate::mcp_page::{EditorData, Live, McpData, McpEditor, ProbeOutcome, RowTest, ServerRow, reach};
+
+    let projects: Vec<(String, gpui::SharedString)> =
+        vec![("p1".into(), "wackcode".into()), ("p2".into(), "site".into()), ("p3".into(), "scenes".into()), ("p4".into(), "notes".into())];
+    let tool = |name: &str, description: &str, read_only: bool| McpToolInfo { name: name.into(), description: description.into(), read_only };
+    let server = |id: &str, name: &str, transport: Transport| McpServer {
+        id: id.into(),
+        name: name.into(),
+        enabled: true,
+        transport,
+        timeout_ms: 120_000,
+        command: String::new(),
+        args: Vec::new(),
+        url: String::new(),
+        headers: Vec::new(),
+        env: Vec::new(),
+        disabled_tools: Vec::new(),
+        tools: Vec::new(),
+        projects: Projects::All,
+    };
+    let github = McpServer {
+        command: "npx".into(),
+        args: vec!["-y".into(), "@modelcontextprotocol/server-github".into()],
+        env: vec!["GITHUB_PERSONAL_ACCESS_TOKEN".into()],
+        tools: vec![
+            tool("search_repositories", "Search for GitHub repositories.", true),
+            tool("get_file_contents", "Get the contents of a file or directory from a repository.", true),
+            tool("create_issue", "Create a new issue in a GitHub repository.", false),
+            tool("delete_branch", "Delete a branch.", false),
+        ],
+        disabled_tools: vec!["delete_branch".into()],
+        ..server("mcp-1", "GitHub", Transport::Stdio)
+    };
+    let blender = McpServer {
+        command: "uvx".into(),
+        args: vec!["blender-mcp".into()],
+        projects: Projects::Only(vec!["p3".into()]),
+        ..server("mcp-2", "Blender", Transport::Stdio)
+    };
+    let linear = McpServer { url: "https://mcp.linear.app/mcp".into(), headers: vec!["Authorization".into()], timeout_ms: 30_000, ..server("mcp-3", "Linear", Transport::Http) };
+    let docs = McpServer { url: "http://localhost:8931/sse".into(), enabled: false, ..server("mcp-4", "Docs", Transport::Sse) };
+    let row = |server: McpServer, live: Live, test: Option<RowTest>| ServerRow { reach: reach(&server.projects, &projects), server, live, test };
+    let servers = match scene {
+        McpScene::Empty => Vec::new(),
+        _ => vec![
+            row(github.clone(), Live::Connected { tools: 4, folders: 2 }, None),
+            row(blender, Live::Connecting, None),
+            row(linear, Live::Failed("The server refused the request (HTTP 401). If it needs a token, add it as a header, e.g. Authorization: Bearer <token>.".into()), None),
+            row(docs, Live::Idle, None),
+        ],
+    };
+    let editor = match scene {
+        McpScene::EditorCommand => {
+            let mut draft = McpDraft::of(&github);
+            draft.env.push(SecretEntry { name: "GITHUB_HOST".into(), value: None });
+            draft.projects = Projects::Only(vec!["p1".into(), "p2".into()]);
+            let mut editor = McpEditor::new(&draft, &["GITHUB_PERSONAL_ACCESS_TOKEN".to_string()], cx);
+            editor.test = Some(ProbeOutcome::Found {
+                elapsed_ms: 1840,
+                tools: github.tools.iter().map(|tool| (tool.name.clone().into(), tool.read_only)).collect(),
+            });
+            Some(EditorData::of(&editor, projects.clone(), false))
+        }
+        McpScene::EditorUrl => {
+            let mut draft = McpDraft::new(Transport::Http);
+            draft.name = "Linear".into();
+            draft.url = "https://mcp.linear.app/mcp".into();
+            draft.headers = vec![SecretEntry { name: "Authorization".into(), value: None }];
+            let editor = McpEditor::new(&draft, &[], cx);
+            editor.headers[0].value.update(cx, |field, cx| field.set_text("Bearer lin_api_0000000000", cx));
+            let mut editor = editor;
+            editor.test = Some(ProbeOutcome::Failed("The server refused the request (HTTP 401). If it needs a token, add it as a header, e.g. Authorization: Bearer <token>.".into()));
+            Some(EditorData::of(&editor, projects.clone(), false))
+        }
+        _ => None,
+    };
+    let mcp = McpData {
+        servers,
+        expanded: matches!(scene, McpScene::Servers | McpScene::Deleting).then(|| "mcp-1".into()),
+        confirming_delete: (scene == McpScene::Deleting).then(|| "mcp-1".into()),
+        editor,
+        error: None,
+    };
+    let form = ProviderForm::new(cx);
+    let data = SettingsData {
+        section: Section::Mcp,
+        providers: ProvidersData::new(&fixtures::connections(), |_| true, &form, cx),
+        appearance: fixtures::appearance(backdrop.clone(), cx),
+        tools: Default::default(),
+        memory: Default::default(),
+        skills: Default::default(),
+        commands: Default::default(),
+        integrations: Default::default(),
+        web: Default::default(),
+        mcp,
+    };
+    cx.new(|_| {
+        let shell = Shell::showing(fixtures::sidebar(Selected::None), Screen::Settings(Box::new(data)));
+        match backdrop {
+            Some(picture) => shell.with_backdrop(picture),
+            None => shell,
+        }
+    })
+    .into()
 }
 
 #[derive(Clone, Copy)]
@@ -1831,6 +1991,7 @@ fn web_scene(scene: WebScene, backdrop: Option<crate::backdrop::Picture>, cx: &m
         commands: Default::default(),
         integrations: Default::default(),
         web,
+        mcp: Default::default(),
     };
     cx.new(|_| {
         let shell = Shell::showing(fixtures::sidebar(Selected::None), Screen::Settings(Box::new(data)));
@@ -1884,6 +2045,7 @@ fn integrations_scene(scene: UsageScene, backdrop: Option<crate::backdrop::Pictu
         commands: Default::default(),
         integrations: crate::integrations_page::IntegrationsData { status },
         web: Default::default(),
+        mcp: Default::default(),
     };
     cx.new(|_| {
         let shell = Shell::showing(fixtures::sidebar(Selected::None), Screen::Settings(Box::new(data)));

@@ -39,7 +39,7 @@ use gpui::{
 
 use crate::{
     actions::{
-        self, ActivatePane, AddFolder, Back, ChooseBackdrop, ChooseEffort, SlideEffort, ToggleTodos, ToggleWaiting, ChooseFocus, ClearCommandOutput, CloseCommandEditor, CycleAgentMode, SetAgentMode, PickOption, ShowQuestion, NextQuestion, PreviousQuestion, SubmitAnswers, CancelQuestion, WrapUpQuestion, ShowDoneTodos, DiscardPlan, KeepPlan, ConfirmDiscardPlan, ApprovePlan, SavePlan, CopyPlan, ToggleUnrestrictedPlanning, ToggleWebFetch, ToggleWebSearch, ToggleRouteFetch, CloseSearchEditor, SaveSearchProvider, TestSearchProvider, AskDeleteSearchProvider, ConfirmDeleteSearchProvider, CancelDeleteSearchProvider, ResetWebUsage, ChooseSearchProvider, AddSearchProvider, EditSearchProvider, ChooseSearchKey, ChooseSearchMethod, ConfirmUnrestrictedPlanning, CancelUnrestrictedPlanning, ToggleMemory, SwitchProjectMemory, NewMemory, EditMemory, ChooseMemoryKind, SaveMemory, CloseMemoryEditor, AskDeleteMemory, AskRemoveMemoryFolder, ConfirmMemoryDelete, CancelMemoryDelete, RevealMemory, ToggleUsageRecording, RevealUsageFolder,
+        self, ActivatePane, AddFolder, Back, ChooseBackdrop, ChooseEffort, SlideEffort, ToggleTodos, ToggleWaiting, ChooseFocus, ClearCommandOutput, CloseCommandEditor, CycleAgentMode, SetAgentMode, PickOption, ShowQuestion, NextQuestion, PreviousQuestion, SubmitAnswers, CancelQuestion, WrapUpQuestion, ShowDoneTodos, DiscardPlan, KeepPlan, ConfirmDiscardPlan, ApprovePlan, SavePlan, CopyPlan, ToggleUnrestrictedPlanning, ToggleWebFetch, ToggleWebSearch, ToggleRouteFetch, CloseSearchEditor, SaveSearchProvider, TestSearchProvider, AskDeleteSearchProvider, ConfirmDeleteSearchProvider, CancelDeleteSearchProvider, ResetWebUsage, ChooseSearchProvider, AddSearchProvider, EditSearchProvider, ChooseSearchKey, ChooseSearchMethod, AddMcpServer, EditMcpServer, ToggleMcpServer, ToggleMcpTool, ExpandMcpServer, TestMcpServer, AskDeleteMcpServer, RemoveMcpEntry, ChooseMcpTransport, ChooseMcpScope, ToggleMcpProject, CloseMcpEditor, SaveMcpServer, TestMcpDraft, AddMcpEntry, ConfirmDeleteMcpServer, CancelDeleteMcpServer, ConfirmUnrestrictedPlanning, CancelUnrestrictedPlanning, ToggleMemory, SwitchProjectMemory, NewMemory, EditMemory, ChooseMemoryKind, SaveMemory, CloseMemoryEditor, AskDeleteMemory, AskRemoveMemoryFolder, ConfirmMemoryDelete, CancelMemoryDelete, RevealMemory, ToggleUsageRecording, RevealUsageFolder,
         ChooseBlur, ChooseDim, ChooseFormat, OpenCommandEditor, OpenConnectionForm, CloseConnectionForm, SwitchConnection, ChooseMode, ChooseModel, ChooseTexture, ChooseTheme, CloseChatTab, CloseMenu, ClosePane,
         ClosePaneId, CloseSettings, CloseTab, Compact, DeleteChat, DiscardConnection, EditConnection, ToggleConnectionKey, EqualizeSplit, FocusNext, FocusPrevious, MovePane, AddModelRow, RemoveModelRow, SaveCommandEditor, SaveConnection,
         NewChat, NewChatIn, NewTerminal, NewTerminalWith, NextTab, OpenEffortMenu, OpenModelMenu, OpenSettings,
@@ -1131,6 +1131,61 @@ impl Render for Shell {
                 .on_action(cx.listener(|shell, _: &CancelDeleteSearchProvider, _, cx| shell.with_app(cx, |app, cx| app.ask_delete_search_provider(false, cx))))
                 .on_action(cx.listener(|shell, _: &ConfirmDeleteSearchProvider, _, cx| shell.with_app(cx, |app, cx| app.confirm_delete_search_provider(cx))))
                 .on_action(cx.listener(|shell, _: &ResetWebUsage, _, cx| shell.with_app(cx, |app, cx| app.reset_web_usage(cx))))
+                .on_action(cx.listener(|shell, action: &AddMcpServer, window, cx| {
+                    let transport = action.transport;
+                    let field = shell.app().map(|app| app.update(cx, |app, cx| app.add_mcp_server(transport, cx)));
+                    shell.focus_new_field(field, window, cx);
+                }))
+                .on_action(cx.listener(|shell, action: &EditMcpServer, window, cx| {
+                    let id = action.id.clone();
+                    let field = shell.app().and_then(|app| app.update(cx, |app, cx| app.edit_mcp_server(&id, cx)));
+                    shell.focus_new_field(field, window, cx);
+                }))
+                .on_action(cx.listener(|shell, _: &CloseMcpEditor, _, cx| shell.with_app(cx, |app, cx| app.close_mcp_editor(cx))))
+                .on_action(cx.listener(|shell, _: &SaveMcpServer, _, cx| shell.with_app(cx, |app, cx| app.save_mcp_server(cx))))
+                .on_action(cx.listener(|shell, _: &TestMcpDraft, _, cx| shell.with_app(cx, |app, cx| app.test_mcp_draft(cx))))
+                .on_action(cx.listener(|shell, _: &AddMcpEntry, window, cx| {
+                    let field = shell.app().and_then(|app| app.update(cx, |app, cx| app.add_mcp_entry(cx)));
+                    shell.focus_new_field(field, window, cx);
+                }))
+                .on_action(cx.listener(|shell, action: &RemoveMcpEntry, _, cx| {
+                    let index = action.index;
+                    shell.with_app(cx, |app, cx| app.remove_mcp_entry(index, cx));
+                }))
+                .on_action(cx.listener(|shell, action: &ChooseMcpTransport, _, cx| {
+                    let transport = action.transport;
+                    shell.with_app(cx, |app, cx| app.choose_mcp_transport(transport, cx));
+                }))
+                .on_action(cx.listener(|shell, action: &ChooseMcpScope, _, cx| {
+                    let only = action.only;
+                    shell.with_app(cx, |app, cx| app.choose_mcp_scope(only, cx));
+                }))
+                .on_action(cx.listener(|shell, action: &ToggleMcpProject, _, cx| {
+                    let id = action.id.clone();
+                    shell.with_app(cx, |app, cx| app.toggle_mcp_project(&id, cx));
+                }))
+                .on_action(cx.listener(|shell, action: &ToggleMcpServer, _, cx| {
+                    let id = action.id.clone();
+                    shell.with_app(cx, |app, cx| app.toggle_mcp_server(&id, cx));
+                }))
+                .on_action(cx.listener(|shell, action: &ToggleMcpTool, _, cx| {
+                    let (id, tool) = (action.id.clone(), action.tool.clone());
+                    shell.with_app(cx, |app, cx| app.toggle_mcp_tool(&id, &tool, cx));
+                }))
+                .on_action(cx.listener(|shell, action: &ExpandMcpServer, _, cx| {
+                    let id = action.id.clone();
+                    shell.with_app(cx, |app, cx| app.expand_mcp_server(&id, cx));
+                }))
+                .on_action(cx.listener(|shell, action: &TestMcpServer, _, cx| {
+                    let id = action.id.clone();
+                    shell.with_app(cx, |app, cx| app.test_mcp_server(&id, cx));
+                }))
+                .on_action(cx.listener(|shell, action: &AskDeleteMcpServer, _, cx| {
+                    let id = action.id.clone();
+                    shell.with_app(cx, |app, cx| app.ask_delete_mcp_server(Some(id), cx));
+                }))
+                .on_action(cx.listener(|shell, _: &CancelDeleteMcpServer, _, cx| shell.with_app(cx, |app, cx| app.ask_delete_mcp_server(None, cx))))
+                .on_action(cx.listener(|shell, _: &ConfirmDeleteMcpServer, _, cx| shell.with_app(cx, |app, cx| app.confirm_delete_mcp_server(cx))))
                 .on_action(cx.listener(|shell, _: &ToggleUsageRecording, _, cx| {
                     shell.with_app(cx, |app, cx| app.toggle_usage_recording(cx))
                 }))
@@ -1598,6 +1653,7 @@ fn live_view(app: &AppState, cx: &App) -> (SidebarData, Screen, StripData) {
                 commands: app.templates.data(cx),
                 integrations: crate::integrations_page::IntegrationsData { status: store.usage().status() },
                 web: app.web_data(cx),
+                mcp: app.mcp_data(),
             }))
         }
         Selection::NewChat(project) => match info(project) {

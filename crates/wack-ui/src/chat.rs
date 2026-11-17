@@ -673,8 +673,13 @@ impl ChatSession {
     }
 
     /// While a run is going: how long it has run ("Working · 8s", or the retry it is waiting on)
-    /// and what it is doing now (`work::activity`), from its live work log.
+    /// and what it is doing now (`work::activity`), from its live work log; or the MCP servers it
+    /// is waiting for.
     pub fn activity(&self) -> Option<(SharedString, Option<SharedString>)> {
+        // Waiting for an MCP server that has never listed its tools (or for one a tool needs).
+        if !self.mcp_starting.is_empty() {
+            return Some(("Starting MCP servers…".into(), Some(self.mcp_starting.join(", ").into())));
+        }
         self.items.iter().rev().find_map(|item| match item {
             Item::Work(work) if work.live => Some((work.summary.clone(), crate::work::activity(&work.rows).map(Into::into))),
             _ => None,

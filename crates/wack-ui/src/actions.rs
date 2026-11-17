@@ -112,6 +112,15 @@ actions!(
         CancelDeleteSearchProvider,
         /// Settings › Web: clears the usage meter's counts.
         ResetWebUsage,
+        /// Settings › MCP servers: back to the overview from the editor.
+        CloseMcpEditor,
+        SaveMcpServer,
+        /// Settings › MCP servers: connects to the editor's draft as it stands and lists its tools.
+        TestMcpDraft,
+        /// Settings › MCP servers: a new variable (command) or header (URL) in the editor.
+        AddMcpEntry,
+        ConfirmDeleteMcpServer,
+        CancelDeleteMcpServer,
         /// Settings › Integrations: turns the usage ledger's recording on or off.
         ToggleUsageRecording,
         /// Adds a picture to the backdrop's library, and shows it.
@@ -579,6 +588,84 @@ pub struct ChooseSearchKey {
 #[action(namespace = wackcode, no_json)]
 pub struct ChooseSearchMethod {
     pub method: wack_core::web::search::HttpMethod,
+}
+
+/// Settings › MCP servers: the editor for a new server of this type.
+#[derive(Clone, Debug, PartialEq, Action)]
+#[action(namespace = wackcode, no_json)]
+pub struct AddMcpServer {
+    pub transport: wack_core::mcp::McpTransport,
+}
+
+/// Settings › MCP servers: the editor for a saved server.
+#[derive(Clone, Debug, PartialEq, Action)]
+#[action(namespace = wackcode, no_json)]
+pub struct EditMcpServer {
+    pub id: String,
+}
+
+/// Settings › MCP servers: a server's switch.
+#[derive(Clone, Debug, PartialEq, Action)]
+#[action(namespace = wackcode, no_json)]
+pub struct ToggleMcpServer {
+    pub id: String,
+}
+
+/// Settings › MCP servers: one tool's switch, by the server's own name for it.
+#[derive(Clone, Debug, PartialEq, Action)]
+#[action(namespace = wackcode, no_json)]
+pub struct ToggleMcpTool {
+    pub id: String,
+    pub tool: String,
+}
+
+/// Settings › MCP servers: opens or folds a server's row.
+#[derive(Clone, Debug, PartialEq, Action)]
+#[action(namespace = wackcode, no_json)]
+pub struct ExpandMcpServer {
+    pub id: String,
+}
+
+/// Settings › MCP servers: connects to a saved server and lists its tools.
+#[derive(Clone, Debug, PartialEq, Action)]
+#[action(namespace = wackcode, no_json)]
+pub struct TestMcpServer {
+    pub id: String,
+}
+
+/// Settings › MCP servers: asks before deleting a server.
+#[derive(Clone, Debug, PartialEq, Action)]
+#[action(namespace = wackcode, no_json)]
+pub struct AskDeleteMcpServer {
+    pub id: String,
+}
+
+/// Settings › MCP servers: removes the editor's variable or header at `index`.
+#[derive(Clone, Debug, PartialEq, Action)]
+#[action(namespace = wackcode, no_json)]
+pub struct RemoveMcpEntry {
+    pub index: usize,
+}
+
+/// Settings › MCP servers: the edited server's type.
+#[derive(Clone, Debug, PartialEq, Action)]
+#[action(namespace = wackcode, no_json)]
+pub struct ChooseMcpTransport {
+    pub transport: wack_core::mcp::McpTransport,
+}
+
+/// Settings › MCP servers: all projects, or only chosen ones.
+#[derive(Clone, Debug, PartialEq, Action)]
+#[action(namespace = wackcode, no_json)]
+pub struct ChooseMcpScope {
+    pub only: bool,
+}
+
+/// Settings › MCP servers: adds or removes a project from the edited server's chosen ones.
+#[derive(Clone, Debug, PartialEq, Action)]
+#[action(namespace = wackcode, no_json)]
+pub struct ToggleMcpProject {
+    pub id: String,
 }
 
 #[derive(Clone, Debug, PartialEq, Action)]

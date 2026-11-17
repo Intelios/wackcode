@@ -1,0 +1,9 @@
+[package]
+name = "wackcode-helper"
+description = "The browser engine's helper processes (renderer, GPU, utility), bundled inside WackCode.app."
+version.workspace = true
+edition.workspace = true
+publish.workspace = true
+
+[dependencies]
+cef.workspace = true

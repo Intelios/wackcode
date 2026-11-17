@@ -57,6 +57,13 @@ htmd = "0.5"
 encoding_rs = "0.8"
 # The terminal pane's emulator: the grid, escape sequences, the PTY. Drawing is ours.
 alacritty_terminal = "0.26"
+# The browser's engine: CEF (Chromium Embedded Framework) through tauri-apps/cef-rs. The crate's
+# version pins the CEF and Chromium release; the build downloads that CEF once into
+# `target/cef` (`CEF_PATH` in .cargo/config.toml). Bumping it is its own task, never part of
+# feature work: see docs/cef.md. Default features are off: `build-util` pulls in anyhow and
+# clap, and we bundle with `cargo xtask` instead.
+cef = { version = "=156.6.0", default-features = false, features = ["sandbox"] }
+cef-dll-sys = { version = "=156.6.0", default-features = false }
 # Backdrop pictures: decoded once on import, scaled down and stored as JPEG.
 image = { version = "0.25", default-features = false, features = ["png", "jpeg", "webp", "gif", "bmp", "tiff"] }
 

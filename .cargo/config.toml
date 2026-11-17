@@ -1,6 +1,9 @@
 [alias]
-# The dev app, with the automation socket compiled in (see docs/testing.md).
-dev = "run -p wackcode --features automation"
+# The dev app, with the automation socket compiled in (see docs/testing.md). It runs from a
+# bundle, `target/debug/WackCode Dev.app`, because the browser engine needs one (docs/cef.md).
+dev = "run -q -p xtask -- dev"
+# Bundles: `cargo xtask bundle` writes the release app, `target/release/WackCode.app`.
+xtask = "run -q -p xtask --"
 # Render UI scenes to PNG files: `cargo snap --list`, `cargo snap shell --theme dark`.
 snap = "run -p gallery --"
 # The agent without the app: `cargo wack connect`, `cargo wack run "…"` (see docs/testing.md).
@@ -10,3 +13,5 @@ wack = "run -q -p wack-cli --"
 # Where `cargo dev` opens the automation socket. Only a build with the `automation` feature reads
 # it. Keep the path short: a Unix socket path is limited to about 100 characters.
 WACKCODE_AUTOMATION = "target/automation.sock"
+# Where the build downloads CEF (the browser engine) once, shared by every profile and crate.
+CEF_PATH = { value = "target/cef", relative = true }

@@ -1,0 +1,13 @@
+[package]
+name = "xtask"
+description = "Builds WackCode's .app bundles (the dev app and the release app), CEF framework and helpers included."
+version.workspace = true
+edition.workspace = true
+publish.workspace = true
+
+[dependencies]
+# Only to find the CEF distribution the build downloaded (`get_cef_dir`).
+cef-dll-sys.workspace = true
+
+[dev-dependencies]
+tempfile.workspace = true

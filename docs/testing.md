@@ -31,6 +31,8 @@ Elements that matter to tests carry a tag: end the element's builder chain with 
 
 `cargo dev` runs the app with the `automation` feature. Use it for what the gallery cannot show: real windows, focus, typing, IME, resizing, animation.
 
+It runs the app from a bundle, `target/debug/WackCode Dev.app`, because the browser engine only works inside one ([cef.md](cef.md)). The first build downloads CEF into `target/cef/`, about 100 MB, once. Arguments after `cargo dev` go to the app.
+
 It opens a Unix socket at `target/automation.sock` (set by `WACKCODE_AUTOMATION` in `.cargo/config.toml`; the path must stay under about 100 characters). Send one JSON object per line and read one back:
 
 ```sh

@@ -21,6 +21,7 @@ WackCode is a native macOS coding agent: a Rust app drawn with GPUI, with its ow
 
 - **`apps/wackcode/`**: the app binary. Opens the window and hands it to `wack-ui`.
 - **`apps/gallery/`**: renders UI scenes to PNG files (`cargo snap`).
+- **`apps/xtask/`**, **`apps/wackcode-helper/`**: the `.app` bundle the browser engine (CEF) needs, and its helper processes.
 - **`crates/wack-ui/`**: every view, the pane tree and layout solver, the theme. The only crate that may use GPUI.
 - **`crates/wack-core/`**: the engine: projects, chats, settings, secrets, Git, PTYs, events.
 - **`crates/wack-agent/`**, **`wack-llm/`**, **`wack-tools/`**: the agent loop, the provider wire formats, and the core tools.
@@ -32,6 +33,7 @@ WackCode is a native macOS coding agent: a Rust app drawn with GPUI, with its ow
 |---|---|
 | Crate boundaries, the engine/UI split, where data lives, what is built so far and what comes next | [docs/architecture.md](docs/architecture.md) |
 | The GPUI version, its patches, bumping it | [docs/gpui.md](docs/gpui.md) |
+| The CEF (Chromium) version, the bundle, bumping it | [docs/cef.md](docs/cef.md) |
 | Network, credentials, the automation socket | [docs/security.md](docs/security.md) |
 | Checking your work: tests, the gallery, the dev app, real LLMs | [docs/testing.md](docs/testing.md) |
 | The usage ledger TokenTrail reads (a published contract) | [docs/wackcode-usage-v1.md](docs/wackcode-usage-v1.md) |
@@ -70,7 +72,7 @@ WackCode should feel like a distinctive macOS app with its own character, never 
 | `cargo test --workspace` | All tests. |
 | `cargo clippy --workspace` | Lints. |
 | `cargo snap --list`, `cargo snap <scene> --theme dark` | Render a UI scene to a PNG and look at it. |
-| `cargo dev` | Run the dev app, with the automation socket compiled in. |
+| `cargo dev` | Run the dev app (from `target/debug/WackCode Dev.app`), with the automation socket compiled in. |
 | `cargo wack run "…"` | Run the agent without the app ([docs/testing.md](docs/testing.md)). |
 | `cargo deny check licenses` | After adding or bumping a dependency. |
 

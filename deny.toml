@@ -24,6 +24,9 @@ allow = [
     "GPL-3.0-or-later",
     "AGPL-3.0-only",
     "AGPL-3.0-or-later",
+    # Permissive data licence: webpki-roots (Mozilla's root certificates), only in the build-time
+    # downloader that fetches CEF (download-cef, under cef-dll-sys). Nothing in the app uses it.
+    "CDLA-Permissive-2.0",
 ]
 confidence-threshold = 0.8
 # The list says what would be acceptable, not only what is in the tree today.

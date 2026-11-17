@@ -1,12 +1,14 @@
 # Architecture
 
-WackCode 3 is one Rust process. There is no Node worker, no IPC protocol and no web view.
+WackCode 3 is one Rust process. There is no Node worker, no IPC protocol and no web UI. The browser pane (in progress) adds Chromium's own helper processes through CEF, which is why the app runs from a bundle ([cef.md](cef.md)).
 
 ## Crates
 
 ```
 apps/wackcode      the app binary: opens the window, hands it to wack-ui
 apps/gallery       renders UI scenes to PNG files
+apps/wackcode-helper  CEF's helper processes (renderer, GPU, utility), copied into the bundle
+apps/xtask         assembles the .app bundles: `cargo dev`, `cargo xtask bundle`
 crates/wack-ui     views, pane tree, layout solver, theme        (GPUI)
 crates/wack-core   engine: projects, chats, settings, secrets, Git, PTYs, events
 crates/wack-agent  turn loop, tool registry, prompt assembly, sessions, compaction

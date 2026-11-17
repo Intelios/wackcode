@@ -55,6 +55,11 @@ pub struct RunSetup {
     pub usage: Option<Usage>,
     /// Which web tools the run offers (Settings › Web).
     pub web: wack_web::WebSetup,
+    /// The MCP servers this project's runs reach (Settings › MCP servers), with their secrets.
+    pub mcp_servers: Vec<wack_mcp::ServerSpec>,
+    /// The connections to them, which outlive the run. `None` offers no MCP tools; the app
+    /// shares its own, and `wack run` makes one for the run.
+    pub mcp_hub: Option<wack_mcp::Hub>,
 }
 
 pub enum Job {
@@ -73,6 +78,8 @@ pub enum Job {
 #[derive(Clone, Debug, PartialEq)]
 pub enum RunEvent {
     Agent(Event),
+    /// The run is waiting for these MCP servers to start; an empty list when it no longer is.
+    McpStarting(Vec<String>),
     /// The run is over. `context_tokens` is how full the model's context now is, when the
     /// session could be read.
     Finished {
@@ -110,6 +117,8 @@ impl Store {
             tasks: None,
             usage: Some(self.usage_recorder(&resolved.connection, &chat.id, &project.path)),
             web: self.web_setup(),
+            mcp_servers: self.mcp_specs_for(&project.path),
+            mcp_hub: None,
         })
     }
 }
@@ -148,6 +157,17 @@ pub async fn run(
         Ok(web) => tools.extend(web),
         Err(message) => return finished(Err(message), None),
     }
+    // MCP servers: their tools, waiting only for a server with no tool list yet. A compaction
+    // calls no tools, so it starts nothing.
+    let mut mcp = wack_mcp::Assembly::default();
+    if let Some(hub) = setup.mcp_hub.as_ref().filter(|_| !matches!(job, Job::Compact(_))) {
+        let starting: wack_mcp::Starting = {
+            let events = events.clone();
+            Arc::new(move |servers| events(RunEvent::McpStarting(servers)))
+        };
+        mcp = wack_mcp::assemble(hub, &setup.mcp_servers, &setup.cwd, &control.stop_token(), starting).await;
+    }
+    tools.extend(mcp.tools);
     let registry = match Registry::new(tools) {
         Ok(registry) => Arc::new(registry),
         Err(message) => return finished(Err(message), None),
@@ -161,6 +181,10 @@ pub async fn run(
     );
     let agent = match setup.usage {
         Some(usage) => agent.with_recorder(usage),
+        None => agent,
+    };
+    let agent = match mcp.feature {
+        Some(feature) => agent.with_feature(Box::new(feature)),
         None => agent,
     };
     let mut agent = kit.attach(agent);
@@ -227,6 +251,8 @@ mod tests {
             tasks: None,
             usage: None,
             web: wack_web::WebSetup::default(),
+            mcp_servers: Vec::new(),
+            mcp_hub: None,
         }
     }
 

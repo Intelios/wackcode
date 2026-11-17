@@ -42,6 +42,8 @@ const HELP: &str = "wack: the WackCode agent without the app
                                A prompt starting with /name runs that skill or command, as in the app.
   wack skills                  List the skills a run loads, and any that could not load.
   wack commands                List the slash commands a run understands.
+  wack mcp list                List the MCP servers (Settings › MCP servers) and the projects they reach.
+  wack mcp test <name>         Connect to one, list its tools and close. Starts in --cwd, or here.
 
   --data-dir <folder>          Use another data folder (for tests).
 
@@ -71,6 +73,7 @@ async fn run(args: &mut Args) -> Result<ExitCode, String> {
         Some("run") => agent(args, &folder).await,
         Some("skills") => list_skills(args, &folder),
         Some("commands") => list_commands(args, &folder),
+        Some("mcp") => mcp(args, &folder).await,
         None | Some("help" | "--help" | "-h") => {
             println!("{HELP}");
             Ok(ExitCode::SUCCESS)
@@ -193,6 +196,74 @@ fn list_commands(args: &mut Args, folder: &Path) -> Result<ExitCode, String> {
     Ok(ExitCode::SUCCESS)
 }
 
+async fn mcp(args: &mut Args, folder: &Path) -> Result<ExitCode, String> {
+    let action = args.command();
+    let cwd = args.value("--cwd")?;
+    let store = Store::open(folder)?;
+    match action.as_deref() {
+        Some("list") => {
+            args.finish()?;
+            if store.mcp_servers().is_empty() {
+                println!("No MCP servers yet. Add one in Settings › MCP servers.");
+            }
+            for server in store.mcp_servers() {
+                let reach = match &server.projects {
+                    wack_core::mcp::Projects::All => "all projects".to_string(),
+                    wack_core::mcp::Projects::Only(ids) => {
+                        let names: Vec<&str> = ids.iter().filter_map(|id| store.project(id)).map(|project| project.name.as_str()).collect();
+                        if names.is_empty() { "no projects".to_string() } else { names.join(", ") }
+                    }
+                };
+                let what = if server.transport == wack_mcp::Transport::Stdio { std::iter::once(server.command.as_str()).chain(server.args.iter().map(String::as_str)).collect::<Vec<_>>().join(" ") } else { server.url.clone() };
+                println!(
+                    "{}  ·  {}{}  ·  {}\n  {what}\n  {} tools known, {} switched off",
+                    server.name,
+                    server.transport.label(),
+                    if server.enabled { "" } else { " · off" },
+                    reach,
+                    server.tools.len(),
+                    server.disabled_tools.len()
+                );
+            }
+            Ok(ExitCode::SUCCESS)
+        }
+        Some("test") => {
+            let name = args.rest().join(" ");
+            if name.trim().is_empty() {
+                return Err("Name the server to test: wack mcp test <name>".into());
+            }
+            let id = store.mcp_servers().iter().find(|server| server.name.eq_ignore_ascii_case(name.trim())).map(|server| server.id.clone()).ok_or_else(|| format!("There is no MCP server named {}.", name.trim()))?;
+            let spec = store.mcp_spec(&id).ok_or("That MCP server no longer exists.")?;
+            let cwd = match cwd {
+                Some(cwd) => PathBuf::from(cwd),
+                None => std::env::current_dir().map_err(|error| format!("Could not find the current folder: {error}"))?,
+            };
+            let hub = Servers(wack_mcp::Hub::new(Some(store.mcp_cache_folder())));
+            eprintln!("{}", print::dim(&format!("Connecting to {}…", spec.name)));
+            let tools = hub.0.probe(&spec, &cwd).await?;
+            let mut store = store;
+            store.set_mcp_tools(&id, &spec.fingerprint(), &tools)?;
+            println!("{} tool{}:", tools.len(), if tools.len() == 1 { "" } else { "s" });
+            for tool in &tools {
+                let about = tool.description.as_deref().unwrap_or_default().lines().next().unwrap_or_default();
+                println!("  {}{}  {about}", wack_mcp::tool_name(&spec.slug, &tool.name), if tool.read_only() { " (read-only)" } else { "" });
+            }
+            Ok(ExitCode::SUCCESS)
+        }
+        _ => Err("Use wack mcp list, or wack mcp test <name>.".into()),
+    }
+}
+
+/// `wack run`'s MCP servers, ended however the run ends: `process::exit` at the end calls
+/// `terminate_all` itself, and an early error drops this.
+struct Servers(wack_mcp::Hub);
+
+impl Drop for Servers {
+    fn drop(&mut self) {
+        self.0.terminate_all();
+    }
+}
+
 /// Times background news may wake the agent before `wack run` gives up.
 const MAX_WAKES: u32 = 3;
 
@@ -281,9 +352,34 @@ async fn agent(args: &mut Args, folder: &Path) -> Result<ExitCode, String> {
             }
         });
     }
+    // Only a person at the keyboard can answer a question.
+    let listening = !piped && terminal::interactive();
+    let control = if listening { Control::with_user() } else { Control::new() };
+    let asking = Arc::new(asking::Asking::default());
+    let stopper = control.clone();
+    tokio::spawn(async move {
+        if tokio::signal::ctrl_c().await.is_ok() {
+            eprintln!("\nStopping. Press Ctrl-C again to quit at once.");
+            stopper.stop();
+        }
+        if tokio::signal::ctrl_c().await.is_ok() {
+            std::process::exit(130);
+        }
+    });
+
+    // MCP servers get a hub of their own, ended with the run. Only a server with no tool list
+    // yet is waited for, and Ctrl-C stops the wait.
+    let hub = Arc::new(Servers(wack_mcp::Hub::new(Some(store.mcp_cache_folder()))));
+    let starting: wack_mcp::Starting = Arc::new(|servers: Vec<String>| {
+        if !servers.is_empty() {
+            eprintln!("{}", print::dim(&format!("Starting MCP servers: {}…", servers.join(", "))));
+        }
+    });
+    let mcp = wack_mcp::assemble(&hub.0, &store.mcp_specs_for(session.cwd()), session.cwd(), &control.stop_token(), starting).await;
     let mut tools = wack_tools::core_tools();
     tools.extend(kit.tools());
     tools.extend(wack_web::tools(&store.web_setup())?);
+    tools.extend(mcp.tools);
     let registry = Arc::new(Registry::new(tools)?);
     // The effort must be one the model lists in Settings › Providers; without --effort, the
     // app's default for it.
@@ -306,6 +402,10 @@ async fn agent(args: &mut Args, folder: &Path) -> Result<ExitCode, String> {
         Some(usage) => agent.with_recorder(usage),
         None => agent,
     };
+    let agent = match mcp.feature {
+        Some(feature) => agent.with_feature(Box::new(feature)),
+        None => agent,
+    };
     let mut agent = kit.attach(agent);
     let mut header = format!("{} · {} · {}", connection.name, model.id, agent.session().cwd().display());
     if kit.plan.mode().planning() {
@@ -316,20 +416,6 @@ async fn agent(args: &mut Args, folder: &Path) -> Result<ExitCode, String> {
     }
     eprintln!("{}", print::dim(&header));
 
-    // Only a person at the keyboard can answer a question.
-    let listening = !piped && terminal::interactive();
-    let control = if listening { Control::with_user() } else { Control::new() };
-    let asking = Arc::new(asking::Asking::default());
-    let stopper = control.clone();
-    tokio::spawn(async move {
-        if tokio::signal::ctrl_c().await.is_ok() {
-            eprintln!("\nStopping. Press Ctrl-C again to quit at once.");
-            stopper.stop();
-        }
-        if tokio::signal::ctrl_c().await.is_ok() {
-            std::process::exit(130);
-        }
-    });
     if listening {
         let (steering, asking) = (control.clone(), asking.clone());
         std::thread::spawn(move || {
@@ -373,6 +459,7 @@ async fn agent(args: &mut Args, folder: &Path) -> Result<ExitCode, String> {
         outcome = agent.wake(&control, &|event| printer.event(event)).await;
     }
     tasks.terminate_all();
+    hub.0.terminate_all();
     printer.finish();
     eprintln!("{}", print::dim(&format!("{}\nsession: {}", printer.usage_line(), agent.session().path().display())));
     // The steering thread is blocked reading the terminal, so the process is ended directly.

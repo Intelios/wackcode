@@ -13,7 +13,8 @@ mod http;
 mod model;
 mod responses;
 mod retry;
-mod sse;
+/// Server-sent events, shared with the MCP client's HTTP transports.
+pub mod sse;
 pub mod testing;
 
 use async_trait::async_trait;

@@ -16,6 +16,9 @@ use wack_ui::{
 actions!(wackcode, [Quit]);
 
 fn main() {
+    // Opened from the Dock, the app has launchd's bare PATH: read the user's login environment
+    // now, for `bash` and MCP servers (`npx`, `uvx`).
+    wack_core::shell_env::warm();
     gpui_platform::application().with_assets(wack_ui::icon::Assets).run(|cx: &mut App| {
         wack_ui::init(cx);
 

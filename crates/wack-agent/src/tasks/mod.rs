@@ -17,7 +17,8 @@
 //! - A notice leaves the inbox only when something takes it to hand to the model.
 //! - A notice about something the user did (they stopped a task) is quiet: it rides along with
 //!   the next request but never wakes the agent ([`Tasks::wakes`]).
-//! - Provider keys (`SECRET_ENV`) are removed from every command's environment.
+//! - Commands get the user's login-shell environment once it is known (`shell_env`), then
+//!   provider keys (`SECRET_ENV`) are removed from it.
 //! - Dropping the last handle kills every task still running; quitting calls
 //!   [`Tasks::terminate_all`] first, which asks them to stop before killing them.
 
@@ -492,6 +493,10 @@ impl Tasks {
             .stdout(Stdio::piped())
             .stderr(Stdio::piped())
             .process_group(0);
+        // The user's login environment (Homebrew, nvm…) when the app was opened from the Dock.
+        if let Some(environment) = crate::shell_env::resolved() {
+            process.envs(environment);
+        }
         for name in SECRET_ENV {
             process.env_remove(name);
         }

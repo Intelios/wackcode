@@ -104,6 +104,8 @@ pub struct ChatSession {
     pub tasks: Tasks,
     /// The list of them is open above its status pill.
     pub tasks_open: bool,
+    /// The MCP servers the run is waiting for, for the "Starting MCP servers…" pill.
+    pub mcp_starting: Vec<String>,
     /// Runs started for task news since the user last sent a message, and whether waking is
     /// paused because the user stopped the last run.
     pub wakes: u32,
@@ -216,6 +218,7 @@ impl ChatSession {
             waiting_open: false,
             tasks,
             tasks_open: false,
+            mcp_starting: Vec::new(),
             wakes: 0,
             wake_paused: false,
             _tasks_watch: tasks_watch,
@@ -561,7 +564,9 @@ impl ChatSession {
                     }
                     self.conversation.apply(&event, now);
                 }
+                RunEvent::McpStarting(servers) => self.mcp_starting = servers,
                 RunEvent::Finished { result, context_tokens } => {
+                    self.mcp_starting.clear();
                     if self.compacting() {
                         self.conversation.finish_compaction(&result);
                     } else {

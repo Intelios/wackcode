@@ -12,11 +12,12 @@ crates/wack-core   engine: projects, chats, settings, secrets, Git, PTYs, events
 crates/wack-agent  turn loop, tool registry, prompt assembly, sessions, compaction
 crates/wack-tools  read, write, edit, bash, grep, find, ls
 crates/wack-web    web_fetch (and web_search), and the guard that keeps them on the public internet
+crates/wack-mcp    the MCP client: servers as deferred tools, connections shared per project
 crates/wack-llm    provider wire formats, streaming events, usage, retries
 crates/wack-cli    `wack`: the agent without the app
 ```
 
-Dependencies point downwards only: `wack-ui` → `wack-core` → `wack-agent` → `wack-llm`, with `wack-tools` and `wack-web` beside the agent.
+Dependencies point downwards only: `wack-ui` → `wack-core` → `wack-agent` → `wack-llm`, with `wack-tools`, `wack-web` and `wack-mcp` beside the agent.
 
 ## The one boundary that matters
 
@@ -39,6 +40,7 @@ State lives in models, not views. Closing a pane or switching a tab must never l
   v3/memory/<label>-<key>/  one project's memory notes (Markdown with frontmatter), origin.json, .trash/
   v3/commands/<name>.md     the user's own slash commands (Settings › Commands)
   v3/web-usage.json         Settings › Web's monthly count of searches and page reads per provider
+  v3/mcp-cache/<sha256>.json  each MCP server's last tool list, named by its connection's fingerprint (7 days)
 ~/.agents/skills/           the user's skills, shared with other tools; the only skill folder WackCode writes to
 ```
 
@@ -59,6 +61,7 @@ Each file's header comment states its invariants; this is the map.
 - **Plan and Ultra Plan, questions, todos** (`plan/`, `ask.rs`, `todo/`, assembled by `kit.rs`), ported from version 2 with its prompts: the mode contract is a note, re-sent only when the mode in force differs from the last one the model saw; while planning, a tool runs only if it changes nothing (`parallel_safe`) or, for `bash`, passes the shell policy (`plan/policy.rs`, fail-closed), unless Settings › Tools lifts that. `plan_mode_complete` ends the run with the plan saved as state `plan`; a new user message consumes it. The tool list and system prompt never change between modes, so the prompt cache holds. **Ultra** reasoning is `wack_core::Reasoning::Ultra`: the provider gets its maximum effort and the system prompt gains `prompt::ULTRA_PROMPT`; it never reaches `wack-llm`.
 - **Memory** (`memory/`, the folder chosen by `wack-core/memory.rs`), ported from version 2 with its tool texts: `memory_save`, `memory_recall` and `memory_forget` work on one project's note files, keyed on the repository's common root so worktrees share them. The kit reads the index once per run and adds it to the system prompt after the project instructions and before Ultra; bodies never enter the prompt. Memory switched off (Settings › Memory, globally or per project) means no folder for the run: no tools and no index. Plan mode lets the memory tools through. Version 2's notes are not imported.
 - **Skills and slash commands** (`skills/`, `commands/`; folders and switches in `wack-core/skills.rs`), ported from version 2's rules: skills are found in the roots the engine names, first name wins, a switched-off skill frees its name. The kit lists every skill the model may choose (name, description, file) in the system prompt, read once per run; the model loads one with `read`, so there is no skill tool. A leading `/name` is expanded in the engine (a skill's `<skill>` block, a template's `$1`/`$ARGUMENTS`, `/init`'s prompt) before the run, the same for the app and `wack run`, and the session keeps what the user typed beside the expanded message (`Entry::Message::command`) so the transcript shows `/name · args`. `/new`, `/name`, `/copy` and `/compact` act on the app and never reach the model.
+- **MCP** (`wack-mcp`, settings in `wack-core/mcp.rs`): hand-rolled JSON-RPC over stdio, Streamable HTTP and legacy SSE, tools only. The app owns one `Hub`; a connection is keyed by server, connection fingerprint and project folder (a stdio server's working directory), so every chat in a project shares it. Connections start lazily, stay up across runs, close after 30 idle minutes, wait five minutes after a failure, and are killed on quit (`AppState::shutdown_runs`). A run never waits for a server whose tool list it knows (live, or cached in `v3/mcp-cache/`); it waits only for one with none, and Stop ends the wait, not the connection. Tools are deferred, named `mcp__<slug>__<tool>`, read-only by the server's `readOnlyHint`, and checked against the live server before each call. A server that fails or stops is told to each chat using it once, as an `mcp:` note the transcript shows. A server can be limited to chosen projects. `wack run` makes a hub of its own; `wack mcp list|test`.
 - **`wack-core/store.rs`** holds connections in `state.json` and their keys in `secrets.json`; `Store::provider` sends a key with the requests that need it, and `Store::reveal_connection_key` is the one path a key takes to the screen, for Settings › Providers' eye. A connection switched off stays stored with its key but is skipped by `Store::resolve`, the model menu and `wack run`.
 
 ## The UI layer
@@ -99,7 +102,6 @@ Known gaps in the agent core, to close as the features that need them arrive:
 
 - Only the Chat Completions format has run against a live endpoint (the Testing connection: multi-tool tasks, resume across models, stop mid-command, a message sent mid-run). The Anthropic and OpenAI Responses formats are tested against recorded streams only.
 - Tool results are text only: `read` refuses images.
-- `bash` inherits the environment of the process that started it. Resolving the user's login-shell environment (for an app launched from the Dock) comes with the app.
 - Settings › Prompts (editing the built-in prompts, as version 2 allowed) is deferred; the prompt builders are written so overrides can slot in.
 - Planning's sub-agent gate returns with that feature.
 

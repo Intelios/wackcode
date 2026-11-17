@@ -125,6 +125,11 @@ impl Printer {
                     println!("  {}", dim(line));
                 }
             }
+            // An MCP server failed or stopped: the model was told, and so is the user.
+            Event::Noted { tag, text } if tag.starts_with(wack_mcp::NOTE_PREFIX) => {
+                Self::break_line(&mut state);
+                println!("{}", paint("33", &text));
+            }
             Event::Noted { .. } => {}
             Event::Notice(text) => {
                 Self::break_line(&mut state);

@@ -17,6 +17,7 @@ pub mod plan;
 pub mod prompt;
 pub mod registry;
 pub mod session;
+pub mod shell_env;
 pub mod skills;
 pub mod tasks;
 pub mod todo;

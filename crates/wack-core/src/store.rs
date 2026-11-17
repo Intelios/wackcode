@@ -314,6 +314,9 @@ struct State {
     /// Settings › Web.
     #[serde(default)]
     web: crate::web::WebConfig,
+    /// Settings › MCP servers.
+    #[serde(default)]
+    mcp: crate::mcp::McpConfig,
 }
 
 fn recording_on() -> bool {
@@ -338,7 +341,7 @@ fn now_millis() -> u64 {
 
 /// An id that sorts by creation time and never repeats within one process, even for two ids
 /// made in the same nanosecond.
-fn new_id(prefix: &str) -> String {
+pub(crate) fn new_id(prefix: &str) -> String {
     use std::sync::atomic::{AtomicU64, Ordering};
     static LAST: AtomicU64 = AtomicU64::new(0);
     let stamp = SystemTime::now()
@@ -485,6 +488,14 @@ impl Store {
 
     pub(crate) fn web_state_mut(&mut self) -> &mut crate::web::WebConfig {
         &mut self.state.web
+    }
+
+    pub(crate) fn mcp_state(&self) -> &crate::mcp::McpConfig {
+        &self.state.mcp
+    }
+
+    pub(crate) fn mcp_state_mut(&mut self) -> &mut crate::mcp::McpConfig {
+        &mut self.state.mcp
     }
 
     /// A stored secret, for the engine's own clients to hold (`web.rs`). Never handed out.

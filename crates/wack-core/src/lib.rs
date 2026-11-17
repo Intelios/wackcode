@@ -8,11 +8,12 @@
 //! So far: the data folder, the secret store, connections, projects, chats, running the agent for
 //! a chat (`run`), what changed in a project (`git`), terminals (`terminal`), how the app looks
 //! (`appearance`), where each project's memory lives (`memory`), skills and slash commands
-//! (`skills`), automatic chat titles (`title`), the usage ledger TokenTrail reads (`usage`), and
-//! the web tools' settings (`web`).
+//! (`skills`), automatic chat titles (`title`), the usage ledger TokenTrail reads (`usage`), the
+//! web tools' settings (`web`), and the MCP servers (`mcp`).
 
 pub mod appearance;
 pub mod git;
+pub mod mcp;
 pub mod memory;
 pub mod run;
 pub mod runner;
@@ -38,6 +39,11 @@ pub use store::{
 pub use wack_agent::{AgentMode, Control, Event, HistoryEntry, Outcome, Recorder, TOOL_SEARCH, history};
 pub use wack_llm::{Message, RetryNotice, Role, Usage, WireFormat};
 pub use wack_web::{WEB_FETCH, WEB_SEARCH};
+
+/// The MCP client the app owns one of, and what Settings shows of its connections.
+pub use wack_mcp as mcp_client;
+/// The user's login-shell environment, read once at launch for `bash` and MCP servers.
+pub use wack_agent::shell_env;
 
 /// Asking the user: the questions a tool raises and the answers that go back.
 pub mod ask {

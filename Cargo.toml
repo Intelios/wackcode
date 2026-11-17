@@ -14,6 +14,7 @@ wack-tools = { path = "crates/wack-tools" }
 wack-core = { path = "crates/wack-core" }
 wack-ui = { path = "crates/wack-ui" }
 wack-web = { path = "crates/wack-web" }
+wack-mcp = { path = "crates/wack-mcp" }
 
 # GPUI comes from one pinned revision of zeronsh/zui, a standalone extraction of Zed's GPUI that
 # adds backdrop blur, edge fade and transparent-window support. All three crates must share the
@@ -45,6 +46,8 @@ uuid = { version = "1", features = ["v4"] }
 yaml-rust2 = { version = "0.13", default-features = false }
 tokio = { version = "1", features = ["full"] }
 url = "2"
+# MCP: the catalogue cache's file names and the hash that keeps a shortened tool name unique.
+sha2 = "0.10"
 # web_fetch: HTML to Markdown. dom_query parses and cleans the page, dom_smoothie (a port of
 # Firefox's Readability) finds the article in it, htmd writes the Markdown, encoding_rs decodes
 # pages that are not UTF-8.

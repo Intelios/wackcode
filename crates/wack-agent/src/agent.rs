@@ -209,6 +209,12 @@ impl Control {
         self.cancel.is_cancelled()
     }
 
+    /// Fires when the run is stopped, for work done on a run's behalf before the loop starts
+    /// (waiting for an MCP server).
+    pub fn stop_token(&self) -> CancellationToken {
+        self.cancel.clone()
+    }
+
     /// Queues a message for the model. It is delivered with the next tool results, or as a new
     /// turn if the model was about to finish.
     pub fn steer(&self, text: impl Into<String>) {

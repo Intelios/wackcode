@@ -10,6 +10,7 @@ wack-agent.workspace = true
 wack-core.workspace = true
 wack-tools.workspace = true
 wack-web.workspace = true
+wack-mcp.workspace = true
 wack-llm.workspace = true
 libc.workspace = true
 serde_json.workspace = true

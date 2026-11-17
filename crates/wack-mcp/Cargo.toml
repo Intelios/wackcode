@@ -1,0 +1,33 @@
+[package]
+name = "wack-mcp"
+description = "The MCP client: the user's MCP servers as deferred tools, with connections shared per project."
+version.workspace = true
+edition.workspace = true
+publish.workspace = true
+
+[dependencies]
+wack-agent.workspace = true
+wack-llm.workspace = true
+async-trait.workspace = true
+futures.workspace = true
+libc.workspace = true
+reqwest.workspace = true
+serde.workspace = true
+serde_json.workspace = true
+sha2.workspace = true
+tokio.workspace = true
+tokio-util.workspace = true
+url.workspace = true
+
+# A tiny MCP server for the tests (stdio, Streamable HTTP and legacy SSE), replacing version 2's
+# mock-mcp-server.mjs. Its integration tests find it through CARGO_BIN_EXE_wack-mcp-fixture, which
+# only works for a binary of this package. It uses only this crate's own dependencies.
+[[bin]]
+name = "wack-mcp-fixture"
+path = "fixture/main.rs"
+test = false
+doc = false
+
+[dev-dependencies]
+tempfile.workspace = true
+wack-llm = { workspace = true }

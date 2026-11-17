@@ -136,6 +136,8 @@ pub struct AppState {
     memory_subscriptions: Vec<Subscription>,
     /// Settings › Web: the provider editor and the overview's last failure.
     pub web: WebState,
+    /// Every MCP connection, shared by the chats of each project; ended on quit.
+    mcp: wack_core::mcp_client::Hub,
     web_subscriptions: Vec<Subscription>,
     /// Settings › Skills: the folders as last read, the editor, a skill on view.
     pub skills: SkillsState,
@@ -237,6 +239,7 @@ impl AppState {
             TextFieldEvent::Menu(key) => app.slash_key(None, *key, cx),
         });
         let form = ProviderForm::new(cx);
+        let mcp = wack_core::mcp_client::Hub::new(Some(store.mcp_cache_folder()));
         let subscriptions = vec![draft_subscription];
         let ui = store.ui().clone();
         // A fresh app: no tabs, no chat in front, and a new chat in the project last worked in (as
@@ -295,6 +298,7 @@ impl AppState {
             memory_subscriptions: Vec::new(),
             web: WebState::default(),
             web_subscriptions: Vec::new(),
+            mcp,
             skills: SkillsState::default(),
             skill_subscriptions: Vec::new(),
             templates: CommandsState::default(),
@@ -1715,7 +1719,8 @@ impl AppState {
             });
         }
         match self.store.run_setup(&chat) {
-            Ok(setup) => {
+            Ok(mut setup) => {
+                setup.mcp_hub = Some(self.mcp.clone());
                 session.update(cx, |session, cx| session.start(setup, job, cx));
                 let _ = self.store.touch_chat(chat_id);
                 cx.notify();
@@ -2339,11 +2344,13 @@ impl AppState {
         cx.notify();
     }
 
-    /// Terminates every active Build/Run process group, and every chat's background commands,
-    /// cleanly when WackCode quits.
+    /// Terminates every active Build/Run process group, every chat's background commands and
+    /// every MCP server, cleanly when WackCode quits.
     pub fn shutdown_runs(&self) {
         let tasks: Vec<_> = self.chat_tasks.values().cloned().collect();
-        let stopping: Vec<_> = tasks.into_iter().map(|tasks| std::thread::spawn(move || tasks.terminate_all())).collect();
+        let mut stopping: Vec<_> = tasks.into_iter().map(|tasks| std::thread::spawn(move || tasks.terminate_all())).collect();
+        let mcp = self.mcp.clone();
+        stopping.push(std::thread::spawn(move || mcp.terminate_all()));
         self.runs.terminate_all();
         for thread in stopping {
             let _ = thread.join();

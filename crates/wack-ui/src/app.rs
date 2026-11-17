@@ -151,6 +151,8 @@ pub struct AppState {
     /// Settings › Commands: the commands as last read and the editor.
     pub templates: CommandsState,
     template_subscriptions: Vec<Subscription>,
+    pub subagents: crate::subagents_page::SubagentsState,
+    subagent_subscriptions: Vec<Subscription>,
     /// Long-lived Build and Run PTY commands keyed by `(canonical_cwd, kind)`.
     runs: Runner,
     command_event_tx: mpsc::UnboundedSender<CommandEvent>,
@@ -312,6 +314,8 @@ impl AppState {
             skill_subscriptions: Vec::new(),
             templates: CommandsState::default(),
             template_subscriptions: Vec::new(),
+            subagents: Default::default(),
+            subagent_subscriptions: Vec::new(),
             runs,
             command_event_tx,
             new_chat_panes: HashMap::new(),
@@ -1147,6 +1151,7 @@ impl AppState {
                 Section::Mcp => self.mcp_settings.editor.as_ref().map(|editor| editor.name.clone()),
                 Section::Skills => self.skills.editor.as_ref().map(|editor| editor.name.clone()),
                 Section::Commands => self.templates.editor.as_ref().map(|editor| editor.name.clone()),
+                Section::Subagents => self.subagents.editor.as_ref().map(|editor| editor.name.clone()),
                 _ => None,
             },
             Selection::Welcome => None,
@@ -1195,6 +1200,9 @@ impl AppState {
                 }
                 if self.settings_section == Section::Commands {
                     self.refresh_templates();
+                }
+                if self.settings_section == Section::Subagents {
+                    self.refresh_subagents();
                 }
             }
             Selection::Welcome => {}
@@ -1548,7 +1556,7 @@ impl AppState {
         cx.notify();
     }
 
-    /// Settings › Providers › Automatic titles' switch. It cannot go on without a usable model.
+    /// Settings › Sub-agents › Automatic titles' switch. It cannot go on without a usable model.
     pub fn toggle_auto_titles(&mut self, cx: &mut Context<Self>) {
         let mut config = self.store.auto_title().clone();
         config.enabled = !config.enabled;
@@ -1702,6 +1710,9 @@ impl AppState {
         }
         if section == Section::Commands {
             self.refresh_templates();
+        }
+        if section == Section::Subagents {
+            self.refresh_subagents();
         }
         cx.notify();
     }
@@ -3208,6 +3219,176 @@ impl AppState {
                 TextFieldEvent::Enter | TextFieldEvent::SendNow => app.save_slash_command(cx),
                 TextFieldEvent::Changed => {
                     if let Some(editor) = app.templates.editor.as_mut() {
+                        editor.error = None;
+                    }
+                    cx.notify();
+                }
+                TextFieldEvent::Moved | TextFieldEvent::Menu(_) => {}
+            }));
+        }
+    }
+}
+
+// -------------------------------------------------------------------------------------------------
+// Settings › Sub-agents
+
+impl AppState {
+    fn refresh_subagents(&mut self) {
+        let overview = self.store.agents_overview();
+        self.subagents.entries = overview.entries;
+        self.subagents.problems = overview.problems;
+        self.subagents.folder = self.store.agents_folder();
+    }
+
+    fn subagents_result(&mut self, result: Result<(), String>, cx: &mut Context<Self>) {
+        self.subagents.error = result.err().map(Into::into);
+        self.refresh_subagents();
+        cx.notify();
+    }
+
+    pub fn choose_delegation(&mut self, delegation: wack_core::agents::Delegation, cx: &mut Context<Self>) {
+        let result = self.store.set_delegation(delegation);
+        self.subagents_result(result, cx);
+    }
+
+    pub fn toggle_helper_models(&mut self, cx: &mut Context<Self>) {
+        self.subagents.helper_open = !self.subagents.helper_open;
+        cx.notify();
+    }
+
+    pub fn choose_helper_model(&mut self, connection: Option<String>, model: Option<String>, cx: &mut Context<Self>) {
+        let choice = connection.zip(model).map(|(connection, model)| wack_core::ModelChoice { connection: Some(connection), model: Some(model), effort: None });
+        let result = self.store.set_helper(choice);
+        self.subagents.helper_open = false;
+        self.subagents_result(result, cx);
+    }
+
+    pub fn switch_agent(&mut self, name: &str, on: bool, cx: &mut Context<Self>) {
+        let result = self.store.set_agent_enabled(name, on);
+        self.subagents_result(result, cx);
+    }
+
+    pub fn switch_agent_folder(&mut self, id: &str, on: bool, cx: &mut Context<Self>) {
+        let result = self.store.set_agent_folder(id, on);
+        self.subagents_result(result, cx);
+    }
+
+    /// The editor on the agent `name`, or a new one. Returns its name field.
+    pub fn open_agent(&mut self, name: Option<&str>, cx: &mut Context<Self>) -> Option<Entity<TextField>> {
+        let agent = match name {
+            Some(name) => match self.store.read_agent(name) {
+                Some(agent) => Some(agent),
+                None => {
+                    self.subagents_result(Err(format!("{name} could not be read. It may have been moved or deleted.")), cx);
+                    return None;
+                }
+            },
+            None => None,
+        };
+        let over_builtin = name.is_some_and(|name| self.store.builtin_agent(name).is_some());
+        let editor = crate::subagents_page::AgentEditor::new(agent.as_ref(), false, over_builtin, cx);
+        Some(self.show_agent_editor(editor, cx))
+    }
+
+    /// A new agent starting from the one in the editor as it stands.
+    pub fn duplicate_agent(&mut self, cx: &mut Context<Self>) -> Option<Entity<TextField>> {
+        let draft = self.subagents.editor.as_ref()?.draft(cx);
+        let agent = wack_core::agents::AgentDef {
+            name: draft.name.trim().to_string(),
+            description: draft.description.clone(),
+            prompt: draft.prompt.clone(),
+            tools: draft.tool_list(),
+            model: draft.model,
+            max_turns: draft.max_turns.trim().parse().unwrap_or(60),
+            file: None,
+            source: String::new(),
+        };
+        let editor = crate::subagents_page::AgentEditor::new(Some(&agent), true, false, cx);
+        Some(self.show_agent_editor(editor, cx))
+    }
+
+    fn show_agent_editor(&mut self, editor: crate::subagents_page::AgentEditor, cx: &mut Context<Self>) -> Entity<TextField> {
+        let field = editor.name.clone();
+        self.subagents.editor = Some(editor);
+        self.subagents.error = None;
+        self.watch_agent_editor(cx);
+        cx.notify();
+        field
+    }
+
+    pub fn choose_agent_model(&mut self, helper: bool, cx: &mut Context<Self>) {
+        if let Some(editor) = self.subagents.editor.as_mut() {
+            editor.model = if helper { wack_core::agents::ModelPref::Helper } else { wack_core::agents::ModelPref::Chat };
+            editor.error = None;
+            cx.notify();
+        }
+    }
+
+    pub fn close_agent(&mut self, cx: &mut Context<Self>) {
+        self.subagents.editor = None;
+        self.subagent_subscriptions.clear();
+        self.refresh_subagents();
+        cx.notify();
+    }
+
+    pub fn save_agent(&mut self, cx: &mut Context<Self>) {
+        let Some(editor) = self.subagents.editor.as_mut() else {
+            return;
+        };
+        if let Some(issue) = editor.issue(cx) {
+            editor.error = Some(issue);
+            cx.notify();
+            return;
+        }
+        let draft = editor.draft(cx);
+        let previous = editor.previous.clone();
+        match self.store.save_agent(previous.as_deref(), &draft) {
+            Ok(_) => self.close_agent(cx),
+            Err(message) => {
+                if let Some(editor) = self.subagents.editor.as_mut() {
+                    editor.error = Some(message.into());
+                }
+                cx.notify();
+            }
+        }
+    }
+
+    pub fn ask_delete_agent(&mut self, ask: bool, cx: &mut Context<Self>) {
+        if let Some(editor) = self.subagents.editor.as_mut() {
+            editor.confirming = ask && editor.yours;
+            cx.notify();
+        }
+    }
+
+    pub fn confirm_agent_delete(&mut self, cx: &mut Context<Self>) {
+        let Some(name) = self.subagents.editor.as_ref().filter(|editor| editor.confirming).and_then(|editor| editor.previous.clone()) else {
+            return;
+        };
+        match self.store.delete_agent(&name, &crate::memory_page::move_to_trash) {
+            Ok(()) => self.close_agent(cx),
+            Err(message) => {
+                if let Some(editor) = self.subagents.editor.as_mut() {
+                    editor.confirming = false;
+                    editor.error = Some(message.into());
+                }
+                cx.notify();
+            }
+        }
+    }
+
+    fn watch_agent_editor(&mut self, cx: &mut Context<Self>) {
+        self.subagent_subscriptions.clear();
+        let Some(editor) = self.subagents.editor.as_ref() else {
+            return;
+        };
+        for (index, field) in editor.fields().into_iter().enumerate() {
+            // The description and the instructions take new lines; ⌘↩ saves from any field.
+            let lines = index == 1 || index == 4;
+            self.subagent_subscriptions.push(cx.subscribe(&field, move |app, field, event: &TextFieldEvent, cx| match event {
+                TextFieldEvent::Enter if lines => field.update(cx, |field, cx| field.insert_line_break(cx)),
+                TextFieldEvent::Enter | TextFieldEvent::SendNow => app.save_agent(cx),
+                TextFieldEvent::Changed => {
+                    if let Some(editor) = app.subagents.editor.as_mut() {
                         editor.error = None;
                     }
                     cx.notify();

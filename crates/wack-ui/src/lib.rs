@@ -12,6 +12,7 @@ pub mod button;
 pub mod chat;
 pub mod colour;
 pub mod commands_page;
+pub mod subagents_page;
 pub mod composer;
 pub mod conversation;
 pub mod edge_fade;

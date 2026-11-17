@@ -509,8 +509,6 @@ pub struct ProvidersData {
     pub editor: Option<ProviderEditor>,
     /// A failure from the overview: switching or removing a connection.
     pub error: Option<SharedString>,
-    /// The Automatic titles card.
-    pub titles: crate::titles_card::TitlesData,
 }
 
 impl ProvidersData {
@@ -554,13 +552,7 @@ impl ProvidersData {
             connections: rows,
             editor,
             error: form.error.clone().filter(|_| !form.open),
-            titles: Default::default(),
         }
-    }
-
-    pub fn with_titles(mut self, titles: crate::titles_card::TitlesData) -> Self {
-        self.titles = titles;
-        self
     }
 }
 
@@ -573,19 +565,21 @@ pub enum Section {
     Memory,
     Skills,
     Commands,
+    Subagents,
     Integrations,
     Mcp,
     Web,
 }
 
 impl Section {
-    pub const ALL: [Section; 9] = [
+    pub const ALL: [Section; 10] = [
         Section::Appearance,
         Section::Providers,
         Section::Tools,
         Section::Memory,
         Section::Skills,
         Section::Commands,
+        Section::Subagents,
         Section::Integrations,
         Section::Mcp,
         Section::Web,
@@ -599,6 +593,7 @@ impl Section {
             Section::Memory => "Memory",
             Section::Skills => "Skills",
             Section::Commands => "Commands",
+            Section::Subagents => "Sub-agents",
             Section::Integrations => "Integrations",
             Section::Mcp => "MCP servers",
             Section::Web => "Web",
@@ -613,6 +608,7 @@ impl Section {
             Section::Memory => "section-memory",
             Section::Skills => "section-skills",
             Section::Commands => "section-commands",
+            Section::Subagents => "section-subagents",
             Section::Integrations => "section-integrations",
             Section::Mcp => "section-mcp",
             Section::Web => "section-web",
@@ -631,7 +627,7 @@ const GROUPS: [(&str, &[Entry]); 4] = [
     ("Models", &[(Some(Section::Providers), "Providers"), (None, "Prompts")]),
     (
         "Agent",
-        &[(Some(Section::Tools), "Tools"), (Some(Section::Memory), "Memory"), (Some(Section::Skills), "Skills"), (Some(Section::Commands), "Commands"), (None, "Sub-agents"), (None, "Git")],
+        &[(Some(Section::Tools), "Tools"), (Some(Section::Memory), "Memory"), (Some(Section::Skills), "Skills"), (Some(Section::Commands), "Commands"), (Some(Section::Subagents), "Sub-agents"), (None, "Git")],
     ),
     (
         "Reach",
@@ -649,6 +645,7 @@ pub struct SettingsData {
     pub memory: crate::memory_page::MemoryData,
     pub skills: crate::skills_page::SkillsData,
     pub commands: crate::commands_page::CommandsData,
+    pub subagents: crate::subagents_page::SubagentsData,
     pub integrations: crate::integrations_page::IntegrationsData,
     pub web: crate::web_page::WebData,
     pub mcp: crate::mcp_page::McpData,
@@ -758,6 +755,7 @@ pub fn page(data: SettingsData, inline_nav: bool, narrow: bool, stack_form: bool
         Section::Memory => crate::memory_page::page(data.memory, theme),
         Section::Skills => crate::skills_page::page(data.skills, theme),
         Section::Commands => crate::commands_page::page(data.commands, theme),
+        Section::Subagents => crate::subagents_page::page(data.subagents, theme),
         Section::Integrations => crate::integrations_page::page(data.integrations, theme).into_any_element(),
         Section::Mcp => crate::mcp_page::page(data.mcp, theme),
         Section::Web => crate::web_page::page(data.web, theme),
@@ -820,7 +818,6 @@ fn overview(data: ProvidersData, theme: &Theme) -> impl IntoElement {
         .when_some(data.error, |page, error| page.child(div().typography(Type::Ui).text_color(theme.danger).child(error)))
         .children(list)
         .child(add_connection(empty, theme))
-        .when(!empty, |page| page.child(crate::titles_card::card_view(data.titles, theme)))
 }
 
 fn add_connection(empty: bool, theme: &Theme) -> impl IntoElement {

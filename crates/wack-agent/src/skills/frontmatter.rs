@@ -146,6 +146,7 @@ pub fn compose(original: Option<&str>, fields: &[(&str, Option<Value<'_>>)], bod
         match value {
             Some(Value::Text(text)) => out.push_str(&format!("{key}: {}\n", yaml_scalar(text))),
             Some(Value::True) => out.push_str(&format!("{key}: true\n")),
+            Some(Value::Raw(yaml)) => out.push_str(&format!("{key}: {yaml}\n")),
             None => {}
         }
     }
@@ -171,6 +172,8 @@ pub fn compose(original: Option<&str>, fields: &[(&str, Option<Value<'_>>)], bod
 pub enum Value<'a> {
     Text(&'a str),
     True,
+    /// YAML written as it is: a number, or a flow list the caller built.
+    Raw(&'a str),
 }
 
 #[cfg(test)]

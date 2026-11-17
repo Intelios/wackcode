@@ -467,10 +467,22 @@ pub fn all() -> Vec<Scene> {
             build: |_, cx| providers_scene(Providers::Listed, false, cx),
         },
         Scene {
-            name: "settings-providers-titles",
-            description: "Settings › Providers › Automatic titles: on, with the title model list open.",
-            size: size(px(1180.), px(1100.)),
-            build: |_, cx| providers_scene(Providers::Titles, false, cx),
+            name: "settings-subagents",
+            description: "Settings › Sub-agents: delegation, the helper model list open, the agents (one customised, one off, one from Claude Code), and Automatic titles.",
+            size: size(px(1180.), px(1400.)),
+            build: |_, cx| subagents_scene(SubagentsScene::List, None, cx),
+        },
+        Scene {
+            name: "settings-subagents-backdrop",
+            description: "Settings › Sub-agents over a backdrop.",
+            size: size(px(1180.), px(1400.)),
+            build: |_, cx| subagents_scene(SubagentsScene::List, Some(over(fixtures::backdrop(wack_core::Texture::None), cx)), cx),
+        },
+        Scene {
+            name: "settings-subagent-editor",
+            description: "Settings › Sub-agents: customising the built-in Review, with Restore built-in.",
+            size: size(px(1180.), px(1300.)),
+            build: |_, cx| subagents_scene(SubagentsScene::Editor, None, cx),
         },
         Scene {
             name: "chat-title-arriving",
@@ -552,6 +564,7 @@ pub fn all() -> Vec<Scene> {
                     memory: Default::default(),
         skills: Default::default(),
         commands: Default::default(),
+        subagents: Default::default(),
         integrations: Default::default(),
         web: Default::default(),
         mcp: Default::default(),
@@ -1280,8 +1293,6 @@ fn over(picture: crate::backdrop::Picture, cx: &mut App) -> crate::backdrop::Pic
 #[derive(Clone, Copy, PartialEq)]
 enum Providers {
     Listed,
-    /// Automatic titles on, with the model list open.
-    Titles,
     Adding,
     Editing,
     /// A saved key shown plainly by the eye.
@@ -1295,7 +1306,7 @@ fn providers_scene(state: Providers, sidebar_hidden: bool, cx: &mut App) -> AnyV
     let mut connections = fixtures::connections();
     connections[1].enabled = false;
     match state {
-        Providers::Listed | Providers::Titles => {}
+        Providers::Listed => {}
         Providers::Adding => {
             form.open_new(cx);
             form.name.update(cx, |field, cx| field.set_text("OpenRouter", cx));
@@ -1315,18 +1326,13 @@ fn providers_scene(state: Providers, sidebar_hidden: bool, cx: &mut App) -> AnyV
     }
     let data = SettingsData {
         section: Section::Providers,
-        providers: ProvidersData::new(&connections, |id| id != "c2", &form, cx).with_titles(match state {
-            Providers::Titles => {
-                let config = wack_core::AutoTitleConfig { enabled: true, connection: Some("c1".into()), model: Some("claude-sonnet-5-5".into()) };
-                crate::titles_card::TitlesData::new(&config, &connections, true, None)
-            }
-            _ => crate::titles_card::TitlesData::new(&Default::default(), &connections, false, None),
-        }),
+        providers: ProvidersData::new(&connections, |id| id != "c2", &form, cx),
         appearance: fixtures::appearance(None, cx),
         tools: Default::default(),
         memory: Default::default(),
         skills: Default::default(),
         commands: Default::default(),
+        subagents: Default::default(),
         integrations: Default::default(),
         web: Default::default(),
         mcp: Default::default(),
@@ -1349,6 +1355,7 @@ fn settings_scene(backdrop: Option<crate::backdrop::Picture>, cx: &mut App) -> A
         memory: Default::default(),
         skills: Default::default(),
         commands: Default::default(),
+        subagents: Default::default(),
         integrations: Default::default(),
         web: Default::default(),
         mcp: Default::default(),
@@ -1422,6 +1429,78 @@ fn agents_scene(backdrop: Option<crate::backdrop::Picture>, cx: &mut App) -> Any
             fixtures::strip(Some(fixtures::WORKING_TITLE)),
         )
         .with_panes(panes, false);
+        match backdrop {
+            Some(picture) => shell.with_backdrop(picture),
+            None => shell,
+        }
+    })
+    .into()
+}
+
+#[derive(Clone, Copy, PartialEq)]
+enum SubagentsScene {
+    List,
+    Editor,
+}
+
+/// Settings › Sub-agents in one of its states.
+fn subagents_scene(scene: SubagentsScene, backdrop: Option<crate::backdrop::Picture>, cx: &mut App) -> AnyView {
+    use wack_core::agents::{AgentEntry, AgentsConfig, Delegation};
+    let connections = fixtures::connections();
+    let mut entries: Vec<AgentEntry> = wack_core::agents::builtins().into_iter().map(|agent| AgentEntry { agent, enabled: true, customised: false }).collect();
+    // The user's own Review, a role of theirs switched off, and one from Claude Code.
+    entries[1].agent.file = Some("/Users/you/Library/Application Support/com.wackcode.desktop/v3/agents/review.md".into());
+    entries[1].agent.source = "Your agents".into();
+    entries[1].agent.description = "Reviews a change the way the team does: correctness, then naming, then tests. Makes no edits.".into();
+    entries[1].customised = true;
+    let mut docs = entries[0].agent.clone();
+    docs.name = "docs-check".into();
+    docs.description = "Checks the docs match the code and lists every place they disagree. Makes no edits.".into();
+    docs.file = Some("/x/docs-check.md".into());
+    docs.source = "Your agents".into();
+    entries.insert(0, AgentEntry { agent: docs, enabled: false, customised: false });
+    let mut tester = entries[3].agent.clone();
+    tester.name = "test-runner".into();
+    tester.description = "Runs the test suite and reports failures with the shortest reproduction it can find.".into();
+    tester.file = Some("/Users/you/.claude/agents/test-runner.md".into());
+    tester.source = "Claude Code".into();
+    tester.tools = Some(vec!["read".into(), "grep".into(), "bash".into()]);
+    entries.push(AgentEntry { agent: tester, enabled: true, customised: false });
+    let mut state = crate::subagents_page::SubagentsState {
+        entries,
+        problems: Vec::new(),
+        folder: "/Users/you/Library/Application Support/com.wackcode.desktop/v3/agents".into(),
+        editor: None,
+        error: None,
+        helper_open: scene == SubagentsScene::List,
+    };
+    if scene == SubagentsScene::Editor {
+        let review = state.entries.iter().find(|entry| entry.agent.name == "review").map(|entry| entry.agent.clone());
+        state.editor = Some(crate::subagents_page::AgentEditor::new(review.as_ref(), false, true, cx));
+    }
+    let config = AgentsConfig {
+        delegation: Delegation::Auto,
+        helper: Some(wack_core::ModelChoice { connection: Some(connections[0].id.clone()), model: connections[0].models.last().map(|model| model.id.clone()), effort: None }),
+        off: vec!["docs-check".into()],
+        tool_folders: vec!["claude".into()],
+    };
+    let titles = crate::titles_card::TitlesData::new(&wack_core::AutoTitleConfig { enabled: true, connection: Some(connections[0].id.clone()), model: connections[0].models.last().map(|model| model.id.clone()) }, &connections, false, None);
+    let form = ProviderForm::new(cx);
+    let data = SettingsData {
+        section: Section::Subagents,
+        providers: ProvidersData::new(&connections, |_| true, &form, cx),
+        appearance: fixtures::appearance(None, cx),
+        tools: Default::default(),
+        memory: Default::default(),
+        skills: Default::default(),
+        commands: Default::default(),
+        subagents: state.data(&config, &connections, titles, cx),
+        integrations: Default::default(),
+        web: Default::default(),
+        mcp: Default::default(),
+    };
+    cx.new(|_| {
+        let shell = Shell::showing(fixtures::sidebar(Selected::None), Screen::Settings(Box::new(data)));
         match backdrop {
             Some(picture) => shell.with_backdrop(picture),
             None => shell,
@@ -1563,6 +1642,7 @@ fn memory_scene(scene: MemoryScene, backdrop: Option<crate::backdrop::Picture>, 
         memory: state.data(cx),
         skills: Default::default(),
         commands: Default::default(),
+        subagents: Default::default(),
         integrations: Default::default(),
         web: Default::default(),
         mcp: Default::default(),
@@ -1784,6 +1864,7 @@ fn skills_scene(scene: SkillsScene, backdrop: bool, cx: &mut App) -> AnyView {
         memory: Default::default(),
         skills: state.data(cx),
         commands: Default::default(),
+        subagents: Default::default(),
         integrations: Default::default(),
         web: Default::default(),
         mcp: Default::default(),
@@ -1837,6 +1918,7 @@ fn commands_scene(editing: bool, cx: &mut App) -> AnyView {
         memory: Default::default(),
         skills: Default::default(),
         commands: state.data(cx),
+        subagents: Default::default(),
         integrations: Default::default(),
         web: Default::default(),
         mcp: Default::default(),
@@ -1959,6 +2041,7 @@ fn mcp_scene(scene: McpScene, backdrop: Option<crate::backdrop::Picture>, cx: &m
         memory: Default::default(),
         skills: Default::default(),
         commands: Default::default(),
+        subagents: Default::default(),
         integrations: Default::default(),
         web: Default::default(),
         mcp,
@@ -2080,6 +2163,7 @@ fn web_scene(scene: WebScene, backdrop: Option<crate::backdrop::Picture>, cx: &m
         memory: Default::default(),
         skills: Default::default(),
         commands: Default::default(),
+        subagents: Default::default(),
         integrations: Default::default(),
         web,
         mcp: Default::default(),
@@ -2134,6 +2218,7 @@ fn integrations_scene(scene: UsageScene, backdrop: Option<crate::backdrop::Pictu
         memory: Default::default(),
         skills: Default::default(),
         commands: Default::default(),
+        subagents: Default::default(),
         integrations: crate::integrations_page::IntegrationsData { status },
         web: Default::default(),
         mcp: Default::default(),

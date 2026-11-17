@@ -509,7 +509,7 @@ fn validate(name: &str, description: &str, hint: &str, body: &str) -> Result<(St
     Ok((skills::validate_name(name)?, skills::validate_description(description)?, skills::validate_hint(hint)?, skills::validate_body(body)?))
 }
 
-fn write_atomic(file: &Path, text: &str) -> Result<(), String> {
+pub(crate) fn write_atomic(file: &Path, text: &str) -> Result<(), String> {
     let name = file.file_name().map(|name| name.to_string_lossy().into_owned()).unwrap_or_default();
     // A leading dot keeps the half-written file out of every scan.
     let staging = file.with_file_name(format!(".{name}.saving"));

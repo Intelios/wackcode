@@ -266,6 +266,12 @@ impl TextField {
         cx.notify();
     }
 
+    /// Sets the text with the caret at its start, so a long text opens at its top.
+    pub fn set_text_at_start(&mut self, text: &str, cx: &mut Context<Self>) {
+        self.set_text(text, cx);
+        self.buffer.move_to(0, false);
+    }
+
     /// A line break at the caret, for an owner whose Return means "new line" (a note's body).
     pub fn insert_line_break(&mut self, cx: &mut Context<Self>) {
         if self.multiline {

@@ -49,6 +49,8 @@ use crate::{
         ToggleModelEffort, SwitchSkill, SwitchSkillFolder, RemoveSkillFolder, OpenSkill, CopySkill, ChooseSkillUse, NewSkill, SaveSkill,
         CloseSkill, AskDeleteSkill, ConfirmSkillDelete, CancelSkillDelete, AddSkillFolder, ImportSkills, SwitchSlashCommand, OpenSlashCommand,
         NewSlashCommand, SaveSlashCommand, CloseSlashCommand, AskDeleteSlashCommand, ConfirmSlashCommandDelete, CancelSlashCommandDelete,
+        ChooseDelegation, ToggleHelperModels, ChooseHelperModel, SwitchAgent, SwitchAgentFolder, OpenAgent, NewAgent, DuplicateAgent,
+        ChooseAgentModel, SaveAgent, CloseAgent, AskDeleteAgent, CancelAgentDelete, ConfirmAgentDelete,
     },
     app::{AppState, Menu, RenamePlace, Selection, shown_path},
     appearance_page::AppearanceData,
@@ -737,7 +739,7 @@ impl Shell {
 
 /// Whether one of Settings' editors (memory, skill, command, search provider or MCP server) is open.
 fn settings_editor_open(app: &AppState) -> bool {
-    app.memory.editor.is_some() || app.skills.editor.is_some() || app.templates.editor.is_some() || app.web.editor.is_some() || app.mcp_settings.editor.is_some()
+    app.memory.editor.is_some() || app.skills.editor.is_some() || app.templates.editor.is_some() || app.subagents.editor.is_some() || app.web.editor.is_some() || app.mcp_settings.editor.is_some()
 }
 
 impl Render for Shell {
@@ -1269,6 +1271,54 @@ impl Render for Shell {
                     shell.with_app(cx, |app, cx| app.confirm_slash_command_delete(cx));
                     shell.refocus_if_closed(window, cx);
                 }))
+                .on_action(cx.listener(|shell, action: &ChooseDelegation, _, cx| {
+                    let delegation = action.delegation;
+                    shell.with_app(cx, |app, cx| app.choose_delegation(delegation, cx));
+                }))
+                .on_action(cx.listener(|shell, _: &ToggleHelperModels, _, cx| shell.with_app(cx, |app, cx| app.toggle_helper_models(cx))))
+                .on_action(cx.listener(|shell, action: &ChooseHelperModel, _, cx| {
+                    let (connection, model) = (action.connection.clone(), action.model.clone());
+                    shell.with_app(cx, |app, cx| app.choose_helper_model(connection, model, cx));
+                }))
+                .on_action(cx.listener(|shell, action: &SwitchAgent, _, cx| {
+                    let (name, on) = (action.name.clone(), action.on);
+                    shell.with_app(cx, |app, cx| app.switch_agent(&name, on, cx));
+                }))
+                .on_action(cx.listener(|shell, action: &SwitchAgentFolder, _, cx| {
+                    let (id, on) = (action.id.clone(), action.on);
+                    shell.with_app(cx, |app, cx| app.switch_agent_folder(&id, on, cx));
+                }))
+                .on_action(cx.listener(|shell, action: &OpenAgent, window, cx| {
+                    let name = action.name.clone();
+                    let field = shell.app().and_then(|app| app.update(cx, |app, cx| app.open_agent(Some(&name), cx)));
+                    shell.focus_new_field(field, window, cx);
+                }))
+                .on_action(cx.listener(|shell, _: &NewAgent, window, cx| {
+                    let field = shell.app().and_then(|app| app.update(cx, |app, cx| app.open_agent(None, cx)));
+                    shell.focus_new_field(field, window, cx);
+                }))
+                .on_action(cx.listener(|shell, _: &DuplicateAgent, window, cx| {
+                    let field = shell.app().and_then(|app| app.update(cx, |app, cx| app.duplicate_agent(cx)));
+                    shell.focus_new_field(field, window, cx);
+                }))
+                .on_action(cx.listener(|shell, action: &ChooseAgentModel, _, cx| {
+                    let helper = action.helper;
+                    shell.with_app(cx, |app, cx| app.choose_agent_model(helper, cx));
+                }))
+                .on_action(cx.listener(|shell, _: &SaveAgent, window, cx| {
+                    shell.with_app(cx, |app, cx| app.save_agent(cx));
+                    shell.refocus_if_closed(window, cx);
+                }))
+                .on_action(cx.listener(|shell, _: &CloseAgent, window, cx| {
+                    shell.with_app(cx, |app, cx| app.close_agent(cx));
+                    shell.refocus_if_closed(window, cx);
+                }))
+                .on_action(cx.listener(|shell, _: &AskDeleteAgent, _, cx| shell.with_app(cx, |app, cx| app.ask_delete_agent(true, cx))))
+                .on_action(cx.listener(|shell, _: &CancelAgentDelete, _, cx| shell.with_app(cx, |app, cx| app.ask_delete_agent(false, cx))))
+                .on_action(cx.listener(|shell, _: &ConfirmAgentDelete, window, cx| {
+                    shell.with_app(cx, |app, cx| app.confirm_agent_delete(cx));
+                    shell.refocus_if_closed(window, cx);
+                }))
                 .on_action(cx.listener(|shell, _: &AskDeleteSkill, _, cx| shell.with_app(cx, |app, cx| app.ask_delete_skill(true, cx))))
                 .on_action(cx.listener(|shell, _: &CancelSkillDelete, _, cx| shell.with_app(cx, |app, cx| app.ask_delete_skill(false, cx))))
                 .on_action(cx.listener(|shell, _: &ConfirmSkillDelete, window, cx| {
@@ -1654,9 +1704,7 @@ fn live_view(app: &AppState, cx: &App) -> (SidebarData, Screen, StripData) {
             let appearance = store.appearance();
             Screen::Settings(Box::new(SettingsData {
                 section: app.settings_section,
-                providers: ProvidersData::new(store.connections(), |id| store.has_key(id), &app.form, cx).with_titles(
-                    crate::titles_card::TitlesData::new(store.auto_title(), store.connections(), app.title_models_open, app.title_error.clone()),
-                ),
+                providers: ProvidersData::new(store.connections(), |id| store.has_key(id), &app.form, cx),
                 appearance: AppearanceData {
                     mode: appearance.mode,
                     theme: appearance.theme,
@@ -1673,6 +1721,12 @@ fn live_view(app: &AppState, cx: &App) -> (SidebarData, Screen, StripData) {
                 memory: app.memory.data(cx),
                 skills: app.skills.data(cx),
                 commands: app.templates.data(cx),
+                subagents: app.subagents.data(
+                    store.agents_config(),
+                    store.connections(),
+                    crate::titles_card::TitlesData::new(store.auto_title(), store.connections(), app.title_models_open, app.title_error.clone()),
+                    cx,
+                ),
                 integrations: crate::integrations_page::IntegrationsData { status: store.usage().status() },
                 web: app.web_data(cx),
                 mcp: app.mcp_data(),

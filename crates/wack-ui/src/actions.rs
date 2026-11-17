@@ -162,9 +162,24 @@ actions!(
         ImportSkills,
         /// Dismisses the Build/Run command configuration popover.
         CloseCommandEditor,
-        /// Settings › Providers › Automatic titles: the switch.
+        /// Settings › Sub-agents: opens or closes the helper model list.
+        ToggleHelperModels,
+        /// Settings › Sub-agents: a new agent of the user's own.
+        NewAgent,
+        /// Settings › Sub-agents: a new agent starting as a copy of the one in the editor.
+        DuplicateAgent,
+        /// Settings › Sub-agents: saves the agent the editor describes.
+        SaveAgent,
+        /// Settings › Sub-agents: back to the list.
+        CloseAgent,
+        /// Settings › Sub-agents: asks before the agent in the editor moves to the Trash (for a
+        /// customised built-in, before the built-in is restored).
+        AskDeleteAgent,
+        ConfirmAgentDelete,
+        CancelAgentDelete,
+        /// Settings › Sub-agents › Automatic titles: the switch.
         ToggleAutoTitles,
-        /// Settings › Providers › Automatic titles: opens or closes the model list.
+        /// Settings › Sub-agents › Automatic titles: opens or closes the model list.
         ToggleTitleModels,
         /// Renames the chat on screen, on its tab (File › Rename Chat…).
         RenameChat,
@@ -790,4 +805,49 @@ pub fn init(cx: &mut App) {
 /// The key context the shell's root sets, so the bindings above apply anywhere in the window.
 pub fn context() -> &'static str {
     CONTEXT
+}
+
+/// Settings › Sub-agents: how freely the agent delegates.
+#[derive(Clone, Debug, PartialEq, Action)]
+#[action(namespace = wackcode, no_json)]
+pub struct ChooseDelegation {
+    pub delegation: wack_core::agents::Delegation,
+}
+
+/// Settings › Sub-agents: the helper model, or `None` for the chat's own.
+#[derive(Clone, Debug, PartialEq, Action)]
+#[action(namespace = wackcode, no_json)]
+pub struct ChooseHelperModel {
+    pub connection: Option<String>,
+    pub model: Option<String>,
+}
+
+/// Settings › Sub-agents: one agent's switch.
+#[derive(Clone, Debug, PartialEq, Action)]
+#[action(namespace = wackcode, no_json)]
+pub struct SwitchAgent {
+    pub name: String,
+    pub on: bool,
+}
+
+/// Settings › Sub-agents: opens an agent in the editor.
+#[derive(Clone, Debug, PartialEq, Action)]
+#[action(namespace = wackcode, no_json)]
+pub struct OpenAgent {
+    pub name: String,
+}
+
+/// Settings › Sub-agents' editor: the model the agent runs on.
+#[derive(Clone, Debug, PartialEq, Action)]
+#[action(namespace = wackcode, no_json)]
+pub struct ChooseAgentModel {
+    pub helper: bool,
+}
+
+/// Settings › Sub-agents: another tool's agent folder, on or off.
+#[derive(Clone, Debug, PartialEq, Action)]
+#[action(namespace = wackcode, no_json)]
+pub struct SwitchAgentFolder {
+    pub id: String,
+    pub on: bool,
 }

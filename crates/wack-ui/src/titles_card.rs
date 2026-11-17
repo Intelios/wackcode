@@ -1,5 +1,5 @@
-//! Settings › Providers › Automatic titles: version 2's auto-title card, on the page whose
-//! connections it picks from (it moves to Sub-agents when that page exists).
+//! Settings › Sub-agents › Automatic titles: version 2's auto-title card, beside the helper model
+//! (both are small requests a chat makes beside its own).
 //!
 //! The model is picked from a list that opens inside the card, one row per model of each
 //! connection that is on; the switch cannot go on until one is picked. The engine checks the

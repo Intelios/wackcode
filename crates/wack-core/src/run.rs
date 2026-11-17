@@ -60,6 +60,9 @@ pub struct RunSetup {
     /// The connections to them, which outlive the run. `None` offers no MCP tools; the app
     /// shares its own, and `wack run` makes one for the run.
     pub mcp_hub: Option<wack_mcp::Hub>,
+    /// Sub-agents (Settings › Sub-agents), or `None` when they are off. Its registry is the
+    /// chat's, which the app swaps in so children outlive the run.
+    pub agents: Option<wack_agent::AgentsSetup>,
 }
 
 pub enum Job {
@@ -98,6 +101,8 @@ impl Store {
             .resolve(&chat.choice)
             .ok_or("Add a connection in Settings › Providers to start chatting.")?;
         let provider = self.provider(&resolved.connection)?;
+        let usage = self.usage_recorder(&resolved.connection, &chat.id, &project.path);
+        let children = self.child_model(&resolved, &chat.id, &project.path)?;
         Ok(RunSetup {
             provider: Arc::new(provider),
             session_path: self.session_path(chat),
@@ -115,10 +120,11 @@ impl Store {
             skill_roots: self.skill_roots(),
             disabled_skills: self.disabled_skills(),
             tasks: None,
-            usage: Some(self.usage_recorder(&resolved.connection, &chat.id, &project.path)),
+            usage: Some(usage),
             web: self.web_setup(),
             mcp_servers: self.mcp_specs_for(&project.path),
             mcp_hub: None,
+            agents: self.agents_setup(children, &chat.id, &project.path, wack_agent::Agents::new()),
         })
     }
 }
@@ -151,6 +157,9 @@ pub async fn run(
     if let Some(tasks) = setup.tasks {
         kit = kit.with_tasks(&session, tasks);
     }
+    if let Some(agents) = setup.agents {
+        kit = kit.with_agents(&session, agents);
+    }
     let mut tools = wack_tools::core_tools();
     tools.extend(kit.tools());
     match wack_web::tools(&setup.web) {
@@ -168,6 +177,9 @@ pub async fn run(
         mcp = wack_mcp::assemble(hub, &setup.mcp_servers, &setup.cwd, &control.stop_token(), starting).await;
     }
     tools.extend(mcp.tools);
+    // Sub-agents last: each child gets its role's share of everything above.
+    let agent_tools = kit.agent_tools(&tools);
+    tools.extend(agent_tools);
     let registry = match Registry::new(tools) {
         Ok(registry) => Arc::new(registry),
         Err(message) => return finished(Err(message), None),
@@ -253,6 +265,7 @@ mod tests {
             web: wack_web::WebSetup::default(),
             mcp_servers: Vec::new(),
             mcp_hub: None,
+            agents: None,
         }
     }
 

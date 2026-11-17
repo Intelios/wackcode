@@ -17,9 +17,9 @@ use std::{
 };
 
 use args::Args;
-use wack_agent::{Agent, AgentMode, Control, Kit, Outcome, Profile, Registry, Session, Settings, Tasks};
+use wack_agent::{Agent, AgentMode, Agents, Control, Kit, Outcome, Profile, Registry, Session, Settings, Tasks};
 use wack_core::{
-    Connection, Model, NewConnection, Reasoning, Store,
+    Connection, Model, NewConnection, Reasoning, Resolved, Store,
     skills::{self, Outgoing},
 };
 use wack_llm::WireFormat;
@@ -42,6 +42,7 @@ const HELP: &str = "wack: the WackCode agent without the app
                                A prompt starting with /name runs that skill or command, as in the app.
   wack skills                  List the skills a run loads, and any that could not load.
   wack commands                List the slash commands a run understands.
+  wack agents                  List the sub-agents a run can start (Settings › Sub-agents).
   wack mcp list                List the MCP servers (Settings › MCP servers) and the projects they reach.
   wack mcp test <name>         Connect to one, list its tools and close. Starts in --cwd, or here.
 
@@ -73,6 +74,7 @@ async fn run(args: &mut Args) -> Result<ExitCode, String> {
         Some("run") => agent(args, &folder).await,
         Some("skills") => list_skills(args, &folder),
         Some("commands") => list_commands(args, &folder),
+        Some("agents") => list_agents(args, &folder),
         Some("mcp") => mcp(args, &folder).await,
         None | Some("help" | "--help" | "-h") => {
             println!("{HELP}");
@@ -179,6 +181,31 @@ fn list_skills(args: &mut Args, folder: &Path) -> Result<ExitCode, String> {
     }
     for lost in &catalog.shadowed {
         println!("{}  ·  {}  (not loaded: {} has a skill with this name)\n  {}", lost.skill.name, lost.skill.source, lost.by, lost.skill.file.display());
+    }
+    for problem in &catalog.problems {
+        println!("{}\n  not loaded: {}", problem.file.display(), problem.message);
+    }
+    Ok(ExitCode::SUCCESS)
+}
+
+fn list_agents(args: &mut Args, folder: &Path) -> Result<ExitCode, String> {
+    args.finish()?;
+    let store = Store::open(folder)?;
+    let config = store.agents_config();
+    let catalog = store.agent_catalog();
+    if config.delegation == wack_agent::Delegation::Off {
+        println!("Sub-agents are off (Settings › Sub-agents).");
+    }
+    for agent in &catalog.agents {
+        let access = if agent.edits() { "edits files" } else { "no edits" };
+        let file = agent.file.as_ref().map(|file| format!("\n  {}", file.display())).unwrap_or_default();
+        println!("{}  ·  {}  ·  {access}  ·  {} model\n  {}{file}", agent.name, agent.source, agent.model.as_str(), agent.description.lines().next().unwrap_or(""));
+    }
+    for name in &config.off {
+        println!("{name}  (switched off)");
+    }
+    for lost in &catalog.shadowed {
+        println!("{}  ·  {}  (not loaded: {} has an agent with this name)", lost.agent.name, lost.agent.source, lost.by);
     }
     for problem in &catalog.problems {
         println!("{}\n  not loaded: {}", problem.file.display(), problem.message);
@@ -336,9 +363,17 @@ async fn agent(args: &mut Args, folder: &Path) -> Result<ExitCode, String> {
     let stem = session.path().file_stem().map(|stem| stem.to_string_lossy().into_owned()).unwrap_or_else(|| "run".into());
     let tasks_folder = store.sessions_folder().parent().map(|data| data.join("tasks").join(format!("cli-{stem}"))).unwrap_or_else(|| std::env::temp_dir().join(&stem));
     let tasks = Tasks::new(tasks_folder);
-    let kit = Kit::new(&session, mode, store.planning_unrestricted(), store.memory_for(session.cwd()))
+    let mut kit = Kit::new(&session, mode, store.planning_unrestricted(), store.memory_for(session.cwd()))
         .with_skills(&store.skill_catalog())
         .with_tasks(&session, tasks.clone());
+    // Sub-agents run on this run's model unless their role asks for the helper.
+    let agents = Agents::new();
+    let stem = session.path().file_stem().map(|stem| stem.to_string_lossy().into_owned()).unwrap_or_default();
+    let resolved = Resolved { connection: connection.clone(), effort: model.pick(effort), model: model.clone() };
+    if let Some(setup) = store.agents_setup(store.child_model(&resolved, &stem, session.cwd())?, &stem, session.cwd(), agents.clone()) {
+        kit = kit.with_agents(&session, setup);
+        print::watch_agents(&agents);
+    }
     // The usage ledger records this run under the session file's stem, the closest thing to a
     // chat it has, and a write that fails is retried while the run lasts.
     let stem = session.path().file_stem().map(|stem| stem.to_string_lossy().into_owned());
@@ -380,6 +415,8 @@ async fn agent(args: &mut Args, folder: &Path) -> Result<ExitCode, String> {
     tools.extend(kit.tools());
     tools.extend(wack_web::tools(&store.web_setup())?);
     tools.extend(mcp.tools);
+    let agent_tools = kit.agent_tools(&tools);
+    tools.extend(agent_tools);
     let registry = Arc::new(Registry::new(tools)?);
     // The effort must be one the model lists in Settings › Providers; without --effort, the
     // app's default for it.
@@ -458,6 +495,7 @@ async fn agent(args: &mut Args, folder: &Path) -> Result<ExitCode, String> {
         wakes += 1;
         outcome = agent.wake(&control, &|event| printer.event(event)).await;
     }
+    agents.stop_all();
     tasks.terminate_all();
     hub.0.terminate_all();
     printer.finish();

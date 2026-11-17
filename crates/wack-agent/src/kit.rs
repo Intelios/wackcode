@@ -12,6 +12,7 @@ use std::{path::PathBuf, sync::Arc};
 
 use crate::{
     agent::{Agent, Feature},
+    agents::{AgentTool, AgentsSetup, Delegation},
     ask::AskUserQuestion,
     memory::Memory,
     plan::{AgentMode, Plan},
@@ -31,6 +32,9 @@ pub struct Kit {
     skills: Option<String>,
     /// The chat's shell tasks, which outlive the run, and what the session said of them.
     tasks: Option<(Tasks, TasksFeature)>,
+    /// Sub-agents, with the session file their sessions go beside.
+    agents: Option<(AgentsSetup, PathBuf)>,
+    unrestricted: bool,
 }
 
 impl Kit {
@@ -43,7 +47,7 @@ impl Kit {
             let index = memory.index();
             (memory, index)
         });
-        Self { plan: Plan::new(session, mode, unrestricted), todo: Todo::new(session), memory, skills: None, tasks: None }
+        Self { plan: Plan::new(session, mode, unrestricted), todo: Todo::new(session), memory, skills: None, tasks: None, agents: None, unrestricted }
     }
 
     /// Lists `catalog`'s skills in the system prompt, for the model to load when a task matches.
@@ -58,6 +62,23 @@ impl Kit {
         let feature = TasksFeature::new(session, tasks.clone());
         self.tasks = Some((tasks, feature));
         self
+    }
+
+    /// Lets the chat start sub-agents. Their tools come from [`Kit::agent_tools`], once the
+    /// chat's other tools are assembled.
+    pub fn with_agents(mut self, session: &Session, setup: AgentsSetup) -> Self {
+        self.agents = Some((setup, session.path().to_path_buf()));
+        self
+    }
+
+    /// The sub-agent tools, given every other tool the chat has (children get their share of
+    /// those). Nothing when sub-agents are off or no role is switched on.
+    pub fn agent_tools(&self, pool: &[Arc<dyn Tool>]) -> Vec<Arc<dyn Tool>> {
+        let Some((setup, session)) = &self.agents else { return Vec::new() };
+        if setup.delegation == Delegation::Off || setup.catalog.is_empty() {
+            return Vec::new();
+        }
+        vec![Arc::new(AgentTool::new(setup.clone(), pool.to_vec(), self.plan.clone(), self.unrestricted, self.skills.clone(), session.clone()))]
     }
 
     /// The tools these features add to a chat's own, in the order the model is shown them.

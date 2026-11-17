@@ -8,16 +8,18 @@
 //!   connection) are one invocation, as version 2 counted them.
 //! - `duration_ms` covers the whole invocation, first attempt to last token.
 
-use std::time::Instant;
+use std::{sync::Arc, time::Instant};
 
 use wack_llm::Usage;
 
-/// Why a model was called. The sub-agent purposes arrive with the sub-agents feature, which
-/// will also give calls their owning child's id.
+/// Why a model was called. A sub-agent's calls carry its id as well ([`ModelCall::subagent_id`]),
+/// whatever their purpose: its compactions stay `Compaction`.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub enum Purpose {
     /// The conversation's own requests.
     Chat,
+    /// A sub-agent's own requests: the `Chat` of a child.
+    Subagent,
     /// A compaction's summary request.
     Compaction,
     /// An automatic chat title.
@@ -29,6 +31,7 @@ impl Purpose {
     pub fn as_str(self) -> &'static str {
         match self {
             Purpose::Chat => "chat",
+            Purpose::Subagent => "subagent",
             Purpose::Compaction => "compaction",
             Purpose::Title => "title",
         }
@@ -67,6 +70,8 @@ pub struct ModelCall {
     pub outcome: CallOutcome,
     /// The provider's own counts, or `None` when it exposed none usable. Never an estimate.
     pub usage: Option<Usage>,
+    /// The sub-agent that made the call, or `None` for the chat itself.
+    pub subagent_id: Option<String>,
 }
 
 /// Receives the loop's model calls. The engine's ledger writer implements this.
@@ -76,7 +81,7 @@ pub trait Recorder: Send + Sync {
 
 /// Reports one finished call to the recorder, when there is one.
 pub(crate) fn report(
-    recorder: &Option<std::sync::Arc<dyn Recorder>>,
+    recorder: &Option<Arc<dyn Recorder>>,
     purpose: Purpose,
     model: &str,
     started: Instant,
@@ -90,6 +95,24 @@ pub(crate) fn report(
             duration_ms: started.elapsed().as_millis() as u64,
             outcome,
             usage,
+            subagent_id: None,
         });
+    }
+}
+
+/// A child's recorder: the parent's, with every call marked as the child's. Its own requests
+/// become [`Purpose::Subagent`]; other purposes (a compaction) keep their own.
+pub struct ForSubagent {
+    pub inner: Arc<dyn Recorder>,
+    pub id: String,
+}
+
+impl Recorder for ForSubagent {
+    fn record(&self, mut call: ModelCall) {
+        if call.purpose == Purpose::Chat {
+            call.purpose = Purpose::Subagent;
+        }
+        call.subagent_id = Some(self.id.clone());
+        self.inner.record(call);
     }
 }

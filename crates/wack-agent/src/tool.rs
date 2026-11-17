@@ -42,6 +42,8 @@ pub struct ToolSpec {
 
 /// What a running tool is given.
 pub struct ToolContext<'a> {
+    /// The id of the call being answered, which the transcript knows it by.
+    pub call_id: String,
     /// The chat's working directory. Relative paths resolve against it.
     pub cwd: PathBuf,
     /// Fires when the user stops the run. A tool that starts anything long-lived must watch it.
@@ -55,7 +57,7 @@ pub struct ToolContext<'a> {
 impl ToolContext<'static> {
     /// A context with nobody on the other end, for running a tool outside a run.
     pub fn detached(cwd: impl Into<PathBuf>) -> Self {
-        Self { cwd: cwd.into(), cancel: CancellationToken::new(), user: User::nobody(), tasks: Tasks::scratch() }
+        Self { call_id: String::new(), cwd: cwd.into(), cancel: CancellationToken::new(), user: User::nobody(), tasks: Tasks::scratch() }
     }
 }
 

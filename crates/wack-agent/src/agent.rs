@@ -595,18 +595,20 @@ impl Agent {
             plans.push(plan);
         }
 
-        let context = ToolContext {
-            cwd: self.cwd.clone(),
-            cancel: control.cancel.clone(),
-            user: User::new(control.clone(), events),
-            tasks: self.tasks.clone(),
-        };
         let features = &self.features;
+        let (cwd, tasks) = (&self.cwd, &self.tasks);
         let run_one = |index: usize| {
             let (id, name, input) = &calls[index];
             let plan = &plans[index];
-            let context = &context;
+            let context = ToolContext {
+                call_id: id.clone(),
+                cwd: cwd.clone(),
+                cancel: control.cancel.clone(),
+                user: User::new(control.clone(), events),
+                tasks: tasks.clone(),
+            };
             async move {
+                let context = &context;
                 let result = match plan {
                     Planned::Settled(result) => result.clone(),
                     Planned::Run { .. } if control.stopped() => Err(STOPPED.to_string()),

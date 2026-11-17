@@ -165,7 +165,7 @@ fn added_label(path: &Path) -> String {
 }
 
 impl Store {
-    fn home(&self) -> PathBuf {
+    pub(crate) fn home(&self) -> PathBuf {
         self.home_override().cloned().unwrap_or_else(|| std::env::var_os("HOME").map(PathBuf::from).unwrap_or_else(|| PathBuf::from("/")))
     }
 

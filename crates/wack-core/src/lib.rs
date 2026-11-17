@@ -8,9 +8,10 @@
 //! So far: the data folder, the secret store, connections, projects, chats, running the agent for
 //! a chat (`run`), what changed in a project (`git`), terminals (`terminal`), how the app looks
 //! (`appearance`), where each project's memory lives (`memory`), skills and slash commands
-//! (`skills`), automatic chat titles (`title`), the usage ledger TokenTrail reads (`usage`), the
+//! (`skills`), sub-agents' settings (`agents`), automatic chat titles (`title`), the usage ledger TokenTrail reads (`usage`), the
 //! web tools' settings (`web`), and the MCP servers (`mcp`).
 
+pub mod agents;
 pub mod appearance;
 pub mod git;
 pub mod mcp;

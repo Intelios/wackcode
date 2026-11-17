@@ -1,13 +1,15 @@
 //! Shows a run on the terminal: the reply as it streams, and a line or two per tool call.
 
 use std::{
+    collections::HashMap,
     io::{IsTerminal, Write},
     sync::{Arc, Mutex},
 };
 
 use serde_json::Value;
 use wack_agent::{
-    Event,
+    Agents, Event,
+    agents::Status as AgentStatus,
     plan::{PLAN_STATE, PlanState},
     todo::{Status, TODO_STATE, TodoList},
 };
@@ -189,10 +191,44 @@ fn summary(name: &str, input: &Value) -> String {
         "stop_task" => field("id"),
         "read" | "write" | "edit" | "ls" => field("path"),
         "grep" | "find" => field("pattern"),
+        wack_agent::agents::AGENT => Some(format!("{} · {}", field("agent").unwrap_or_default(), field("description").unwrap_or_default())),
         _ => None,
     }
     .unwrap_or_else(|| if input.as_object().is_some_and(|object| object.is_empty()) { String::new() } else { input.to_string() });
     let line = text.lines().next().unwrap_or_default();
     let short: String = line.chars().take(140).collect();
     if short.len() < text.len() { format!("{short}…") } else { short }
+}
+
+/// Prints each sub-agent's start, steps and end, indented under the call that started it.
+pub fn watch_agents(agents: &Agents) {
+    let seen: Mutex<HashMap<String, (u32, bool)>> = Mutex::default();
+    let listed = agents.clone();
+    agents.set_observer(move |_| {
+        let mut seen = seen.lock().unwrap();
+        for child in listed.list() {
+            let (steps, ended) = seen.entry(child.id.clone()).or_insert_with(|| {
+                println!("  {}", paint("36", &format!("↳ {} {} · {}", child.id, child.role, child.description)));
+                (0, false)
+            });
+            if child.tool_calls > *steps {
+                *steps = child.tool_calls;
+                if let Some(activity) = &child.activity {
+                    println!("    {}", dim(&format!("· {} {}", activity.tool, activity.target)));
+                }
+            }
+            if !*ended && !child.status.running() {
+                *ended = true;
+                let how = match &child.status {
+                    AgentStatus::Done => "done".to_string(),
+                    AgentStatus::Failed { message } => format!("failed: {message}"),
+                    AgentStatus::Stopped { .. } => "stopped".to_string(),
+                    AgentStatus::Interrupted => "interrupted".to_string(),
+                    AgentStatus::Running => unreachable!(),
+                };
+                println!("  {}", paint("36", &format!("↳ {} {how} · {} tool calls", child.id, child.tool_calls)));
+            }
+        }
+        let _ = std::io::stdout().flush();
+    });
 }

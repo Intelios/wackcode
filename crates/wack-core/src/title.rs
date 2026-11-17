@@ -94,6 +94,7 @@ pub async fn generate(
                 duration_ms: started.elapsed().as_millis() as u64,
                 outcome,
                 usage,
+                subagent_id: None,
             });
         }
     };

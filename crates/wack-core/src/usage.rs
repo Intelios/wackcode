@@ -334,7 +334,7 @@ impl Recorder for RunRecorder {
             provider_name: self.provider_name.clone(),
             model: call.model,
             purpose: call.purpose.as_str().to_string(),
-            subagent_id: None,
+            subagent_id: call.subagent_id,
             outcome: call.outcome.as_str().to_string(),
             tokens: usage.map(|usage| Tokens {
                 input: usage.input,
@@ -547,6 +547,7 @@ mod tests {
             duration_ms: 1234,
             outcome: CallOutcome::Completed,
             usage: Some(Usage { input: 10, output: 5, cache_read: 3, cache_write: 2 }),
+            subagent_id: None,
         });
         let root = temp.path().join("usage/v1");
         let month = fs::read_dir(&root).unwrap().next().unwrap().unwrap().path();
@@ -579,6 +580,7 @@ mod tests {
             duration_ms: 5,
             outcome: CallOutcome::Failed,
             usage: None,
+            subagent_id: None,
         });
         run.record(ModelCall {
             purpose: Purpose::Compaction,
@@ -586,6 +588,7 @@ mod tests {
             duration_ms: 5,
             outcome: CallOutcome::Completed,
             usage: Some(Usage::default()),
+            subagent_id: None,
         });
         let root = temp.path().join("usage/v1");
         let month = fs::read_dir(&root).unwrap().next().unwrap().unwrap().path();
@@ -596,5 +599,34 @@ mod tests {
             .map(|line| serde_json::from_str::<Record>(line).unwrap().tokens)
             .collect();
         assert_eq!(tokens, [None, None], "absent counts and all-zero counts are both null");
+    }
+
+    #[test]
+    fn a_sub_agents_calls_carry_its_id_and_its_compactions_keep_their_purpose() {
+        let temp = tempfile::tempdir().unwrap();
+        let child = wack_agent::usage::ForSubagent { inner: Arc::new(recorder(temp.path())), id: "chat-9/a1".into() };
+        for purpose in [Purpose::Chat, Purpose::Compaction] {
+            child.record(ModelCall {
+                purpose,
+                model: "m".into(),
+                duration_ms: 5,
+                outcome: CallOutcome::Completed,
+                usage: None,
+                subagent_id: None,
+            });
+        }
+        let root = temp.path().join("usage/v1");
+        let month = fs::read_dir(&root).unwrap().next().unwrap().unwrap().path();
+        let file = fs::read_dir(&month).unwrap().next().unwrap().unwrap().path();
+        let records: Vec<(String, Option<String>)> = fs::read_to_string(&file)
+            .unwrap()
+            .lines()
+            .map(|line| serde_json::from_str::<Record>(line).unwrap())
+            .map(|record| (record.purpose, record.subagent_id))
+            .collect();
+        assert_eq!(
+            records,
+            [("subagent".to_string(), Some("chat-9/a1".to_string())), ("compaction".to_string(), Some("chat-9/a1".to_string()))]
+        );
     }
 }

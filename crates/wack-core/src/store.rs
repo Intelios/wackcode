@@ -317,6 +317,9 @@ struct State {
     /// Settings › MCP servers.
     #[serde(default)]
     mcp: crate::mcp::McpConfig,
+    /// Settings › Sub-agents.
+    #[serde(default)]
+    agents: crate::agents::AgentsConfig,
 }
 
 fn recording_on() -> bool {
@@ -488,6 +491,14 @@ impl Store {
 
     pub(crate) fn web_state_mut(&mut self) -> &mut crate::web::WebConfig {
         &mut self.state.web
+    }
+
+    pub(crate) fn agents_state(&self) -> &crate::agents::AgentsConfig {
+        &self.state.agents
+    }
+
+    pub(crate) fn agents_state_mut(&mut self) -> &mut crate::agents::AgentsConfig {
+        &mut self.state.agents
     }
 
     pub(crate) fn mcp_state(&self) -> &crate::mcp::McpConfig {
@@ -1042,7 +1053,7 @@ impl Store {
         self.save()
     }
 
-    /// Deletes a chat and its conversation file.
+    /// Deletes a chat, its conversation file and its sub-agents' sessions.
     pub fn delete_chat(&mut self, id: &str) -> Result<(), String> {
         let Some(chat) = self.chat(id).cloned() else {
             return Ok(());
@@ -1050,6 +1061,7 @@ impl Store {
         self.state.chats.retain(|listed| listed.id != id);
         self.save()?;
         let _ = fs::remove_dir_all(self.tasks_folder(&chat));
+        let _ = fs::remove_dir_all(wack_agent::agents::children_folder(&self.session_path(&chat)));
         match fs::remove_file(self.session_path(&chat)) {
             Err(error) if error.kind() != std::io::ErrorKind::NotFound => {
                 Err(format!("Could not delete the chat's file: {error}"))

@@ -61,6 +61,23 @@ impl Fields {
         matches!(self.get(key), Yaml::Boolean(true))
     }
 
+    /// A list of words, written as a YAML list or as one comma-separated line (`tools: Read,
+    /// Grep`, as other tools' agent files have it). `None` when the key is missing.
+    pub fn list(&self, key: &str) -> Option<Vec<String>> {
+        let items: Vec<String> = match self.get(key) {
+            Yaml::Array(items) => items
+                .iter()
+                .filter_map(|item| match item {
+                    Yaml::String(value) | Yaml::Real(value) => Some(value.clone()),
+                    Yaml::Integer(value) => Some(value.to_string()),
+                    _ => None,
+                })
+                .collect(),
+            _ => self.text(key)?.split(',').map(str::to_string).collect(),
+        };
+        Some(items.into_iter().map(|item| item.trim().to_string()).filter(|item| !item.is_empty()).collect())
+    }
+
     /// `argument-hint`: an unquoted `[files]` parses as a YAML list, and is rebuilt as the
     /// `"[files]"` the writer meant.
     pub fn hint(&self, key: &str) -> Option<String> {

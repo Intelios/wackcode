@@ -496,7 +496,7 @@ impl Agents {
             seen: crate::tool::Seen::default(),
         };
         use crate::tool::Tool as _;
-        messenger.run(serde_json::json!({ "agent_id": id, "message": text, "background": true }), &context).await
+        messenger.run(serde_json::json!({ "agent_id": id, "message": text, "background": true }), &context).await.map(|output| output.text)
     }
 
     /// The reports waiting for the model, in the order they came. Empties the inbox.

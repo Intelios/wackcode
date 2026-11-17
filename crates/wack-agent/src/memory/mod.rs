@@ -18,7 +18,7 @@ use std::{path::PathBuf, sync::Arc};
 use async_trait::async_trait;
 use serde_json::{Value, json};
 
-use crate::tool::{Loading, Tool, ToolContext, ToolSpec};
+use crate::tool::{Loading, Tool, ToolContext, ToolOutput, ToolSpec};
 use store::{Kind, MAX_BODY_CHARS, MAX_DESCRIPTION_CHARS, MAX_TITLE_CHARS};
 
 pub const MEMORY_SAVE: &str = "memory_save";
@@ -95,7 +95,7 @@ impl Tool for Save {
         }
     }
 
-    async fn run(&self, input: Value, _: &ToolContext<'_>) -> Result<String, String> {
+    async fn run(&self, input: Value, _: &ToolContext<'_>) -> Result<ToolOutput, String> {
         let kind = Kind::parse(text(&input, "type")).ok_or("type must be one of user, feedback, project, reference.")?;
         let title = one_line(text(&input, "title"), MAX_TITLE_CHARS);
         let description = one_line(text(&input, "description"), MAX_DESCRIPTION_CHARS);
@@ -115,7 +115,7 @@ impl Tool for Save {
             None => store::available_name(&self.0, &store::note_name(kind, &title)),
         };
         store::write(&self.0, &name, kind, &title, &description, &body)?;
-        Ok(format!("{} {name}: {title}", if requested.is_some() { "Updated" } else { "Saved" }))
+        Ok(format!("{} {name}: {title}", if requested.is_some() { "Updated" } else { "Saved" }).into())
     }
 }
 
@@ -144,7 +144,7 @@ impl Tool for Recall {
         }
     }
 
-    async fn run(&self, input: Value, _: &ToolContext<'_>) -> Result<String, String> {
+    async fn run(&self, input: Value, _: &ToolContext<'_>) -> Result<ToolOutput, String> {
         let names: Vec<String> = input
             .get("names")
             .and_then(Value::as_array)
@@ -173,7 +173,7 @@ impl Tool for Recall {
                 None => format!("No memory named '{name}'."),
             })
             .collect();
-        Ok(parts.join("\n\n"))
+        Ok(parts.join("\n\n").into())
     }
 }
 
@@ -200,7 +200,7 @@ impl Tool for Forget {
         }
     }
 
-    async fn run(&self, input: Value, _: &ToolContext<'_>) -> Result<String, String> {
+    async fn run(&self, input: Value, _: &ToolContext<'_>) -> Result<ToolOutput, String> {
         let name = text(&input, "name").trim();
         if name.is_empty() {
             return Err("Give memory_forget the note's name.".into());
@@ -210,7 +210,7 @@ impl Tool for Forget {
             return Err(format!("No memory named '{name}'."));
         }
         store::trash(&self.0, name)?;
-        Ok(format!("Forgot {name}."))
+        Ok(format!("Forgot {name}.").into())
     }
 }
 
@@ -220,7 +220,7 @@ mod tests {
 
     async fn call(memory: &Memory, name: &str, input: Value) -> Result<String, String> {
         let tool = memory.tools().into_iter().find(|tool| tool.spec().name == name).unwrap();
-        tool.run(input, &ToolContext::detached("/tmp")).await
+        tool.run(input, &ToolContext::detached("/tmp")).await.map(|output| output.text)
     }
 
     #[tokio::test]

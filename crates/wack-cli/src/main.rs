@@ -434,6 +434,7 @@ async fn agent(args: &mut Args, folder: &Path) -> Result<ExitCode, String> {
         effort: model.effort_for(effort),
         max_output_tokens: None,
         context_window: model.context_window,
+        accepts_images: model.accepts_images,
         ultra: effort.is_ultra(),
         commit_attribution: store.git_config().commit_attribution,
     };

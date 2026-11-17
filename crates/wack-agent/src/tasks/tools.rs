@@ -19,7 +19,7 @@ use super::{Kind, NOTE_PREFIX, Status, StoppedBy, Task, TaskInfo, Tasks, Why, el
 use crate::{
     agent::Feature,
     session::{Note, Session},
-    tool::{Loading, Tool, ToolContext, ToolSpec},
+    tool::{Loading, Tool, ToolContext, ToolOutput, ToolSpec},
 };
 
 pub const STOP_TASK: &str = "stop_task";
@@ -104,17 +104,17 @@ impl Tool for StopTask {
         }
     }
 
-    async fn run(&self, input: Value, context: &ToolContext<'_>) -> Result<String, String> {
+    async fn run(&self, input: Value, context: &ToolContext<'_>) -> Result<ToolOutput, String> {
         let input: StopInput = parse(input)?;
         let Some(task) = context.tasks.get(&input.id) else {
             return Err(NO_SUCH_TASK.to_string());
         };
         let command = first_line(&task.command).to_string();
         if !task.info().status.running() {
-            return Ok(format!("Task {} (`{command}`) had already ended.", task.id));
+            return Ok(format!("Task {} (`{command}`) had already ended.", task.id).into());
         }
         context.tasks.stop(&task.id, StoppedBy::Agent).await;
-        Ok(format!("Stopped task {} (`{command}`).", task.id))
+        Ok(format!("Stopped task {} (`{command}`).", task.id).into())
     }
 }
 
@@ -142,7 +142,7 @@ impl Tool for WaitForTasks {
         }
     }
 
-    async fn run(&self, _input: Value, context: &ToolContext<'_>) -> Result<String, String> {
+    async fn run(&self, _input: Value, context: &ToolContext<'_>) -> Result<ToolOutput, String> {
         let (tasks, agents) = (&context.tasks, &context.agents);
         let agents_working = || agents.active().into_iter().filter(|info| info.background).collect::<Vec<_>>();
         if tasks.running().is_empty() && !tasks.has_news() && agents_working().is_empty() && !agents.has_news() {
@@ -191,7 +191,7 @@ impl Tool for WaitForTasks {
             }
             parts.push(list.join("\n"));
         }
-        Ok(parts.join("\n\n"))
+        Ok(parts.join("\n\n").into())
     }
 }
 
@@ -240,7 +240,7 @@ impl Tool for Watch {
         }
     }
 
-    async fn run(&self, input: Value, context: &ToolContext<'_>) -> Result<String, String> {
+    async fn run(&self, input: Value, context: &ToolContext<'_>) -> Result<ToolOutput, String> {
         let input: WatchInput = parse(input)?;
         if input.command.trim().is_empty() {
             return Err("The command is empty.".to_string());
@@ -256,7 +256,7 @@ impl Tool for Watch {
             "Watching in the background (ID: {}). Each line it prints reaches you as a notice, a few seconds' worth at a time, and you are told when it ends; do not poll its output file ({}). {ending}",
             task.id,
             task.log().display()
-        ))
+        ).into())
     }
 }
 
@@ -386,7 +386,7 @@ mod tests {
         let folder = tempfile::tempdir().unwrap();
         let tasks = Tasks::new(folder.path());
         let task = tasks.start(folder.path(), "sleep 60", "", Kind::Shell, Some(Why::Asked)).unwrap();
-        let result = StopTask.run(json!({ "id": task.id }), &context(&folder, &tasks)).await.unwrap();
+        let result = StopTask.run(json!({ "id": task.id }), &context(&folder, &tasks)).await.unwrap().text;
         assert_eq!(result, format!("Stopped task {} (`sleep 60`).", task.id));
         assert!(gone(task.pgid).await);
         let unknown = StopTask.run(json!({ "id": "zzzz" }), &context(&folder, &tasks)).await.unwrap_err();
@@ -402,7 +402,7 @@ mod tests {
 
         tasks.start(folder.path(), "sleep 0.2; echo built", "", Kind::Shell, Some(Why::Asked)).unwrap();
         let slow = tasks.start(folder.path(), "sleep 60", "", Kind::Shell, Some(Why::Asked)).unwrap();
-        let result = WaitForTasks.run(json!({}), &context).await.unwrap();
+        let result = WaitForTasks.run(json!({}), &context).await.unwrap().text;
         assert!(result.contains("While you waited:") && result.contains("built"), "{result}");
         assert!(result.contains(&format!("- {} (`sleep 60`)", slow.id)), "{result}");
         assert!(!tasks.has_news(), "what the wait returned is not delivered again");
@@ -411,7 +411,7 @@ mod tests {
         assert!(again.contains("already waited"), "{again}");
         tasks.inner.replies.fetch_add(1, Ordering::SeqCst);
         tasks.tell(Note { tag: "task:x:end".into(), text: "news".into() });
-        assert!(WaitForTasks.run(json!({}), &context).await.unwrap().contains("news"));
+        assert!(WaitForTasks.run(json!({}), &context).await.unwrap().text.contains("news"));
         tasks.terminate_all();
     }
 
@@ -423,7 +423,8 @@ mod tests {
         let result = Watch
             .run(json!({ "command": "echo one; echo two; echo o\"\"ops >&2; sleep 0.5", "description": "Lines" }), &context)
             .await
-            .unwrap();
+            .unwrap()
+            .text;
         assert!(result.starts_with("Watching in the background (ID: "), "{result}");
         let task = tasks.list().pop().unwrap();
         tasks.get(&task.id).unwrap().ended().await;

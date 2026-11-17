@@ -188,6 +188,7 @@ fn answer_open_calls(reply: Option<&Message>, call_id: &str, directive: &str) ->
                 "This call is your parent's, not yours: it runs separately, and you won't see its result.".to_string()
             },
             is_error: false,
+            images: Vec::new(),
         })
         .collect();
     content.push(Block::Text { text: format!("{COPY_DIRECTIVE}\n\n{directive}") });
@@ -385,8 +386,8 @@ mod tests {
             }
         }
 
-        async fn run(&self, _input: Value, _context: &crate::tool::ToolContext<'_>) -> Result<String, String> {
-            Ok(String::new())
+        async fn run(&self, _input: Value, _context: &crate::tool::ToolContext<'_>) -> Result<crate::tool::ToolOutput, String> {
+            Ok(String::new().into())
         }
     }
 

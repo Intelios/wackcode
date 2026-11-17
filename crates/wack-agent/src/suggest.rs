@@ -26,7 +26,7 @@ use serde_json::{Value, json};
 use crate::{
     agent::Feature,
     session::Session,
-    tool::{Loading, Tool, ToolContext, ToolSpec},
+    tool::{Loading, Tool, ToolContext, ToolOutput, ToolSpec},
 };
 
 pub const SUGGEST_TASK: &str = "suggest_task";
@@ -171,7 +171,7 @@ impl Tool for Suggestions {
         }
     }
 
-    async fn run(&self, input: Value, _: &ToolContext<'_>) -> Result<String, String> {
+    async fn run(&self, input: Value, _: &ToolContext<'_>) -> Result<ToolOutput, String> {
         let suggestion = normalize(&input)?;
         let mut state = self.state.lock().unwrap();
         let key = title_key(&suggestion.title);
@@ -188,7 +188,7 @@ impl Tool for Suggestions {
         Ok(format!(
             "Suggested “{}”. It appears to the user as a card under your final message, with actions to start it later. Don't work on it now, and don't repeat its details in your reply.",
             suggestion.title
-        ))
+        ).into())
     }
 }
 
@@ -229,7 +229,7 @@ mod tests {
         let suggestions = Suggestions::new(&session);
         let context = ToolContext::detached("/tmp");
 
-        let filed = suggestions.run(suggest("One bug"), &context).await.unwrap();
+        let filed = suggestions.run(suggest("One bug"), &context).await.unwrap().text;
         assert!(filed.starts_with("Suggested “One bug”"));
 
         // Spacing and case never make a second suggestion distinct.

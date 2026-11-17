@@ -13,7 +13,7 @@ use wack_llm::testing::{ScriptedProvider, Step, call, say};
 use super::*;
 use crate::{
     Agent, AgentMode, Control, Event, Kit, ModelCall, Outcome, Profile, Purpose, Recorder, Registry, Session, Settings,
-    tool::{Loading, Tool, ToolContext, ToolSpec},
+    tool::{Loading, Tool, ToolContext, ToolOutput, ToolSpec},
 };
 
 /// A read-only tool that answers with what it was asked.
@@ -35,8 +35,8 @@ impl Tool for Look {
         }
     }
 
-    async fn run(&self, input: Value, _context: &ToolContext<'_>) -> Result<String, String> {
-        Ok(format!("contents of {}", input["path"].as_str().unwrap_or("?")))
+    async fn run(&self, input: Value, _context: &ToolContext<'_>) -> Result<ToolOutput, String> {
+        Ok(format!("contents of {}", input["path"].as_str().unwrap_or("?")).into())
     }
 }
 
@@ -55,6 +55,7 @@ fn settings(model: &str) -> Settings {
         effort: None,
         max_output_tokens: None,
         context_window: None,
+        accepts_images: true,
         ultra: false,
         commit_attribution: false,
     }
@@ -237,7 +238,7 @@ impl Tool for Gate {
         ToolSpec { name: "gate".into(), ..Look.spec() }
     }
 
-    async fn run(&self, _input: Value, _context: &ToolContext<'_>) -> Result<String, String> {
+    async fn run(&self, _input: Value, _context: &ToolContext<'_>) -> Result<ToolOutput, String> {
         let _pass = self.0.acquire().await.map_err(|_| "closed".to_string())?;
         Ok("through".into())
     }
@@ -252,8 +253,8 @@ impl Tool for Meet {
         ToolSpec { name: "meet".into(), ..Look.spec() }
     }
 
-    async fn run(&self, _input: Value, _context: &ToolContext<'_>) -> Result<String, String> {
-        tokio::time::timeout(Duration::from_secs(5), self.0.wait()).await.map(|_| "met".to_string()).map_err(|_| "alone".to_string())
+    async fn run(&self, _input: Value, _context: &ToolContext<'_>) -> Result<ToolOutput, String> {
+        tokio::time::timeout(Duration::from_secs(5), self.0.wait()).await.map(|_| "met".into()).map_err(|_| "alone".to_string())
     }
 }
 

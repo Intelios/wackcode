@@ -1,7 +1,7 @@
 use async_trait::async_trait;
 use serde::Deserialize;
 use serde_json::{Value, json};
-use wack_agent::{Loading, Tool, ToolContext, ToolSpec};
+use wack_agent::{Loading, Tool, ToolContext, ToolOutput, ToolSpec};
 
 use crate::text::{parse, resolve};
 
@@ -53,7 +53,7 @@ impl Tool for Edit {
         }
     }
 
-    async fn run(&self, input: Value, context: &ToolContext<'_>) -> Result<String, String> {
+    async fn run(&self, input: Value, context: &ToolContext<'_>) -> Result<ToolOutput, String> {
         let input: Input = parse(input)?;
         let path = resolve(&context.cwd, &input.path);
         let bytes = tokio::fs::read(&path).await.map_err(|error| format!("Could not read {}: {error}.", input.path))?;
@@ -61,7 +61,7 @@ impl Tool for Edit {
         let changed = apply(&original, &input.edits)?;
         tokio::fs::write(&path, changed).await.map_err(|error| format!("Could not write {}: {error}.", input.path))?;
         let noun = if input.edits.len() == 1 { "change" } else { "changes" };
-        Ok(format!("Edited {} ({} {noun}).", input.path, input.edits.len()))
+        Ok(format!("Edited {} ({} {noun}).", input.path, input.edits.len()).into())
     }
 }
 
@@ -158,7 +158,7 @@ mod tests {
         assert_eq!(std::fs::read_to_string(&path).unwrap(), "alpha\nbeta\n");
 
         let input = json!({ "path": "a.rs", "edits": [{ "old_text": "beta", "new_text": "BETA" }] });
-        assert_eq!(Edit.run(input, &context).await.unwrap(), "Edited a.rs (1 change).");
+        assert_eq!(Edit.run(input, &context).await.unwrap().text, "Edited a.rs (1 change).");
         assert_eq!(std::fs::read_to_string(&path).unwrap(), "alpha\nBETA\n");
     }
 }

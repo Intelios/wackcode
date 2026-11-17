@@ -302,6 +302,7 @@ impl Store {
                 effort: resolved.model.effort_for(level),
                 max_output_tokens: None,
                 context_window: resolved.model.context_window,
+                accepts_images: resolved.model.accepts_images,
                 ultra: false,
                 commit_attribution: false,
             },

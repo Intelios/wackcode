@@ -18,7 +18,7 @@ use async_trait::async_trait;
 use serde::Deserialize;
 use serde_json::{Value, json};
 use wack_agent::{
-    Loading, Tool, ToolContext, ToolSpec,
+    Loading, Tool, ToolContext, ToolOutput, ToolSpec,
     tasks::{Holding, Kind, STOP_TASK, Why, moved_result},
 };
 
@@ -68,13 +68,13 @@ impl Tool for Bash {
         }
     }
 
-    async fn run(&self, input: Value, context: &ToolContext<'_>) -> Result<String, String> {
+    async fn run(&self, input: Value, context: &ToolContext<'_>) -> Result<ToolOutput, String> {
         let input: Input = parse(input)?;
         let wait = Duration::from_secs(input.timeout.unwrap_or(DEFAULT_TIMEOUT).clamp(1, MAX_TIMEOUT));
         let tasks = &context.tasks;
         if input.run_in_background {
             let task = tasks.start(&context.cwd, &input.command, &input.description, Kind::Shell, Some(Why::Asked))?;
-            return Ok(moved_result(&task, Why::Asked, wait));
+            return Ok(moved_result(&task, Why::Asked, wait).into());
         }
 
         let task = tasks.start(&context.cwd, &input.command, &input.description, Kind::Shell, None)?;
@@ -87,7 +87,7 @@ impl Tool for Bash {
         if let Some(why) = early {
             // ⌘B has already moved it. A timeout moves it now, unless it ended at that moment.
             if why == Why::User || task.move_to_background(why) {
-                return Ok(moved_result(&task, why, wait));
+                return Ok(moved_result(&task, why, wait).into());
             }
             task.ended().await;
         }
@@ -97,7 +97,7 @@ impl Tool for Bash {
         let text = if cut || task.dropped_output() { format!("[Only the end of the output is shown.]\n{shown}") } else { shown.to_string() };
         let with = |note: String| if text.trim().is_empty() { note } else { format!("{}\n\n{note}", text.trim_end()) };
         match task.info().status {
-            wack_agent::tasks::Status::Finished => Ok(if text.trim().is_empty() { "(No output.)".to_string() } else { text }),
+            wack_agent::tasks::Status::Finished => Ok(if text.trim().is_empty() { "(No output.)".to_string() } else { text }.into()),
             wack_agent::tasks::Status::Failed { code: Some(code), .. } => Err(with(format!("Exit code {code}."))),
             wack_agent::tasks::Status::Failed { .. } => Err(with("The command was killed by a signal.".to_string())),
             wack_agent::tasks::Status::Stopped { .. } => Err(with("The command was stopped.".to_string())),
@@ -134,9 +134,9 @@ mod tests {
     async fn runs_in_the_working_directory_and_merges_both_streams() {
         let folder = tempfile::tempdir().unwrap();
         std::fs::write(folder.path().join("here.txt"), "").unwrap();
-        let output = Bash.run(json!({ "command": "ls; echo oops >&2" }), &context(&folder)).await.unwrap();
+        let output = Bash.run(json!({ "command": "ls; echo oops >&2" }), &context(&folder)).await.unwrap().text;
         assert!(output.contains("here.txt") && output.contains("oops"));
-        assert_eq!(Bash.run(json!({ "command": "true" }), &context(&folder)).await.unwrap(), "(No output.)");
+        assert_eq!(Bash.run(json!({ "command": "true" }), &context(&folder)).await.unwrap().text, "(No output.)");
     }
 
     #[tokio::test]
@@ -151,7 +151,7 @@ mod tests {
         let folder = tempfile::tempdir().unwrap();
         // SAFETY: this test alone sets this variable, and nothing else reads it.
         unsafe { std::env::set_var("OPENROUTER_API_KEY", "sk-or-test") };
-        let output = Bash.run(json!({ "command": "echo \"key=[$OPENROUTER_API_KEY] home=$HOME\"" }), &context(&folder)).await.unwrap();
+        let output = Bash.run(json!({ "command": "echo \"key=[$OPENROUTER_API_KEY] home=$HOME\"" }), &context(&folder)).await.unwrap().text;
         assert!(output.starts_with("key=[] home=/"), "got {output}");
     }
 
@@ -159,7 +159,7 @@ mod tests {
     async fn a_timeout_moves_the_command_to_the_background() {
         let folder = tempfile::tempdir().unwrap();
         let context = context(&folder);
-        let result = Bash.run(json!({ "command": "echo $$; sleep 60", "timeout": 1 }), &context).await.unwrap();
+        let result = Bash.run(json!({ "command": "echo $$; sleep 60", "timeout": 1 }), &context).await.unwrap().text;
         assert!(result.starts_with("Command did not complete within its 1s timeout and was moved to the background (ID: "), "got {result}");
         let task = context.tasks.running().pop().expect("still running");
         let pid: i32 = task.output().trim().parse().unwrap();
@@ -173,7 +173,7 @@ mod tests {
         let folder = tempfile::tempdir().unwrap();
         let context = context(&folder);
         let started = std::time::Instant::now();
-        let result = Bash.run(json!({ "command": "sleep 0.3; echo done", "run_in_background": true }), &context).await.unwrap();
+        let result = Bash.run(json!({ "command": "sleep 0.3; echo done", "run_in_background": true }), &context).await.unwrap().text;
         assert!(started.elapsed() < Duration::from_millis(250));
         assert!(result.starts_with("Started in the background (ID: ") && !result.contains("No output had been read"), "{result}");
         context.tasks.news().await;
@@ -192,7 +192,7 @@ mod tests {
             }
             tasks.background_foreground()
         });
-        let result = Bash.run(json!({ "command": "sleep 60" }), &context).await.unwrap();
+        let result = Bash.run(json!({ "command": "sleep 60" }), &context).await.unwrap().text;
         assert!(mover.await.unwrap());
         assert!(result.starts_with("The user moved this command to the background"), "{result}");
         assert_eq!(context.tasks.running().len(), 1);
@@ -203,7 +203,7 @@ mod tests {
     async fn a_background_process_does_not_outlive_a_command_that_finished() {
         let folder = tempfile::tempdir().unwrap();
         let started = std::time::Instant::now();
-        let output = Bash.run(json!({ "command": "sleep 60 & echo $!" }), &context(&folder)).await.unwrap();
+        let output = Bash.run(json!({ "command": "sleep 60 & echo $!" }), &context(&folder)).await.unwrap().text;
         assert!(started.elapsed() < Duration::from_secs(10), "the tool must not wait for the background process");
         assert!(gone(output.trim().parse().unwrap()).await);
     }
@@ -226,7 +226,7 @@ mod tests {
     #[tokio::test]
     async fn long_output_keeps_its_end() {
         let folder = tempfile::tempdir().unwrap();
-        let output = Bash.run(json!({ "command": "seq 1 200000" }), &context(&folder)).await.unwrap();
+        let output = Bash.run(json!({ "command": "seq 1 200000" }), &context(&folder)).await.unwrap().text;
         assert!(output.starts_with("[Only the end of the output is shown.]"));
         assert!(output.trim_end().ends_with("200000"));
         assert!(output.len() <= crate::text::MAX_BYTES + 100);

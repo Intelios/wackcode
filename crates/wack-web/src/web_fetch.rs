@@ -22,7 +22,7 @@ use std::{
 
 use async_trait::async_trait;
 use serde_json::{Value, json};
-use wack_agent::{Loading, Tool, ToolContext, ToolSpec};
+use wack_agent::{Loading, Tool, ToolContext, ToolOutput, ToolSpec};
 
 use crate::{
     convert::{Page, convert},
@@ -136,10 +136,10 @@ impl Tool for WebFetch {
         }
     }
 
-    async fn run(&self, input: Value, _context: &ToolContext<'_>) -> Result<String, String> {
+    async fn run(&self, input: Value, _context: &ToolContext<'_>) -> Result<ToolOutput, String> {
         let (url, offset) = parse_input(&input)?;
         let entry = self.load(&url).await?;
-        Ok(format_page(&entry, offset))
+        Ok(format_page(&entry, offset).into())
     }
 }
 
@@ -271,7 +271,7 @@ mod tests {
         let base = serve().await;
         let tool = WebFetch::new(Fetcher::new(Policy::loopback_for_tests()).unwrap());
         let context = ToolContext::detached("/");
-        let page = tool.run(json!({ "url": format!("{base}/page") }), &context).await.unwrap();
+        let page = tool.run(json!({ "url": format!("{base}/page") }), &context).await.unwrap().text;
         assert!(page.contains("Title: Hi"), "{page}");
         assert!(page.contains("Hello"));
         assert!(page.contains("Content-Type: text/html"));

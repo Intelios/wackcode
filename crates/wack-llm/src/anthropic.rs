@@ -102,15 +102,26 @@ fn block(block: &Block) -> Option<Value> {
             let input = if input.is_object() { input.clone() } else { json!({}) };
             json!({ "type": "tool_use", "id": id, "name": name, "input": input })
         }
-        Block::ToolResult { tool_use_id, content, is_error } => {
+        Block::ToolResult { tool_use_id, content, is_error, images } if images.is_empty() => {
             json!({ "type": "tool_result", "tool_use_id": tool_use_id, "content": content, "is_error": is_error })
         }
-        Block::Image { media_type, data } => {
-            json!({ "type": "image", "source": { "type": "base64", "media_type": media_type, "data": data } })
+        // Pictures go inside the result, after its text, so the model reads them as the tool's.
+        Block::ToolResult { tool_use_id, content, is_error, images } => {
+            let mut parts = Vec::new();
+            if !content.is_empty() {
+                parts.push(json!({ "type": "text", "text": content }));
+            }
+            parts.extend(images.iter().map(|image| image_block(&image.media_type, &image.data)));
+            json!({ "type": "tool_result", "tool_use_id": tool_use_id, "content": parts, "is_error": is_error })
         }
+        Block::Image { media_type, data } => image_block(media_type, data),
         Block::Opaque { format: WireFormat::AnthropicMessages, value } => value.clone(),
         Block::Opaque { .. } => return None,
     })
+}
+
+fn image_block(media_type: &str, data: &str) -> Value {
+    json!({ "type": "image", "source": { "type": "base64", "media_type": media_type, "data": data } })
 }
 
 enum Partial {
@@ -326,6 +337,30 @@ mod tests {
         let content = body["messages"][1]["content"].as_array().unwrap();
         assert_eq!(content.len(), 1);
         assert_eq!(content[0]["input"], json!({}));
+    }
+
+    #[test]
+    fn tool_result_images_go_inside_the_result() {
+        let mut request = request();
+        let image = crate::Image { media_type: "image/png".into(), data: "AAAA".into() };
+        request.messages.push(Message {
+            role: Role::User,
+            content: vec![
+                Block::ToolResult { tool_use_id: "t1".into(), content: "Shot.".into(), is_error: false, images: vec![image.clone()] },
+                Block::ToolResult { tool_use_id: "t2".into(), content: "Plain.".into(), is_error: false, images: vec![] },
+                Block::ToolResult { tool_use_id: "t3".into(), content: String::new(), is_error: false, images: vec![image] },
+            ],
+        });
+        let body = body(&request, true);
+        let content = &body["messages"][1]["content"];
+        assert_eq!(content[0]["content"][0], json!({"type": "text", "text": "Shot."}));
+        assert_eq!(content[0]["content"][1]["type"], "image");
+        assert_eq!(content[0]["content"][1]["source"], json!({"type": "base64", "media_type": "image/png", "data": "AAAA"}));
+        // Without pictures the result is the plain string it always was.
+        assert_eq!(content[1]["content"], "Plain.");
+        // An empty text sends no empty text block.
+        assert_eq!(content[2]["content"].as_array().unwrap().len(), 1);
+        assert_eq!(content[2]["content"][0]["type"], "image");
     }
 
     const STREAM: &str = r#"event: message_start

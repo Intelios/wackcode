@@ -142,6 +142,11 @@ pub(crate) fn shorten(text: &str, max: usize) -> String {
     format!("{start}\n[… {} characters left out …]\n{end}", count - max)
 }
 
+/// What one picture counts as in [`estimate_tokens`]: about 1,500 tokens, a screenshot's size.
+/// Every picture in the session counts, including ones a request elides, so the estimate errs
+/// high; once the provider has answered, its own count (which reflects the elision) takes over.
+const IMAGE_CHARS: usize = 6_000;
+
 /// A rough token count: the provider's real count is used wherever one is known.
 pub fn estimate_tokens(messages: &[Message]) -> u64 {
     let mut characters = 0usize;
@@ -150,8 +155,8 @@ pub fn estimate_tokens(messages: &[Message]) -> u64 {
             characters += match block {
                 Block::Text { text } | Block::Thinking { text, .. } => text.len(),
                 Block::ToolUse { name, input, .. } => name.len() + input.to_string().len(),
-                Block::ToolResult { content, .. } => content.len(),
-                Block::Image { .. } => 6_000,
+                Block::ToolResult { content, images, .. } => content.len() + images.len() * IMAGE_CHARS,
+                Block::Image { .. } => IMAGE_CHARS,
                 Block::Opaque { value, .. } => value.to_string().len(),
             };
         }
@@ -246,9 +251,15 @@ fn transcript(messages: &[Message], budget_chars: usize) -> String {
                 (Block::ToolUse { name, input, .. }, _) => {
                     parts.push(format!("[assistant called {name}]\n{}", shorten(&input.to_string(), 1_000)));
                 }
-                (Block::ToolResult { content, is_error, .. }, _) => {
+                (Block::ToolResult { content, is_error, images, .. }, _) => {
                     let label = if *is_error { "tool error" } else { "tool result" };
-                    parts.push(format!("[{label}]\n{}", shorten(content, 2_000)));
+                    let mut part = format!("[{label}]\n{}", shorten(content, 2_000));
+                    // The summariser is never sent the pictures, only told they were there.
+                    if !images.is_empty() {
+                        let noun = if images.len() == 1 { "image" } else { "images" };
+                        part.push_str(&format!("\n[{} {noun}]", images.len()));
+                    }
+                    parts.push(part);
                 }
                 (Block::Image { .. }, _) => parts.push("[image]".to_string()),
                 _ => {}
@@ -275,7 +286,7 @@ mod tests {
     fn results(text: &str) -> Message {
         Message {
             role: Role::User,
-            content: vec![Block::ToolResult { tool_use_id: "t".into(), content: text.into(), is_error: false }],
+            content: vec![Block::ToolResult { tool_use_id: "t".into(), content: text.into(), is_error: false, images: Vec::new() }],
         }
     }
 
@@ -308,7 +319,7 @@ mod tests {
                 Message {
                     role: Role::User,
                     content: vec![
-                        Block::ToolResult { tool_use_id: "t".into(), content: "ok".into(), is_error: false },
+                        Block::ToolResult { tool_use_id: "t".into(), content: "ok".into(), is_error: false, images: Vec::new() },
                         Block::Text { text: "and keep the tests".into() },
                     ],
                 },
@@ -357,5 +368,19 @@ mod tests {
         assert!(text.contains("focus on: the API"));
         assert!(text.len() < 10_000, "tool output is shortened before it is sent");
         assert!(request.tools.is_empty());
+    }
+
+    #[test]
+    fn tool_result_pictures_are_estimated_and_named_but_never_sent_to_the_summariser() {
+        let image = wack_llm::Image { media_type: "image/png".into(), data: "x".repeat(400_000) };
+        let shot = Message {
+            role: Role::User,
+            content: vec![Block::ToolResult { tool_use_id: "t".into(), content: "Shot.".into(), is_error: false, images: vec![image.clone(), image] }],
+        };
+        assert_eq!(estimate_tokens(std::slice::from_ref(&shot)), (5 + 2 * IMAGE_CHARS as u64) / 4);
+        let request = request("m", None, &[Message::user("look"), shot], None, 100_000);
+        let text = request.messages[0].text();
+        assert!(text.contains("[tool result]\nShot.\n[2 images]"));
+        assert!(text.len() < 5_000, "the base64 never reaches the summariser");
     }
 }

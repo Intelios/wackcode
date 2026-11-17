@@ -6,7 +6,7 @@ use std::sync::Arc;
 
 use async_trait::async_trait;
 use serde_json::Value;
-use wack_llm::{Message, SystemPart};
+use wack_llm::{Image, Message, SystemPart};
 use tokio_util::sync::CancellationToken;
 
 use crate::{
@@ -116,12 +116,41 @@ impl<'a> User<'a> {
     }
 }
 
+/// What a tool that succeeded hands back: text, and pictures for a tool that has them (a
+/// screenshot). Most tools return text alone, through `From<String>`.
+///
+/// Pictures reach a model only when it accepts them; otherwise the agent drops them and says so
+/// in the text (`images::prepare`), so `text` must make sense on its own.
+#[derive(Clone, Debug, Default, PartialEq, Eq)]
+pub struct ToolOutput {
+    pub text: String,
+    pub images: Vec<Image>,
+}
+
+impl ToolOutput {
+    pub fn with_images(text: impl Into<String>, images: Vec<Image>) -> Self {
+        Self { text: text.into(), images }
+    }
+}
+
+impl From<String> for ToolOutput {
+    fn from(text: String) -> Self {
+        Self { text, images: Vec::new() }
+    }
+}
+
+impl From<&str> for ToolOutput {
+    fn from(text: &str) -> Self {
+        Self::from(text.to_string())
+    }
+}
+
 #[async_trait]
 pub trait Tool: Send + Sync {
     fn spec(&self) -> ToolSpec;
 
-    /// Runs the tool. Both outcomes go back to the model as text; an error is marked as one. The
-    /// future may be dropped at any await point when the user stops the run, so anything that
+    /// Runs the tool. Both outcomes go back to the model; an error is text alone, marked as one.
+    /// The future may be dropped at any await point when the user stops the run, so anything that
     /// must be cleaned up (a child process) needs a guard that does it on drop.
-    async fn run(&self, input: Value, context: &ToolContext<'_>) -> Result<String, String>;
+    async fn run(&self, input: Value, context: &ToolContext<'_>) -> Result<ToolOutput, String>;
 }

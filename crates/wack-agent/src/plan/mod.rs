@@ -39,7 +39,7 @@ use crate::{
     memory::MEMORY_TOOLS,
     tasks::{STOP_TASK, WAIT_FOR_TASKS, WATCH},
     todo::TODO,
-    tool::{Loading, Tool, ToolContext, ToolSpec},
+    tool::{Loading, Tool, ToolContext, ToolOutput, ToolSpec},
 };
 
 pub const PLAN_MODE_ENTER: &str = "plan_mode_enter";
@@ -318,7 +318,7 @@ impl Tool for Enter {
         }
     }
 
-    async fn run(&self, input: Value, _: &ToolContext<'_>) -> Result<String, String> {
+    async fn run(&self, input: Value, _: &ToolContext<'_>) -> Result<ToolOutput, String> {
         let mode = normalize_entry(&input)?;
         let unchanged = {
             let mut state = self.0.state.lock().unwrap();
@@ -330,7 +330,7 @@ impl Tool for Enter {
             "{} mode is {} active. Continue planning in this run under the current mode contract and execution policy. Submit the complete plan with plan_mode_complete when it is decision-ready; the user reviews it before implementation.",
             mode.label(),
             if unchanged { "already" } else { "now" }
-        ))
+        ).into())
     }
 }
 
@@ -364,14 +364,14 @@ impl Tool for Complete {
         }
     }
 
-    async fn run(&self, input: Value, _: &ToolContext<'_>) -> Result<String, String> {
+    async fn run(&self, input: Value, _: &ToolContext<'_>) -> Result<ToolOutput, String> {
         let mut state = self.0.state.lock().unwrap();
         if !state.mode.planning() {
             return Err(ONLY_WHILE_PLANNING.to_string());
         }
         let plan = normalize_plan(&input)?;
         state.plan = Some(plan.clone());
-        Ok(format!("**Proposed Plan**\n\n{plan}"))
+        Ok(format!("**Proposed Plan**\n\n{plan}").into())
     }
 }
 
@@ -475,7 +475,7 @@ mod tests {
 
         assert_eq!(complete.run(json!({ "plan": "  " }), &context).await.unwrap_err(), "plan must not be empty");
         assert_eq!(complete.run(json!({}), &context).await.unwrap_err(), "plan must be a string");
-        let result = complete.run(json!({ "plan": " # Fix it\n\n1. Do it " }), &context).await.unwrap();
+        let result = complete.run(json!({ "plan": " # Fix it\n\n1. Do it " }), &context).await.unwrap().text;
         assert_eq!(result, "**Proposed Plan**\n\n# Fix it\n\n1. Do it");
         for (key, value) in plan.state_to_save() {
             session.set_state(&key, value).unwrap();
@@ -500,10 +500,10 @@ mod tests {
         let context = ToolContext::detached("/tmp");
         let tools = plan.tools();
         let enter = &tools[0];
-        assert!(enter.run(json!({}), &context).await.unwrap().starts_with("Plan mode is now active."));
+        assert!(enter.run(json!({}), &context).await.unwrap().text.starts_with("Plan mode is now active."));
         assert_eq!(plan.mode(), AgentMode::Plan);
-        assert!(enter.run(json!({ "mode": "ultraplan" }), &context).await.unwrap().starts_with("Ultra Plan mode is now active."));
-        assert!(enter.run(json!({ "mode": "ultraplan" }), &context).await.unwrap().starts_with("Ultra Plan mode is already active."));
+        assert!(enter.run(json!({ "mode": "ultraplan" }), &context).await.unwrap().text.starts_with("Ultra Plan mode is now active."));
+        assert!(enter.run(json!({ "mode": "ultraplan" }), &context).await.unwrap().text.starts_with("Ultra Plan mode is already active."));
         let refused = enter.run(json!({ "mode": "build" }), &context).await.unwrap_err();
         assert_eq!(refused, "Planning mode must be plan or ultraplan; only the user can switch back to Build.");
         assert_eq!(plan.mode(), AgentMode::UltraPlan);

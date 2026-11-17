@@ -36,12 +36,17 @@ pub struct Model {
     /// saved before the list existed load that way until the user picks theirs.
     #[serde(default, skip_serializing_if = "Vec::is_empty")]
     pub efforts: Vec<Reasoning>,
+    /// The model reads pictures, so tools' screenshots are sent to it. Most current models do,
+    /// so models saved before the flag existed load as accepting them; a text-only model is
+    /// sent a line in each result saying its pictures were left out instead.
+    #[serde(default = "on", skip_serializing_if = "is_on")]
+    pub accepts_images: bool,
 }
 
 impl Model {
     /// A model that does not reason, as a new model row starts.
     pub fn new(id: impl Into<String>, context_window: Option<u64>) -> Self {
-        Self { id: id.into(), context_window, efforts: Vec::new() }
+        Self { id: id.into(), context_window, efforts: Vec::new(), accepts_images: true }
     }
 
     /// The efforts the model accepts, low to high, never Ultra. Without a list, only Off.
@@ -1191,6 +1196,17 @@ mod tests {
                 Model::new("", None),
             ],
         }
+    }
+
+    #[test]
+    fn models_accept_images_unless_saved_otherwise() {
+        let saved: Model = serde_json::from_str(r#"{"id":"m"}"#).unwrap();
+        assert!(saved.accepts_images, "models saved before the flag existed accept images");
+        assert_eq!(serde_json::to_string(&Model::new("m", None)).unwrap(), r#"{"id":"m"}"#);
+        let text_only = Model { accepts_images: false, ..Model::new("m", None) };
+        let written = serde_json::to_string(&text_only).unwrap();
+        assert_eq!(written, r#"{"id":"m","accepts_images":false}"#);
+        assert_eq!(serde_json::from_str::<Model>(&written).unwrap(), text_only);
     }
 
     #[test]

@@ -1,7 +1,7 @@
 use async_trait::async_trait;
 use serde::Deserialize;
 use serde_json::{Value, json};
-use wack_agent::{Loading, Tool, ToolContext, ToolSpec};
+use wack_agent::{Loading, Tool, ToolContext, ToolOutput, ToolSpec};
 
 use crate::text::{parse, resolve};
 
@@ -37,7 +37,7 @@ impl Tool for Ls {
         }
     }
 
-    async fn run(&self, input: Value, context: &ToolContext<'_>) -> Result<String, String> {
+    async fn run(&self, input: Value, context: &ToolContext<'_>) -> Result<ToolOutput, String> {
         let input: Input = parse(input)?;
         let shown = input.path.as_deref().unwrap_or(".");
         let path = resolve(&context.cwd, shown);
@@ -49,7 +49,7 @@ impl Tool for Ls {
             names.push(format!("{}{slash}", entry.file_name().to_string_lossy()));
         }
         if names.is_empty() {
-            return Ok("(The folder is empty.)".to_string());
+            return Ok("(The folder is empty.)".to_string().into());
         }
         names.sort_by_key(|name| name.to_lowercase());
         let limit = input.limit.unwrap_or(DEFAULT_LIMIT).max(1);
@@ -59,7 +59,7 @@ impl Tool for Ls {
         if total > limit {
             out.push_str(&format!("\n\n[{limit} of {total} entries shown. Set a higher limit to see the rest.]"));
         }
-        Ok(out)
+        Ok(out.into())
     }
 }
 
@@ -77,9 +77,9 @@ mod tests {
             std::fs::write(folder.path().join(file), "").unwrap();
         }
         let context = ToolContext::detached(folder.path().to_path_buf());
-        assert_eq!(Ls.run(json!({}), &context).await.unwrap(), ".env\napple.txt\nempty/\nsrc/\nZed.md");
-        assert_eq!(Ls.run(json!({ "path": "empty" }), &context).await.unwrap(), "(The folder is empty.)");
-        assert!(Ls.run(json!({ "limit": 2 }), &context).await.unwrap().ends_with("[2 of 5 entries shown. Set a higher limit to see the rest.]"));
+        assert_eq!(Ls.run(json!({}), &context).await.unwrap().text, ".env\napple.txt\nempty/\nsrc/\nZed.md");
+        assert_eq!(Ls.run(json!({ "path": "empty" }), &context).await.unwrap().text, "(The folder is empty.)");
+        assert!(Ls.run(json!({ "limit": 2 }), &context).await.unwrap().text.ends_with("[2 of 5 entries shown. Set a higher limit to see the rest.]"));
         assert!(Ls.run(json!({ "path": "missing" }), &context).await.is_err());
     }
 }

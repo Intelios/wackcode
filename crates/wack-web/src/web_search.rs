@@ -10,7 +10,7 @@ use std::sync::Arc;
 
 use async_trait::async_trait;
 use serde_json::{Value, json};
-use wack_agent::{Loading, Tool, ToolContext, ToolSpec};
+use wack_agent::{Loading, Tool, ToolContext, ToolOutput, ToolSpec};
 
 use crate::search::{DEFAULT_COUNT, MAX_COUNT, Recency, SearchClient, SearchHit, normalize_query};
 
@@ -55,7 +55,7 @@ impl Tool for WebSearch {
         }
     }
 
-    async fn run(&self, input: Value, _context: &ToolContext<'_>) -> Result<String, String> {
+    async fn run(&self, input: Value, _context: &ToolContext<'_>) -> Result<ToolOutput, String> {
         let query = input.get("query").and_then(Value::as_str).ok_or("The tool's input is wrong: query must be a non-empty string.")?;
         let count = match input.get("count") {
             None | Some(Value::Null) => None,
@@ -71,7 +71,7 @@ impl Tool for WebSearch {
         };
         let query = normalize_query(query, count, site, recency)?;
         let hits = self.client.search(&query).await?;
-        Ok(format_results(self.client.name(), &query.query, &hits))
+        Ok(format_results(self.client.name(), &query.query, &hits).into())
     }
 }
 
@@ -153,7 +153,7 @@ mod tests {
         searxng.base_url = Some(base);
         let tool = WebSearch::new(Arc::new(SearchClient::new(searxng, None, None).unwrap()));
         let context = ToolContext::detached("/");
-        let text = tool.run(json!({ "query": "t" }), &context).await.unwrap();
+        let text = tool.run(json!({ "query": "t" }), &context).await.unwrap().text;
         assert!(text.contains("1. T\n   https://t.example/\n   About T."), "{text}");
         assert!(tool.run(json!({ "query": "t", "recency": "decade" }), &context).await.unwrap_err().contains("recency"));
         assert!(tool.run(json!({ "query": "t", "count": "many" }), &context).await.unwrap_err().contains("count"));

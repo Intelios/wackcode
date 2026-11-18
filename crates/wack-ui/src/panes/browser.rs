@@ -12,9 +12,12 @@
 //! - The address field belongs to the user: what they type opens even an address the agent may
 //!   not (only http and https, and never a web search, which would add a network origin). Typing
 //!   an address makes the user the tab's driver, so the agent's address rule stops applying to it.
-//! - A press on the page gives the pane the app's focus in the same event, so the app's own keys
-//!   (⌘W, ⌘⇧B) act on the pane and not on whatever had focus before. Where the keyboard itself goes
-//!   is decided before the press is routed, in the engine (`cef::before_press`).
+//! - The page has the keyboard only while the app's focus is in this pane: when it leaves (a
+//!   shortcut, a click elsewhere), the page gives the keyboard back.
+//! - A press on the page gives the pane the app's focus straight after it (`browser::attach`), so
+//!   the app's own keys (⌘W, ⌘⇧B) act on the pane and not on whatever had focus before, and the
+//!   page gets the ones it handles (⌘A). Where the keyboard itself goes is decided before the
+//!   press is routed, in the engine (`cef::before_press`).
 
 use std::{
     cell::{Cell, RefCell},
@@ -77,6 +80,9 @@ pub struct BrowserPane {
     applied: Option<Fitted>,
     /// A still picture in place of the page, for gallery scenes (they have no engine).
     fixture: Option<std::path::PathBuf>,
+    /// Hands the keyboard back from a page when the app's focus leaves this pane by any route
+    /// a press doesn't cover (a shortcut, a new chat's composer): made on the first render.
+    focus_out: Option<gpui::Subscription>,
     _field: Subscription,
     _reply: Subscription,
 }
@@ -111,6 +117,7 @@ impl BrowserPane {
             fitted: Rc::default(),
             applied: None,
             fixture: None,
+            focus_out: None,
             _field: subscription,
             _reply: reply_subscription,
         };
@@ -843,6 +850,9 @@ impl BrowserPane {
 
 impl Render for BrowserPane {
     fn render(&mut self, window: &mut Window, cx: &mut Context<Self>) -> impl IntoElement {
+        if self.focus_out.is_none() {
+            self.focus_out = Some(cx.on_focus_out(&self.focus, window, |_, _, _, _| crate::browser::release_page_focus()));
+        }
         let theme = Theme::get(cx).clone();
         let still = cx.reduce_motion();
         let list = self.tabs.tabs();
@@ -933,6 +943,7 @@ impl Render for BrowserPane {
                 let unshowable = self.unshowable.clone();
                 let fitted = self.fitted.clone();
                 let viewport = state.as_ref().map_or(Viewport::Fit, |state| state.viewport);
+                let focus = self.focus.clone();
                 canvas(
                     |_, _, _| (),
                     move |bounds, _, window, _| {
@@ -945,7 +956,7 @@ impl Render for BrowserPane {
                             None => (bounds, 1.),
                         };
                         fitted.set(Some((id, viewport, (scale * 100.).round() as u32)));
-                        if let Err(message) = crate::browser::show(window, id, frame, PAGE_RADIUS) {
+                        if let Err(message) = crate::browser::show(window, id, &focus, frame, PAGE_RADIUS) {
                             *unshowable.borrow_mut() = Some(message);
                         }
                     },
@@ -1012,13 +1023,6 @@ impl Render for BrowserPane {
                         .child(self.dialog_card(&dialog, &host, &theme, cx)),
                 ))
             })
-            // A press on the page reaches here too (Chromium passes it up the views): the app's
-            // keys act on this pane from now, so ⌘W closes the pane and not the chat.
-            .on_mouse_down(gpui::MouseButton::Left, cx.listener(|pane, _, window, cx| {
-                if !pane.focus.is_focused(window) {
-                    window.focus(&pane.focus, cx);
-                }
-            }))
             .tag("browser-page");
 
         div()

@@ -7302,6 +7302,7 @@ version = "3.0.0-dev.0"
 dependencies = [
  "gpui",
  "gpui_platform",
+ "wack-browser",
  "wack-core",
  "wack-ui",
 ]

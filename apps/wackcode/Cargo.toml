@@ -12,5 +12,6 @@ automation = ["wack-ui/automation", "gpui_platform/test-support"]
 [dependencies]
 wack-ui.workspace = true
 wack-core.workspace = true
+wack-browser.workspace = true
 gpui.workspace = true
 gpui_platform = { workspace = true, features = ["font-kit"] }

@@ -16,6 +16,9 @@ use wack_ui::{
 actions!(wackcode, [Quit]);
 
 fn main() {
+    // Before any other thread: loading Chromium's library swaps the process's allocator (it
+    // starts nothing; the browser starts on first use).
+    wack_browser::cef::load_library();
     // Opened from the Dock, the app has launchd's bare PATH: read the user's login environment
     // now, for `bash` and MCP servers (`npx`, `uvx`).
     wack_core::shell_env::warm();

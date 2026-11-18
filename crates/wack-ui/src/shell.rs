@@ -189,7 +189,7 @@ impl Shell {
             Err(message) => Source::Failed(message.into()),
         };
         motion::follow_system(cx);
-        crate::browser::attach(window);
+        crate::browser::attach(window, cx);
         let activation = cx.observe_window_activation(window, |_, window, cx| {
             if window.is_window_active() {
                 motion::follow_system(cx);

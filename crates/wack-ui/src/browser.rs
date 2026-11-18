@@ -14,9 +14,13 @@
 //!   cached view replays its callbacks without painting again: `begin_frame` is painted first in
 //!   the window, each pane's `show` marks its page, and `end_frame`, painted last, parks the rest.
 
-use std::{cell::RefCell, collections::HashSet, sync::Arc};
+use std::{
+    cell::RefCell,
+    collections::{HashMap, HashSet},
+    sync::Arc,
+};
 
-use gpui::{Bounds, Pixels, Window};
+use gpui::{App, Bounds, FocusHandle, Pixels, WeakFocusHandle, Window};
 use raw_window_handle::{HasWindowHandle, RawWindowHandle};
 use wack_browser::{
     Backend, TabId,
@@ -37,10 +41,31 @@ fn content_view(window: &Window) -> Option<*mut std::ffi::c_void> {
 
 /// Lends the engine the window's view, for pages to live in while parked. Call when the window
 /// opens. Without the overlay yet: a parked page is off screen, so nothing needs to draw over it.
-pub fn attach(window: &Window) {
+///
+/// It also gives a pressed page's pane the app's focus, so the app's keys (⌘W) act on that pane
+/// and the page gets the ones it handles (⌘A): GPUI never hears a press the page handles itself.
+/// The engine calls in from inside AppKit's event dispatch, so the focus moves in a task, which
+/// runs before the next event.
+pub fn attach(window: &Window, cx: &App) {
     if let Some(view) = content_view(window) {
         wack_browser::cef::set_host(view, std::ptr::null_mut());
     }
+    let handle = window.window_handle();
+    let cx = cx.to_async();
+    wack_browser::cef::on_page_press(move |tab| {
+        let Some(focus) = PRESENTED.with(|presented| presented.borrow().panes.get(&tab).and_then(WeakFocusHandle::upgrade)) else {
+            return;
+        };
+        cx.spawn(async move |cx| {
+            let _ = handle.update(cx, |_, window, cx| {
+                // The pane itself, not a field in it (the address): that field would take ⌘A.
+                if !focus.is_focused(window) {
+                    window.focus(&focus, cx);
+                }
+            });
+        })
+        .detach();
+    });
 }
 
 /// Turns on GPUI's overlay plane and keeps pages beneath it. Call before a page is first shown.
@@ -63,6 +88,8 @@ pub fn enable_overlay(window: &Window) -> Result<(), String> {
 struct Presented {
     /// Pages placed in the frame being presented.
     marked: HashSet<TabId>,
+    /// The focus of the pane that last showed each page.
+    panes: HashMap<TabId, WeakFocusHandle>,
     /// Pages on screen after the last frame.
     shown: HashSet<TabId>,
     /// Whether the overlay plane is on, or why it could not be turned on.
@@ -102,7 +129,8 @@ pub fn end_frame(window: &mut Window) {
 
 /// Puts `tab`'s page at `bounds` (window points) when this frame reaches the screen. Call from a
 /// paint pass. Errs when the window could not be prepared for pages; the page stays parked then.
-pub fn show(window: &mut Window, tab: TabId, bounds: Bounds<Pixels>, corner_radius: f32) -> Result<(), String> {
+pub fn show(window: &mut Window, tab: TabId, pane: &FocusHandle, bounds: Bounds<Pixels>, corner_radius: f32) -> Result<(), String> {
+    PRESENTED.with(|presented| presented.borrow_mut().panes.insert(tab, pane.downgrade()));
     let overlay = PRESENTED.with(|presented| presented.borrow().overlay.clone());
     let overlay = match overlay {
         Some(overlay) => overlay,

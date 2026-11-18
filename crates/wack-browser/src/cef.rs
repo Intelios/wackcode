@@ -248,15 +248,30 @@ fn private_dir(path: &Path) -> Result<(), String> {
         .map_err(|e| format!("Could not protect {}: {e}", path.display()))
 }
 
+/// Loads Chromium's library into the process without starting it: no thread, no process, no
+/// network. Call it first thing in `main`, before any other thread exists. Loading the framework
+/// swaps the process's malloc zones (Chromium's allocator), and a thread freeing memory while
+/// that happens crashes the app; so it is never loaded lazily, the first time a page is made.
+/// Outside the app bundle (tests, `cargo run`) there is nothing to load and this does nothing.
+pub fn load_library() {
+    if with_main(|main| main.library.is_some()) {
+        return;
+    }
+    let Ok(exe) = framework_path() else { return };
+    let loader = cef::library_loader::LibraryLoader::new(&exe, false);
+    if loader.load() {
+        with_main(|main| main.library = Some(loader));
+    }
+}
+
 /// Starts CEF. Main thread only; at most once per process.
 fn start() -> Result<(), String> {
     let config = CONFIG
         .get()
         .ok_or("The browser was not configured.")?
         .clone();
-    let exe = framework_path()?;
-    let loader = cef::library_loader::LibraryLoader::new(&exe, false);
-    if !loader.load() {
+    framework_path()?;
+    if with_main(|main| main.library.is_none()) {
         return Err("Could not load the browser engine (Chromium Embedded Framework).".into());
     }
     let _ = cef::api_hash(cef::sys::CEF_API_VERSION_LAST, 0);
@@ -286,7 +301,6 @@ fn start() -> Result<(), String> {
     {
         return Err("The browser engine failed to start. Its log is in the app's data folder (browser/browser.log).".into());
     }
-    with_main(|main| main.library = Some(loader));
     RUNNING.store(true, Ordering::Release);
     heartbeat();
     Ok(())
@@ -499,6 +513,21 @@ fn holds_focus(view: &NSView) -> bool {
     }
 }
 
+type PagePress = Box<dyn Fn(TabId)>;
+
+thread_local! {
+    /// Told of each press on a shown page, before it is routed (`on_page_press`).
+    static ON_PAGE_PRESS: RefCell<Option<PagePress>> = RefCell::new(None);
+}
+
+/// Sets what is told of a press on a shown page, as the page takes the keyboard. The app moves
+/// its own focus to that page's pane, because a press the page handles (in a text field, say)
+/// never reaches the app's views. Called inside AppKit's event dispatch: it must not re-enter the
+/// app synchronously.
+pub fn on_page_press(callback: impl Fn(TabId) + 'static) {
+    ON_PAGE_PRESS.with(|cell| *cell.borrow_mut() = Some(Box::new(callback)));
+}
+
 /// Before AppKit routes a press in `window` at `point` (window coordinates), the keyboard goes
 /// where the press is, at once: to the page under it (Chromium would take it only after a round
 /// trip through the page, so keys typed straight after the click went astray), or, off every
@@ -522,9 +551,17 @@ fn before_press(window: *mut AnyObject, point: NSPoint) {
     match pressed {
         Some((id, page)) => {
             let shown = with_main(|main| main.pages.get(id).is_some_and(|page| page.shown.is_some()));
-            if shown && !holds_focus(page) && let Some(hit) = &hit {
+            if !shown {
+                return;
+            }
+            if !holds_focus(page) && let Some(hit) = &hit {
                 host_window.makeFirstResponder(Some(hit));
             }
+            ON_PAGE_PRESS.with(|cell| {
+                if let Some(callback) = cell.borrow().as_ref() {
+                    callback(*id);
+                }
+            });
         }
         None => {
             if pages.iter().any(|(_, page)| holds_focus(page)) {
@@ -699,11 +736,15 @@ wrap_focus_handler! {
     }
 
     impl FocusHandler {
-        // A parked page never takes the keyboard (Chromium focuses a page as it loads), or keys
-        // would go to a page nobody can see.
-        fn on_set_focus(&self, _browser: Option<&mut Browser>, _source: FocusSource) -> i32 {
+        // A parked page never takes the keyboard, or keys would go to a page nobody can see. A
+        // shown page takes it from a press (`before_press`), never from loading: Chromium
+        // focuses a page as it loads, which would take the keyboard from the composer mid-word
+        // whenever the user or the agent opened a page. A page that already has it keeps it.
+        fn on_set_focus(&self, _browser: Option<&mut Browser>, source: FocusSource) -> i32 {
             let parked = with_main(|main| main.pages.get(&self.tab).is_none_or(|page| page.shown.is_none()));
-            i32::from(parked)
+            let loading = source.as_ref() == FocusSource::NAVIGATION.as_ref();
+            let refuse = parked || (loading && !view_of(self.tab).is_some_and(|view| holds_focus(&view)));
+            i32::from(refuse)
         }
 
     }

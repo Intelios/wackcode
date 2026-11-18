@@ -68,6 +68,8 @@ pub enum ChatEvent {
     TasksNews,
     /// A sub-agent in the background reported.
     AgentsNews,
+    /// The browser tabs' addresses or titles changed: worth saving.
+    BrowserTabsChanged(Vec<wack_browser::SavedTab>),
 }
 
 pub struct ChatSession {
@@ -180,7 +182,7 @@ impl ChatSession {
         runner: Runner,
         commands: (Option<String>, Option<String>),
         tasks_folder: PathBuf,
-        browser: Arc<dyn wack_browser::Backend>,
+        browser: (Arc<dyn wack_browser::Backend>, Vec<wack_browser::SavedTab>),
         cx: &mut Context<Self>,
     ) -> Self {
         let mut context_tokens = None;
@@ -214,7 +216,10 @@ impl ChatSession {
         agents.restore(saved_agents);
         let agents_watch = watch_agents(&agents, cx);
         panes.set_agents(agents.clone());
+        let (browser, saved_tabs) = browser;
         let tabs = wack_browser::ChatTabs::new(Some(browser));
+        // Listed now, made into pages only when shown or used.
+        tabs.restore(saved_tabs);
         let browser_watch = watch_browser(&tabs, cx);
         panes.set_browser(tabs.clone());
         let mut chat = Self {
@@ -959,9 +964,18 @@ fn watch_browser(tabs: &wack_browser::ChatTabs, cx: &mut Context<ChatSession>) -
         let _ = sender.unbounded_send(signal);
     });
     cx.spawn(async move |this, cx| {
+        let mut saved: Option<Vec<wack_browser::SavedTab>> = None;
         while receiver.next().await.is_some() {
             while receiver.try_recv().is_ok() {}
-            let kept = this.update(cx, |chat, cx| chat.panes.refresh_browser(cx));
+            let kept = this.update(cx, |chat, cx| {
+                chat.panes.refresh_browser(cx);
+                let now = chat.tabs.saved();
+                // The first look is what was restored, already saved.
+                if saved.as_ref().is_some_and(|saved| *saved != now) {
+                    cx.emit(ChatEvent::BrowserTabsChanged(now.clone()));
+                }
+                saved = Some(now);
+            });
             if kept.is_err() {
                 return;
             }

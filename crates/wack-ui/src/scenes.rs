@@ -8,7 +8,7 @@ use wack_core::{CommandKind, CommandSession, CommandStatus};
 
 use crate::{
     composer::{ComposerData, Input},
-    panes::{AgentsPane, ChangesPane, ChatPanes, Dock, Edge, Layout, PaneKind, PaneModel, RunPane, Target, TasksPane, TerminalPane},
+    panes::{AgentsPane, BrowserPane, ChangesPane, ChatPanes, Dock, Edge, Layout, PaneKind, PaneModel, RunPane, Target, TasksPane, TerminalPane},
     run_button::{CommandButtonData, CommandEditorData},
     settings::{ProviderForm, ProvidersData, Section, SettingsData},
     fixtures::{self, Selected},
@@ -1232,6 +1232,57 @@ pub fn all() -> Vec<Scene> {
             build: |_, cx| agents_scene(None, cx),
         },
         Scene {
+            name: "browser-pane",
+            description: "The Browser pane on a dev server the user opened, beside a page the agent opened.",
+            size: size(px(1480.), px(940.)),
+            build: |_, cx| browser_scene(BrowserScene::Page, None, cx),
+        },
+        Scene {
+            name: "browser-pane-agent",
+            description: "The agent driving a tab: its ring round the page, Take control, the loading sweep.",
+            size: size(px(1480.), px(940.)),
+            build: |_, cx| browser_scene(BrowserScene::Agent, None, cx),
+        },
+        Scene {
+            name: "browser-pane-agent-backdrop",
+            description: "The agent driving a tab, over a backdrop.",
+            size: size(px(1480.), px(940.)),
+            build: |_, cx| {
+                let picture = over(fixtures::backdrop(wack_core::Texture::None), cx);
+                browser_scene(BrowserScene::Agent, Some(picture), cx)
+            },
+        },
+        Scene {
+            name: "browser-pane-dialog",
+            description: "A page's confirm() held as a card over the page, for the user or the agent to answer.",
+            size: size(px(1480.), px(940.)),
+            build: |_, cx| browser_scene(BrowserScene::Dialog, None, cx),
+        },
+        Scene {
+            name: "browser-pane-failed",
+            description: "A dev server that isn't running: the failed load as a card, with Try again.",
+            size: size(px(1480.), px(940.)),
+            build: |_, cx| browser_scene(BrowserScene::Failed, None, cx),
+        },
+        Scene {
+            name: "browser-pane-empty",
+            description: "The Browser pane with no pages open.",
+            size: size(px(1480.), px(940.)),
+            build: |_, cx| browser_scene(BrowserScene::Empty, None, cx),
+        },
+        Scene {
+            name: "browser-pane-phone",
+            description: "A page laid out at a phone's size, scaled down and letterboxed in the pane.",
+            size: size(px(1480.), px(940.)),
+            build: |_, cx| browser_scene(BrowserScene::Phone, None, cx),
+        },
+        Scene {
+            name: "browser-pane-sizes",
+            description: "The page size menu open over the page.",
+            size: size(px(1480.), px(940.)),
+            build: |_, cx| browser_scene(BrowserScene::Sizes, None, cx),
+        },
+        Scene {
             name: "agents-pane-backdrop",
             description: "The Agents pane over a backdrop.",
             size: size(px(1480.), px(940.)),
@@ -1446,6 +1497,91 @@ fn panes_scene(layout: Layout, ids: &[u32], sidebar_hidden: bool, cx: &mut App) 
 }
 
 /// A chat with its agents at work and the Agents pane open on the one exploring.
+#[derive(Clone, Copy, PartialEq)]
+enum BrowserScene {
+    Page,
+    Agent,
+    Dialog,
+    Failed,
+    Empty,
+    Phone,
+    Sizes,
+}
+
+/// A chat with its Browser pane in the right dock. The page is a still: scenes have no engine.
+fn browser_scene(scene: BrowserScene, backdrop: Option<crate::backdrop::Picture>, cx: &mut App) -> AnyView {
+    use wack_browser::{ChatTabs, Dialog, DialogKind, Owner, SavedTab, Viewport};
+    cx.new(|cx| {
+        let mut layout = Layout::default();
+        let id = layout.open(PaneKind::Browser);
+        layout.right_width = Some(620.);
+        let mut panes = ChatPanes::new(layout, "/Users/you/Documents/GitHub/wackcode".into());
+        let tabs = ChatTabs::new(None);
+        let saved = |url: &str, title: &str, owner: Owner| SavedTab { url: url.into(), title: title.into(), owner };
+        if scene != BrowserScene::Empty {
+            tabs.restore(vec![
+                saved("http://localhost:5173/signup", "Sign up · Tidepool", Owner::User),
+                saved("https://docs.example.com/guides/forms", "Forms guide", Owner::Agent),
+            ]);
+        }
+        let list = tabs.tabs();
+        let shown = match scene {
+            BrowserScene::Agent | BrowserScene::Dialog => list.get(1).cloned(),
+            _ => list.first().cloned(),
+        };
+        if let Some(tab) = &shown {
+            tabs.set_shown(Some(tab.id));
+            match scene {
+                BrowserScene::Agent => tab.update(|state| state.loading = true),
+                BrowserScene::Dialog => tab.update(|state| {
+                    state.dialog = Some(Dialog {
+                        kind: DialogKind::Confirm,
+                        message: "Leave this guide? Your notes on the page won't be kept.".into(),
+                        default_prompt: String::new(),
+                    })
+                }),
+                BrowserScene::Failed => tab.update(|state| {
+                    state.load_error = Some(("http://localhost:5173/signup".into(), "ERR_CONNECTION_REFUSED".into()))
+                }),
+                BrowserScene::Phone | BrowserScene::Sizes => tab.update(|state| {
+                    state.viewport = if scene == BrowserScene::Phone { Viewport::Phone } else { Viewport::Fit };
+                    state.can_go_back = true;
+                }),
+                _ => tab.update(|state| state.can_go_back = true),
+            }
+        }
+        let picture = match scene {
+            BrowserScene::Phone => fixtures::page_picture(390, 844),
+            _ => fixtures::page_picture(1280, 1600),
+        };
+        let menu = scene == BrowserScene::Sizes;
+        panes.insert(
+            id,
+            PaneModel::Browser(cx.new(|cx| {
+                let pane = BrowserPane::new(tabs, cx).with_fixture(picture);
+                if menu { pane.with_viewport_menu() } else { pane }
+            })),
+            cx,
+        );
+        let shell = Shell::showing_tabs(
+            fixtures::sidebar(Selected::Working),
+            Screen::Chat {
+                title: fixtures::WORKING_TITLE.into(),
+                project: fixtures::project(),
+                body: Body::Items(fixtures::agent_turn()),
+                composer: fixtures::composer_agents(),
+            },
+            fixtures::strip(Some(fixtures::WORKING_TITLE)),
+        )
+        .with_panes(panes, false);
+        match backdrop {
+            Some(picture) => shell.with_backdrop(picture),
+            None => shell,
+        }
+    })
+    .into()
+}
+
 fn agents_scene(backdrop: Option<crate::backdrop::Picture>, cx: &mut App) -> AnyView {
     cx.new(|cx| {
         let mut layout = Layout::default();

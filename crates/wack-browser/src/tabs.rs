@@ -71,8 +71,8 @@ pub trait Backend: Send + Sync {
 }
 
 type Notify = Arc<dyn Fn(TabId) + Send + Sync>;
-/// Makes a tab for a popup the page opened, in the same chat, with the same owner.
-type PopupSink = Arc<dyn Fn(Owner) -> Arc<Tab> + Send + Sync>;
+/// Makes a tab for a popup the page of tab `.1` opened, in the same chat, with owner `.0`.
+type PopupSink = Arc<dyn Fn(Owner, TabId) -> Arc<Tab> + Send + Sync>;
 
 /// One tab: its state, and whether the engine has a page for it.
 pub struct Tab {
@@ -160,7 +160,7 @@ impl Tab {
             .lock()
             .unwrap_or_else(|e| e.into_inner())
             .clone()?;
-        let child = sink(self.owner.clone());
+        let child = sink(self.owner.clone(), self.id);
         child.set_agent_driving(self.agent_driving());
         Some(child)
     }
@@ -271,10 +271,15 @@ impl ChatTabs {
         });
         *tab.notify.lock().unwrap_or_else(|e| e.into_inner()) = Some(notify);
         let weak = Arc::downgrade(&self.inner);
-        let popups: PopupSink = Arc::new(move |owner| {
+        let popups: PopupSink = Arc::new(move |owner, opener| {
             let child = Tab::new(owner);
             if let Some(inner) = weak.upgrade() {
-                ChatTabs { inner }.adopt(&child);
+                let tabs = ChatTabs { inner };
+                tabs.adopt(&child);
+                // A popup from the page in front comes to the front, as in any browser.
+                if tabs.shown() == Some(opener) {
+                    tabs.set_shown(Some(child.id));
+                }
             }
             child
         });
@@ -680,6 +685,7 @@ pub(crate) mod tests {
         assert!(child.agent_driving());
         assert_eq!(tabs.tabs().len(), 2);
         assert!(!child.is_live(), "the engine makes the popup's page");
+        assert_eq!(tabs.shown(), Some(child.id), "a popup from the page in front comes to the front");
     }
 
     #[tokio::test]

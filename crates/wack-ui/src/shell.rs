@@ -1646,6 +1646,7 @@ pub struct PaneWords {
     pub changes: bool,
     pub changed_files: Option<usize>,
     pub terminal: bool,
+    pub browser: bool,
 }
 
 impl PaneWords {
@@ -1659,6 +1660,7 @@ impl PaneWords {
             changes: visible.iter().any(|pane| pane.kind == PaneKind::Changes),
             changed_files,
             terminal: visible.iter().any(|pane| pane.kind == PaneKind::Terminal),
+            browser: visible.iter().any(|pane| pane.kind == PaneKind::Browser),
         }
     }
 }
@@ -2432,6 +2434,7 @@ fn tab_strip(
             })
             .child(word("toggle-changes", "Changes", words.changed_files, words.changes, Box::new(ToggleChanges)))
             .child(word("toggle-terminal", "Terminal", None, words.terminal, Box::new(ToggleTerminal)))
+            .child(word("toggle-browser", "Browser", None, words.browser, Box::new(ToggleBrowserPane)))
     });
     div()
         .size_full()

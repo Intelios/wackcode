@@ -282,6 +282,11 @@ pub struct Chat {
     /// Where the chat's panes are, as the UI wrote it. The engine keeps it without reading it.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub layout: Option<serde_json::Value>,
+    /// The chat's browser tabs (address, title, who opened them), as the UI wrote them. The
+    /// engine keeps it without reading it. Sign-ins are not here: they live in the browser's
+    /// profile.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub browser_tabs: Option<serde_json::Value>,
     /// Suggested-task ids the user dismissed in this chat. Card state only.
     #[serde(default, skip_serializing_if = "Vec::is_empty")]
     pub dismissed_suggestions: Vec<String>,
@@ -878,6 +883,7 @@ impl Store {
             choice,
             mode,
             layout: None,
+            browser_tabs: None,
             dismissed_suggestions: Vec::new(),
             origin,
         };
@@ -1058,6 +1064,15 @@ impl Store {
             return Ok(());
         }
         chat.layout = layout;
+        self.save()
+    }
+
+    pub fn set_browser_tabs(&mut self, id: &str, tabs: Option<serde_json::Value>) -> Result<(), String> {
+        let chat = self.state.chats.iter_mut().find(|chat| chat.id == id).ok_or("That chat is gone.")?;
+        if chat.browser_tabs == tabs {
+            return Ok(());
+        }
+        chat.browser_tabs = tabs;
         self.save()
     }
 

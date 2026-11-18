@@ -1,7 +1,7 @@
 //! Sample data for gallery scenes: a believable WackCode session, so a scene shows real lengths
 //! and real rhythm rather than lorem ipsum.
 
-use std::{collections::HashSet, path::Path};
+use std::{collections::HashSet, path::{Path, PathBuf}};
 
 use serde_json::json;
 use wack_core::{Event, Outcome, Usage};
@@ -973,4 +973,54 @@ pub fn agents_registry(folder: &Path) -> wack_core::agents::Agents {
         registry.insert_fixture(info);
     }
     registry
+}
+
+/// A still of a web page for the Browser pane's scenes, which have no engine: a site bar, a
+/// heading, text and a sign-up form, drawn once into `target/gallery`.
+pub fn page_picture(width: u32, height: u32) -> PathBuf {
+    let workspace = Path::new(env!("CARGO_MANIFEST_DIR")).parent().and_then(Path::parent).unwrap_or(Path::new("."));
+    let gallery = workspace.join("target/gallery");
+    let path = gallery.join(format!("fixture-page-{width}x{height}.png"));
+    if path.exists() {
+        return path;
+    }
+    let _ = std::fs::create_dir_all(&gallery);
+    let unit = width as f32 / 100.;
+    let inside = |x: u32, y: u32, (left, top, w, h): (f32, f32, f32, f32)| {
+        let (x, y) = (x as f32 / unit, y as f32 / unit);
+        x >= left && x < left + w && y >= top && y < top + h
+    };
+    let bar = (0., 0., 100., 9.);
+    let logo = (6., 2.8, 14., 3.4);
+    let links = [(62., 3.5, 8., 2.), (73., 3.5, 8., 2.), (84., 3.5, 9., 2.)];
+    let heading = [(6., 16., 70., 6.), (6., 24., 48., 6.)];
+    let lines = [(6., 35., 84., 1.8), (6., 39., 80., 1.8), (6., 43., 62., 1.8)];
+    let fields = [(6., 52., 60., 7.), (6., 62., 60., 7.)];
+    let button = (6., 73., 26., 7.);
+    let picture = image::RgbImage::from_fn(width, height, |x, y| {
+        let at = |area| inside(x, y, area);
+        let edge = |(left, top, w, h): (f32, f32, f32, f32)| {
+            at((left, top, w, h)) && !at((left + 0.3, top + 0.3, w - 0.6, h - 0.6))
+        };
+        let colour: [u8; 3] = if at(logo) {
+            [32, 36, 52]
+        } else if links.iter().any(|link| at(*link)) {
+            [120, 126, 140]
+        } else if at(bar) {
+            [244, 245, 248]
+        } else if heading.iter().any(|block| at(*block)) {
+            [36, 40, 56]
+        } else if lines.iter().any(|line| at(*line)) {
+            [196, 200, 210]
+        } else if fields.iter().any(|field| edge(*field)) {
+            [176, 182, 196]
+        } else if at(button) {
+            [52, 104, 230]
+        } else {
+            [255, 255, 255]
+        };
+        image::Rgb(colour)
+    });
+    let _ = picture.save(&path);
+    path
 }

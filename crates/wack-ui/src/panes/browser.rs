@@ -15,14 +15,20 @@
 //! - When the page takes keyboard focus (a click in it) the pane takes the app's focus too, so the
 //!   app's own keys (⌘W, ⌘⇧B) act on the pane and not on whatever had focus before.
 
-use std::{cell::RefCell, collections::HashSet, rc::Rc, sync::Arc, time::Duration};
+use std::{
+    cell::{Cell, RefCell},
+    collections::HashSet,
+    rc::Rc,
+    sync::Arc,
+    time::Duration,
+};
 
 use gpui::{
     Animation, AnimationExt, Bounds, Context, Entity, FocusHandle, Hsla, Pixels, SharedString, Subscription, Window,
     canvas, deferred, div, prelude::*, px, relative,
 };
 use gpui_tokio::Tokio;
-use wack_browser::{ChatTabs, Dialog, DialogKind, Nav, Owner, Tab, TabId, TabState};
+use wack_browser::{ChatTabs, Dialog, DialogKind, Nav, Owner, Tab, TabId, TabState, Viewport};
 
 use crate::{
     icon::Icon,
@@ -38,6 +44,12 @@ const PAGE_MARGIN: f32 = 8.;
 const PAGE_RADIUS: f32 = 10.;
 const CIRCLE: f32 = 26.;
 const TAB_WIDTH: f32 = 180.;
+/// Room under a letterboxed page for its size.
+const SIZE_LINE: f32 = 22.;
+
+/// What the page's DevTools emulation was last set to: the tab, its viewport, and the scale it is
+/// drawn at, in hundredths.
+type Fitted = (TabId, Viewport, u32);
 
 pub struct BrowserPane {
     tabs: ChatTabs,
@@ -59,8 +71,13 @@ pub struct BrowserPane {
     seen_focus: (TabId, u64),
     /// Restored tabs whose page has been asked for.
     waking: HashSet<TabId>,
+    /// The viewport menu is open.
+    viewport_menu: bool,
+    /// What the last paint fitted the page to, and what the page has been told.
+    fitted: Rc<Cell<Option<Fitted>>>,
+    applied: Option<Fitted>,
     /// A still picture in place of the page, for gallery scenes (they have no engine).
-    fixture: Option<SharedString>,
+    fixture: Option<std::path::PathBuf>,
     _field: Subscription,
     _reply: Subscription,
 }
@@ -92,6 +109,9 @@ impl BrowserPane {
             unshowable: Rc::default(),
             seen_focus: (0, 0),
             waking: HashSet::new(),
+            viewport_menu: false,
+            fitted: Rc::default(),
+            applied: None,
             fixture: None,
             _field: subscription,
             _reply: reply_subscription,
@@ -101,8 +121,14 @@ impl BrowserPane {
     }
 
     /// Shows a still picture where the page would be: gallery scenes have no engine.
-    pub fn with_fixture(mut self, image: impl Into<SharedString>) -> Self {
-        self.fixture = Some(image.into());
+    pub fn with_fixture(mut self, picture: std::path::PathBuf) -> Self {
+        self.fixture = Some(picture);
+        self
+    }
+
+    /// Opens the viewport menu, for a gallery scene.
+    pub fn with_viewport_menu(mut self) -> Self {
+        self.viewport_menu = true;
         self
     }
 
@@ -236,6 +262,47 @@ impl BrowserPane {
         self.replying = None;
     }
 
+    fn choose_viewport(&mut self, viewport: Viewport, cx: &mut Context<Self>) {
+        self.viewport_menu = false;
+        if let Some(tab) = self.current() {
+            tab.update(|state| state.viewport = viewport);
+        }
+        cx.notify();
+    }
+
+    /// Tells the page the size it is laid out at and the scale it is drawn at, when the last
+    /// paint fitted it differently from what the page was last told.
+    fn apply_viewport(&mut self, cx: &mut Context<Self>) {
+        let Some(fitted) = self.fitted.get() else { return };
+        if self.applied == Some(fitted) || self.fixture.is_some() {
+            return;
+        }
+        self.applied = Some(fitted);
+        let (id, viewport, scale) = fitted;
+        let (method, params) = match viewport.size() {
+            None => ("Emulation.clearDeviceMetricsOverride", serde_json::json!({})),
+            Some((width, height, mobile)) => (
+                "Emulation.setDeviceMetricsOverride",
+                serde_json::json!({
+                    "width": width,
+                    "height": height,
+                    "deviceScaleFactor": 0,
+                    "mobile": mobile,
+                    "scale": scale as f64 / 100.,
+                }),
+            ),
+        };
+        // Phones and tablets are touch devices: pages that ask (`pointer: coarse`, touch events)
+        // are told so.
+        let touch = serde_json::json!({ "enabled": viewport.size().is_some_and(|(_, _, mobile)| mobile), "maxTouchPoints": 5 });
+        let tabs = self.tabs.clone();
+        Tokio::spawn(cx, async move {
+            tabs.cdp(id, method, params).await?;
+            tabs.cdp(id, "Emulation.setTouchEmulationEnabled", touch).await
+        })
+        .detach();
+    }
+
     /// A restored tab shown in the pane gets its page.
     fn wake(&mut self, tab: &Arc<Tab>, cx: &mut Context<Self>) {
         if tab.is_live() || self.fixture.is_some() || !self.waking.insert(tab.id) {
@@ -331,6 +398,20 @@ fn host_of(url: &str) -> Option<String> {
         None => host.split(':').next()?.to_string(),
     };
     (!host.is_empty()).then_some(host)
+}
+
+/// A page laid out at `width` × `height`, scaled down (never up) to fit `area` above its size
+/// line, and centred: its frame in the area, and the scale.
+fn letterbox(area: Bounds<Pixels>, width: f32, height: f32) -> (Bounds<Pixels>, f32) {
+    let room_width = f32::from(area.size.width);
+    let room_height = (f32::from(area.size.height) - SIZE_LINE).max(1.);
+    let scale = (room_width / width).min(room_height / height).min(1.);
+    let size = gpui::size(px((width * scale).floor()), px((height * scale).floor()));
+    let origin = gpui::point(
+        area.origin.x + (area.size.width - size.width) / 2.,
+        area.origin.y + px(((room_height - f32::from(size.height)) / 2.).max(0.)),
+    );
+    (Bounds { origin, size }, scale)
 }
 
 /// The bounds lie wholly inside the mask, give or take a point of rounding.
@@ -433,6 +514,34 @@ impl BrowserPane {
             )
             .child(div().w(px(4.)))
             .child(url_pill);
+
+        // The size the page is laid out at.
+        let viewport = state.map_or(Viewport::Fit, |state| state.viewport);
+        let menu_pane = pane.clone();
+        bar = bar.child(
+            div()
+                .id("browser-viewport")
+                .flex_none()
+                .ml(px(4.))
+                .size(px(CIRCLE + 4.))
+                .rounded_full()
+                .cursor_pointer()
+                .flex()
+                .items_center()
+                .justify_center()
+                .when(viewport != Viewport::Fit, |circle| circle.bg(theme.accent_wash))
+                .when(self.viewport_menu, |circle| circle.bg(theme.hover))
+                .hover(|circle| circle.bg(theme.hover))
+                .tooltip(tip(format!("Page size: {}", viewport.name())))
+                .on_click(move |_, _, cx| {
+                    menu_pane.update(cx, |pane, cx| {
+                        pane.viewport_menu = !pane.viewport_menu;
+                        cx.notify();
+                    })
+                })
+                .child(Icon::Phone.view(px(14.), if viewport != Viewport::Fit { theme.accent_text } else { theme.text_soft }))
+                .tag("browser-viewport"),
+        );
 
         // Taking control is offered on a tab the agent opened or has driven.
         if let Some(tab) = tab.filter(|tab| tab.owner != Owner::User || tab.agent_driving()) {
@@ -554,6 +663,58 @@ impl BrowserPane {
                 .on_click(move |_, window, cx| new_pane.update(cx, |pane, cx| pane.new_tab(window, cx)))
                 .tag("new-browser-tab"),
         )
+    }
+
+    /// The page sizes, under the toolbar's size button. Drawn on the overlay plane, like every
+    /// menu: while it is open the page takes no input, and a press outside closes it.
+    fn viewport_menu(&self, current: Viewport, theme: &Theme, cx: &mut Context<Self>) -> impl IntoElement + use<> {
+        let close_pane = cx.entity();
+        let backdrop = gpui::anchored().position_mode(gpui::AnchoredPositionMode::Window).position(gpui::point(px(0.), px(0.))).child(
+            div().id("browser-viewport-backdrop").size(px(10000.)).on_mouse_down(gpui::MouseButton::Left, move |_, _, cx| {
+                cx.stop_propagation();
+                close_pane.update(cx, |pane, cx| {
+                    pane.viewport_menu = false;
+                    cx.notify();
+                });
+            }),
+        );
+        let mut list = div()
+            .id("browser-viewport-menu")
+            .occlude()
+            .w(px(220.))
+            .p(px(6.))
+            .rounded(px(12.))
+            .bg(theme.raised)
+            .border_1()
+            .border_color(theme.border_strong)
+            .shadow_lg()
+            .flex()
+            .flex_col();
+        for viewport in Viewport::ALL {
+            let pane = cx.entity();
+            let picked = viewport == current;
+            let size = viewport.size().map(|(width, height, _)| format!("{width} × {height}"));
+            list = list.child(
+                div()
+                    .id(("browser-viewport-choice", viewport as usize))
+                    .h(px(30.))
+                    .px(px(10.))
+                    .rounded(px(8.))
+                    .cursor_pointer()
+                    .flex()
+                    .items_center()
+                    .gap(px(8.))
+                    .hover(|row| row.bg(theme.hover))
+                    .on_click(move |_, _, cx| pane.update(cx, |pane, cx| pane.choose_viewport(viewport, cx)))
+                    .child(div().w(px(14.)).children(picked.then(|| Icon::Check.view(px(12.), theme.accent_text))))
+                    .child(div().flex_1().typography(Type::Ui).text_color(theme.text).child(viewport.name()))
+                    .children(size.map(|size| div().typography(Type::Small).text_color(theme.text_faint).child(size)))
+                    .tag("browser-viewport-choice"),
+            );
+        }
+        div()
+            .child(deferred(backdrop).with_priority(1))
+            .child(deferred(div().absolute().top(px(CIRCLE + 12.)).right(px(10.)).child(crate::motion::enter("browser-viewport-arrive", list))).with_priority(2))
     }
 
     /// The loading line under the toolbar: a sweep, or a still line with Reduce Motion.
@@ -688,6 +849,7 @@ impl Render for BrowserPane {
         if let Some(tab) = &tab {
             self.wake(tab, cx);
         }
+        self.apply_viewport(cx);
 
         // A click in the page: the app's keys act on this pane now.
         if let (Some(id), Some(state)) = (shown, &state)
@@ -724,7 +886,7 @@ impl Render for BrowserPane {
         let unshowable = self.unshowable.borrow().clone();
 
         // What fills the page area: the page itself, or a card standing in for it.
-        let stand_in: Option<gpui::AnyElement> = if !self.tabs.available() {
+        let stand_in: Option<gpui::AnyElement> = if !self.tabs.available() && self.fixture.is_none() {
             Some(Self::card(Icon::Globe, "The browser isn't available here".into(), Some("It needs WackCode's app bundle: start the dev app with `cargo dev`.".into()), None, &theme, cx).into_any_element())
         } else if let Some(message) = unshowable {
             Some(Self::card(Icon::Alert, "The page can't be shown".into(), Some(message), None, &theme, cx).into_any_element())
@@ -747,16 +909,26 @@ impl Render for BrowserPane {
             }
         };
 
+        let stand_in_absent = stand_in.is_none();
         let driving = tab.as_ref().is_some_and(|tab| tab.agent_driving() && !tab.user_has_control()) && stand_in.is_none();
         let dialog = state.as_ref().and_then(|state| state.dialog.clone()).filter(|_| stand_in.is_none());
         let host = state.as_ref().and_then(|state| host_of(&state.url)).unwrap_or_else(|| "This page".into());
 
         let page: gpui::AnyElement = match (stand_in, &self.fixture) {
             (Some(card), _) => card,
-            (None, Some(image)) => gpui::img(image.clone()).size_full().rounded(px(PAGE_RADIUS)).object_fit(gpui::ObjectFit::Cover).into_any_element(),
+            (None, Some(picture)) => {
+                let sized = state.as_ref().is_some_and(|state| state.viewport.size().is_some());
+                div()
+                    .size_full()
+                    .when(sized, |area| area.pb(px(SIZE_LINE)))
+                    .child(gpui::img(picture.clone()).size_full().rounded(px(PAGE_RADIUS)).object_fit(if sized { gpui::ObjectFit::Contain } else { gpui::ObjectFit::Cover }))
+                    .into_any_element()
+            }
             (None, None) => {
                 let id = shown.unwrap_or_default();
                 let unshowable = self.unshowable.clone();
+                let fitted = self.fitted.clone();
+                let viewport = state.as_ref().map_or(Viewport::Fit, |state| state.viewport);
                 let dragging = cx.has_active_drag();
                 canvas(
                     |_, _, _| (),
@@ -765,7 +937,12 @@ impl Render for BrowserPane {
                         if dragging || !inside(mask, bounds) {
                             return;
                         }
-                        if let Err(message) = crate::browser::show(window, id, bounds, PAGE_RADIUS) {
+                        let (frame, scale) = match viewport.size() {
+                            Some((width, height, _)) => letterbox(bounds, width as f32, height as f32),
+                            None => (bounds, 1.),
+                        };
+                        fitted.set(Some((id, viewport, (scale * 100.).round() as u32)));
+                        if let Err(message) = crate::browser::show(window, id, frame, PAGE_RADIUS) {
                             *unshowable.borrow_mut() = Some(message);
                         }
                     },
@@ -775,6 +952,23 @@ impl Render for BrowserPane {
             }
         };
 
+        // A letterboxed page says what size it is laid out at, and how far it is scaled down.
+        let sized_line = state.as_ref().and_then(|state| state.viewport.size().map(|size| (state.viewport, size))).filter(|_| stand_in_absent).map(|(viewport, (width, height, _))| {
+            let scale = self.fitted.get().filter(|fitted| Some(fitted.0) == shown).map(|fitted| format!(" · {}%", fitted.2)).unwrap_or_default();
+            div()
+                .absolute()
+                .bottom(px(3.))
+                .left_0()
+                .right_0()
+                .flex()
+                .justify_center()
+                .typography(Type::Small)
+                .text_color(theme.text_faint)
+                .child(format!("{} · {width} × {height}{scale}", viewport.name()))
+                .tag("browser-size-line")
+        });
+        let letterboxed = sized_line.is_some();
+        let viewport_menu = self.viewport_menu.then(|| self.viewport_menu(state.as_ref().map_or(Viewport::Fit, |state| state.viewport), &theme, cx));
         let page_area = div()
             .flex_1()
             .min_h_0()
@@ -783,6 +977,8 @@ impl Render for BrowserPane {
             .mt(px(2.))
             .rounded(px(PAGE_RADIUS))
             .bg(theme.surface)
+            // A page at a fixed size sits on a softer ground, so a white page's edge shows.
+            .when(letterboxed, |area| area.child(div().absolute().top_0().left_0().size_full().rounded(px(PAGE_RADIUS)).bg(theme.hover).border_1().border_color(theme.border)))
             // The agent at work: a ring around the page, outside it, so the page never covers it.
             .when(driving, |area| {
                 area.child(
@@ -799,6 +995,7 @@ impl Render for BrowserPane {
                 )
             })
             .child(page)
+            .when_some(sized_line, |area, line| area.child(line))
             .when_some(dialog, |area, dialog| {
                 area.child(deferred(
                     div()
@@ -819,7 +1016,9 @@ impl Render for BrowserPane {
             .size_full()
             .flex()
             .flex_col()
+            .relative()
             .child(toolbar)
+            .children(viewport_menu)
             .children(strip)
             .children(note)
             .child(Self::loading_line(loading, still, &theme))
@@ -885,6 +1084,19 @@ mod tests {
         assert_eq!(place_of("http://example.com/"), Place::NotSecure);
         assert_eq!(place_of("about:blank"), Place::Blank);
         assert_eq!(place_of(""), Place::Blank);
+    }
+
+    #[test]
+    fn a_fixed_size_page_is_scaled_down_and_centred_never_up() {
+        let area = Bounds { origin: gpui::point(px(100.), px(50.)), size: gpui::size(px(440.), px(622.)) };
+        let (frame, scale) = letterbox(area, 390., 844.);
+        assert!((scale - 600. / 844.).abs() < 0.001, "{scale}");
+        assert_eq!(frame.size.height, px((844. * scale).floor()));
+        assert!(frame.origin.x > area.origin.x && frame.right() < area.right(), "centred across");
+        let roomy = Bounds { origin: gpui::point(px(0.), px(0.)), size: gpui::size(px(2000.), px(2000.)) };
+        let (frame, scale) = letterbox(roomy, 390., 844.);
+        assert_eq!(scale, 1.);
+        assert_eq!(frame.size.width, px(390.));
     }
 
     #[test]

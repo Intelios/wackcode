@@ -179,6 +179,40 @@ pub struct Dialog {
     pub default_prompt: String,
 }
 
+/// The size a page is laid out at. `Fit` follows the pane; the others are fixed device sizes,
+/// shown scaled down to fit and letterboxed, so the page's layout never changes with the pane.
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
+pub enum Viewport {
+    #[default]
+    Fit,
+    Phone,
+    Tablet,
+    Desktop,
+}
+
+impl Viewport {
+    pub const ALL: [Viewport; 4] = [Viewport::Fit, Viewport::Phone, Viewport::Tablet, Viewport::Desktop];
+
+    /// Width and height in CSS pixels, and whether it is a touch device.
+    pub fn size(self) -> Option<(u32, u32, bool)> {
+        match self {
+            Viewport::Fit => None,
+            Viewport::Phone => Some((390, 844, true)),
+            Viewport::Tablet => Some((820, 1180, true)),
+            Viewport::Desktop => Some((1280, 800, false)),
+        }
+    }
+
+    pub fn name(self) -> &'static str {
+        match self {
+            Viewport::Fit => "Fit the pane",
+            Viewport::Phone => "Phone",
+            Viewport::Tablet => "Tablet",
+            Viewport::Desktop => "Desktop",
+        }
+    }
+}
+
 #[derive(Clone, Debug)]
 pub struct TabState {
     pub url: String,
@@ -196,6 +230,8 @@ pub struct TabState {
     /// How many times the page has taken keyboard focus (a click in it). The pane moves the app's
     /// own focus to itself when this changes, so the app's keys act on the pane, not the composer.
     pub focused: u64,
+    /// The size the page is laid out at.
+    pub viewport: Viewport,
     pub console: Ring<ConsoleEntry>,
     pub network: Ring<NetworkEntry>,
 }
@@ -213,6 +249,7 @@ impl Default for TabState {
             dialog: None,
             page: 0,
             focused: 0,
+            viewport: Viewport::Fit,
             console: Ring::new(CONSOLE_CAPACITY),
             network: Ring::new(NETWORK_CAPACITY),
         }

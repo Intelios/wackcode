@@ -2353,7 +2353,9 @@ impl AppState {
         let layout = Layout::from_saved(chat.layout.as_ref());
         let runner = self.runs.clone();
         let tasks_folder = self.store.tasks_folder(chat);
-        let browser = self.browser.clone();
+        let saved_tabs: Vec<wack_browser::SavedTab> =
+            chat.browser_tabs.as_ref().and_then(|value| serde_json::from_value(value.clone()).ok()).unwrap_or_default();
+        let browser = (self.browser.clone(), saved_tabs);
         let session = cx.new(|cx| ChatSession::load(&chat.id, cwd, &path, layout, runner, commands, tasks_folder, browser, cx));
         let id = chat.id.clone();
         // Cards read their dismissals and opened links from the store as it stands now.
@@ -2373,6 +2375,13 @@ impl AppState {
                     ChatEvent::LayoutChanged => app.layout_changed(&id, cx),
                     ChatEvent::ModeChanged(mode) => app.set_chat_mode(&id, *mode, cx),
                     ChatEvent::TasksNews | ChatEvent::AgentsNews => app.wake(&id, cx),
+                    ChatEvent::BrowserTabsChanged(tabs) => {
+                        let value = (!tabs.is_empty()).then(|| serde_json::to_value(tabs).ok()).flatten();
+                        if let Err(message) = app.store.set_browser_tabs(&id, value) {
+                            app.notice = Some(message.into());
+                            cx.notify();
+                        }
+                    }
                 }
             }),
             cx.subscribe(&composer, {

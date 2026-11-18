@@ -15,5 +15,5 @@ pub mod policy;
 pub mod state;
 pub mod tabs;
 
-pub use state::{ConsoleEntry, Dialog, DialogKind, Level, NetworkEntry, TabState};
+pub use state::{ConsoleEntry, Dialog, DialogKind, Level, NetworkEntry, TabState, Viewport};
 pub use tabs::{Backend, ChatTabs, Nav, Owner, SavedTab, Signal, Tab, TabId};

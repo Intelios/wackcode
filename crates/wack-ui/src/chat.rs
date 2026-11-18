@@ -134,6 +134,9 @@ pub struct ChatSession {
     pub tabs: wack_browser::ChatTabs,
     /// The chat's canvases, which outlive its runs and the Canvas pane.
     pub canvases: wack_canvas::Canvases,
+    /// What canvas cards show of each artboard (its name, its newest small picture), found once
+    /// and kept until the canvases next signal, so rebuilding a live turn never reads the disk.
+    canvas_faces: std::collections::HashMap<(String, String), crate::canvas_card::Face>,
     _canvases_watch: Task<()>,
     _tasks_watch: Task<()>,
     _agents_watch: Task<()>,
@@ -267,6 +270,7 @@ impl ChatSession {
             agents,
             tabs,
             canvases,
+            canvas_faces: Default::default(),
             _canvases_watch: canvases_watch,
             _tasks_watch: tasks_watch,
             _agents_watch: agents_watch,
@@ -915,7 +919,30 @@ impl ChatSession {
             work::entry_items(&self.conversation, index, &self.cwd, &self.open, now, &mut self.cache, &mut self.items);
             self.spans.push(self.items.len() - before);
         }
+        self.fill_canvas_cards(start);
         self.tell_list(start, old_end - start, self.items.len() - start);
+    }
+
+    /// Gives the canvas cards from item `from` on their artboards' names and pictures.
+    fn fill_canvas_cards(&mut self, from: usize) {
+        let mut items = std::mem::take(&mut self.items);
+        let from = from.min(items.len());
+        self.fill_faces(&mut items[from..]);
+        self.items = items;
+    }
+
+    fn fill_faces(&mut self, items: &mut [Item]) {
+        for item in items {
+            let Item::Canvas(card) = item else { continue };
+            for board in &mut card.boards {
+                let key = (card.canvas.clone(), board.id.clone());
+                if !self.canvas_faces.contains_key(&key) {
+                    let face = crate::canvas_card::face(&self.canvases, &card.canvas, &board.id);
+                    self.canvas_faces.insert(key.clone(), face);
+                }
+                board.wear(&self.canvas_faces[&key]);
+            }
+        }
     }
 
     /// Rebuilds one entry's items in place.
@@ -926,6 +953,7 @@ impl ChatSession {
         let start: usize = self.spans[..index].iter().sum();
         let mut fresh = Vec::new();
         work::entry_items(&self.conversation, index, &self.cwd, &self.open, now_millis(), &mut self.cache, &mut fresh);
+        self.fill_faces(&mut fresh);
         let new_count = fresh.len();
         self.items.splice(start..start + old_count, fresh);
         self.spans[index] = new_count;
@@ -1007,6 +1035,8 @@ fn watch_canvases(canvases: &wack_canvas::Canvases, cx: &mut Context<ChatSession
                     cx.emit(ChatEvent::AgentStartedCanvas);
                 }
                 chat.panes.refresh_canvas(cx);
+                chat.canvas_faces.clear();
+                chat.fill_canvas_cards(0);
                 cx.notify();
             });
             if kept.is_err() {

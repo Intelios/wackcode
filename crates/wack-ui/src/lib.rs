@@ -11,6 +11,7 @@ pub mod automation;
 pub mod backdrop;
 pub mod browser;
 pub mod button;
+pub mod canvas_card;
 pub mod chat;
 pub mod colour;
 pub mod commands_page;

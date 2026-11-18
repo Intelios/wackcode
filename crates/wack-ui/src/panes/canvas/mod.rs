@@ -45,6 +45,10 @@ use crate::{
 pub const CANVAS_CONTEXT: &str = "CanvasPane";
 const CIRCLE: f32 = 26.;
 const PILL_HEIGHT: f32 = 32.;
+/// About how wide the zoom pill draws (− 100% + Fit).
+const ZOOM_PILL: f32 = 176.;
+/// Below this pane width the pills say less.
+const NARROW: f32 = 480.;
 const EDGE: f32 = 12.;
 /// A press that moves less than this is a click, not a pan.
 const CLICK_SLOP: f32 = 4.;
@@ -104,6 +108,8 @@ pub struct CanvasPane {
     switcher: bool,
     /// The canvas to fit once the pane's size is known.
     fit_pending: Option<String>,
+    /// A zoom for that fit to end at instead, about the pane's middle (gallery scenes).
+    fit_zoom: Option<f32>,
 }
 
 impl CanvasPane {
@@ -126,9 +132,41 @@ impl CanvasPane {
             bounds: Rc::default(),
             switcher: false,
             fit_pending: None,
+            fit_zoom: None,
         };
         pane.reload(false, cx);
         pane
+    }
+
+    /// Brings a canvas to the front and goes to some of its artboards (all when `artboards` is
+    /// empty), selecting the first. The camera then stays where the user asked to look.
+    pub fn show(&mut self, canvas: &str, artboards: &[String], cx: &mut Context<Self>) {
+        if !self.list.iter().any(|c| c.id == canvas) {
+            self.reload(false, cx);
+        }
+        let Some(found) = self.list.iter().find(|c| c.id == canvas) else { return };
+        let ids: Vec<String> = artboards.iter().filter(|id| found.artboards.iter().any(|a| &&a.id == id)).cloned().collect();
+        self.current = Some(canvas.to_string());
+        self.selected = ids.first().cloned();
+        self.switcher = false;
+        self.unseen.clear();
+        self.following = ids.is_empty();
+        if self.bounds.get().is_none() {
+            // Not laid out yet: the first paint fits the canvas.
+            self.fit_pending = Some(canvas.to_string());
+        } else if ids.is_empty() {
+            self.fit_all(cx);
+        } else {
+            self.go_to(&ids, cx);
+        }
+        self.ask_for_pictures(cx);
+        cx.notify();
+    }
+
+    /// Sets the pane up for a gallery scene: an artboard selected, and the first fit's zoom.
+    pub fn stage(&mut self, selected: Option<&str>, zoom: Option<f32>) {
+        self.selected = selected.map(str::to_string);
+        self.fit_zoom = zoom;
     }
 
     /// The chat's canvases changed, or a picture was drawn.
@@ -268,7 +306,7 @@ impl CanvasPane {
     fn go_to(&mut self, ids: &[String], cx: &mut Context<Self>) {
         let (width, height) = self.size();
         if let Some(bounds) = self.board().bounds_of(ids) {
-            let to = board::fit(bounds, width, height, 1.);
+            let to = fit_below_pills(bounds, width, height, 1.);
             self.glide_to(to, cx);
         }
     }
@@ -278,7 +316,7 @@ impl CanvasPane {
         if let Some(bounds) = self.board().bounds() {
             self.following = true;
             self.unseen.clear();
-            self.glide_to(board::fit(bounds, width, height, 1.), cx);
+            self.glide_to(fit_below_pills(bounds, width, height, 1.), cx);
         }
     }
 
@@ -367,7 +405,7 @@ impl CanvasPane {
             let (width, height) = self.size();
             if let Some(bounds) = self.board().bounds_of(&[id]) {
                 self.moved_by_hand();
-                self.glide_to(board::fit(bounds, width, height, 2.), cx);
+                self.glide_to(fit_below_pills(bounds, width, height, 2.), cx);
             }
         }
     }
@@ -425,6 +463,13 @@ impl CanvasPane {
     }
 }
 
+/// A fit that keeps clear of the pills along the pane's top, so no label hides under them.
+fn fit_below_pills(bounds: Rect, width: f32, height: f32, max_zoom: f32) -> Camera {
+    let band = EDGE + PILL_HEIGHT - board::FIT_PADDING / 2.;
+    let camera = board::fit(bounds, width, (height - band).max(1.), max_zoom);
+    Camera { y: camera.y + band, ..camera }
+}
+
 fn ease_out(t: f32) -> f32 {
     1. - (1. - t.clamp(0., 1.)).powi(3)
 }
@@ -442,7 +487,11 @@ impl Render for CanvasPane {
         {
             self.fit_pending = None;
             if let Some(bounds) = self.board().bounds() {
-                self.cameras.insert(id, board::fit(bounds, width, height, 1.));
+                let mut camera = fit_below_pills(bounds, width, height, 1.);
+                if let Some(zoom) = self.fit_zoom.take() {
+                    camera = camera.zoom_at(width / 2., height / 2., zoom / camera.zoom);
+                }
+                self.cameras.insert(id, camera);
             }
         }
         let mut animating = false;
@@ -475,8 +524,11 @@ impl Render for CanvasPane {
 
         let mut layer = div().absolute().inset_0();
         if let Some(canvas) = &canvas {
-            for group in &board.groups {
-                let (x, y) = (group.x * camera.zoom + camera.x, group.y * camera.zoom + camera.y);
+            // A group's name sits a fixed height above its row's artboard names, which keep one
+            // size at any zoom; far out there is no room between rows, so only the names show.
+            for group in board.groups.iter().filter(|_| !far) {
+                let row_top = (group.y + board::GROUP_BAND + board::LABEL_BAND) * camera.zoom + camera.y;
+                let (x, y) = (group.x * camera.zoom + camera.x, row_top - 44.);
                 if y < -40. || y > height + 40. {
                     continue;
                 }
@@ -625,7 +677,8 @@ impl Render for CanvasPane {
             .absolute()
             .top(px(EDGE))
             .left(px(EDGE))
-            .max_w(px((width * 0.5).max(160.)))
+            // Room is kept for the zoom pill on the right; a narrow pane drops the count.
+            .max_w(px((width - ZOOM_PILL - 3. * EDGE).max(96.)))
             .h(px(PILL_HEIGHT))
             .px(px(14.))
             .rounded_full()
@@ -646,8 +699,10 @@ impl Render for CanvasPane {
                     })
                 })
             })
-            .child(div().typography(Type::UiStrong).text_color(theme.text).whitespace_nowrap().text_ellipsis().child(canvas.title.clone()))
-            .child(div().typography(Type::Small).text_color(theme.text_dim).whitespace_nowrap().child(artboards(canvas.artboards.len())))
+            .child(div().min_w_0().flex_shrink(1.).typography(Type::UiStrong).text_color(theme.text).whitespace_nowrap().text_ellipsis().child(canvas.title.clone()))
+            .when(width >= NARROW, |pill| {
+                pill.child(div().flex_none().typography(Type::Small).text_color(theme.text_dim).whitespace_nowrap().child(artboards(canvas.artboards.len())))
+            })
             .when(many, |pill| pill.child(Icon::ChevronDown.view(px(12.), theme.text_dim)))
             .tag("canvas-switcher");
         let switcher = (self.switcher && many).then(|| {

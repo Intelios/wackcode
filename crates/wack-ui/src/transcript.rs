@@ -50,6 +50,8 @@ pub enum Item {
     Plan(crate::plan_card::PlanCard),
     /// The follow-ups a settled turn filed, under its answer.
     Suggestions(crate::suggestion::Tray),
+    /// What a turn drew on a canvas, under its log.
+    Canvas(crate::canvas_card::CanvasCard),
 }
 
 /// A slash command as the user typed it.
@@ -278,6 +280,7 @@ fn gap_above(item: &Item, previous: Option<&Item>) -> f32 {
         (_, Item::Prompt { .. }) => 44.,
         (_, Item::Footer(_)) => 12.,
         (_, Item::Suggestions(_)) => 14.,
+        (_, Item::Canvas(_)) => 12.,
         (Some(Item::Prompt { .. }), _) => 16.,
         _ => 18.,
     }
@@ -345,6 +348,7 @@ pub fn item(item: &Item, previous: Option<&Item>, theme: &Theme, handlers: &Hand
             .into_any_element(),
         Item::Plan(card) => crate::plan_card::plan_card(card, theme, handlers).into_any_element(),
         Item::Suggestions(tray) => crate::suggestion::tray(tray, theme, handlers).into_any_element(),
+        Item::Canvas(card) => crate::canvas_card::view(card, theme).into_any_element(),
         Item::Footer(text) => div().typography(Type::Small).text_color(theme.text_faint).child(text.clone()).into_any_element(),
         Item::Notice { text, failed } => div()
             .typography(Type::Ui)
@@ -454,6 +458,7 @@ fn row_icon(verb: &str, theme: &Theme) -> impl IntoElement {
         "Used skill" => Some(Icon::Book),
         "Saved memory" | "Updated memory" | "Recalled memory" | "Forgot memory" => Some(Icon::Bookmark),
         "Reported" => Some(Icon::Duck),
+        verb if crate::work::CANVAS_VERBS.contains(&verb) => Some(Icon::Board),
         verb if crate::work::BROWSER_VERBS.contains(&verb) => Some(Icon::Globe),
         "" => None,
         _ => Some(Icon::Hammer),

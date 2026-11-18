@@ -108,8 +108,21 @@ pub fn entry_items(
                         tally: tally(&rows).into(),
                         live: turn.live,
                         rows,
-                        key: key.into(),
+                        key: key.clone().into(),
                     }));
+                }
+                let outcomes: Vec<wack_canvas::tools::Outcome> = turn
+                    .steps
+                    .iter()
+                    .filter_map(|step| match step {
+                        Step::Tool(tool) if tool.name == wack_canvas::tools::CANVAS => tool.result.as_ref(),
+                        _ => None,
+                    })
+                    .filter(|result| !result.is_error)
+                    .filter_map(|result| wack_canvas::tools::outcome(&result.text))
+                    .collect();
+                for card in crate::canvas_card::cards(&key, &outcomes, turn.live) {
+                    items.push(Item::Canvas(card));
                 }
                 // A plan proposed in prose shows as the card, not twice.
                 let reply = match &turn.proposal {
@@ -216,8 +229,9 @@ pub fn summary(turn: &Turn, now: u64) -> String {
 /// What a log did, counted: "2 reads · 1 search · 1 edit · 1 command". Thoughts, notes and
 /// smaller tools are left out; empty when nothing counted.
 pub fn tally(rows: &[WorkRow]) -> String {
-    const KINDS: [(&[&str], &str, &str); 11] = [
+    const KINDS: [(&[&str], &str, &str); 12] = [
         (&[AGENT_VERB], "agent", "agents"),
+        (&["Drew"], "drawing", "drawings"),
         (&BROWSER_VERBS, "browser step", "browser steps"),
         (&["Used skill"], "skill", "skills"),
         (&["Read"], "read", "reads"),
@@ -695,6 +709,21 @@ pub fn tool_row(tool: &ToolStep, cwd: &Path, live: bool) -> WorkRow {
             None,
             text_field(input, "description").map(|description| Detail::Text(description.to_string().into())),
         ),
+        // "Drew “Settings” · 2 new, 1 revised": the card under the log shows the pictures.
+        wack_canvas::tools::CANVAS => {
+            let (target, note) = canvas_words(input.as_ref(), ok);
+            ("Drew", Target::Words(target.into()), note, ok.map(|text| Detail::Output(tail(text, DETAIL_LINES).into())))
+        }
+        wack_canvas::tools::CANVAS_LOOK => {
+            let names = string_list(input.as_ref(), "artboards");
+            let target = if names.is_empty() { "the canvas".to_string() } else { names.join(", ") };
+            ("Viewed", Target::Words(target.into()), None, ok.map(|text| Detail::Output(tail(text, DETAIL_LINES).into())))
+        }
+        wack_canvas::tools::CANVAS_GUIDE => {
+            let sections = string_list(input.as_ref(), "sections");
+            let target = if sections.is_empty() { "the canvas guide".to_string() } else { format!("the canvas guide · {}", sections.join(", ")) };
+            ("Studied", Target::Words(target.into()), None, None)
+        }
         // An MCP tool is named by its server and its own name: `mcp__github__create_issue` reads
         // "Used github · create_issue". What it returned is its detail.
         name if mcp_parts(name).is_some() => {
@@ -728,6 +757,41 @@ pub fn tool_row(tool: &ToolStep, cwd: &Path, live: bool) -> WorkRow {
         },
     };
     WorkRow { key: tool.id.clone().into(), verb: verb.to_string().into(), target, meta, detail, open: false, agent: None, pictures: result.map(|result| result.pictures.clone()).unwrap_or_default() }
+}
+
+/// The verbs canvas rows take, none shared with another tool's, so the icon and tally can tell
+/// them by verb alone.
+pub const CANVAS_VERBS: [&str; 3] = ["Drew", "Viewed", "Studied"];
+
+/// A `canvas` call in words: what it drew on, and once it is done, how many artboards to fix.
+fn canvas_words(input: Option<&Value>, result: Option<&str>) -> (String, Option<String>) {
+    if let Some(outcome) = result.and_then(wack_canvas::tools::outcome) {
+        let mut parts = vec![format!("“{}”", outcome.title)];
+        for (count, word) in [(outcome.added.len(), "new"), (outcome.revised.len(), "revised"), (outcome.removed.len(), "removed")] {
+            if count > 0 {
+                parts.push(format!("{count} {word}"));
+            }
+        }
+        let note = (!outcome.problems.is_empty()).then(|| format!("{} to fix", outcome.problems.len()));
+        return (parts.join(" · "), note);
+    }
+    let title = input.and_then(|input| input.get("title")).and_then(Value::as_str).map(|t| format!("“{}”", t.trim()));
+    let canvas = input.and_then(|input| input.get("canvas")).and_then(Value::as_str).map(str::to_string);
+    let count = input.and_then(|input| input.get("artboards")).and_then(Value::as_array).map_or(0, Vec::len);
+    let mut parts: Vec<String> = title.or(canvas).into_iter().collect();
+    if count > 0 {
+        parts.push(format!("{count} artboard{}", if count == 1 { "" } else { "s" }));
+    }
+    (if parts.is_empty() { "the canvas".into() } else { parts.join(" · ") }, None)
+}
+
+/// The strings in an input's array field (names, ids), others skipped.
+fn string_list(input: Option<&Value>, key: &str) -> Vec<String> {
+    input
+        .and_then(|input| input.get(key))
+        .and_then(Value::as_array)
+        .map(|list| list.iter().filter_map(Value::as_str).map(str::to_string).collect())
+        .unwrap_or_default()
 }
 
 /// The verbs `browser_words` gives, none shared with another tool's row, so a row's icon and
@@ -1036,6 +1100,9 @@ fn doing(tool: &str, target: &str) -> String {
         wack_core::WEB_FETCH => format!("Reading {}", target.split('/').nth(2).unwrap_or(target)),
         wack_core::WEB_SEARCH => format!("Searching the web for {target}"),
         name if name.starts_with("browser_") => "Using the browser".into(),
+        wack_canvas::tools::CANVAS => "Drawing on the canvas".into(),
+        wack_canvas::tools::CANVAS_LOOK => "Looking at the canvas".into(),
+        wack_canvas::tools::CANVAS_GUIDE => "Reading the canvas guide".into(),
         name => match mcp_parts(name) {
             Some((server, tool)) => format!("Using {server} · {tool}"),
             None => format!("Using {name}"),

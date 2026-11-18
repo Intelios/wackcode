@@ -126,6 +126,15 @@ impl ChatPanes {
         }
     }
 
+    /// Shows a canvas in the Canvas pane, if one has been made.
+    pub fn show_canvas(&self, canvas: &str, artboards: &[String], cx: &mut App) {
+        for (model, _) in self.models.values() {
+            if let PaneModel::Canvas(pane) = model {
+                pane.update(cx, |pane, cx| pane.show(canvas, artboards, cx));
+            }
+        }
+    }
+
     /// The tabs the Browser pane shows, if this tree was given any.
     pub fn browser(&self) -> Option<&wack_browser::ChatTabs> {
         self.browser.as_ref()

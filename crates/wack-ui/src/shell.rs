@@ -44,7 +44,7 @@ use crate::{
         ClosePaneId, CloseSettings, CloseTab, Compact, DeleteChat, DiscardConnection, EditConnection, ToggleConnectionKey, EqualizeSplit, FocusNext, FocusPrevious, MovePane, AddModelRow, RemoveModelRow, SaveCommandEditor, SaveConnection,
         NewChat, NewChatIn, NewTerminal, NewTerminalWith, NextTab, OpenEffortMenu, OpenModelMenu, OpenSettings,
         OpenSettingsSection, PinProject, PreviousTab, RemoveConnection, RemovePicture, ShowCommandOutput, ShowPicture, RemoveProject, ResetDockSize,
-        PickCommand, SelectChat, Send, Stop, StopCommand, MoveToBackground, ToggleTasks, ToggleTasksPane, StopTask, ShowTask, ToggleAgentsPane, ToggleBrowserPane, ToggleCanvasPane, WriteInComposer, ShowAgent, StopAgent, ToggleChanges, ToggleProject, ToggleSidebar, ToggleTerminal, TriggerProjectCommand, Unqueue,
+        PickCommand, SelectChat, Send, Stop, StopCommand, MoveToBackground, ToggleTasks, ToggleTasksPane, StopTask, ShowTask, ToggleAgentsPane, ToggleBrowserPane, ToggleCanvasPane, ShowCanvas, WriteInComposer, ShowAgent, StopAgent, ToggleChanges, ToggleProject, ToggleSidebar, ToggleTerminal, TriggerProjectCommand, Unqueue,
         ToggleAutoTitles, ToggleTitleModels, ChooseTitleModel, RenameChat, RenameChatAt, CancelRename, ToggleModelReasoning, ToggleModelVision, AttachPictures, AttachFiles, RemoveAttachment, OpenPicture, ClosePicture, StepPicture, ZoomPicture,
         StartSuggestion, DismissSuggestion, CopySuggestion, OpenChat,
         ToggleModelEffort, SwitchSkill, SwitchSkillFolder, RemoveSkillFolder, OpenSkill, CopySkill, ChooseSkillUse, NewSkill, SaveSkill,
@@ -1461,6 +1461,11 @@ impl Render for Shell {
                 .on_action(cx.listener(|shell, _: &ToggleBrowserPane, window, cx| shell.toggle_pane(PaneKind::Browser, window, cx)))
                 .on_action(cx.listener(|shell, _: &ToggleCanvasPane, window, cx| shell.toggle_pane(PaneKind::Canvas, window, cx)))
                 .on_action(cx.listener(|shell, action: &WriteInComposer, window, cx| shell.write_in_composer(&action.text, window, cx)))
+                .on_action(cx.listener(|shell, action: &ShowCanvas, _, cx| {
+                    let (canvas, artboards) = (action.canvas.clone(), action.artboards.clone());
+                    shell.change_layout(cx, |layout| layout.open(PaneKind::Canvas));
+                    shell.with_session(cx, |session, cx| session.panes.show_canvas(&canvas, &artboards, cx));
+                }))
                 .on_action(cx.listener(|shell, action: &ShowAgent, _, cx| {
                     let id = action.id.to_string();
                     shell.change_layout(cx, |layout| layout.open(PaneKind::Agents));

@@ -908,6 +908,15 @@ pub struct WriteInComposer {
     pub text: String,
 }
 
+/// Opens the Canvas pane on a canvas, gliding to some of its artboards (all when empty): what a
+/// transcript card's click does.
+#[derive(Clone, Debug, PartialEq, Action)]
+#[action(namespace = wackcode, no_json)]
+pub struct ShowCanvas {
+    pub canvas: String,
+    pub artboards: Vec<String>,
+}
+
 const CONTEXT: &str = "Shell";
 /// The key context of a form whose fields Tab moves between.
 pub const FORM_CONTEXT: &str = "Form";

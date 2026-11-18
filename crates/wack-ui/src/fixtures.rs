@@ -1104,3 +1104,65 @@ pub fn pictures_turn() -> Vec<Item> {
     conversation.finish(&Ok(wack_core::Outcome::Done), START + 9_000);
     items(&conversation, &["turn-1"], START + 10_000)
 }
+
+/// A chat's canvases for the canvas scenes, in a fresh folder under `dir`: "Settings", two rows
+/// of artboards with pictures drawn from `page_picture`, one of them reporting console errors.
+/// There is no engine, so nothing is drawn again.
+pub fn canvases(dir: &Path) -> wack_canvas::Canvases {
+    let _ = std::fs::remove_dir_all(dir);
+    let canvases = wack_canvas::Canvases::new(dir, None);
+    let boards = [
+        ("Calm", "Phone", 390, 760),
+        ("Dense", "Phone", 410, 760),
+        ("Bold", "Phone", 400, 760),
+        ("Overview", "Desktop", 960, 600),
+        ("Empty state", "Desktop", 720, 480),
+    ];
+    let artboards: Vec<serde_json::Value> = boards
+        .iter()
+        .map(|(name, group, width, height)| json!({ "name": name, "group": group, "width": width, "height": height, "html": "<main><h1>Settings</h1></main>" }))
+        .collect();
+    let planned = canvases.apply(&json!({ "title": "Settings", "artboards": artboards })).expect("the fixture canvas is valid");
+    let store = canvases.store();
+    for artboard in &planned.canvas.artboards {
+        let (width, height) = (artboard.width, artboard.height.unwrap_or(600));
+        let picture = std::fs::read(page_picture(width * 2, height * 2)).unwrap_or_default();
+        let console: Vec<String> = if artboard.id == "empty-state" {
+            vec!["error: Uncaught TypeError: Cannot read properties of null (reading 'append') (empty-state.html:41)".into()]
+        } else {
+            Vec::new()
+        };
+        let report = wack_canvas::Report { rev: artboard.rev, width, height, content: height, scale: 2., console, ..Default::default() };
+        let report = serde_json::to_value(&report).unwrap_or_default();
+        let _ = store.save_render("settings", &artboard.id, artboard.rev, &picture, &report);
+        let _ = store.save_thumbnail("settings", &artboard.id, artboard.rev, &picture);
+    }
+    canvases
+}
+
+/// A turn that drew on a canvas: the guide, the drawing, a look, its card and the reply. The
+/// card's faces come from `canvases`, as a chat's would.
+pub fn canvas_turn(canvases: &wack_canvas::Canvases, live: bool) -> Vec<Item> {
+    let mut conversation = Conversation::default();
+    let now = START + 60_000;
+    conversation.send("Sketch three directions for the settings screen on a phone, and a desktop overview.", now - 30_000);
+    call(&mut conversation, "c-1", "canvas_guide", json!({ "sections": ["explore", "craft"] }), Some("Canvas guide…"), now);
+    let drawn = "Started canvas “Settings” (canvas: \"settings\").\nAdded: calm, dense, bold, overview, empty-state.\n\nDrawn:\n- calm: drawn 390×760. No console errors.\n- dense: drawn 410×760. No console errors.\n- bold: drawn 400×760. No console errors.\n- overview: drawn 960×600. No console errors.\n- empty-state: drawn 720×480. Console: error: Uncaught TypeError: Cannot read properties of null (reading 'append')\n\nArtboards on “Settings”:\n- calm\n\nThe user sees the canvas now.";
+    call(&mut conversation, "c-2", "canvas", json!({ "title": "Settings", "artboards": [{}, {}, {}, {}, {}] }), Some(drawn), now);
+    if live {
+        call(&mut conversation, "c-3", "canvas_look", json!({ "artboards": ["empty-state"] }), None, now);
+    } else {
+        call(&mut conversation, "c-3", "canvas_look", json!({ "artboards": ["empty-state"] }), Some("empty-state: drawn 720×480."), now);
+        conversation.apply(&Event::Text("Three phone directions are on the canvas: **Calm** groups settings into quiet cards, **Dense** fits everything on one screen, and **Bold** leads with the account. The desktop empty state has a script error I'll fix next. Which direction should I take further?".into()), now + 4_000);
+        conversation.finish(&Ok(Outcome::Done), now + 6_000);
+    }
+    let mut items = items(&conversation, &[], now + 10_000);
+    for item in &mut items {
+        if let Item::Canvas(card) = item {
+            for board in &mut card.boards {
+                board.wear(&crate::canvas_card::face(canvases, &card.canvas, &board.id));
+            }
+        }
+    }
+    items
+}

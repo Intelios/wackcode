@@ -189,6 +189,56 @@ fn summary(planned: &model::Planned, drawn: &[(String, Result<Report, String>)],
     lines.join("\n")
 }
 
+/// What one `canvas` call did, read back from its result: the transcript keeps only the text,
+/// so its card is built from this. Kept beside `summary`, which writes what it reads.
+#[derive(Clone, Debug, Default, PartialEq)]
+pub struct Outcome {
+    pub created: bool,
+    pub canvas: String,
+    pub title: String,
+    pub added: Vec<String>,
+    pub revised: Vec<String>,
+    pub removed: Vec<String>,
+    /// The drawn artboards whose report named a problem: an error, overflow, a stuck page.
+    pub problems: Vec<String>,
+}
+
+pub fn outcome(result: &str) -> Option<Outcome> {
+    let mut lines = result.lines();
+    let first = lines.next()?;
+    let created = first.starts_with("Started canvas “");
+    let rest = first.strip_prefix("Started canvas “").or_else(|| first.strip_prefix("Updated canvas “"))?;
+    let split = rest.rfind("” (canvas: \"")?;
+    let title = rest[..split].to_string();
+    let canvas = rest[split + "” (canvas: \"".len()..].strip_suffix("\").")?.to_string();
+    let ids = |line: &str, label: &str| -> Option<Vec<String>> {
+        let list = line.strip_prefix(label)?.strip_suffix('.')?;
+        Some(list.split(", ").map(str::to_string).filter(|id| !id.is_empty()).collect())
+    };
+    let mut outcome = Outcome { created, canvas, title, ..Outcome::default() };
+    let mut drawn = false;
+    for line in lines {
+        if let Some(list) = ids(line, "Added: ") {
+            outcome.added = list;
+        } else if let Some(list) = ids(line, "Revised: ") {
+            outcome.revised = list;
+        } else if let Some(list) = ids(line, "Removed: ") {
+            outcome.removed = list;
+        } else if line == "Drawn:" {
+            drawn = true;
+        } else if line.is_empty() {
+            drawn = false;
+        } else if drawn && let Some(entry) = line.strip_prefix("- ") {
+            let id = entry.split(':').next().unwrap_or_default();
+            let clean = entry.ends_with("No console errors.") && !entry.contains("overflows") && !entry.contains("cut off") && !entry.contains("never settled");
+            if !clean && !id.is_empty() {
+                outcome.problems.push(id.to_string());
+            }
+        }
+    }
+    Some(outcome)
+}
+
 fn report_line(artboard: &model::Artboard, result: &Result<Report, String>) -> String {
     let report = match result {
         Ok(report) => report,
@@ -343,6 +393,19 @@ pub fn collapse_data_urls(html: &str) -> String {
 
 #[cfg(test)]
 mod tests {
+    #[test]
+    fn a_result_reads_back_as_what_the_call_did() {
+        let text = "Started canvas “Settings, “tidy” edition” (canvas: \"settings\").\nAdded: calm, dense.\nRevised: bold.\n\nDrawn:\n- calm: drawn 600×400. No console errors.\n- dense: drawn 600×400. Content overflows the bottom by 20 px. No console errors.\n- bold: could not be drawn. The page failed.\n\nArtboards on “Settings”:\n- calm — “Calm” 600×400\n\nThe user sees the canvas now.";
+        let read = outcome(text).unwrap();
+        assert!(read.created);
+        assert_eq!((read.canvas.as_str(), read.title.as_str()), ("settings", "Settings, “tidy” edition"));
+        assert_eq!(read.added, ["calm", "dense"]);
+        assert_eq!(read.revised, ["bold"]);
+        assert_eq!(read.problems, ["dense", "bold"]);
+        assert!(outcome("Updated canvas “T” (canvas: \"t\").\nRemoved: x.").unwrap().removed == ["x"]);
+        assert!(outcome("There is no artboard “ws”.").is_none());
+    }
+
     use super::*;
 
     #[test]

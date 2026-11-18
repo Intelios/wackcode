@@ -1328,6 +1328,63 @@ pub fn all() -> Vec<Scene> {
             build: |_, cx| agents_scene(None, cx),
         },
         Scene {
+            name: "canvas-board",
+            description: "The Canvas pane at most of the stage: two rows of artboards, fitted, beside a 420 pt transcript.",
+            size: size(px(1680.), px(1000.)),
+            build: |_, cx| canvas_scene(CanvasScene::Board, None, cx),
+        },
+        Scene {
+            name: "canvas-board-backdrop",
+            description: "The Canvas pane over an image backdrop: the board's own surface keeps the pictures readable.",
+            size: size(px(1680.), px(1000.)),
+            build: |_, cx| {
+                let picture = over(fixtures::backdrop(wack_core::Texture::None), cx);
+                canvas_scene(CanvasScene::Board, Some(picture), cx)
+            },
+        },
+        Scene {
+            name: "canvas-errors",
+            description: "An artboard with console errors selected: its badge and Ask to fix.",
+            size: size(px(1680.), px(1000.)),
+            build: |_, cx| canvas_scene(CanvasScene::Errors, None, cx),
+        },
+        Scene {
+            name: "canvas-far-zoom",
+            description: "The board zoomed far out: only the names show over the small pictures.",
+            size: size(px(1680.), px(1000.)),
+            build: |_, cx| canvas_scene(CanvasScene::Far, None, cx),
+        },
+        Scene {
+            name: "canvas-empty",
+            description: "The Canvas pane before the agent has drawn anything.",
+            size: size(px(1480.), px(940.)),
+            build: |_, cx| canvas_scene(CanvasScene::Empty, None, cx),
+        },
+        Scene {
+            name: "canvas-wide",
+            description: "The Canvas pane in a 2,500 pt window.",
+            size: size(px(2500.), px(1300.)),
+            build: |_, cx| canvas_scene(CanvasScene::Board, None, cx),
+        },
+        Scene {
+            name: "canvas-narrow",
+            description: "The Canvas pane in a 1,000 pt window: the transcript keeps its minimum width.",
+            size: size(px(1000.), px(760.)),
+            build: |_, cx| canvas_scene(CanvasScene::Board, None, cx),
+        },
+        Scene {
+            name: "canvas-card",
+            description: "A turn that drew on a canvas: its rows, the card with the artboards' pictures, one to fix.",
+            size: WINDOW,
+            build: |_, cx| canvas_chat_scene(false, cx),
+        },
+        Scene {
+            name: "canvas-card-live",
+            description: "The same turn still at work: the card says it is drawing.",
+            size: WINDOW,
+            build: |_, cx| canvas_chat_scene(true, cx),
+        },
+        Scene {
             name: "browser-pane",
             description: "The Browser pane on a dev server the user opened, beside a page the agent opened.",
             size: size(px(1480.), px(940.)),
@@ -1596,6 +1653,80 @@ fn panes_scene(layout: Layout, ids: &[u32], sidebar_hidden: bool, cx: &mut App) 
             fixtures::strip(Some(fixtures::FINISHED_TITLE)),
         )
         .with_panes(panes, sidebar_hidden)
+    })
+    .into()
+}
+
+#[derive(Clone, Copy, PartialEq)]
+enum CanvasScene {
+    Board,
+    Errors,
+    Far,
+    Empty,
+}
+
+/// A chat with its Canvas pane in the right dock, at its default width. Pictures are fixtures:
+/// scenes have no engine.
+fn canvas_scene(scene: CanvasScene, backdrop: Option<crate::backdrop::Picture>, cx: &mut App) -> AnyView {
+    cx.new(|cx| {
+        let mut layout = Layout::default();
+        let id = layout.open(PaneKind::Canvas);
+        let mut panes = ChatPanes::new(layout, "/Users/you/Documents/GitHub/wackcode".into());
+        let folder = std::env::temp_dir().join(format!("wackcode-gallery-canvas-{}", if scene == CanvasScene::Empty { "empty" } else { "board" }));
+        let canvases = if scene == CanvasScene::Empty {
+            let _ = std::fs::remove_dir_all(&folder);
+            wack_canvas::Canvases::new(&folder, None)
+        } else {
+            fixtures::canvases(&folder)
+        };
+        let items = if scene == CanvasScene::Empty { fixtures::agent_turn() } else { fixtures::canvas_turn(&canvases, false) };
+        panes.insert(
+            id,
+            PaneModel::Canvas(cx.new(|cx| {
+                let mut pane = crate::panes::canvas::CanvasPane::new(canvases, cx);
+                match scene {
+                    CanvasScene::Errors => pane.stage(Some("empty-state"), None),
+                    CanvasScene::Far => pane.stage(None, Some(0.16)),
+                    _ => {}
+                }
+                pane
+            })),
+            cx,
+        );
+        let shell = Shell::showing_tabs(
+            fixtures::sidebar(Selected::Finished),
+            Screen::Chat {
+                title: fixtures::FINISHED_TITLE.into(),
+                project: fixtures::project(),
+                body: Body::Items(items),
+                composer: fixtures::composer_after_turn(Input::Drawn { text: None, placeholder: crate::chat::FOLLOW_UP_PLACEHOLDER.into() }),
+            },
+            fixtures::strip(Some(fixtures::FINISHED_TITLE)),
+        )
+        .with_panes(panes, false);
+        match backdrop {
+            Some(picture) => shell.with_backdrop(picture),
+            None => shell,
+        }
+    })
+    .into()
+}
+
+/// A chat whose turn drew on a canvas, the pane closed: the card in the transcript.
+fn canvas_chat_scene(live: bool, cx: &mut App) -> AnyView {
+    let canvases = fixtures::canvases(&std::env::temp_dir().join("wackcode-gallery-canvas-card"));
+    let items = fixtures::canvas_turn(&canvases, live);
+    cx.new(|_| {
+        Shell::showing_tabs(
+            fixtures::sidebar(if live { Selected::Working } else { Selected::Finished }),
+            Screen::Chat {
+                title: fixtures::FINISHED_TITLE.into(),
+                project: fixtures::project(),
+                body: Body::Items(items),
+                composer: if live { fixtures::composer_working() } else { fixtures::composer_after_turn(Input::Drawn { text: None, placeholder: crate::chat::FOLLOW_UP_PLACEHOLDER.into() }) },
+            },
+            fixtures::strip(Some(fixtures::FINISHED_TITLE)),
+        )
     })
     .into()
 }

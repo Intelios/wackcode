@@ -107,7 +107,24 @@ fn user_words(message: &Message) -> Option<String> {
     }
     let text = message.text();
     let text = text.trim();
-    (!text.is_empty()).then(|| shorten(text, MAX_USER_MESSAGE_CHARS))
+    // Pictures the user attached are named by reference, so the summary can still point at them
+    // (`read_image` reopens them after the compaction drops the pictures themselves).
+    let pictures: Vec<String> = message
+        .content
+        .iter()
+        .filter_map(|block| match block {
+            Block::Image { id: Some(id), .. } => Some(crate::images::reference(id)),
+            _ => None,
+        })
+        .collect();
+    let mut words = shorten(text, MAX_USER_MESSAGE_CHARS);
+    if !pictures.is_empty() {
+        if !words.is_empty() {
+            words.push('\n');
+        }
+        words.push_str(&format!("[Attached pictures: {}]", pictures.join(", ")));
+    }
+    (!words.is_empty()).then_some(words)
 }
 
 /// The first request always stays; then the newest messages that fit the budget.
@@ -348,6 +365,15 @@ mod tests {
         assert_eq!(kept.last().unwrap(), "newest");
         assert_eq!(kept.len(), 4);
         assert_eq!(omitted, 3);
+    }
+
+    #[test]
+    fn the_users_pictures_are_carried_by_reference() {
+        let picture = |id: &str| Block::Image { media_type: "image/png".into(), data: "A".into(), label: None, id: Some(id.into()) };
+        let message = Message { role: Role::User, content: vec![Block::Text { text: "Match this".into() }, picture("3f2a9c01b4d7e5f6"), picture("0123456789abcdef")] };
+        assert_eq!(user_words(&message).unwrap(), "Match this\n[Attached pictures: img:3f2a9c01b4d7, img:0123456789ab]");
+        let only = Message { role: Role::User, content: vec![picture("3f2a9c01b4d7e5f6")] };
+        assert_eq!(user_words(&only).unwrap(), "[Attached pictures: img:3f2a9c01b4d7]");
     }
 
     #[test]

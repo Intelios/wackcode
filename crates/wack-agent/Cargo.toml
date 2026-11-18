@@ -8,6 +8,10 @@ publish.workspace = true
 [dependencies]
 wack-llm.workspace = true
 async-trait.workspace = true
+# Pictures: decoding, viewing copies, the base64 the providers take and the hash that names a saved original.
+base64 = "0.22"
+image.workspace = true
+sha2.workspace = true
 futures.workspace = true
 libc.workspace = true
 serde.workspace = true

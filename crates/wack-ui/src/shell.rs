@@ -45,7 +45,7 @@ use crate::{
         NewChat, NewChatIn, NewTerminal, NewTerminalWith, NextTab, OpenEffortMenu, OpenModelMenu, OpenSettings,
         OpenSettingsSection, PinProject, PreviousTab, RemoveConnection, RemovePicture, ShowCommandOutput, ShowPicture, RemoveProject, ResetDockSize,
         PickCommand, SelectChat, Send, Stop, StopCommand, MoveToBackground, ToggleTasks, ToggleTasksPane, StopTask, ShowTask, ToggleAgentsPane, ToggleBrowserPane, ShowAgent, StopAgent, ToggleChanges, ToggleProject, ToggleSidebar, ToggleTerminal, TriggerProjectCommand, Unqueue,
-        ToggleAutoTitles, ToggleTitleModels, ChooseTitleModel, RenameChat, RenameChatAt, CancelRename, ToggleModelReasoning,
+        ToggleAutoTitles, ToggleTitleModels, ChooseTitleModel, RenameChat, RenameChatAt, CancelRename, ToggleModelReasoning, ToggleModelVision,
         StartSuggestion, DismissSuggestion, CopySuggestion, OpenChat,
         ToggleModelEffort, SwitchSkill, SwitchSkillFolder, RemoveSkillFolder, OpenSkill, CopySkill, ChooseSkillUse, NewSkill, SaveSkill,
         CloseSkill, AskDeleteSkill, ConfirmSkillDelete, CancelSkillDelete, AddSkillFolder, ImportSkills, SwitchSlashCommand, OpenSlashCommand,
@@ -1487,6 +1487,10 @@ impl Render for Shell {
                 .on_action(cx.listener(|shell, action: &ToggleModelReasoning, _, cx| {
                     let index = action.index;
                     shell.with_app(cx, |app, cx| app.toggle_model_reasoning(index, cx));
+                }))
+                .on_action(cx.listener(|shell, action: &ToggleModelVision, _, cx| {
+                    let index = action.index;
+                    shell.with_app(cx, |app, cx| app.toggle_model_vision(index, cx));
                 }))
                 .on_action(cx.listener(|shell, action: &ToggleModelEffort, _, cx| {
                     let (index, effort) = (action.index, action.effort);

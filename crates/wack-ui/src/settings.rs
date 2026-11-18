@@ -34,7 +34,7 @@ use crate::{
     actions::{
         AddModelRow, ChooseFormat, CloseConnectionForm, CloseSettings, DiscardConnection, EditConnection, OpenConnectionForm,
         OpenSettingsSection, RemoveConnection, RemoveModelRow, SaveConnection, SwitchConnection, ToggleConnectionKey,
-        ToggleModelEffort, ToggleModelReasoning,
+        ToggleModelEffort, ToggleModelReasoning, ToggleModelVision,
     },
     appearance_page::{self, AppearanceData},
     button::{Button, Kind},
@@ -56,7 +56,7 @@ pub struct ModelField {
     pub reasoning: bool,
     /// The efforts ticked while Reasoning is on, low to high.
     pub efforts: Vec<Reasoning>,
-    /// Kept from the saved model, which the editor has no switch for yet; a new row accepts.
+    /// The Vision switch: whether the model is sent pictures. A new row accepts.
     pub accepts_images: bool,
 }
 
@@ -172,6 +172,13 @@ impl ProviderForm {
         if let Some(row) = self.models.get_mut(index) {
             row.reasoning = !row.reasoning;
             row.efforts = if row.reasoning { REASONING_DEFAULT.to_vec() } else { Vec::new() };
+        }
+    }
+
+    /// The Vision switch of one model.
+    pub fn toggle_vision(&mut self, index: usize) {
+        if let Some(row) = self.models.get_mut(index) {
+            row.accepts_images = !row.accepts_images;
         }
     }
 
@@ -382,6 +389,7 @@ impl ProviderForm {
         models.iter().zip(&saved.models).any(|(row, saved)| {
             row.id != saved.id
                 || row.efforts != saved_efforts(&saved.efforts)
+                || row.accepts_images != saved.accepts_images
                 || match (row.context.as_str(), saved.context_window) {
                     ("", None) => false,
                     (text, Some(window)) => parse_tokens(text) != Some(window),
@@ -1207,6 +1215,26 @@ fn model_row(index: usize, row: &ModelField, theme: &Theme) -> impl IntoElement 
 }
 
 /// Tags for the automation socket, which takes only fixed names.
+const VISION_TAGS: [&str; 4] = ["model-vision-0", "model-vision-1", "model-vision-2", "model-vision-3"];
+
+/// The Vision switch: off and the model is never sent pictures (screenshots, image files, the
+/// user's attachments), and is told they were left out.
+fn vision_toggle(index: usize, row: &ModelField, theme: &Theme) -> impl IntoElement {
+    div()
+        .id(("model-vision", index))
+        .flex()
+        .flex_none()
+        .items_center()
+        .gap(px(8.))
+        .cursor_pointer()
+        .tooltip(crate::tooltip::tip("Whether this model is sent pictures: screenshots, image files and your attachments"))
+        .on_click(dispatch(ToggleModelVision { index }))
+        .child(switch(row.accepts_images, theme))
+        .child(div().typography(Type::Ui).text_color(if row.accepts_images { theme.text_soft } else { theme.text_dim }).child("Vision"))
+        .tag(VISION_TAGS.get(index).copied().unwrap_or("model-vision"))
+}
+
+/// Tags for the automation socket, which takes only fixed names.
 const REASONING_TAGS: [&str; 4] = ["model-reasoning-0", "model-reasoning-1", "model-reasoning-2", "model-reasoning-3"];
 
 /// The Reasoning switch and, while it is on, the efforts the endpoint accepts.
@@ -1249,6 +1277,8 @@ fn reasoning_line(index: usize, row: &ModelField, theme: &Theme) -> impl IntoEle
                 .flex()
                 .items_center()
                 .gap(px(14.))
+                .child(vision_toggle(index, row, theme))
+                .child(div().h(px(16.)).w(px(1.)).bg(theme.border))
                 .child(toggle)
                 .when_some(chips, |line, chips| line.child(div().h(px(16.)).w(px(1.)).bg(theme.border)).child(chips)),
         )

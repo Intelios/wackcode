@@ -344,6 +344,10 @@ impl Browser {
             Kind::Tabs => self.tabs_tool(input, context, owner).await.map(Into::into),
             Kind::Navigate => self.navigate(input, context, owner).await.map(Into::into),
             Kind::Snapshot => self.snapshot(input, owner).await.map(Into::into),
+            // A picture this model can't see would cost a capture for nothing.
+            Kind::Screenshot if !context.seen.settings.is_none_or(|settings| settings.accepts_images) => {
+                Err("This model can't view pictures, so screenshots tell it nothing. Read the page with browser_snapshot, or its text with browser_text.".into())
+            }
             Kind::Screenshot => self.screenshot(input, owner).await,
             Kind::Act => self.act(input, context, owner).await.map(Into::into),
             Kind::Fill => self.fill(input, context, owner).await.map(Into::into),

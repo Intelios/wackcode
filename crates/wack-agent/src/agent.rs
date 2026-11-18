@@ -42,7 +42,7 @@ use crate::{
     ask::{Answer, Question},
     commands::CommandUse,
     compaction::{self, Summary},
-    images,
+    images::{self, Images},
     prompt,
     registry::{Registry, TOOL_SEARCH},
     session::{Note, Session},
@@ -291,6 +291,8 @@ pub struct Agent {
     recorder: Option<Arc<dyn Recorder>>,
     /// The sub-agent this is, for tools that keep its work apart (its own browser tabs).
     caller: Option<String>,
+    /// Where the chat keeps its pictures: beside its session, or its parent's for a sub-agent.
+    images: Images,
 }
 
 enum Planned {
@@ -307,6 +309,7 @@ impl Agent {
         settings: Settings,
     ) -> Self {
         let cwd = session.cwd().to_path_buf();
+        let images = Images::for_session(session.path());
         let specs: Vec<_> = registry.specs().collect();
         let co_author = settings.commit_attribution.then(|| prompt::co_author_label(&settings.model));
         let mut system = prompt::system(&profile.prompt, &cwd, &prompt::today(), &specs, co_author.as_deref());
@@ -325,7 +328,15 @@ impl Agent {
             agents: Agents::new(),
             recorder: None,
             caller: None,
+            images,
         }
+    }
+
+    /// Keeps pictures in `images` instead of beside this agent's session: a sub-agent shares its
+    /// chat's.
+    pub fn with_images(mut self, images: Images) -> Self {
+        self.images = images;
+        self
     }
 
     /// Adds a part to the system prompt after the project instructions and before Ultra's, for a
@@ -641,7 +652,7 @@ impl Agent {
         }
 
         let features = &self.features;
-        let (cwd, tasks, agents) = (&self.cwd, &self.tasks, &self.agents);
+        let (cwd, tasks, agents, pictures) = (&self.cwd, &self.tasks, &self.agents, &self.images);
         let seen = Seen {
             system: &self.system,
             messages: self.session.messages(),
@@ -661,6 +672,7 @@ impl Agent {
                 agents: agents.clone(),
                 seen,
                 caller: self.caller.clone(),
+                images: pictures.clone(),
             };
             async move {
                 let context = &context;
@@ -681,7 +693,10 @@ impl Agent {
                     },
                 };
                 let (content, images, is_error) = match result {
-                    Ok(ToolOutput { text, images }) => (text, images, false),
+                    Ok(output) => {
+                        let ToolOutput { text, images } = images::ingest(pictures, output).await;
+                        (text, images, false)
+                    }
                     Err(content) => (content, Vec::new(), true),
                 };
                 events(Event::ToolResult { id: id.clone(), name: name.clone(), content: content.clone(), is_error });
@@ -1944,7 +1959,9 @@ mod tests {
         }
 
         async fn run(&self, _: Value, _: &ToolContext<'_>) -> Result<ToolOutput, String> {
-            let image = wack_llm::Image::new("image/png", "iVBORw0KGgo=");
+            let mut png = Vec::new();
+            image::DynamicImage::new_rgb8(1, 1).write_to(&mut std::io::Cursor::new(&mut png), image::ImageFormat::Png).unwrap();
+            let image = wack_llm::Image::new("image/png", crate::images::view::encode(&png));
             Ok(ToolOutput::with_images("The page.", vec![image]))
         }
     }

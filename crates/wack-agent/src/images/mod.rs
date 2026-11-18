@@ -20,8 +20,20 @@
 //!
 //! Every rule keeps every message and block where it was (an elided user picture becomes a text
 //! block in its place), so a tool call and its result stay paired.
+//!
+//! Before any of that, [`ingest`] turns each picture a tool returns into its viewing copy
+//! (`view`) and saves its original for the chat (`store`), which is what `list_images` and
+//! `read_image` (`tools`) reopen.
+
+pub mod store;
+pub mod tools;
+pub mod view;
+
+pub use store::{Images, reference};
 
 use wack_llm::{Block, Image, Message};
+
+use crate::tool::ToolOutput;
 
 /// The most pictures one request carries. Anthropic tightens its size rules past 20.
 pub const MAX_IMAGES: usize = 20;
@@ -48,12 +60,12 @@ pub fn prepare(messages: &mut [Message], accepts_images: bool) {
             Block::ToolResult { content, images, .. } if !images.is_empty() => {
                 let here = elide.min(images.len());
                 for image in images.drain(..here) {
-                    append(content, &elided(image.label.as_deref()));
+                    append(content, &elided(image.label.as_deref(), image.id.as_deref()));
                 }
                 elide -= here;
             }
-            Block::Image { label, .. } => {
-                *block = Block::Text { text: elided_attachment(label.as_deref()) };
+            Block::Image { label, id, .. } => {
+                *block = Block::Text { text: elided_attachment(label.as_deref(), id.as_deref()) };
                 elide -= 1;
             }
             _ => {}
@@ -91,18 +103,59 @@ pub fn cap_turn(results: &mut [Block]) {
 }
 
 /// The line an elided tool picture leaves in its result's text.
-pub fn elided(label: Option<&str>) -> String {
-    match label {
-        Some(label) => format!("[Picture elided from this request: you already viewed it ({label}).]"),
-        None => "[Picture elided from this request: you already viewed it.]".to_string(),
-    }
+pub fn elided(label: Option<&str>, id: Option<&str>) -> String {
+    let what = label.map(|label| format!(" ({label})")).unwrap_or_default();
+    format!("[Picture elided from this request: you already viewed it{what}.{}]", reopen(id))
 }
 
-fn elided_attachment(label: Option<&str>) -> String {
-    match label {
-        Some(label) => format!("[A picture the user attached ({label}) is elided from this request: you already viewed it.]"),
-        None => "[A picture the user attached is elided from this request: you already viewed it.]".to_string(),
+fn elided_attachment(label: Option<&str>, id: Option<&str>) -> String {
+    let what = label.map(|label| format!(" ({label})")).unwrap_or_default();
+    format!("[A picture the user attached{what} is elided from this request: you already viewed it.{}]", reopen(id))
+}
+
+fn reopen(id: Option<&str>) -> String {
+    id.map(|id| format!(" Reopen it with read_image(\"{}\") only if you need to look at it again.", reference(id))).unwrap_or_default()
+}
+
+/// Makes a tool's pictures ready for a model: each becomes its viewing copy (saying so when it
+/// was made smaller) and its original is saved for the chat, which gives it its id. A picture
+/// that cannot be read is left out with a line saying why. Decoding is slow, so it runs off the
+/// async threads.
+pub async fn ingest(store: &Images, output: ToolOutput) -> ToolOutput {
+    if output.images.is_empty() {
+        return output;
     }
+    let text = output.text.clone();
+    let store = store.clone();
+    tokio::task::spawn_blocking(move || ingest_now(&store, output)).await.unwrap_or_else(|_| {
+        let mut text = text;
+        append(&mut text, "[The pictures could not be prepared.]");
+        text.into()
+    })
+}
+
+fn ingest_now(store: &Images, output: ToolOutput) -> ToolOutput {
+    let ToolOutput { mut text, images } = output;
+    let several = images.len() > 1;
+    let mut kept = Vec::with_capacity(images.len());
+    for (index, image) in images.into_iter().enumerate() {
+        let which = if several { format!("Picture {}: ", index + 1) } else { String::new() };
+        let prepared = view::decode(&image.data).and_then(|bytes| {
+            let viewing = view::viewing_copy(&bytes)?;
+            let media = view::media_type(&bytes).unwrap_or(image.media_type.as_str());
+            Ok((viewing, store.save(&bytes, media).ok()))
+        });
+        match prepared {
+            Ok((viewing, id)) => {
+                if let Some(note) = viewing.note() {
+                    append(&mut text, &format!("{which}{note}"));
+                }
+                kept.push(Image { id, label: image.label, ..viewing.image });
+            }
+            Err(error) => append(&mut text, &format!("[{which}left out. {error}]")),
+        }
+    }
+    ToolOutput { text, images: kept }
 }
 
 fn leave_out(messages: &mut [Message]) {
@@ -279,7 +332,7 @@ mod tests {
 
     #[test]
     fn the_users_pictures_count_and_become_a_line_when_elided() {
-        let attached = Block::Image { media_type: "image/png".into(), data: "mine".into(), label: Some("design.png".into()) };
+        let attached = Block::Image { media_type: "image/png".into(), data: "mine".into(), label: Some("design.png".into()), id: None };
         let mut messages = vec![turn(vec![Block::Text { text: "look".into() }, attached.clone()])];
         messages.extend(conversation(MAX_IMAGES));
         let messages = prepared(messages);
@@ -300,7 +353,7 @@ mod tests {
         messages[1].content.push(Block::Text { text: "and this".into() });
         let Block::ToolResult { images, .. } = &mut messages[1].content[0] else { panic!() };
         images.push(image("extra"));
-        messages.push(turn(vec![Block::Image { media_type: "image/png".into(), data: "mine".into(), label: None }]));
+        messages.push(turn(vec![Block::Image { media_type: "image/png".into(), data: "mine".into(), label: None, id: None }]));
         prepare(&mut messages, false);
         assert!(sent(&messages).is_empty());
         let Block::ToolResult { content, .. } = &messages[0].content[0] else { panic!() };
@@ -323,6 +376,35 @@ mod tests {
         let Block::ToolResult { images, content, .. } = &results[1] else { panic!() };
         assert_eq!(images.len(), 5);
         assert_eq!(content, "result b\n[10 more pictures were not kept: one step can return at most 20 pictures. Ask for fewer at a time.]");
+    }
+
+    #[test]
+    fn an_elided_picture_with_an_id_says_how_to_reopen_it() {
+        assert_eq!(
+            elided(Some("screenshot of http://localhost:3000"), Some("3f2a9c01b4d7e5f6")),
+            "[Picture elided from this request: you already viewed it (screenshot of http://localhost:3000). Reopen it with read_image(\"img:3f2a9c01b4d7\") only if you need to look at it again.]"
+        );
+    }
+
+    #[tokio::test]
+    async fn ingesting_saves_the_original_and_sends_a_viewing_copy() {
+        let folder = tempfile::tempdir().unwrap();
+        let store = Images::at(folder.path());
+        let mut big = Vec::new();
+        image::DynamicImage::new_rgb8(2000, 1000).write_to(&mut std::io::Cursor::new(&mut big), image::ImageFormat::Png).unwrap();
+        let output = ToolOutput::with_images(
+            "read",
+            vec![Image::new("image/png", view::encode(&big)).labelled("big.png"), Image::new("image/png", "bm90IGEgcGljdHVyZQ==")],
+        );
+        let output = ingest(&store, output).await;
+        assert_eq!(output.images.len(), 1, "the broken one is left out");
+        let image = &output.images[0];
+        assert_eq!(image.label.as_deref(), Some("big.png"));
+        let id = image.id.as_deref().unwrap();
+        assert_eq!(std::fs::read(store.find(id).unwrap()).unwrap(), big, "the original is saved as it was");
+        assert_eq!(view::dimensions(&view::decode(&image.data).unwrap()), Some((1568, 784)));
+        assert!(output.text.contains("Picture 1: [Picture resized: original 2000 × 1000"));
+        assert!(output.text.contains("[Picture 2: left out. It is not a picture"));
     }
 
     #[test]

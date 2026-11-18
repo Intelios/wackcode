@@ -7,6 +7,7 @@ publish.workspace = true
 
 [dependencies]
 wack-agent.workspace = true
+wack-llm.workspace = true
 async-trait.workspace = true
 globset.workspace = true
 ignore.workspace = true
@@ -18,4 +19,5 @@ tokio.workspace = true
 tokio-util.workspace = true
 
 [dev-dependencies]
+image.workspace = true
 tempfile.workspace = true

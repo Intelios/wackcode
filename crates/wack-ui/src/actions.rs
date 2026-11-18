@@ -400,6 +400,13 @@ pub struct ToggleModelReasoning {
     pub index: usize,
 }
 
+/// Settings › Providers: one model's Vision switch (whether it is sent pictures).
+#[derive(Clone, Debug, PartialEq, Action)]
+#[action(namespace = wackcode, no_json)]
+pub struct ToggleModelVision {
+    pub index: usize,
+}
+
 /// Settings › Providers: ticks or unticks an effort one model's endpoint accepts.
 #[derive(Clone, Debug, PartialEq, Action)]
 #[action(namespace = wackcode, no_json)]

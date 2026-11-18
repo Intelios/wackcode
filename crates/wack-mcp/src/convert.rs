@@ -5,6 +5,9 @@
 use serde_json::{Map, Value};
 use sha2::{Digest, Sha256};
 
+use wack_agent::ToolOutput;
+use wack_llm::Image;
+
 use crate::spec::hex;
 
 pub const MCP_PREFIX: &str = "mcp__";
@@ -40,17 +43,22 @@ pub fn parameters(schema: &Value) -> Value {
     Value::Object(parameters)
 }
 
-/// A `tools/call` result as tool output. Text passes through; links and embedded text resources
-/// become text; images, audio and binary resources are named but left out (tool results carry
-/// text only, for now). An error result is an `Err`. Output past the shared limits is cut.
-pub fn result_text(result: &Value) -> Result<String, String> {
+/// A `tools/call` result as tool output. Text passes through; images come back as pictures (the
+/// agent makes their viewing copies, and leaves them out for a model that can't see them); links
+/// and embedded text resources become text; audio and binary resources are named but left out. An
+/// error result is an `Err`. Text past the shared limits is cut.
+pub fn result_output(result: &Value) -> Result<ToolOutput, String> {
     let blocks = result.get("content").and_then(Value::as_array).cloned().unwrap_or_default();
     let mut texts: Vec<String> = Vec::new();
+    let mut images = Vec::new();
     for block in &blocks {
         let text = |name: &str| block.get(name).and_then(Value::as_str);
         match text("type") {
             Some("text") => texts.extend(text("text").map(str::to_string)),
-            Some("image") => texts.push(format!("[Image omitted: {}]", text("mimeType").unwrap_or("image"))),
+            Some("image") => match text("data") {
+                Some(data) => images.push(Image::new(text("mimeType").unwrap_or("image/png"), data)),
+                None => texts.push("[An image with no data]".into()),
+            },
             Some("audio") => texts.push("[Audio omitted]".into()),
             Some("resource_link") => {
                 let name = text("name").filter(|name| !name.is_empty()).map(|name| format!(" ({name})")).unwrap_or_default();
@@ -77,10 +85,16 @@ pub fn result_text(result: &Value) -> Result<String, String> {
         return Err(if message.is_empty() { "The MCP tool reported an error.".into() } else { head(message).0 });
     }
     if text.is_empty() {
-        return Ok("(no output)".into());
+        let text = match images.len() {
+            0 => "(no output)".to_string(),
+            1 => "(A picture.)".to_string(),
+            count => format!("({count} pictures.)"),
+        };
+        return Ok(ToolOutput::with_images(text, images));
     }
     let (kept, truncated) = head(&text);
-    Ok(if truncated { format!("{kept}\n\n[Output truncated to {} KB.]", MAX_BYTES / 1024) } else { kept })
+    let text = if truncated { format!("{kept}\n\n[Output truncated to {} KB.]", MAX_BYTES / 1024) } else { kept };
+    Ok(ToolOutput::with_images(text, images))
 }
 
 /// The start of `text` that fits a tool result, in whole lines where it can be, and whether
@@ -147,8 +161,8 @@ mod tests {
     }
 
     #[test]
-    fn results_pass_text_and_describe_what_they_cannot_show() {
-        let text = result_text(&json!({ "content": [
+    fn results_pass_text_and_pictures_and_describe_what_they_cannot_show() {
+        let output = result_output(&json!({ "content": [
             { "type": "text", "text": "Hello" },
             { "type": "image", "data": "aGk=", "mimeType": "image/png" },
             { "type": "resource_link", "uri": "file:///a.txt", "name": "a.txt" },
@@ -158,27 +172,30 @@ mod tests {
         ] }))
         .unwrap();
         assert_eq!(
-            text,
-            "Hello\n\n[Image omitted: image/png]\n\nResource: file:///a.txt (a.txt)\n\nB contents\n\n[Binary resource omitted: file:///c.bin]\n\n[Audio omitted]"
+            output.text,
+            "Hello\n\nResource: file:///a.txt (a.txt)\n\nB contents\n\n[Binary resource omitted: file:///c.bin]\n\n[Audio omitted]"
         );
+        assert_eq!(output.images, vec![Image::new("image/png", "aGk=")]);
+        let only = result_output(&json!({ "content": [{ "type": "image", "data": "aGk=", "mimeType": "image/png" }] })).unwrap();
+        assert_eq!((only.text.as_str(), only.images.len()), ("(A picture.)", 1));
     }
 
     #[test]
     fn structured_content_shows_when_there_is_no_content() {
-        assert_eq!(result_text(&json!({ "content": [], "structuredContent": { "count": 2 } })).unwrap(), "{\n  \"count\": 2\n}");
-        assert_eq!(result_text(&json!({ "content": [] })).unwrap(), "(no output)");
+        assert_eq!(result_output(&json!({ "content": [], "structuredContent": { "count": 2 } })).unwrap().text, "{\n  \"count\": 2\n}");
+        assert_eq!(result_output(&json!({ "content": [] })).unwrap().text, "(no output)");
     }
 
     #[test]
     fn an_error_result_is_an_error() {
-        assert_eq!(result_text(&json!({ "content": [{ "type": "text", "text": "Nope." }], "isError": true })).unwrap_err(), "Nope.");
-        assert_eq!(result_text(&json!({ "isError": true })).unwrap_err(), "The MCP tool reported an error.");
+        assert_eq!(result_output(&json!({ "content": [{ "type": "text", "text": "Nope." }], "isError": true })).unwrap_err(), "Nope.");
+        assert_eq!(result_output(&json!({ "isError": true })).unwrap_err(), "The MCP tool reported an error.");
     }
 
     #[test]
     fn long_output_is_cut_and_says_so() {
         let lines: String = (0..5_000).map(|index| format!("line {index}\n")).collect();
-        let text = result_text(&json!({ "content": [{ "type": "text", "text": lines }] })).unwrap();
+        let text = result_output(&json!({ "content": [{ "type": "text", "text": lines }] })).unwrap().text;
         assert!(text.len() < lines.len());
         assert!(text.ends_with("[Output truncated to 50 KB.]"));
         assert_eq!(text.lines().filter(|line| line.starts_with("line ")).count(), MAX_LINES);

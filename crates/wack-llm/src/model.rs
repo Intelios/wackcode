@@ -94,6 +94,9 @@ pub enum Block {
         data: String,
         #[serde(default, skip_serializing_if = "Option::is_none")]
         label: Option<String>,
+        /// The saved original's id, ours and never sent (see [`Image::id`]).
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        id: Option<String>,
     },
     Opaque {
         format: WireFormat,
@@ -112,11 +115,15 @@ pub struct Image {
     /// the picture when a request leaves it out, so the model knows it already saw it.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub label: Option<String>,
+    /// The id (a SHA-256) of the original the agent saved for the chat, which the model and the
+    /// transcript reopen it by. Ours and never sent; `None` for a picture saved nowhere.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub id: Option<String>,
 }
 
 impl Image {
     pub fn new(media_type: impl Into<String>, data: impl Into<String>) -> Self {
-        Self { media_type: media_type.into(), data: data.into(), label: None }
+        Self { media_type: media_type.into(), data: data.into(), label: None, id: None }
     }
 
     pub fn labelled(mut self, label: impl Into<String>) -> Self {

@@ -2604,6 +2604,11 @@ impl AppState {
         self.form_changed(cx);
     }
 
+    pub fn toggle_model_vision(&mut self, index: usize, cx: &mut Context<Self>) {
+        self.form.toggle_vision(index);
+        self.form_changed(cx);
+    }
+
     pub fn toggle_model_effort(&mut self, index: usize, effort: Reasoning, cx: &mut Context<Self>) {
         self.form.toggle_effort(index, effort);
         self.form_changed(cx);

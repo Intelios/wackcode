@@ -14,6 +14,7 @@ use crate::{
     registry::Registry,
     agents::Agents,
     ask::{Answer, Question},
+    images::Images,
     tasks::Tasks,
 };
 
@@ -67,6 +68,8 @@ pub struct ToolContext<'a> {
     pub seen: Seen<'a>,
     /// The sub-agent making the call, or `None` for the chat's own agent.
     pub caller: Option<String>,
+    /// Where the chat keeps its pictures' originals.
+    pub images: Images,
 }
 
 /// What the model sent to make this call: its instructions, its tools and the conversation,
@@ -85,7 +88,7 @@ pub struct Seen<'a> {
 impl ToolContext<'static> {
     /// A context with nobody on the other end, for running a tool outside a run.
     pub fn detached(cwd: impl Into<PathBuf>) -> Self {
-        Self { call_id: String::new(), cwd: cwd.into(), cancel: CancellationToken::new(), user: User::nobody(), tasks: Tasks::scratch(), agents: Agents::new(), seen: Seen::default(), caller: None }
+        Self { call_id: String::new(), cwd: cwd.into(), cancel: CancellationToken::new(), user: User::nobody(), tasks: Tasks::scratch(), agents: Agents::new(), seen: Seen::default(), caller: None, images: Images::none() }
     }
 }
 

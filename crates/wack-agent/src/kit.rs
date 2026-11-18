@@ -112,6 +112,8 @@ impl Kit {
         }
         // Task suggestions ride along in every chat: recording only, never a surface of its own.
         tools.push(self.suggestions.tool());
+        // The way back to a picture a request elided.
+        tools.extend(crate::images::tools::tools());
         tools
     }
 

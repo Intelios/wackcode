@@ -1,7 +1,8 @@
 use async_trait::async_trait;
 use serde::Deserialize;
 use serde_json::{Value, json};
-use wack_agent::{Loading, Tool, ToolContext, ToolOutput, ToolSpec};
+use wack_agent::{Loading, Tool, ToolContext, ToolOutput, ToolSpec, images::view};
+use wack_llm::Image;
 
 use crate::text::{MAX_BYTES, MAX_LINES, cut, looks_binary, parse, resolve};
 
@@ -22,7 +23,7 @@ impl Tool for Read {
     fn spec(&self) -> ToolSpec {
         ToolSpec {
             name: "read".into(),
-            description: format!("Reads a text file. Returns up to {MAX_LINES} lines or {} KB, whichever comes first, and says how to continue when there is more. Use offset and limit to read part of a large file.", MAX_BYTES / 1024),
+            description: format!("Reads a text file, or shows you a picture file (PNG, JPEG, GIF or WebP). Returns up to {MAX_LINES} lines or {} KB, whichever comes first, and says how to continue when there is more. Use offset and limit to read part of a large file.", MAX_BYTES / 1024),
             input_schema: json!({
                 "type": "object",
                 "properties": {
@@ -52,6 +53,15 @@ impl Tool for Read {
             return Err(format!("{} is too large to read ({} MB). Search it with grep, or read part of it with a shell command.", input.path, size.len() / 1024 / 1024));
         }
         let bytes = tokio::fs::read(&path).await.map_err(|error| format!("Could not read {}: {error}.", input.path))?;
+        if let Some(media) = view::media_type(&bytes) {
+            // The agent makes the viewing copy and saves the original (`images::ingest`).
+            let (width, height) = view::dimensions(&bytes).unwrap_or_default();
+            let text = format!("{} is a picture, {width} × {height} pixels.", input.path);
+            if !context.seen.settings.is_none_or(|settings| settings.accepts_images) {
+                return Ok(format!("{text} This model can't view pictures.").into());
+            }
+            return Ok(ToolOutput::with_images(text, vec![Image::new(media, view::encode(&bytes)).labelled(input.path.clone())]));
+        }
         if looks_binary(&bytes) {
             return Err(format!("{} is not a text file.", input.path));
         }
@@ -97,6 +107,20 @@ mod tests {
 
     fn context(folder: &tempfile::TempDir) -> ToolContext<'static> {
         ToolContext::detached(folder.path().to_path_buf())
+    }
+
+    #[tokio::test]
+    async fn a_picture_file_comes_back_as_a_picture() {
+        let folder = tempfile::tempdir().unwrap();
+        let mut png = Vec::new();
+        image::DynamicImage::new_rgb8(3, 2).write_to(&mut std::io::Cursor::new(&mut png), image::ImageFormat::Png).unwrap();
+        std::fs::write(folder.path().join("logo.png"), &png).unwrap();
+        let output = Read.run(json!({ "path": "logo.png" }), &context(&folder)).await.unwrap();
+        assert_eq!(output.text, "logo.png is a picture, 3 × 2 pixels.");
+        assert_eq!(output.images.len(), 1);
+        assert_eq!(output.images[0].media_type, "image/png");
+        assert_eq!(output.images[0].label.as_deref(), Some("logo.png"));
+        assert_eq!(view::decode(&output.images[0].data).unwrap(), png);
     }
 
     #[tokio::test]

@@ -21,7 +21,7 @@ use tokio_util::sync::CancellationToken;
 use wack_agent::{Feature, Loading, Note, Session, Tool, ToolContext, ToolOutput, ToolSpec};
 
 use crate::{
-    convert::{parameters, result_text, tool_name},
+    convert::{parameters, result_output, tool_name},
     hub::{Hub, Server},
     spec::{ServerSpec, ToolDecl},
 };
@@ -135,7 +135,11 @@ impl Tool for McpTool {
         }
         let arguments = if input.is_object() { input } else { json!({}) };
         let result = connection.call(tool, arguments, &context.cancel).await?;
-        result_text(&result).map(ToolOutput::from).map_err(|error| spec.redact(&error))
+        let mut output = result_output(&result).map_err(|error| spec.redact(&error))?;
+        for image in &mut output.images {
+            image.label = Some(format!("picture from {tool} ({})", spec.name));
+        }
+        Ok(output)
     }
 }
 

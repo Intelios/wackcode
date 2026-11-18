@@ -202,8 +202,9 @@ pub fn summary(turn: &Turn, now: u64) -> String {
 /// What a log did, counted: "2 reads · 1 search · 1 edit · 1 command". Thoughts, notes and
 /// smaller tools are left out; empty when nothing counted.
 pub fn tally(rows: &[WorkRow]) -> String {
-    const KINDS: [(&[&str], &str, &str); 10] = [
+    const KINDS: [(&[&str], &str, &str); 11] = [
         (&[AGENT_VERB], "agent", "agents"),
+        (&BROWSER_VERBS, "browser step", "browser steps"),
         (&["Used skill"], "skill", "skills"),
         (&["Read"], "read", "reads"),
         (&["Fetched"], "page", "pages"),
@@ -248,8 +249,33 @@ pub fn activity(rows: &[WorkRow]) -> Option<String> {
         "Recalled memory" => "Recalling memory",
         "Forgot memory" => "Forgetting memory",
         "Waited" => "Waiting",
+        "Awaited" => "Awaiting",
+        "Halted" => "Halting",
+        "Outlined" => "Outlining",
+        "Extracted" => "Extracting",
+        "Evaluated" => "Evaluating",
+        "Batched" => "Running",
+        "Browsed" => "Browsing",
         AGENT_VERB => "Waiting on",
         "Stopped" => "Stopping",
+        // The browser's steps (see `browser_words`).
+        "Opened" => "Opening",
+        "Went" => "Going",
+        "Reloaded" => "Reloading",
+        "Switched" => "Switching",
+        "Closed" => "Closing",
+        "Looked at" => "Looking at",
+        "Clicked" => "Clicking",
+        "Hovered" => "Hovering",
+        "Dragged" => "Dragging",
+        "Typed" => "Typing",
+        "Pressed" => "Pressing",
+        "Scrolled" => "Scrolling",
+        "Filled" => "Filling",
+        "Resized" => "Resizing",
+        "Checked" => "Checking",
+        "Answered" => "Answering",
+        "Uploaded" => "Uploading",
         other => other,
     };
     let target = match &row.target {
@@ -686,12 +712,22 @@ pub fn tool_row(tool: &ToolStep, cwd: &Path, live: bool) -> WorkRow {
     WorkRow { key: tool.id.clone().into(), verb: verb.to_string().into(), target, meta, detail, open: false, agent: None }
 }
 
+/// The verbs `browser_words` gives, none shared with another tool's row, so a row's icon and
+/// the log's tally can tell a browser step by its verb alone.
+/// One word each where it can be, so the verb column never wraps.
+pub const BROWSER_VERBS: [&str; 24] = [
+    "Opened", "Went", "Reloaded", "Halted", "Switched", "Closed", "Checked", "Outlined", "Looked at", "Clicked", "Hovered",
+    "Dragged", "Typed", "Pressed", "Scrolled", "Filled", "Awaited", "Extracted", "Evaluated", "Resized", "Answered", "Uploaded",
+    "Batched", "Browsed",
+];
+
 /// A browser tool call in words: its verb and what it acted on.
 fn browser_words(name: &str, input: Option<&Value>) -> (&'static str, String) {
     let field = |key: &str| input.and_then(|input| input.get(key)).and_then(Value::as_str).map(str::trim).unwrap_or("").to_string();
     let number = |key: &str| input.and_then(|input| input.get(key)).and_then(Value::as_f64);
     let short = |text: String, limit: usize| if text.chars().count() > limit { format!("{}…", text.chars().take(limit).collect::<String>()) } else { text };
-    let site = |url: String| url.strip_prefix("https://").or_else(|| url.strip_prefix("http://")).unwrap_or(&url).trim_end_matches('/').to_string();
+    // An address has no spaces to wrap at, so a long one is cut rather than broken mid-word.
+    let site = |url: String| short(url.strip_prefix("https://").or_else(|| url.strip_prefix("http://")).unwrap_or(&url).trim_end_matches('/').to_string(), 48);
     let point = || match (field("ref"), number("x"), number("y")) {
         (r, _, _) if !r.is_empty() => r,
         (_, Some(x), Some(y)) => format!("{x:.0}, {y:.0}"),
@@ -704,40 +740,40 @@ fn browser_words(name: &str, input: Option<&Value>) -> (&'static str, String) {
             "new" => ("Opened", format!("a tab {}", site(field("url"))).trim().to_string()),
             "select" => ("Switched", format!("to tab {}", number("tab").unwrap_or(0.))),
             "close" => ("Closed", "a tab".into()),
-            _ => ("Listed", "the browser's tabs".into()),
+            _ => ("Checked", "the browser's tabs".into()),
         },
         "navigate" => match field("action").as_str() {
             "back" => ("Went", "back".into()),
             "forward" => ("Went", "forward".into()),
             "reload" => ("Reloaded", "the page".into()),
-            "stop" => ("Stopped", "loading".into()),
+            "stop" => ("Halted", "loading".into()),
             _ => ("Opened", site(field("url"))),
         },
-        "snapshot" => ("Read", if field("query").is_empty() { "the page".into() } else { format!("the page for “{}”", field("query")) }),
+        "snapshot" => ("Outlined", if field("query").is_empty() { "the page".into() } else { format!("the page for “{}”", field("query")) }),
         "screenshot" => ("Looked at", if count("region") > 0 { "part of the page".into() } else { "the page".into() }),
         "act" => match field("action").as_str() {
             "type" => ("Typed", format!("“{}”", short(field("text"), 40))),
             "key" => ("Pressed", field("key")),
             "scroll" => ("Scrolled", if field("direction").is_empty() { "down".into() } else { field("direction") }),
-            "scroll_to" => ("Scrolled to", field("ref")),
-            "hover" => ("Hovered over", point()),
+            "scroll_to" => ("Scrolled", format!("to {}", field("ref"))),
+            "hover" => ("Hovered", format!("over {}", point())),
             "drag" => ("Dragged", point()),
-            "double_click" => ("Double-clicked", point()),
-            "right_click" => ("Right-clicked", point()),
+            "double_click" => ("Clicked", format!("{} twice", point())),
+            "right_click" => ("Clicked", format!("{} with the right button", point())),
             _ => ("Clicked", point()),
         },
         "fill" => ("Filled", plural(count("fields"), "field", "fields")),
-        "wait" => ("Waited", match (field("text"), field("selector"), field("url")) {
-            (text, _, _) if !text.is_empty() && gone => format!("for “{text}” to go"),
-            (text, _, _) if !text.is_empty() => format!("for “{text}”"),
-            (_, selector, _) if !selector.is_empty() => format!("for {selector}"),
-            (_, _, url) if !url.is_empty() => format!("for {url}"),
-            _ => number("ms").map(|ms| format!("{:.1} s", ms / 1000.)).unwrap_or_else(|| "for the network".into()),
+        "wait" => ("Awaited", match (field("text"), field("selector"), field("url")) {
+            (text, _, _) if !text.is_empty() && gone => format!("“{text}” to go"),
+            (text, _, _) if !text.is_empty() => format!("“{text}”"),
+            (_, selector, _) if !selector.is_empty() => short(selector, 48),
+            (_, _, url) if !url.is_empty() => short(url, 48),
+            _ => number("ms").map(|ms| format!("{:.1} s", ms / 1000.)).unwrap_or_else(|| "the network".into()),
         }),
-        "text" => ("Read", "the page's text".into()),
-        "eval" => ("Ran", short(field("expression"), 60)),
-        "console" => ("Read", "the console".into()),
-        "network" => ("Read", if field("body_of").is_empty() { "the requests".into() } else { "a response".into() }),
+        "text" => ("Extracted", "the page's text".into()),
+        "eval" => ("Evaluated", short(field("expression"), 60)),
+        "console" => ("Checked", "the console".into()),
+        "network" => ("Checked", if field("body_of").is_empty() { "the requests".into() } else { "a response".into() }),
         "viewport" => match (field("size"), field("color_scheme")) {
             (size, _) if !size.is_empty() => ("Resized", format!("the page to {size}")),
             (_, scheme) if !scheme.is_empty() => ("Switched", format!("the page to {scheme} colours")),
@@ -745,8 +781,8 @@ fn browser_words(name: &str, input: Option<&Value>) -> (&'static str, String) {
         },
         "dialog" => ("Answered", if input.and_then(|input| input.get("accept")).and_then(Value::as_bool).unwrap_or(false) { "a dialog: OK".into() } else { "a dialog: Cancel".into() }),
         "upload" => ("Uploaded", plural(count("paths"), "file", "files")),
-        "batch" => ("Ran", plural(count("steps"), "browser step", "browser steps")),
-        _ => ("Used", "the browser".into()),
+        "batch" => ("Batched", plural(count("steps"), "browser step", "browser steps")),
+        _ => ("Browsed", "the page".into()),
     }
 }
 
@@ -1031,10 +1067,27 @@ mod tests {
         assert_eq!(words("browser_act", json!({ "action": "click", "x": 120.4, "y": 80 })), ("Clicked", "120, 80".into()));
         assert_eq!(words("browser_act", json!({ "action": "key", "key": "cmd+a" })), ("Pressed", "cmd+a".into()));
         assert_eq!(words("browser_fill", json!({ "fields": [{}, {}] })), ("Filled", "2 fields".into()));
-        assert_eq!(words("browser_wait", json!({ "text": "Saved", "gone": true })), ("Waited", "for “Saved” to go".into()));
+        assert_eq!(words("browser_wait", json!({ "text": "Saved", "gone": true })), ("Awaited", "“Saved” to go".into()));
         assert_eq!(words("browser_viewport", json!({ "color_scheme": "dark" })), ("Switched", "the page to dark colours".into()));
-        assert_eq!(words("browser_batch", json!({ "steps": [{}] })), ("Ran", "1 browser step".into()));
+        assert_eq!(words("browser_batch", json!({ "steps": [{}] })), ("Batched", "1 browser step".into()));
         assert_eq!(doing("browser_snapshot", ""), "Using the browser");
+        let all = ["tabs", "navigate", "snapshot", "screenshot", "act", "fill", "wait", "text", "eval", "console", "network", "viewport", "dialog", "upload", "batch", "unknown"];
+        for tool in all {
+            let verb = words(&format!("browser_{tool}"), json!({})).0;
+            assert!(BROWSER_VERBS.contains(&verb), "{verb} is listed");
+        }
+        let long = format!("https://example.com/{}", "a".repeat(80));
+        assert_eq!(words("browser_navigate", json!({ "url": long })).1.chars().count(), 49);
+    }
+
+    #[test]
+    fn a_running_browser_step_reads_in_the_present_tense() {
+        let mut conversation = Conversation::default();
+        conversation.send("Check the form", 0);
+        conversation.apply(&wack_core::Event::ToolCall { id: "b1".into(), name: "browser_act".into(), input: json!({ "action": "click", "ref": "ref_7" }) }, 1);
+        let items = items(&conversation, Path::new("/"), &HashSet::new(), 2, &mut ReplyCache::default());
+        let rows = items.iter().find_map(|item| if let Item::Work(work) = item { Some(work.rows.clone()) } else { None }).expect("a work log");
+        assert_eq!(activity(&rows).as_deref(), Some("Clicking ref_7"));
     }
 
     #[test]

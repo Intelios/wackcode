@@ -439,6 +439,7 @@ fn row_icon(verb: &str, theme: &Theme) -> impl IntoElement {
         "Used skill" => Some(Icon::Book),
         "Saved memory" | "Updated memory" | "Recalled memory" | "Forgot memory" => Some(Icon::Bookmark),
         "Reported" => Some(Icon::Duck),
+        verb if crate::work::BROWSER_VERBS.contains(&verb) => Some(Icon::Globe),
         "" => None,
         _ => Some(Icon::Hammer),
     };

@@ -466,6 +466,23 @@ pub fn working_turn() -> Vec<Item> {
     items(&conversation, &[], now)
 }
 
+/// The agent checking a form in the browser: each step in words, the last one still running.
+pub fn browser_turn() -> Vec<Item> {
+    let mut conversation = Conversation::default();
+    let now = START + 60_000;
+    conversation.send("Open the sign-up page on the dev server, fill it in with test details and send it. Tell me what the console says.", now - 20_000);
+    let outline = "document \"Sign up\"\n  textbox \"Email\" [ref_3]\n  textbox \"Password\" [ref_4] value=[redacted]\n  button \"Create account\" [ref_7]";
+    call(&mut conversation, "b-1", "tool_search", json!({ "query": "browser" }), Some("Loaded 15 tools."), now);
+    call(&mut conversation, "b-2", "browser_navigate", json!({ "url": "http://localhost:5173/signup?invite=4f9c2a7e1b3d8c6f0a5e9d2b7c4f1a8e3d6b9c2f" }), Some("Tab 1 (yours): \"Sign up\" localhost:5173/signup"), now);
+    call(&mut conversation, "b-3", "browser_snapshot", json!({}), Some(outline), now);
+    call(&mut conversation, "b-4", "browser_fill", json!({ "fields": [{ "ref": "ref_3", "value": "test@example.com" }, { "ref": "ref_4", "value": "x" }] }), Some("Filled 2 fields."), now);
+    call(&mut conversation, "b-5", "browser_act", json!({ "action": "click", "ref": "ref_7" }), Some("Clicked ref_7. A new page loaded: refs from earlier snapshots are gone."), now);
+    call(&mut conversation, "b-6", "browser_wait", json!({ "text": "Welcome" }), Some("“Welcome” is on the page."), now);
+    call(&mut conversation, "b-7", "browser_screenshot", json!({}), Some("A 1280×800 screenshot."), now);
+    call(&mut conversation, "b-8", "browser_console", json!({ "errors_only": true }), None, now);
+    items(&conversation, &[], now)
+}
+
 /// A chat opened with a skill: the `/pdf` bubble, the skill loaded, the reply. `open` shows the
 /// prompt the agent got beneath the bubble.
 pub fn skill_turn(open: bool) -> Vec<Item> {

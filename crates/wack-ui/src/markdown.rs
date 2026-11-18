@@ -2,8 +2,9 @@
 //!
 //! CommonMark plus tables, strikethrough and task lists (pulldown-cmark). Raw HTML is shown as
 //! text, never interpreted. An image whose address is a picture reference (`![the page](img:3f2a…)`)
-//! becomes a span with `picture` set and no text: the transcript shows that picture of the
-//! conversation under the reply (`crate::pictures`). Any other image reads as a link. A reply is parsed again while it streams; an unfinished construct
+//! or a local path becomes a span with `picture` set and no text: the transcript shows that
+//! picture of the conversation under the reply (`crate::pictures`). An image on the web reads as
+//! a link: nothing a reply names is fetched. A reply is parsed again while it streams; an unfinished construct
 //! (an open code fence) simply parses as what it is so far.
 
 use pulldown_cmark::{CodeBlockKind, Event, HeadingLevel, Options, Parser, Tag, TagEnd};
@@ -103,7 +104,9 @@ pub fn parse(text: &str) -> Vec<Block> {
                     Tag::Emphasis => style.italic += 1,
                     Tag::Strong => style.bold += 1,
                     Tag::Strikethrough => style.strike += 1,
-                    Tag::Image { dest_url, .. } if dest_url.starts_with("img:") => style.picture = Some(dest_url.to_string()),
+                    // A picture of the conversation, by reference or by the path it was read from;
+                    // anything on the web stays a link (the app fetches nothing a reply names).
+                    Tag::Image { dest_url, .. } if !dest_url.contains("://") && !dest_url.starts_with("data:") => style.picture = Some(dest_url.to_string()),
                     Tag::Link { dest_url, .. } | Tag::Image { dest_url, .. } => style.links.push(dest_url.to_string()),
                     _ => {}
                 }

@@ -64,10 +64,17 @@ impl Picture {
             .collect()
     }
 
-    /// Whether `reference` (`img:` and the start of an id) names this picture.
+    /// Whether `reference` names this picture: `img:` and the start of its id, or the path a
+    /// file was read from (its label), which is how a model names a file it just showed.
     pub fn answers_to(&self, reference: &str) -> bool {
-        let prefix = reference.trim_start_matches("img:");
-        prefix.len() >= 6 && self.id.as_deref().is_some_and(|id| id.starts_with(prefix))
+        if let Some(prefix) = reference.strip_prefix("img:") {
+            return prefix.len() >= 6 && self.id.as_deref().is_some_and(|id| id.starts_with(prefix));
+        }
+        let path = reference.trim_start_matches("./");
+        self.label.as_deref().is_some_and(|label| {
+            let label = label.trim_start_matches("./");
+            !path.is_empty() && (label == path || label.ends_with(&format!("/{path}")) || path.ends_with(&format!("/{label}")))
+        })
     }
 }
 
@@ -410,6 +417,9 @@ mod tests {
         assert!(picture.answers_to("img:3f2a9c01b4d7"));
         assert!(!picture.answers_to("img:3f2"));
         assert!(!picture.answers_to("img:000000000000"));
+        let read = Picture::new("BBBB", Some("assets/banner.png"), Some("0123456789abcdef"));
+        assert!(read.answers_to("banner.png") && read.answers_to("./assets/banner.png") && read.answers_to("/repo/assets/banner.png"));
+        assert!(!read.answers_to("other.png") && !read.answers_to("anner.png"));
         assert_eq!(picture.key, Picture::new("AAAA", None, None).key, "the key follows the data");
     }
 
@@ -427,7 +437,7 @@ mod tests {
 
     #[test]
     fn a_reply_names_its_pictures_once_in_order() {
-        let blocks = crate::markdown::parse("Before ![the page](img:aaaaaaaaaaaa) and\n\n- ![x](img:bbbbbbbbbbbb)\n\n![again](img:aaaaaaaaaaaa) ![web](https://example.com/a.png)");
-        assert_eq!(referenced(&blocks), ["img:aaaaaaaaaaaa", "img:bbbbbbbbbbbb"]);
+        let blocks = crate::markdown::parse("Before ![the page](img:aaaaaaaaaaaa) and\n\n- ![x](img:bbbbbbbbbbbb)\n\n![again](img:aaaaaaaaaaaa) ![web](https://example.com/a.png) ![file](banner.png)");
+        assert_eq!(referenced(&blocks), ["img:aaaaaaaaaaaa", "img:bbbbbbbbbbbb", "banner.png"]);
     }
 }

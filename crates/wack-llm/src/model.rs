@@ -111,8 +111,9 @@ pub struct Image {
     pub media_type: String,
     /// Base64.
     pub data: String,
-    /// What the picture is ("screenshot of http://localhost:3000"), ours and never sent: it names
-    /// the picture when a request leaves it out, so the model knows it already saw it.
+    /// What the picture is ("screenshot of http://localhost:3000", a file's path). It names the
+    /// picture when a request leaves it out, so the model knows it already saw it, and Chat
+    /// Completions sends it beside the picture, whose tool messages can't hold it.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub label: Option<String>,
     /// The id (a SHA-256) of the original the agent saved for the chat, which the model and the

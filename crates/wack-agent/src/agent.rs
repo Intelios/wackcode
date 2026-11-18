@@ -289,6 +289,8 @@ pub struct Agent {
     tasks: Tasks,
     agents: Agents,
     recorder: Option<Arc<dyn Recorder>>,
+    /// The sub-agent this is, for tools that keep its work apart (its own browser tabs).
+    caller: Option<String>,
 }
 
 enum Planned {
@@ -322,6 +324,7 @@ impl Agent {
             tasks: Tasks::scratch(),
             agents: Agents::new(),
             recorder: None,
+            caller: None,
         }
     }
 
@@ -352,6 +355,12 @@ impl Agent {
     }
 
     /// Reports every model invocation to this recorder, for the usage ledger.
+    /// Marks this agent as the sub-agent `id`: its tool calls carry it (`ToolContext::caller`).
+    pub fn with_caller(mut self, id: impl Into<String>) -> Self {
+        self.caller = Some(id.into());
+        self
+    }
+
     pub fn with_recorder(mut self, recorder: Arc<dyn Recorder>) -> Self {
         self.recorder = Some(recorder);
         self
@@ -650,6 +659,7 @@ impl Agent {
                 tasks: tasks.clone(),
                 agents: agents.clone(),
                 seen,
+                caller: self.caller.clone(),
             };
             async move {
                 let context = &context;

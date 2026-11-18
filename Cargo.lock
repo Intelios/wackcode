@@ -7158,6 +7158,8 @@ dependencies = [
 name = "wack-browser"
 version = "3.0.0-dev.0"
 dependencies = [
+ "async-trait",
+ "base64 0.22.1",
  "cef",
  "libc",
  "objc2 0.6.5",
@@ -7167,6 +7169,8 @@ dependencies = [
  "serde_json",
  "tokio",
  "url",
+ "wack-agent",
+ "wack-llm",
  "wack-web",
 ]
 

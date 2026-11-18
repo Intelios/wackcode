@@ -176,6 +176,10 @@ pub async fn run(
         Ok(web) => tools.extend(web),
         Err(message) => return finished(Err(message), None),
     }
+    // The chat's browser: its tabs outlive the run, and sub-agents get tabs of their own.
+    if let Some(tabs) = &setup.browser {
+        tools.extend(wack_browser::tools::tools(tabs.clone()));
+    }
     // MCP servers: their tools, waiting only for a server with no tool list yet. A compaction
     // calls no tools, so it starts nothing.
     let mut mcp = wack_mcp::Assembly::default();

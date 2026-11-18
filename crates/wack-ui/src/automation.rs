@@ -93,7 +93,7 @@ enum Command {
     Appearance {
         theme: String,
     },
-    Browser(BrowserArgs),
+    Browser(Box<BrowserArgs>),
     Quit,
 }
 
@@ -113,6 +113,16 @@ struct BrowserArgs {
     accept: bool,
     #[serde(default)]
     text: Option<String>,
+    /// For `tool`: the browser tool to call, its input, the folder it works in, and the
+    /// sub-agent calling it (none for the chat's own agent).
+    #[serde(default)]
+    name: Option<String>,
+    #[serde(default)]
+    input: Option<Value>,
+    #[serde(default)]
+    cwd: Option<PathBuf>,
+    #[serde(default)]
+    caller: Option<String>,
 }
 
 fn one() -> usize {
@@ -360,7 +370,7 @@ async fn run(command: Command, cx: &mut AsyncApp) -> Result<Value, String> {
             settle(window, cx).await;
             Ok(json!({ "ok": true }))
         }
-        Command::Browser(args) => browser(window, cx, args).await,
+        Command::Browser(args) => browser(window, cx, *args).await,
         Command::Quit => {
             cx.update(|cx| cx.quit());
             Ok(json!({ "ok": true }))
@@ -430,7 +440,7 @@ async fn settle(window: AnyWindowHandle, cx: &mut AsyncApp) {
 
 /// Drives the engine as the agent would, before the Browser pane and the tools exist to.
 async fn browser(window: AnyWindowHandle, cx: &mut AsyncApp, args: BrowserArgs) -> Result<Value, String> {
-    let BrowserArgs { action, url, expression, path, tab, accept, text } = args;
+    let BrowserArgs { action, url, expression, path, tab, accept, text, name, input, cwd, caller } = args;
     use base64::Engine as _;
     use wack_browser::{ChatTabs, Owner};
 
@@ -496,6 +506,26 @@ async fn browser(window: AnyWindowHandle, cx: &mut AsyncApp, args: BrowserArgs) 
             tabs.close(target()?);
             Ok(json!({ "ok": true }))
         }
-        other => Err(format!("Unknown browser action \"{other}\": use open, eval, screenshot, state, dialog or close.")),
+        // Calls one of the agent's browser tools as a run would, so they can be tried on real
+        // pages without a model. A picture it returns is saved to `path`, if given.
+        "tool" => {
+            let name = name.ok_or("\"tool\" needs a \"name\".")?;
+            let started = std::time::Instant::now();
+            // On Tokio, as a run's tools are: they wait with its timers.
+            let call = wack_browser::tools::call(tabs.clone(), name, input.unwrap_or_else(|| json!({})), cwd.unwrap_or_else(|| PathBuf::from("/")), caller);
+            let result = gpui_tokio::Tokio::spawn(cx, call).await.map_err(|_| "The tool call was dropped.".to_string())?;
+            let ms = started.elapsed().as_millis() as u64;
+            match result {
+                Ok(output) => {
+                    if let (Some(path), Some(image)) = (&path, output.images.first()) {
+                        let bytes = base64::engine::general_purpose::STANDARD.decode(&image.data).map_err(|e| format!("The image was damaged: {e}"))?;
+                        std::fs::write(path, bytes).map_err(|e| format!("Could not write {}: {e}", path.display()))?;
+                    }
+                    Ok(json!({ "ok": true, "text": output.text, "images": output.images.len(), "ms": ms }))
+                }
+                Err(error) => Ok(json!({ "ok": true, "error": error, "ms": ms })),
+            }
+        }
+        other => Err(format!("Unknown browser action \"{other}\": use open, eval, screenshot, state, dialog, close or tool.")),
     }
 }

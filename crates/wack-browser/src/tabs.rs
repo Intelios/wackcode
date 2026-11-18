@@ -86,6 +86,8 @@ pub struct Tab {
     agent_driving: AtomicBool,
     notify: Mutex<Option<Notify>>,
     popups: Mutex<Option<PopupSink>>,
+    /// What the agent's tools know of the page: its refs and the last screenshot's frame.
+    pub(crate) agent: Mutex<crate::tools::AgentView>,
 }
 
 impl Tab {
@@ -102,6 +104,7 @@ impl Tab {
             agent_driving: AtomicBool::new(agents),
             notify: Mutex::new(None),
             popups: Mutex::new(None),
+            agent: Mutex::default(),
         })
     }
 
@@ -190,6 +193,11 @@ struct Inner {
     tabs: Mutex<Vec<Arc<Tab>>>,
     shown: Mutex<Option<TabId>>,
     observer: Mutex<Option<Observer>>,
+    /// One queue per agent (the chat's, each sub-agent's): its browser calls run one at a time,
+    /// in the order it made them (`lane`).
+    lanes: Mutex<std::collections::HashMap<Owner, Arc<tokio::sync::Mutex<()>>>>,
+    /// The tab each agent last chose to work in (`browser_tabs` select, or the tab it opened).
+    current: Mutex<std::collections::HashMap<Owner, TabId>>,
 }
 
 impl Drop for Inner {
@@ -226,6 +234,8 @@ impl ChatTabs {
                 tabs: Mutex::default(),
                 shown: Mutex::default(),
                 observer: Mutex::default(),
+                lanes: Mutex::default(),
+                current: Mutex::default(),
             }),
         }
     }
@@ -322,6 +332,43 @@ impl ChatTabs {
             .into_iter()
             .rev()
             .find(|tab| &tab.owner == owner)
+    }
+
+    /// `owner`'s queue. A tokio mutex is first come, first served, so calls that take it as
+    /// their first step run in the order they were started, even side by side.
+    pub fn lane(&self, owner: &Owner) -> Arc<tokio::sync::Mutex<()>> {
+        self.inner.lanes.lock().unwrap_or_else(|e| e.into_inner()).entry(owner.clone()).or_default().clone()
+    }
+
+    /// The tab `owner` works in by default: the one it last chose, while open, else its newest.
+    pub fn current_of(&self, owner: &Owner) -> Option<Arc<Tab>> {
+        let chosen = self.inner.current.lock().unwrap_or_else(|e| e.into_inner()).get(owner).copied();
+        chosen.and_then(|id| self.get(id)).or_else(|| self.latest_of(owner))
+    }
+
+    pub fn set_current(&self, owner: &Owner, id: TabId) {
+        self.inner.current.lock().unwrap_or_else(|e| e.into_inner()).insert(owner.clone(), id);
+    }
+
+    /// Lays the page out at its size (`TabState::viewport`), scaled by the pane's display scale,
+    /// with touch for the phone and tablet sizes. The one place either the pane or the agent
+    /// changes a page's size, so the two never disagree.
+    pub async fn apply_viewport(&self, id: TabId) -> Result<(), String> {
+        let tab = self.get(id).ok_or_else(|| "That tab is closed.".to_string())?;
+        let (viewport, scale) = {
+            let state = tab.state();
+            (state.viewport, state.display_scale)
+        };
+        let (method, params) = match viewport.size() {
+            None => ("Emulation.clearDeviceMetricsOverride", serde_json::json!({})),
+            Some((width, height, mobile)) => (
+                "Emulation.setDeviceMetricsOverride",
+                serde_json::json!({ "width": width, "height": height, "deviceScaleFactor": 0, "mobile": mobile, "scale": scale }),
+            ),
+        };
+        let touch = serde_json::json!({ "enabled": viewport.size().is_some_and(|(_, _, mobile)| mobile), "maxTouchPoints": 5 });
+        self.cdp(id, method, params).await?;
+        self.cdp(id, "Emulation.setTouchEmulationEnabled", touch).await.map(|_| ())
     }
 
     /// Opens a new tab at `url`. The address is not checked here: the agent's tools check it
@@ -466,7 +513,7 @@ impl ChatTabs {
 }
 
 /// Two addresses name the same page: equal, or equal but for a trailing slash on an empty path.
-fn same_address(current: &str, wanted: &str) -> bool {
+pub(crate) fn same_address(current: &str, wanted: &str) -> bool {
     let normal = |raw: &str| match url::Url::parse(raw.trim()) {
         Ok(url) => url.to_string(),
         Err(_) => raw.trim().to_string(),

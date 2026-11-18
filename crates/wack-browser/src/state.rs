@@ -232,6 +232,11 @@ pub struct TabState {
     pub page: u64,
     /// The size the page is laid out at.
     pub viewport: Viewport,
+    /// How much the pane scales a fixed-size page down to fit (1 when it isn't shown): the
+    /// pane's part of the page size, which the engine applies (`ChatTabs::apply_viewport`).
+    pub display_scale: f64,
+    /// An agent's tool is working in this tab now: the pane rings the page while it is.
+    pub agent_acting: bool,
     pub console: Ring<ConsoleEntry>,
     pub network: Ring<NetworkEntry>,
 }
@@ -250,6 +255,8 @@ impl Default for TabState {
             dialog: None,
             page: 0,
             viewport: Viewport::Fit,
+            display_scale: 1.,
+            agent_acting: false,
             console: Ring::new(CONSOLE_CAPACITY),
             network: Ring::new(NETWORK_CAPACITY),
         }

@@ -89,6 +89,40 @@ pub fn check(raw: &str) -> Result<Verdict, String> {
     }
 }
 
+/// The page at `raw` is on this Mac: `localhost`, `*.localhost` or a loopback address. Only
+/// such pages (the user's own dev previews) may run the agent's scripts or hand it raw
+/// responses (the owner's call, 2026-11-18; docs/security.md).
+pub fn is_this_mac(raw: &str) -> bool {
+    let Ok(url) = Url::parse(raw.trim()) else { return false };
+    if url.scheme() != "http" && url.scheme() != "https" {
+        return false;
+    }
+    match url.host() {
+        Some(Host::Domain(name)) => is_local_name(name),
+        Some(Host::Ipv4(address)) => is_loopback(address.into()),
+        Some(Host::Ipv6(address)) => is_loopback(address.into()),
+        None => false,
+    }
+}
+
+/// The rule for any other request a page makes while the agent drives its tab: a frame, an
+/// image, a script, a fetch. `None` for one that reaches no network (`data:`, `blob:`,
+/// `about:`); WebSockets are judged as the http address they share a host with.
+pub fn check_request(raw: &str) -> Result<Option<Verdict>, String> {
+    let mut url = Url::parse(raw.trim()).map_err(|_| format!("Not a valid URL: {}", raw.trim()))?;
+    match url.scheme() {
+        "data" | "blob" | "about" => return Ok(None),
+        "ws" => {
+            let _ = url.set_scheme("http");
+        }
+        "wss" => {
+            let _ = url.set_scheme("https");
+        }
+        _ => {}
+    }
+    check(url.as_str()).map(Some)
+}
+
 /// Judges the addresses a host resolved to: all must be allowed, and there must be one.
 pub fn judge_addresses(host: &str, addresses: &[IpAddr]) -> Result<(), String> {
     if addresses.is_empty() {
@@ -120,6 +154,28 @@ pub async fn check_resolved(raw: &str) -> Result<Url, String> {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn only_loopback_pages_are_this_mac() {
+        assert!(is_this_mac("http://localhost:5173/"));
+        assert!(is_this_mac("http://app.localhost/login"));
+        assert!(is_this_mac("http://127.0.0.1:8765/x"));
+        assert!(is_this_mac("http://[::1]:3000/"));
+        assert!(!is_this_mac("https://example.com/"));
+        assert!(!is_this_mac("http://192.168.1.10/"));
+        assert!(!is_this_mac("about:blank"));
+    }
+
+    #[test]
+    fn a_pages_own_requests_pass_the_same_rule() {
+        assert_eq!(check_request("data:image/png;base64,AAAA").unwrap(), None);
+        assert_eq!(check_request("blob:https://example.com/1").unwrap(), None);
+        assert!(matches!(check_request("http://127.0.0.1:5173/app.js").unwrap(), Some(Verdict::Allowed(_))));
+        assert!(matches!(check_request("wss://example.com/live").unwrap(), Some(Verdict::NeedsLookup(_, host)) if host == "example.com"));
+        assert!(check_request("http://192.168.1.1/").is_err(), "a router's page in a frame");
+        assert!(check_request("ws://10.0.0.2:8080/").is_err(), "a socket on the local network");
+        assert!(check_request("file:///etc/hosts").is_err());
+    }
 
     fn allowed(raw: &str) -> bool {
         matches!(check(raw), Ok(Verdict::Allowed(_)))

@@ -284,29 +284,13 @@ impl BrowserPane {
             return;
         }
         self.applied = Some(fitted);
-        let (id, viewport, scale) = fitted;
-        let (method, params) = match viewport.size() {
-            None => ("Emulation.clearDeviceMetricsOverride", serde_json::json!({})),
-            Some((width, height, mobile)) => (
-                "Emulation.setDeviceMetricsOverride",
-                serde_json::json!({
-                    "width": width,
-                    "height": height,
-                    "deviceScaleFactor": 0,
-                    "mobile": mobile,
-                    "scale": scale as f64 / 100.,
-                }),
-            ),
-        };
-        // Phones and tablets are touch devices: pages that ask (`pointer: coarse`, touch events)
-        // are told so.
-        let touch = serde_json::json!({ "enabled": viewport.size().is_some_and(|(_, _, mobile)| mobile), "maxTouchPoints": 5 });
+        let (id, _, scale) = fitted;
+        // The pane supplies only how much it scales the page down; the engine lays it out.
+        if let Some(tab) = self.tabs.get(id) {
+            tab.update(|state| state.display_scale = scale as f64 / 100.);
+        }
         let tabs = self.tabs.clone();
-        Tokio::spawn(cx, async move {
-            tabs.cdp(id, method, params).await?;
-            tabs.cdp(id, "Emulation.setTouchEmulationEnabled", touch).await
-        })
-        .detach();
+        Tokio::spawn(cx, async move { tabs.apply_viewport(id).await }).detach();
     }
 
     /// A restored tab shown in the pane gets its page.
@@ -930,7 +914,8 @@ impl Render for BrowserPane {
         };
 
         let stand_in_absent = stand_in.is_none();
-        let driving = tab.as_ref().is_some_and(|tab| tab.agent_driving() && !tab.user_has_control()) && stand_in.is_none();
+        // The ring follows the agent's work in the page, not who drove it last.
+        let driving = tab.as_ref().is_some_and(|tab| tab.state().agent_acting && !tab.user_has_control()) && stand_in.is_none();
         let dialog = state.as_ref().and_then(|state| state.dialog.clone()).filter(|_| stand_in.is_none());
         let host = state.as_ref().and_then(|state| host_of(&state.url)).unwrap_or_else(|| "This page".into());
 

@@ -159,7 +159,8 @@ async fn run(child: &Arc<Child>, launch: Launch, control: &Control) -> Result<(S
         }
     };
     let tasks_feature = TasksFeature::new(agent.session(), tasks.clone());
-    agent = agent.with_tasks(tasks).with_feature(Box::new(tasks_feature)).with_feature(Box::new(rules));
+    // Every start, a copied conversation's too: its tool calls are this child's.
+    agent = agent.with_caller(child.id.clone()).with_tasks(tasks).with_feature(Box::new(tasks_feature)).with_feature(Box::new(rules));
     if let Some(recorder) = model.recorder {
         agent = agent.with_recorder(Arc::new(ForSubagent { inner: recorder, id: ledger_id }));
     }

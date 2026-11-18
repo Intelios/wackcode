@@ -185,6 +185,22 @@ fn with_main<T>(f: impl FnOnce(&mut Main) -> T) -> T {
     MAIN.with(|main| f(&mut main.borrow_mut()))
 }
 
+/// Every tab with a page, for the handlers Chromium calls off the main thread (its IO thread).
+/// Weak, so it never keeps a closed tab alive.
+static ANY_THREAD: std::sync::Mutex<Option<HashMap<TabId, std::sync::Weak<Tab>>>> = std::sync::Mutex::new(None);
+
+fn register_tab(tab: &Arc<Tab>) {
+    let mut tabs = ANY_THREAD.lock().unwrap_or_else(|e| e.into_inner());
+    let tabs = tabs.get_or_insert_with(HashMap::new);
+    tabs.retain(|_, tab| tab.strong_count() > 0);
+    tabs.insert(tab.id, Arc::downgrade(tab));
+}
+
+/// `tab_of` for any thread.
+fn tab_anywhere(id: TabId) -> Option<Arc<Tab>> {
+    ANY_THREAD.lock().unwrap_or_else(|e| e.into_inner()).as_ref()?.get(&id)?.upgrade()
+}
+
 fn tab_of(id: TabId) -> Option<Arc<Tab>> {
     with_main(|main| {
         main.pages
@@ -406,6 +422,7 @@ fn make_page(tab: Arc<Tab>, url: &str) -> Result<(), String> {
     let host =
         with_main(|main| main.host).ok_or("The browser has no window to show pages in yet.")?;
     let info = child_window_info(host.0);
+    register_tab(&tab);
     let mut client = WackClient::new(tab.id);
     // Made blank and loaded once the DevTools domains are on, so the page's own document request
     // and its first console lines are captured too.
@@ -782,6 +799,7 @@ wrap_life_span_handler! {
             if let Some(client) = client {
                 *client = Some(WackClient::new(child.id));
             }
+            register_tab(&child);
             with_main(|main| main.popups.insert(child.id, child));
             0
         }
@@ -989,6 +1007,29 @@ wrap_request_handler! {
             }
         }
 
+        // Every other request a page makes while the agent drives its tab (a frame, an image, a
+        // script, a fetch from the page or from `browser_eval`) passes the same address rule, so
+        // a page the agent opens can't show it, or hand it, a private address. The main frame's
+        // own navigations are judged above, where a refusal keeps the page and says why.
+        // Called on Chromium's IO thread.
+        fn resource_request_handler(
+            &self,
+            _browser: Option<&mut Browser>,
+            frame: Option<&mut Frame>,
+            _request: Option<&mut Request>,
+            is_navigation: i32,
+            _is_download: i32,
+            _request_initiator: Option<&CefString>,
+            _disable_default_handling: Option<&mut i32>,
+        ) -> Option<ResourceRequestHandler> {
+            let tab = tab_anywhere(self.tab)?;
+            if !tab.agent_driving() {
+                return None;
+            }
+            let main_navigation = is_navigation != 0 && frame.is_some_and(|frame| frame.is_main() == 1);
+            (!main_navigation).then(|| WackResources::new(self.tab))
+        }
+
         fn on_render_process_terminated(
             &self,
             _browser: Option<&mut Browser>,
@@ -1003,6 +1044,88 @@ wrap_request_handler! {
             }
         }
     }
+}
+
+/// Hosts whose every address passed the agent's address rule, and when: a page's requests are
+/// judged once per host for a while, not once per request.
+static APPROVED_HOSTS: std::sync::Mutex<Option<HashMap<String, std::time::Instant>>> = std::sync::Mutex::new(None);
+const APPROVAL_LIFE: std::time::Duration = std::time::Duration::from_secs(300);
+
+fn host_approved(host: &str) -> bool {
+    let hosts = APPROVED_HOSTS.lock().unwrap_or_else(|e| e.into_inner());
+    hosts.as_ref().and_then(|hosts| hosts.get(host)).is_some_and(|when| when.elapsed() < APPROVAL_LIFE)
+}
+
+fn approve_host(host: String) {
+    let mut hosts = APPROVED_HOSTS.lock().unwrap_or_else(|e| e.into_inner());
+    let hosts = hosts.get_or_insert_with(HashMap::new);
+    hosts.retain(|_, when| when.elapsed() < APPROVAL_LIFE);
+    hosts.insert(host, std::time::Instant::now());
+}
+
+/// A CEF callback handed to the thread that looks a host up. CEF's callbacks may be called from
+/// any thread (cef_callback_t).
+struct AnyThreadCallback(Callback);
+// SAFETY: see above; the callback is reference counted by CEF, which is thread-safe.
+unsafe impl Send for AnyThreadCallback {}
+
+wrap_resource_request_handler! {
+    struct WackResources {
+        tab: TabId,
+    }
+
+    impl ResourceRequestHandler {
+        fn on_before_resource_load(
+            &self,
+            _browser: Option<&mut Browser>,
+            _frame: Option<&mut Frame>,
+            request: Option<&mut Request>,
+            callback: Option<&mut Callback>,
+        ) -> ReturnValue {
+            let url = request.map(|r| CefString::from(&r.url()).to_string()).unwrap_or_default();
+            let id = self.tab;
+            match policy::check_request(&url) {
+                Ok(None) | Ok(Some(Verdict::Allowed(_))) => ReturnValue::CONTINUE,
+                Ok(Some(Verdict::NeedsLookup(_, host))) => {
+                    if host_approved(&host) {
+                        return ReturnValue::CONTINUE;
+                    }
+                    let Some(callback) = callback.map(|callback| AnyThreadCallback(callback.clone())) else {
+                        return ReturnValue::CANCEL;
+                    };
+                    std::thread::spawn(move || {
+                        use std::net::ToSocketAddrs;
+                        let callback = callback;
+                        let addresses: Vec<_> = (host.as_str(), 0).to_socket_addrs().map(|a| a.map(|s| s.ip()).collect()).unwrap_or_default();
+                        match policy::judge_addresses(&host, &addresses) {
+                            Ok(()) => {
+                                approve_host(host);
+                                callback.0.cont();
+                            }
+                            Err(error) => {
+                                blocked_request(id, url, error);
+                                callback.0.cancel();
+                            }
+                        }
+                    });
+                    ReturnValue::CONTINUE_ASYNC
+                }
+                Err(error) => {
+                    blocked_request(id, url, error);
+                    ReturnValue::CANCEL
+                }
+            }
+        }
+    }
+}
+
+/// Records a request the address rule stopped, in the page's console, where the agent reads it.
+fn blocked_request(id: TabId, url: String, error: String) {
+    main_thread::post(move || {
+        if let Some(tab) = tab_of(id) {
+            tab.update(|state| state.push_console(Level::Error, &format!("Request blocked: {url}. {error}"), None));
+        }
+    });
 }
 
 /// Records a refused navigation where the agent will read it.

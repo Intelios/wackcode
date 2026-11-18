@@ -42,6 +42,10 @@ use crate::{
     tool::{Loading, Tool, ToolContext, ToolOutput, ToolSpec},
 };
 
+/// The canvas tools (`wack-canvas`), which sits above this crate: they change only the chat's
+/// canvases in the app's data, so planning may use them, as version 2 allowed.
+pub const CANVAS_TOOLS: [&str; 3] = ["canvas_guide", "canvas", "canvas_look"];
+
 pub const PLAN_MODE_ENTER: &str = "plan_mode_enter";
 pub const PLAN_MODE_COMPLETE: &str = "plan_mode_complete";
 /// The session state key holding [`PlanState`].
@@ -242,6 +246,8 @@ impl Feature for Plan {
         if self.unrestricted
             || [ASK_USER_QUESTION, PLAN_MODE_ENTER, PLAN_MODE_COMPLETE, TODO].contains(&name)
             || MEMORY_TOOLS.contains(&name)
+            // A canvas lives in the chat's own folder in the app's data, never the project.
+            || CANVAS_TOOLS.contains(&name)
             // Stopping or waiting on a background command changes nothing in the project.
             || [STOP_TASK, WAIT_FOR_TASKS].contains(&name)
             // The sub-agent tools judge for themselves: only roles that make no edits work, gated

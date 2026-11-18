@@ -21,6 +21,8 @@
 //! {"cmd":"browser","action":"state"}                     every tab's address, title, console and network
 //! {"cmd":"browser","action":"dialog","accept":true,"text":"reply"}   answers the page's dialog
 //! {"cmd":"browser","action":"close"}
+//! {"cmd":"canvas","name":"canvas","input":{…}}         one of the canvas tools, on the chat in front
+//! {"cmd":"canvas","name":"canvas_look","input":{…},"path":"/abs/a.png"}   its first picture saved there
 //! {"cmd":"quit"}
 //! ```
 //!
@@ -94,6 +96,13 @@ enum Command {
         theme: String,
     },
     Browser(Box<BrowserArgs>),
+    Canvas {
+        name: String,
+        #[serde(default)]
+        input: Option<Value>,
+        #[serde(default)]
+        path: Option<PathBuf>,
+    },
     Quit,
 }
 
@@ -371,6 +380,7 @@ async fn run(command: Command, cx: &mut AsyncApp) -> Result<Value, String> {
             Ok(json!({ "ok": true }))
         }
         Command::Browser(args) => browser(window, cx, *args).await,
+        Command::Canvas { name, input, path } => canvas_tool(window, cx, name, input, path).await,
         Command::Quit => {
             cx.update(|cx| cx.quit());
             Ok(json!({ "ok": true }))
@@ -436,6 +446,30 @@ async fn settle_briefly(window: AnyWindowHandle, cx: &mut AsyncApp) {
 async fn settle(window: AnyWindowHandle, cx: &mut AsyncApp) {
     on_window(window, cx, |window, _| window.refresh()).ok();
     cx.background_executor().timer(SETTLE).await;
+}
+
+/// Calls one of the canvas tools on the chat in front, as its agent would, so canvases can be
+/// drawn and checked without a model.
+async fn canvas_tool(window: AnyWindowHandle, cx: &mut AsyncApp, name: String, input: Option<Value>, path: Option<PathBuf>) -> Result<Value, String> {
+    use base64::Engine as _;
+    let canvases: wack_canvas::Canvases = on_window(window, cx, |window, cx| {
+        window.root::<crate::shell::Shell>().flatten().and_then(|shell| shell.read(cx).current_canvases(cx))
+    })?
+    .ok_or("Open a chat first: canvases belong to a chat.")?;
+    let started = std::time::Instant::now();
+    let call = async move { wack_canvas::tools::call(canvases, &name, input.unwrap_or_else(|| json!({}))).await };
+    let result = gpui_tokio::Tokio::spawn(cx, call).await.map_err(|_| "The tool call was dropped.".to_string())?;
+    let ms = started.elapsed().as_millis() as u64;
+    match result {
+        Ok(output) => {
+            if let (Some(path), Some(image)) = (&path, output.images.first()) {
+                let bytes = base64::engine::general_purpose::STANDARD.decode(&image.data).map_err(|e| format!("The image was damaged: {e}"))?;
+                std::fs::write(path, bytes).map_err(|e| format!("Could not write {}: {e}", path.display()))?;
+            }
+            Ok(json!({ "ok": true, "text": output.text, "images": output.images.len(), "ms": ms }))
+        }
+        Err(error) => Ok(json!({ "ok": true, "error": error, "ms": ms })),
+    }
 }
 
 /// Drives the engine as the agent would, before the Browser pane and the tools exist to.

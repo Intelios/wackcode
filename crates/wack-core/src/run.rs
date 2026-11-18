@@ -66,6 +66,9 @@ pub struct RunSetup {
     /// The chat's browser tabs, which outlive the run. `None` offers no browser; the app hands
     /// the chat's own.
     pub browser: Option<wack_browser::ChatTabs>,
+    /// The chat's canvases, which outlive the run. `None` offers no canvas tools; the app hands
+    /// the chat's own.
+    pub canvases: Option<wack_canvas::Canvases>,
     /// The project's Run command when the run starts, for `browser_preview`.
     pub run_command: Option<String>,
     /// The app's Build and Run commands, so `browser_preview` can start the Run command the
@@ -140,6 +143,7 @@ impl Store {
             mcp_hub: None,
             agents: self.agents_setup(children, &chat.id, &project.path, wack_agent::Agents::new()),
             browser: None,
+            canvases: None,
             run_command: project.command(crate::store::CommandKind::Run).map(str::to_string),
             commands: None,
         })
@@ -208,6 +212,11 @@ pub async fn run(
     // Sub-agents last: each child gets its role's share of everything above.
     let agent_tools = kit.agent_tools(&tools);
     tools.extend(agent_tools);
+    // Canvases after the children's share: a canvas is the chat's conversation with the user,
+    // so sub-agents never draw on one.
+    if let Some(canvases) = &setup.canvases {
+        tools.extend(wack_canvas::tools::tools(canvases.clone()));
+    }
     let registry = match Registry::new(tools) {
         Ok(registry) => Arc::new(registry),
         Err(message) => return finished(Err(message), None),
@@ -298,6 +307,7 @@ mod tests {
             mcp_hub: None,
             agents: None,
             browser: None,
+            canvases: None,
             run_command: None,
             commands: None,
         }

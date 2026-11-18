@@ -1,4 +1,4 @@
-//! Panes: a chat's Changes, Terminal, Tasks, Agents and Browser views beside and below its transcript.
+//! Panes: a chat's Changes, Terminal, Tasks, Agents, Browser and Canvas views beside and below its transcript.
 //!
 //! `layout` is the tree of docks, splits and tab stacks, as data; `solve` turns it and the window
 //! size into rectangles. Both are pure and property-tested. `dock` draws them, and each pane's
@@ -12,6 +12,7 @@
 
 pub mod agents;
 pub mod browser;
+pub mod canvas;
 pub mod changes;
 pub mod dock;
 pub mod grid;
@@ -28,6 +29,7 @@ use wack_core::{CommandKind, CommandSession, CommandStatus, Runner, agents::Agen
 
 pub use agents::AgentsPane;
 pub use browser::BrowserPane;
+pub use canvas::CanvasPane;
 pub use changes::ChangesPane;
 pub use layout::{Axis, Dock, Edge, Layout, Node, Pane, PaneId, PaneKind, Stack, Target};
 pub use run::RunPane;
@@ -44,6 +46,7 @@ pub enum PaneModel {
     Tasks(Entity<TasksPane>),
     Agents(Entity<AgentsPane>),
     Browser(Entity<BrowserPane>),
+    Canvas(Entity<CanvasPane>),
 }
 
 impl PaneModel {
@@ -55,6 +58,7 @@ impl PaneModel {
             PaneModel::Tasks(pane) => pane.read(cx).focus.clone(),
             PaneModel::Agents(pane) => pane.read(cx).focus.clone(),
             PaneModel::Browser(pane) => pane.read(cx).focus.clone(),
+            PaneModel::Canvas(pane) => pane.read(cx).focus.clone(),
         }
     }
 }
@@ -71,6 +75,8 @@ pub struct ChatPanes {
     agents: Option<Agents>,
     /// The chat's browser tabs, for its Browser pane.
     browser: Option<wack_browser::ChatTabs>,
+    /// The chat's canvases, for its Canvas pane.
+    canvases: Option<wack_canvas::Canvases>,
     models: HashMap<PaneId, (PaneModel, Subscription)>,
 }
 
@@ -85,6 +91,7 @@ impl ChatPanes {
             tasks: None,
             agents: None,
             browser: None,
+            canvases: None,
             models: HashMap::new(),
         }
     }
@@ -99,6 +106,24 @@ impl ChatPanes {
 
     pub fn set_browser(&mut self, tabs: wack_browser::ChatTabs) {
         self.browser = Some(tabs);
+    }
+
+    pub fn set_canvases(&mut self, canvases: wack_canvas::Canvases) {
+        self.canvases = Some(canvases);
+    }
+
+    /// The chat's canvases, if this tree was given them.
+    pub fn canvases(&self) -> Option<&wack_canvas::Canvases> {
+        self.canvases.as_ref()
+    }
+
+    /// Redraws the Canvas pane: a canvas changed, or a picture was drawn.
+    pub fn refresh_canvas(&self, cx: &mut App) {
+        for (model, _) in self.models.values() {
+            if let PaneModel::Canvas(pane) = model {
+                pane.update(cx, |pane, cx| pane.refresh(cx));
+            }
+        }
     }
 
     /// The tabs the Browser pane shows, if this tree was given any.
@@ -206,6 +231,11 @@ impl ChatPanes {
                     let tabs = self.browser.clone().unwrap_or_else(|| wack_browser::ChatTabs::new(None));
                     PaneModel::Browser(cx.new(|cx| BrowserPane::new(tabs, cx)))
                 }
+                PaneKind::Canvas => {
+                    // A new chat's screen has no canvases until its first message makes the chat.
+                    let canvases = self.canvases.clone().unwrap_or_else(|| wack_canvas::Canvases::new(std::env::temp_dir().join("wackcode-no-canvas"), None));
+                    PaneModel::Canvas(cx.new(|cx| CanvasPane::new(canvases, cx)))
+                }
             };
             let subscription = match &model {
                 PaneModel::Changes(entity) => {
@@ -229,6 +259,10 @@ impl ChatPanes {
                     cx.observe(entity, move |owner, _, cx| on_change(owner, cx))
                 }
                 PaneModel::Browser(entity) => {
+                    let on_change = on_change.clone();
+                    cx.observe(entity, move |owner, _, cx| on_change(owner, cx))
+                }
+                PaneModel::Canvas(entity) => {
                     let on_change = on_change.clone();
                     cx.observe(entity, move |owner, _, cx| on_change(owner, cx))
                 }
@@ -277,6 +311,7 @@ impl ChatPanes {
             PaneModel::Tasks(entity) => cx.observe(entity, |_, _, cx| cx.notify()),
             PaneModel::Agents(entity) => cx.observe(entity, |_, _, cx| cx.notify()),
             PaneModel::Browser(entity) => cx.observe(entity, |_, _, cx| cx.notify()),
+            PaneModel::Canvas(entity) => cx.observe(entity, |_, _, cx| cx.notify()),
         };
         self.models.insert(id, (model, subscription));
     }
@@ -310,6 +345,7 @@ impl ChatPanes {
             (PaneKind::Tasks, _) => "Tasks".into(),
             (PaneKind::Agents, _) => "Agents".into(),
             (PaneKind::Browser, _) => "Browser".into(),
+            (PaneKind::Canvas, _) => "Canvas".into(),
         }
     }
 

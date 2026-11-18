@@ -595,6 +595,7 @@ impl BrowserPane {
                 Owner::User => "Opened by you".to_string(),
                 Owner::Agent => "Opened by the agent".to_string(),
                 Owner::SubAgent(id) => format!("Opened by sub-agent {id}"),
+                Owner::Canvas => "A canvas page".to_string(),
             };
             let (select_pane, close_pane, id) = (cx.entity(), cx.entity(), tab.id);
             let group: SharedString = format!("browser-tab-{}", tab.id).into();

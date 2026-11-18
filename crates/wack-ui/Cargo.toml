@@ -12,6 +12,7 @@ automation = ["gpui/test-support", "dep:async-channel", "dep:base64"]
 [dependencies]
 wack-core.workspace = true
 wack-browser.workspace = true
+wack-canvas.workspace = true
 # The window's NSView, which browser pages live in (browser.rs). Already in the build through GPUI.
 raw-window-handle = "0.6"
 gpui.workspace = true

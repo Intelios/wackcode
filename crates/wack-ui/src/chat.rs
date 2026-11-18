@@ -70,6 +70,8 @@ pub enum ChatEvent {
     AgentsNews,
     /// The browser tabs' addresses or titles changed: worth saving.
     BrowserTabsChanged(Vec<wack_browser::SavedTab>),
+    /// The agent started a canvas: the Canvas pane opens for it.
+    AgentStartedCanvas,
     /// The agent or a sub-agent opened a tab (Settings › Browser may show the pane).
     AgentOpenedTab,
 }
@@ -130,6 +132,9 @@ pub struct ChatSession {
     pub agents: Agents,
     /// The chat's browser tabs, which outlive its runs and the Browser pane.
     pub tabs: wack_browser::ChatTabs,
+    /// The chat's canvases, which outlive its runs and the Canvas pane.
+    pub canvases: wack_canvas::Canvases,
+    _canvases_watch: Task<()>,
     _tasks_watch: Task<()>,
     _agents_watch: Task<()>,
     _browser_watch: Task<()>,
@@ -190,6 +195,7 @@ impl ChatSession {
         commands: (Option<String>, Option<String>),
         tasks_folder: PathBuf,
         tabs: wack_browser::ChatTabs,
+        canvases: wack_canvas::Canvases,
         cx: &mut Context<Self>,
     ) -> Self {
         let mut context_tokens = None;
@@ -225,6 +231,8 @@ impl ChatSession {
         panes.set_agents(agents.clone());
         let browser_watch = watch_browser(&tabs, cx);
         panes.set_browser(tabs.clone());
+        let canvases_watch = watch_canvases(&canvases, cx);
+        panes.set_canvases(canvases.clone());
         let mut chat = Self {
             id: id.to_string(),
             cwd,
@@ -258,6 +266,8 @@ impl ChatSession {
             wake_paused: false,
             agents,
             tabs,
+            canvases,
+            _canvases_watch: canvases_watch,
             _tasks_watch: tasks_watch,
             _agents_watch: agents_watch,
             _browser_watch: browser_watch,
@@ -378,6 +388,7 @@ impl ChatSession {
         let mut setup = setup;
         setup.tasks = Some(self.tasks.clone());
         setup.browser = Some(self.tabs.clone());
+        setup.canvases = Some(self.canvases.clone());
         if let Some(agents) = setup.agents.as_mut() {
             agents.agents = self.agents.clone();
         }
@@ -973,6 +984,39 @@ fn watch_tasks(tasks: &Tasks, cx: &mut Context<ChatSession>) -> Task<()> {
 
 /// Redraws the chat as its sub-agents work, and tells the app when one in the background has
 /// reported. While any works, it also redraws each second, so their times keep counting.
+/// Redraws the chat as its canvases change and their pictures are drawn, and tells the app when
+/// the agent starts one. Signals come in bursts (a call draws several artboards), so they are
+/// taken in batches, at most ten redraws a second.
+fn watch_canvases(canvases: &wack_canvas::Canvases, cx: &mut Context<ChatSession>) -> Task<()> {
+    let (sender, mut receiver) = mpsc::unbounded::<wack_canvas::Signal>();
+    canvases.set_observer(move |signal| {
+        let _ = sender.unbounded_send(signal);
+    });
+    cx.spawn(async move |this, cx| {
+        while let Some(first) = receiver.next().await {
+            let mut started = false;
+            let mut signal = Some(first);
+            while let Some(next) = signal {
+                if matches!(next, wack_canvas::Signal::Changed { created: true, .. }) {
+                    started = true;
+                }
+                signal = receiver.try_recv().ok();
+            }
+            let kept = this.update(cx, |chat, cx| {
+                if started {
+                    cx.emit(ChatEvent::AgentStartedCanvas);
+                }
+                chat.panes.refresh_canvas(cx);
+                cx.notify();
+            });
+            if kept.is_err() {
+                return;
+            }
+            cx.background_executor().timer(Duration::from_millis(100)).await;
+        }
+    })
+}
+
 /// Redraws the Browser pane as the chat's tabs change. A page sends many events (every request,
 /// every console line), so they are taken in batches, at most ten redraws a second.
 fn watch_browser(tabs: &wack_browser::ChatTabs, cx: &mut Context<ChatSession>) -> Task<()> {

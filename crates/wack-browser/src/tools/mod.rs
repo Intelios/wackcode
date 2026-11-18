@@ -203,6 +203,7 @@ fn owner_word(tab: &Tab, owner: &Owner) -> &'static str {
         found if found == owner => "yours",
         Owner::Agent => "the agent's",
         Owner::SubAgent(_) => "a sub-agent's",
+        Owner::Canvas => "a canvas's",
     }
 }
 

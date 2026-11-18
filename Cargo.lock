@@ -7179,6 +7179,24 @@ dependencies = [
 ]
 
 [[package]]
+name = "wack-canvas"
+version = "3.0.0-dev.0"
+dependencies = [
+ "async-trait",
+ "base64 0.22.1",
+ "image",
+ "regex",
+ "serde",
+ "serde_json",
+ "sha2",
+ "tempfile",
+ "tokio",
+ "wack-agent",
+ "wack-browser",
+ "wack-llm",
+]
+
+[[package]]
 name = "wack-cli"
 version = "3.0.0-dev.0"
 dependencies = [
@@ -7209,6 +7227,7 @@ dependencies = [
  "uuid",
  "wack-agent",
  "wack-browser",
+ "wack-canvas",
  "wack-llm",
  "wack-mcp",
  "wack-tools",
@@ -7286,6 +7305,7 @@ dependencies = [
  "tokio",
  "unicode-segmentation",
  "wack-browser",
+ "wack-canvas",
  "wack-core",
 ]
 

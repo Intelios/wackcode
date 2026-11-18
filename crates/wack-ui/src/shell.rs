@@ -44,7 +44,7 @@ use crate::{
         ClosePaneId, CloseSettings, CloseTab, Compact, DeleteChat, DiscardConnection, EditConnection, ToggleConnectionKey, EqualizeSplit, FocusNext, FocusPrevious, MovePane, AddModelRow, RemoveModelRow, SaveCommandEditor, SaveConnection,
         NewChat, NewChatIn, NewTerminal, NewTerminalWith, NextTab, OpenEffortMenu, OpenModelMenu, OpenSettings,
         OpenSettingsSection, PinProject, PreviousTab, RemoveConnection, RemovePicture, ShowCommandOutput, ShowPicture, RemoveProject, ResetDockSize,
-        PickCommand, SelectChat, Send, Stop, StopCommand, MoveToBackground, ToggleTasks, ToggleTasksPane, StopTask, ShowTask, ToggleAgentsPane, ToggleBrowserPane, ShowAgent, StopAgent, ToggleChanges, ToggleProject, ToggleSidebar, ToggleTerminal, TriggerProjectCommand, Unqueue,
+        PickCommand, SelectChat, Send, Stop, StopCommand, MoveToBackground, ToggleTasks, ToggleTasksPane, StopTask, ShowTask, ToggleAgentsPane, ToggleBrowserPane, ToggleCanvasPane, WriteInComposer, ShowAgent, StopAgent, ToggleChanges, ToggleProject, ToggleSidebar, ToggleTerminal, TriggerProjectCommand, Unqueue,
         ToggleAutoTitles, ToggleTitleModels, ChooseTitleModel, RenameChat, RenameChatAt, CancelRename, ToggleModelReasoning, ToggleModelVision, AttachPictures, AttachFiles, RemoveAttachment, OpenPicture, ClosePicture, StepPicture, ZoomPicture,
         StartSuggestion, DismissSuggestion, CopySuggestion, OpenChat,
         ToggleModelEffort, SwitchSkill, SwitchSkillFolder, RemoveSkillFolder, OpenSkill, CopySkill, ChooseSkillUse, NewSkill, SaveSkill,
@@ -264,6 +264,10 @@ impl Shell {
     #[cfg(feature = "automation")]
     pub fn current_tabs(&self, cx: &App) -> Option<wack_browser::ChatTabs> {
         Some(self.app()?.read(cx).current_chat()?.read(cx).tabs.clone())
+    }
+
+    pub fn current_canvases(&self, cx: &App) -> Option<wack_canvas::Canvases> {
+        Some(self.app()?.read(cx).current_chat()?.read(cx).canvases.clone())
     }
 
     fn app(&self) -> Option<Entity<AppState>> {
@@ -515,6 +519,18 @@ impl Shell {
             Some(None) if had_focus.is_some() => self.focus_composer(window, cx),
             _ => {}
         }
+    }
+
+    /// Puts words after whatever the current chat's composer holds, and gives it the keyboard.
+    fn write_in_composer(&mut self, text: &str, window: &mut Window, cx: &mut Context<Self>) {
+        let Some(app) = self.app() else { return };
+        let Some(composer) = app.read(cx).current_chat().map(|session| session.read(cx).composer.clone()) else { return };
+        composer.update(cx, |field, cx| {
+            let existing = field.text().trim_end().to_string();
+            let joined = if existing.is_empty() { text.to_string() } else { format!("{existing}\n\n{text}") };
+            field.set_text(&joined, cx);
+        });
+        self.focus_composer(window, cx);
     }
 
     /// A new terminal: as a tab beside `with`, or in the bottom dock.
@@ -1443,6 +1459,8 @@ impl Render for Shell {
                 .on_action(cx.listener(|shell, _: &ToggleTasksPane, window, cx| shell.toggle_pane(PaneKind::Tasks, window, cx)))
                 .on_action(cx.listener(|shell, _: &ToggleAgentsPane, window, cx| shell.toggle_pane(PaneKind::Agents, window, cx)))
                 .on_action(cx.listener(|shell, _: &ToggleBrowserPane, window, cx| shell.toggle_pane(PaneKind::Browser, window, cx)))
+                .on_action(cx.listener(|shell, _: &ToggleCanvasPane, window, cx| shell.toggle_pane(PaneKind::Canvas, window, cx)))
+                .on_action(cx.listener(|shell, action: &WriteInComposer, window, cx| shell.write_in_composer(&action.text, window, cx)))
                 .on_action(cx.listener(|shell, action: &ShowAgent, _, cx| {
                     let id = action.id.to_string();
                     shell.change_layout(cx, |layout| layout.open(PaneKind::Agents));
@@ -1744,6 +1762,9 @@ pub struct PaneWords {
     pub changed_files: Option<usize>,
     pub terminal: bool,
     pub browser: bool,
+    /// The chat has a canvas, so the Canvas word shows; and whether it is in front.
+    pub has_canvas: bool,
+    pub canvas: bool,
 }
 
 impl PaneWords {
@@ -1758,6 +1779,8 @@ impl PaneWords {
             changed_files,
             terminal: visible.iter().any(|pane| pane.kind == PaneKind::Terminal),
             browser: visible.iter().any(|pane| pane.kind == PaneKind::Browser),
+            has_canvas: panes.canvases().is_some_and(|canvases| !canvases.is_empty()) || panes.layout.first_of(PaneKind::Canvas).is_some(),
+            canvas: visible.iter().any(|pane| pane.kind == PaneKind::Canvas),
         }
     }
 }
@@ -2537,6 +2560,7 @@ fn tab_strip(
             .child(word("toggle-changes", "Changes", words.changed_files, words.changes, Box::new(ToggleChanges)))
             .child(word("toggle-terminal", "Terminal", None, words.terminal, Box::new(ToggleTerminal)))
             .child(word("toggle-browser", "Browser", None, words.browser, Box::new(ToggleBrowserPane)))
+            .when(words.has_canvas, |strip| strip.child(word("toggle-canvas", "Canvas", None, words.canvas, Box::new(ToggleCanvasPane))))
     });
     div()
         .size_full()

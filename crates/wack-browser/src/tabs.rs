@@ -40,6 +40,8 @@ pub enum Owner {
     User,
     Agent,
     SubAgent(String),
+    /// A page WackCode serves itself (`site`): a canvas's artboard. Never in a chat's tabs.
+    Canvas,
 }
 
 /// A navigation request.
@@ -88,11 +90,24 @@ pub struct Tab {
     popups: Mutex<Option<PopupSink>>,
     /// What the agent's tools know of the page: its refs and the last screenshot's frame.
     pub(crate) agent: Mutex<crate::tools::AgentView>,
+    /// The files this tab's page is served from, for a site's tab (`Owner::Canvas`): the engine
+    /// then holds it to the site's offline rule (`site::rule`) instead of the agent's address rule.
+    site: Option<Arc<dyn crate::site::Site>>,
 }
 
 impl Tab {
     fn new(owner: Owner) -> Arc<Self> {
-        let agents = !matches!(owner, Owner::User);
+        Self::make(owner, None)
+    }
+
+    /// A tab for a page of `site`. It belongs to no chat's tabs: whoever makes it makes its page
+    /// with `Backend::create` and closes it with `Backend::close`.
+    pub fn for_site(site: Arc<dyn crate::site::Site>) -> Arc<Self> {
+        Self::make(Owner::Canvas, Some(site))
+    }
+
+    fn make(owner: Owner, site: Option<Arc<dyn crate::site::Site>>) -> Arc<Self> {
+        let agents = matches!(owner, Owner::Agent | Owner::SubAgent(_));
         Arc::new(Self {
             id: NEXT_ID.fetch_add(1, Ordering::Relaxed),
             owner,
@@ -105,7 +120,13 @@ impl Tab {
             notify: Mutex::new(None),
             popups: Mutex::new(None),
             agent: Mutex::default(),
+            site,
         })
+    }
+
+    /// The site this tab's page is served from, if it is a site's tab.
+    pub fn site(&self) -> Option<&Arc<dyn crate::site::Site>> {
+        self.site.as_ref()
     }
 
     pub fn state(&self) -> MutexGuard<'_, TabState> {

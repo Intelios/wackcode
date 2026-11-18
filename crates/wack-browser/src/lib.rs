@@ -3,6 +3,7 @@
 //! - `tabs`: `ChatTabs`, owned by each chat, and the `Backend` boundary to the engine.
 //! - `state`: a tab's state folded from engine events (console and network history included).
 //! - `policy`: which addresses the agent may open.
+//! - `site`: pages WackCode serves itself (a canvas's artboards), offline, at a reserved origin.
 //! - `tools`: the agent's `browser_*` tools, which drive a chat's tabs over DevTools.
 //! - `cef`: the engine itself: one CEF instance for the app, one shared profile, a page per tab.
 //!
@@ -13,6 +14,7 @@
 pub mod cef;
 mod main_thread;
 pub mod policy;
+pub mod site;
 pub mod state;
 pub mod tabs;
 pub mod tools;

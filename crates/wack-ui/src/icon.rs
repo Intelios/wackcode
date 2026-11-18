@@ -72,6 +72,16 @@ pub enum Icon {
     Stop,
     Terminal,
     Trash,
+    /// Zoom out, and other steps down.
+    Minus,
+    /// A canvas: a board of artboards.
+    Board,
+    /// A comment pinned to an artboard.
+    Comment,
+    /// An artboard's tweaks.
+    Sliders,
+    /// The canvas's hand tool, which pans.
+    Hand,
 }
 
 /// Every icon file, by asset path. One list, so a missing file fails the test below.
@@ -119,6 +129,11 @@ const FILES: &[(&str, &[u8])] = &[
     ("icons/stop.svg", include_bytes!("../assets/icons/stop.svg")),
     ("icons/terminal.svg", include_bytes!("../assets/icons/terminal.svg")),
     ("icons/trash.svg", include_bytes!("../assets/icons/trash.svg")),
+    ("icons/minus.svg", include_bytes!("../assets/icons/minus.svg")),
+    ("icons/board.svg", include_bytes!("../assets/icons/board.svg")),
+    ("icons/comment.svg", include_bytes!("../assets/icons/comment.svg")),
+    ("icons/sliders.svg", include_bytes!("../assets/icons/sliders.svg")),
+    ("icons/hand.svg", include_bytes!("../assets/icons/hand.svg")),
 ];
 
 impl Icon {
@@ -167,6 +182,11 @@ impl Icon {
             Icon::Stop => "icons/stop.svg",
             Icon::Terminal => "icons/terminal.svg",
             Icon::Trash => "icons/trash.svg",
+            Icon::Minus => "icons/minus.svg",
+            Icon::Board => "icons/board.svg",
+            Icon::Comment => "icons/comment.svg",
+            Icon::Sliders => "icons/sliders.svg",
+            Icon::Hand => "icons/hand.svg",
         }
     }
 

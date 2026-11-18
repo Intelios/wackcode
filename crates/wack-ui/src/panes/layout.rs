@@ -11,7 +11,7 @@
 //! - A dock with nothing in it is `None`.
 //! - Pane ids are unique across the layout and never reused, so state kept for a pane elsewhere
 //!   can never be handed to a different one.
-//! - The sizes the user chose (`right_width`, `bottom_height`) are only ever set by the user;
+//! - The sizes the user chose (`right_width`, `canvas_width`, `bottom_height`) are only ever set by the user;
 //!   the solver reads them and never writes them back, so a window made smaller and larger again
 //!   gets the same panes back.
 
@@ -32,6 +32,8 @@ pub enum PaneKind {
     Agents,
     /// The chat's browser tabs.
     Browser,
+    /// The chat's canvases: boards of the agent's mockups.
+    Canvas,
 }
 
 impl PaneKind {
@@ -44,18 +46,19 @@ impl PaneKind {
             PaneKind::Tasks => "Tasks",
             PaneKind::Agents => "Agents",
             PaneKind::Browser => "Browser",
+            PaneKind::Canvas => "Canvas",
         }
     }
 
     /// One per chat: opening it again shows the one there is.
     pub fn single(self) -> bool {
-        matches!(self, PaneKind::Changes | PaneKind::Build | PaneKind::Run | PaneKind::Tasks | PaneKind::Agents | PaneKind::Browser)
+        matches!(self, PaneKind::Changes | PaneKind::Build | PaneKind::Run | PaneKind::Tasks | PaneKind::Agents | PaneKind::Browser | PaneKind::Canvas)
     }
 
     /// Where a new pane of this kind opens.
     pub fn home(self) -> Dock {
         match self {
-            PaneKind::Changes | PaneKind::Agents | PaneKind::Browser => Dock::Right,
+            PaneKind::Changes | PaneKind::Agents | PaneKind::Browser | PaneKind::Canvas => Dock::Right,
             PaneKind::Terminal | PaneKind::Build | PaneKind::Run | PaneKind::Tasks => Dock::Bottom,
         }
     }
@@ -150,6 +153,11 @@ pub struct Layout {
     /// The width the user dragged the right dock to; until then it opens balanced.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub right_width: Option<f32>,
+    /// The width the user dragged the right dock to while a Canvas was in front of it. A board
+    /// wants far more room than a diff, so it keeps its own (version 2 learned this); until the
+    /// user drags it, the canvas opens as wide as the transcript allows (`solve`).
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub canvas_width: Option<f32>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub bottom_height: Option<f32>,
     /// A hidden dock keeps its panes, and their state, until it is shown again.
@@ -195,11 +203,23 @@ impl Layout {
         self.dock(dock).filter(|_| !self.hidden(dock))
     }
 
+    /// Sets a dock's size; the right dock's is the canvas's own while a Canvas is in front of it.
     pub fn set_size(&mut self, dock: Dock, size: Option<f32>) {
         match dock {
+            Dock::Right if self.canvas_in_front() => self.canvas_width = size,
             Dock::Right => self.right_width = size,
             Dock::Bottom => self.bottom_height = size,
         }
+    }
+
+    /// The right dock is shown with a Canvas in front of one of its stacks: it takes the canvas's
+    /// width.
+    pub fn canvas_in_front(&self) -> bool {
+        let mut found = false;
+        if let Some(node) = self.shown(Dock::Right) {
+            visit(node, &mut |stack| found |= stack.active_pane().kind == PaneKind::Canvas);
+        }
+        found
     }
 
     /// Every pane, with its dock.
@@ -647,10 +667,10 @@ pub(crate) mod tests {
                 layout.add(PaneKind::Terminal);
             }
             1 => {
-                layout.open([PaneKind::Changes, PaneKind::Build, PaneKind::Run, PaneKind::Browser][random.below(4)]);
+                layout.open([PaneKind::Changes, PaneKind::Build, PaneKind::Run, PaneKind::Browser, PaneKind::Canvas][random.below(5)]);
             }
             2 => {
-                layout.toggle([PaneKind::Changes, PaneKind::Terminal, PaneKind::Build, PaneKind::Run, PaneKind::Browser][random.below(5)]);
+                layout.toggle([PaneKind::Changes, PaneKind::Terminal, PaneKind::Build, PaneKind::Run, PaneKind::Browser, PaneKind::Canvas][random.below(6)]);
             }
             3 => {
                 if let Some(id) = any(random) {

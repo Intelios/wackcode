@@ -7,7 +7,7 @@
 use gpui::{Action, App, KeyBinding, actions};
 use wack_core::{AgentMode, CommandKind, Reasoning, WireFormat};
 
-use crate::panes::{Dock, PaneId, Target, dock::PANE_CONTEXT, terminal::TERMINAL_CONTEXT};
+use crate::panes::{Dock, PaneId, Target, canvas::CANVAS_CONTEXT, dock::PANE_CONTEXT, terminal::TERMINAL_CONTEXT};
 
 actions!(
     wackcode,
@@ -32,6 +32,21 @@ actions!(
         ToggleAgentsPane,
         /// Show the Browser pane: the chat's browser tabs.
         ToggleBrowserPane,
+        /// Show the Canvas pane: the chat's canvases.
+        ToggleCanvasPane,
+        /// The Canvas pane: show the whole board.
+        CanvasFit,
+        /// The Canvas pane: step the zoom in or out.
+        CanvasZoomIn,
+        CanvasZoomOut,
+        /// The Canvas pane: zoom to the selected artboard.
+        CanvasZoomSelection,
+        /// The Canvas pane: 100%.
+        CanvasActualSize,
+        /// The Canvas pane: step back (close a menu, stop playing, clear the selection).
+        CanvasEscape,
+        /// The Canvas pane: play the selected artboard as a live page.
+        CanvasPlay,
         /// Summarise the current chat's older messages now.
         Compact,
         /// Step back: closes a menu or Settings, or stops the run.
@@ -877,6 +892,22 @@ pub struct ChooseFocus {
     pub down: u8,
 }
 
+/// The Canvas pane: move the selection to the next artboard that way.
+#[derive(Clone, Debug, PartialEq, Action)]
+#[action(namespace = wackcode, no_json)]
+pub struct CanvasMove {
+    pub dx: i32,
+    pub dy: i32,
+}
+
+/// Puts words in the current chat's composer, after what is there, and gives it the keyboard:
+/// a canvas's "Ask to fix", say. The user sends them.
+#[derive(Clone, Debug, PartialEq, Action)]
+#[action(namespace = wackcode, no_json)]
+pub struct WriteInComposer {
+    pub text: String,
+}
+
 const CONTEXT: &str = "Shell";
 /// The key context of a form whose fields Tab moves between.
 pub const FORM_CONTEXT: &str = "Form";
@@ -895,6 +926,21 @@ pub fn init(cx: &mut App) {
         KeyBinding::new("cmd-b", MoveToBackground, Some(CONTEXT)),
         KeyBinding::new("cmd-shift-a", ToggleAgentsPane, Some(CONTEXT)),
         KeyBinding::new("cmd-shift-b", ToggleBrowserPane, Some(CONTEXT)),
+        KeyBinding::new("cmd-shift-k", ToggleCanvasPane, Some(CONTEXT)),
+        KeyBinding::new("shift-1", CanvasFit, Some(CANVAS_CONTEXT)),
+        KeyBinding::new("shift-!", CanvasFit, Some(CANVAS_CONTEXT)),
+        KeyBinding::new("shift-2", CanvasZoomSelection, Some(CANVAS_CONTEXT)),
+        KeyBinding::new("shift-@", CanvasZoomSelection, Some(CANVAS_CONTEXT)),
+        KeyBinding::new("cmd-0", CanvasActualSize, Some(CANVAS_CONTEXT)),
+        KeyBinding::new("cmd-=", CanvasZoomIn, Some(CANVAS_CONTEXT)),
+        KeyBinding::new("cmd-+", CanvasZoomIn, Some(CANVAS_CONTEXT)),
+        KeyBinding::new("cmd--", CanvasZoomOut, Some(CANVAS_CONTEXT)),
+        KeyBinding::new("escape", CanvasEscape, Some(CANVAS_CONTEXT)),
+        KeyBinding::new("enter", CanvasPlay, Some(CANVAS_CONTEXT)),
+        KeyBinding::new("left", CanvasMove { dx: -1, dy: 0 }, Some(CANVAS_CONTEXT)),
+        KeyBinding::new("right", CanvasMove { dx: 1, dy: 0 }, Some(CANVAS_CONTEXT)),
+        KeyBinding::new("up", CanvasMove { dx: 0, dy: -1 }, Some(CANVAS_CONTEXT)),
+        KeyBinding::new("down", CanvasMove { dx: 0, dy: 1 }, Some(CANVAS_CONTEXT)),
         KeyBinding::new("ctrl-`", ToggleTerminal, Some(CONTEXT)),
         // macOS may report ⌃⇧` as either.
         KeyBinding::new("ctrl-shift-`", NewTerminal, Some(CONTEXT)),

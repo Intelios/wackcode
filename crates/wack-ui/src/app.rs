@@ -2608,7 +2608,8 @@ impl AppState {
             tabs.restore(saved);
             tabs
         });
-        let session = cx.new(|cx| ChatSession::load(&chat.id, cwd, &path, layout, runner, commands, tasks_folder, tabs, cx));
+        let canvases = wack_canvas::Canvases::new(self.store.canvases_folder(chat), Some(self.browser.clone()));
+        let session = cx.new(|cx| ChatSession::load(&chat.id, cwd, &path, layout, runner, commands, tasks_folder, tabs, canvases, cx));
         let id = chat.id.clone();
         // Cards read their dismissals and opened links from the store as it stands now.
         let view = self.suggestion_view(chat);
@@ -2636,6 +2637,15 @@ impl AppState {
                             session.update(cx, |session, cx| {
                                 session.change_layout(cx, |layout| {
                                     layout.open(crate::panes::PaneKind::Browser);
+                                })
+                            });
+                        }
+                    }
+                    ChatEvent::AgentStartedCanvas => {
+                        if let Some(session) = app.sessions.get(&id).cloned() {
+                            session.update(cx, |session, cx| {
+                                session.change_layout(cx, |layout| {
+                                    layout.open(crate::panes::PaneKind::Canvas);
                                 })
                             });
                         }

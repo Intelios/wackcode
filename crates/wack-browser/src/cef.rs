@@ -26,6 +26,11 @@
 //!   port or pipe.
 //! - Chromium's own background services are switched off or their hosts mapped to nowhere
 //!   (`QUIET_SWITCHES`, `DISABLED_FEATURES`, `BLOCKED_HOSTS`): idle, it reaches no host.
+//! - A site page (a canvas; `site.rs`) is served by its `Site` and nothing else: every other
+//!   request and navigation is refused in the hooks, and it lives in its own in-memory request
+//!   context whose connections go to a proxy that resolves nowhere (`make_site_context`), which is what
+//!   stops WebSockets and WebRTC (the resource hooks never see them). The engine is `Ready` only
+//!   once that context is configured; if it could not be, no site page opens.
 //! - While the agent drives a tab, every main-frame navigation passes `policy`: redirects and
 //!   script navigations too, re-checked after a DNS lookup off the main thread.
 //! - The profile folder is private (0700) and is what protects the user's sign-ins, as 0600
@@ -55,6 +60,7 @@ use tokio::sync::oneshot;
 use crate::{
     main_thread,
     policy::{self, Verdict},
+    site::{self, Site},
     state::{Dialog, DialogKind, Level},
     tabs::{Backend, BoxFuture, Nav, Tab, TabId},
 };
@@ -126,6 +132,18 @@ const BLOCKED_HOSTS: &[&str] = &[
     "*.gvt1.com",
 ];
 
+/// Names no host may resolve: every site's origin is under `.invalid` (`site`), so a request the
+/// engine did not answer itself still reaches no network, with no DNS lookup.
+const NOWHERE_HOSTS: &[&str] = &["*.invalid"];
+
+/// The proxy every connection from a site page is sent to. It resolves nowhere (`NOWHERE_HOSTS`),
+/// and with no `direct://` after it Chromium has no route left, so a WebSocket, a WebTransport or
+/// a WebRTC candidate a site page opens fails here. The resource hooks never see those, so this is
+/// what keeps them offline natively; the site's own requests are answered by its resource handler
+/// before they would reach the proxy. `<-loopback>` drops Chromium's implicit bypass for this Mac.
+const SITE_PROXY: &str = "http://nowhere.invalid:9";
+const SITE_PROXY_BYPASS: &str = "<-loopback>";
+
 /// A page parked outside the window: far to the left, its last size kept.
 const PARK_X: f64 = -40_000.0;
 const DEFAULT_SIZE: (f64, f64) = (1280.0, 800.0);
@@ -175,6 +193,8 @@ struct Main {
     popups: HashMap<TabId, Arc<Tab>>,
     dialogs: HashMap<TabId, JsdialogCallback>,
     answers: HashMap<i32, (TabId, Answer)>,
+    /// The request context every site page (a canvas) shares, made on first use (`site_context`).
+    site_context: Option<Result<RequestContext, String>>,
 }
 
 thread_local! {
@@ -338,7 +358,7 @@ wrap_app! {
             let name = CefString::from("disable-features");
             let existing = CefString::from(&line.switch_value(Some(&name))).to_string();
             line.append_switch_with_value(Some(&name), Some(&CefString::from(with_features(&existing, DISABLED_FEATURES).as_str())));
-            let rules = BLOCKED_HOSTS.iter().map(|host| format!("MAP {host} ~NOTFOUND")).collect::<Vec<_>>().join(", ");
+            let rules = BLOCKED_HOSTS.iter().chain(NOWHERE_HOSTS).map(|host| format!("MAP {host} ~NOTFOUND")).collect::<Vec<_>>().join(", ");
             line.append_switch_with_value(Some(&CefString::from("host-resolver-rules")), Some(&CefString::from(rules.as_str())));
         }
 
@@ -354,10 +374,8 @@ wrap_browser_process_handler! {
     impl BrowserProcessHandler {
         fn on_context_initialized(&self) {
             // Not from inside CEF's callback: flushing makes pages, which calls back into CEF.
-            main_thread::post(|| {
-                with_main(|main| main.phase = Phase::Ready);
-                flush_waiting();
-            });
+            // Ready once the site pages' own context is offline too (`make_site_context`).
+            main_thread::post(make_site_context);
         }
 
         fn on_schedule_message_pump_work(&self, delay_ms: i64) {
@@ -418,10 +436,88 @@ fn child_window_info(host: usize) -> WindowInfo {
     info
 }
 
+/// The request context site pages share: in memory, so nothing a page stores outlives the app,
+/// with every connection sent to `SITE_PROXY` and WebRTC kept to proxied routes. Made once the
+/// engine is up; its preferences take only once Chromium says it is initialized, and the engine
+/// counts as ready only after that, so no site page can open on a context that is not yet offline.
+fn make_site_context() {
+    let made = cef::request_context_create_context(Some(&RequestContextSettings::default()), Some(&mut WackSiteContext::new()));
+    if made.is_none() {
+        site_context_settled(Err(SITE_REFUSED.to_string()));
+    }
+}
+
+const SITE_REFUSED: &str = "Canvas pages could not be kept offline, so none was opened.";
+
+fn configure_site_context(context: &RequestContext) -> Result<(), String> {
+    let mut proxy = cef::dictionary_value_create().ok_or(SITE_REFUSED)?;
+    for (key, value) in [("mode", "fixed_servers"), ("server", SITE_PROXY), ("bypass_list", SITE_PROXY_BYPASS)] {
+        proxy.set_string(Some(&CefString::from(key)), Some(&CefString::from(value)));
+    }
+    let proxy_value = cef::value_create().ok_or(SITE_REFUSED)?;
+    proxy_value.set_dictionary(Some(&mut proxy));
+    let webrtc = cef::value_create().ok_or(SITE_REFUSED)?;
+    webrtc.set_string(Some(&CefString::from("disable_non_proxied_udp")));
+    for (name, value) in [("proxy", &proxy_value), ("webrtc.ip_handling_policy", &webrtc)] {
+        set_preference(context, name, value).map_err(|error| format!("{SITE_REFUSED} (Chromium refused its {name} setting: {error})"))?;
+    }
+    Ok(())
+}
+
+/// Sets one preference through CEF's C function. The cef crate's own `set_preference` answers
+/// failure for every call in 156.6 (the same call made here succeeds), so it is not used.
+fn set_preference(context: &RequestContext, name: &str, value: &Value) -> Result<(), String> {
+    use cef::rc::ConvertParam;
+    let name = CefString::from(name);
+    // SAFETY: `raw` is a live preference manager (the context is borrowed for the call); CEF takes
+    // the reference added to `value`, and `error` is ours to clear.
+    unsafe {
+        let raw = ImplPreferenceManager::get_raw(context);
+        let set = (*raw).set_preference.ok_or("This CEF has no preference setter.")?;
+        let mut error: cef::sys::cef_string_utf16_t = std::mem::zeroed();
+        value.add_ref();
+        let ok = set(raw, ConvertParam::into_raw(&name), ImplValue::get_raw(value), &mut error);
+        let text = if error.str_.is_null() { String::new() } else { String::from_utf16_lossy(std::slice::from_raw_parts(error.str_, error.length)) };
+        cef::sys::cef_string_utf16_clear(&mut error);
+        if ok == 1 { Ok(()) } else { Err(if text.is_empty() { "no reason given".to_string() } else { text }) }
+    }
+}
+
+/// Keeps the site context's outcome and lets the waiting pages open.
+fn site_context_settled(context: Result<RequestContext, String>) {
+    with_main(|main| {
+        main.site_context = Some(context);
+        main.phase = Phase::Ready;
+    });
+    flush_waiting();
+}
+
+wrap_request_context_handler! {
+    struct WackSiteContext {}
+
+    impl RequestContextHandler {
+        fn on_request_context_initialized(&self, request_context: Option<&mut RequestContext>) {
+            let Some(context) = request_context.map(|context| context.clone()) else { return };
+            // Not from inside CEF's callback: flushing makes pages, which calls back into CEF.
+            main_thread::post(move || {
+                let outcome = configure_site_context(&context).map(|()| context);
+                site_context_settled(outcome);
+            });
+        }
+    }
+}
+
 fn make_page(tab: Arc<Tab>, url: &str) -> Result<(), String> {
     let host =
         with_main(|main| main.host).ok_or("The browser has no window to show pages in yet.")?;
     let info = child_window_info(host.0);
+    let mut context = match tab.site() {
+        Some(_) => match with_main(|main| main.site_context.clone()) {
+            Some(outcome) => Some(outcome?),
+            None => return Err(SITE_REFUSED.to_string()),
+        },
+        None => None,
+    };
     register_tab(&tab);
     let mut client = WackClient::new(tab.id);
     // Made blank and loaded once the DevTools domains are on, so the page's own document request
@@ -432,7 +528,7 @@ fn make_page(tab: Arc<Tab>, url: &str) -> Result<(), String> {
         Some(&CefString::from("about:blank")),
         Some(&BrowserSettings::default()),
         None,
-        None,
+        context.as_mut(),
     )
     .ok_or("The browser could not open a page.")?;
     let id = tab.id;
@@ -790,8 +886,13 @@ wrap_life_span_handler! {
             _no_javascript_access: Option<&mut i32>,
         ) -> i32 {
             // A popup becomes a tab of its own in the same chat, with `window.opener` intact so
-            // sign-in popups work. Without a tab to put it in, it is refused.
+            // sign-in popups work. Without a tab to put it in, it is refused. A site's page never
+            // opens one (`site`).
             let (Some(parent), Some(host)) = (tab_of(self.tab), with_main(|main| main.host)) else { return 1 };
+            if parent.site().is_some() {
+                parent.update(|state| state.push_console(Level::Warning, "A popup was refused: canvas pages open no windows.", None));
+                return 1;
+            }
             let Some(child) = parent.spawn_popup() else { return 1 };
             if let Some(info) = window_info {
                 *info = child_window_info(host.0);
@@ -913,8 +1014,17 @@ wrap_jsdialog_handler! {
             message_text: Option<&CefString>,
             default_prompt_text: Option<&CefString>,
             callback: Option<&mut JsdialogCallback>,
-            _suppress_message: Option<&mut i32>,
+            suppress_message: Option<&mut i32>,
         ) -> i32 {
+            // A site's page is drawn as a picture nobody can answer: its dialogs are dismissed
+            // and noted in its console, where the canvas's report reads them.
+            if let Some(tab) = tab_of(self.tab).filter(|tab| tab.site().is_some()) {
+                tab.update(|state| state.push_console(Level::Warning, &format!("A dialog was dismissed: {}", text(message_text)), None));
+                if let Some(suppress) = suppress_message {
+                    *suppress = 1;
+                }
+                return 0;
+            }
             let (Some(tab), Some(callback)) = (tab_of(self.tab), callback) else { return 0 };
             let kind = if dialog_type == JsdialogType::CONFIRM {
                 DialogKind::Confirm
@@ -967,6 +1077,22 @@ wrap_request_handler! {
             _is_redirect: i32,
         ) -> i32 {
             let Some(tab) = tab_of(self.tab) else { return 0 };
+            // A site's page goes nowhere but its own origin, in any frame (`site`).
+            if let Some(site) = tab.site() {
+                let url = request.map(|r| CefString::from(&r.url()).to_string()).unwrap_or_default();
+                return match site::rule(site.name(), &url) {
+                    site::Rule::Serve(_) => 0,
+                    site::Rule::Pass if url.starts_with("about:") => 0,
+                    site::Rule::Pass => {
+                        refuse(self.tab, &url, "Canvas pages stay on their own page.");
+                        1
+                    }
+                    site::Rule::Refuse(error) => {
+                        refuse(self.tab, &url, &error);
+                        1
+                    }
+                };
+            }
             if !tab.agent_driving() || !frame.map(|f| f.is_main() == 1).unwrap_or(false) {
                 return 0;
             }
@@ -1023,6 +1149,11 @@ wrap_request_handler! {
             _disable_default_handling: Option<&mut i32>,
         ) -> Option<ResourceRequestHandler> {
             let tab = tab_anywhere(self.tab)?;
+            // Every request of a site's page, its own document included, is answered or refused
+            // by the site's rule (`site`).
+            if let Some(site) = tab.site() {
+                return Some(WackSiteResources::new(self.tab, site.clone()));
+            }
             if !tab.agent_driving() {
                 return None;
             }
@@ -1119,6 +1250,109 @@ wrap_resource_request_handler! {
     }
 }
 
+wrap_resource_request_handler! {
+    struct WackSiteResources {
+        tab: TabId,
+        site: Arc<dyn Site>,
+    }
+
+    impl ResourceRequestHandler {
+        fn on_before_resource_load(
+            &self,
+            _browser: Option<&mut Browser>,
+            _frame: Option<&mut Frame>,
+            request: Option<&mut Request>,
+            _callback: Option<&mut Callback>,
+        ) -> ReturnValue {
+            let url = request.map(|r| CefString::from(&r.url()).to_string()).unwrap_or_default();
+            match site::rule(self.site.name(), &url) {
+                site::Rule::Serve(_) | site::Rule::Pass => ReturnValue::CONTINUE,
+                site::Rule::Refuse(error) => {
+                    blocked_request(self.tab, url, error);
+                    ReturnValue::CANCEL
+                }
+            }
+        }
+
+        fn resource_handler(
+            &self,
+            _browser: Option<&mut Browser>,
+            _frame: Option<&mut Frame>,
+            request: Option<&mut Request>,
+        ) -> Option<ResourceHandler> {
+            let url = request.map(|r| CefString::from(&r.url()).to_string()).unwrap_or_default();
+            match site::rule(self.site.name(), &url) {
+                site::Rule::Serve(path) => {
+                    let served = self.site.serve(&path);
+                    Some(WackServed::new(Arc::new(served), Arc::new(std::sync::Mutex::new(0))))
+                }
+                // `data:` and `blob:` are Chromium's own; anything else was cancelled above.
+                _ => None,
+            }
+        }
+    }
+}
+
+wrap_resource_handler! {
+    struct WackServed {
+        served: Arc<site::Served>,
+        offset: Arc<std::sync::Mutex<usize>>,
+    }
+
+    impl ResourceHandler {
+        fn open(&self, _request: Option<&mut Request>, handle_request: Option<&mut i32>, _callback: Option<&mut Callback>) -> i32 {
+            // Answered at once: the body is already in memory.
+            if let Some(handle) = handle_request {
+                *handle = 1;
+            }
+            1
+        }
+
+        fn response_headers(&self, response: Option<&mut Response>, response_length: Option<&mut i64>, _redirect_url: Option<&mut CefString>) {
+            if let Some(response) = response {
+                response.set_status(i32::from(self.served.status));
+                response.set_status_text(Some(&CefString::from(if self.served.status == 200 { "OK" } else { "Not Found" })));
+                response.set_mime_type(Some(&CefString::from(self.served.mime.as_str())));
+                if self.served.mime.starts_with("text/") || self.served.mime.ends_with("json") || self.served.mime.ends_with("+xml") {
+                    response.set_charset(Some(&CefString::from("utf-8")));
+                }
+                for (name, value) in &self.served.headers {
+                    response.set_header_by_name(Some(&CefString::from(name.as_str())), Some(&CefString::from(value.as_str())), 1);
+                }
+            }
+            if let Some(length) = response_length {
+                *length = self.served.body.len() as i64;
+            }
+        }
+
+        fn read(&self, data_out: *mut u8, bytes_to_read: i32, bytes_read: Option<&mut i32>, _callback: Option<&mut ResourceReadCallback>) -> i32 {
+            let mut offset = self.offset.lock().unwrap_or_else(|e| e.into_inner());
+            let body = &self.served.body;
+            let count = body.len().saturating_sub(*offset).min(bytes_to_read.max(0) as usize);
+            if count > 0 && !data_out.is_null() {
+                // SAFETY: CEF hands a buffer of `bytes_to_read` bytes; `count` is no more than that.
+                unsafe { std::ptr::copy_nonoverlapping(body[*offset..].as_ptr(), data_out, count) };
+                *offset += count;
+            }
+            if let Some(read) = bytes_read {
+                *read = count as i32;
+            }
+            // 0 with nothing read ends the response.
+            i32::from(count > 0)
+        }
+
+        fn skip(&self, bytes_to_skip: i64, bytes_skipped: Option<&mut i64>, _callback: Option<&mut ResourceSkipCallback>) -> i32 {
+            let mut offset = self.offset.lock().unwrap_or_else(|e| e.into_inner());
+            let skipped = (self.served.body.len().saturating_sub(*offset) as i64).min(bytes_to_skip.max(0));
+            *offset += skipped as usize;
+            if let Some(out) = bytes_skipped {
+                *out = skipped;
+            }
+            i32::from(skipped > 0)
+        }
+    }
+}
+
 /// Records a request the address rule stopped, in the page's console, where the agent reads it.
 fn blocked_request(id: TabId, url: String, error: String) {
     main_thread::post(move || {
@@ -1204,6 +1438,10 @@ wrap_download_handler! {
             callback: Option<&mut BeforeDownloadCallback>,
         ) -> i32 {
             let Some(tab) = tab_of(self.tab) else { return 0 };
+            if tab.site().is_some() {
+                tab.update(|state| state.push_console(Level::Warning, "A download was refused: canvas pages save no files.", None));
+                return 0;
+            }
             // The agent does not download files; refusing is the default.
             if tab.agent_driving() {
                 tab.update(|state| state.push_console(Level::Warning, "A download was refused: the agent does not download files.", None));

@@ -937,6 +937,11 @@ impl Store {
         self.folder.join("tasks").join(&chat.id)
     }
 
+    /// Where a chat's canvases live (`v3/canvases/<chat>/`), removed with the chat.
+    pub fn canvases_folder(&self, chat: &Chat) -> PathBuf {
+        self.folder.join("canvases").join(&chat.id)
+    }
+
     /// Marks a chat as just used, so it moves to the top of its project.
     pub fn touch_chat(&mut self, id: &str) -> Result<(), String> {
         if let Some(chat) = self.state.chats.iter_mut().find(|chat| chat.id == id) {
@@ -1161,7 +1166,7 @@ impl Store {
         self.save()
     }
 
-    /// Deletes a chat, its conversation file and its sub-agents' sessions.
+    /// Deletes a chat, its conversation file, its sub-agents' sessions and its canvases.
     pub fn delete_chat(&mut self, id: &str) -> Result<(), String> {
         let Some(chat) = self.chat(id).cloned() else {
             return Ok(());
@@ -1169,6 +1174,7 @@ impl Store {
         self.state.chats.retain(|listed| listed.id != id);
         self.save()?;
         let _ = fs::remove_dir_all(self.tasks_folder(&chat));
+        let _ = fs::remove_dir_all(self.canvases_folder(&chat));
         let _ = fs::remove_dir_all(wack_agent::agents::children_folder(&self.session_path(&chat)));
         match fs::remove_file(self.session_path(&chat)) {
             Err(error) if error.kind() != std::io::ErrorKind::NotFound => {

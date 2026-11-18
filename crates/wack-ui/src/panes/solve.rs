@@ -4,6 +4,8 @@
 //! The rules, which the property tests below check over random layouts and window sizes:
 //! - The transcript keeps `TRANSCRIPT_MIN_WIDTH` × `TRANSCRIPT_MIN_HEIGHT` at any window size the
 //!   app allows. It is the one thing that must stay readable.
+//! - A Canvas in front of the right dock opens as wide as the transcript's minimum allows beside
+//!   the sidebar, and keeps a width of its own once dragged (`Layout::canvas_width`).
 //! - A dock gets the size the user gave it when that fits. When it does not, the sidebar steps
 //!   aside first (only while open, and it comes back once there is room), and only then is the
 //!   dock clamped.
@@ -92,6 +94,12 @@ pub fn balanced_width(width: f32, sidebar: f32) -> f32 {
     ((width - sidebar) / 2.).max(DOCK_MIN_WIDTH)
 }
 
+/// The canvas's width before the user drags it: everything the transcript's minimum leaves beside
+/// the sidebar, so the board gets the room and nothing steps aside for it.
+pub fn canvas_width(width: f32, sidebar: f32) -> f32 {
+    (width - sidebar - TRANSCRIPT_MIN_WIDTH).max(DOCK_MIN_WIDTH)
+}
+
 /// The widest the right dock can be: what leaves the transcript its minimum with the sidebar
 /// aside. Dragging is clamped to this.
 pub fn widest_dock(width: f32) -> f32 {
@@ -109,7 +117,11 @@ pub fn solve(width: f32, height: f32, sidebar_open: bool, layout: &Layout) -> So
     let room = |sidebar: f32| (width - sidebar - TRANSCRIPT_MIN_WIDTH).max(0.);
 
     let right = layout.shown(Dock::Right).map(|_| {
-        let wanted = layout.right_width.filter(|width| width.is_finite()).unwrap_or_else(|| balanced_width(width, sidebar));
+        let wanted = if layout.canvas_in_front() {
+            layout.canvas_width.filter(|width| width.is_finite()).unwrap_or_else(|| canvas_width(width, sidebar))
+        } else {
+            layout.right_width.filter(|width| width.is_finite()).unwrap_or_else(|| balanced_width(width, sidebar))
+        };
         wanted.max(DOCK_MIN_WIDTH)
     });
     let needed = right.map_or(0., |wanted| wanted.min(room(0.)).max(DOCK_MIN_WIDTH.min(room(0.))));
@@ -266,7 +278,39 @@ mod tests {
             _ => Some(random.between(0., 1600.)),
         };
         layout.right_width = size(random);
+        layout.canvas_width = size(random);
         layout.bottom_height = size(random);
+    }
+
+    #[test]
+    fn a_canvas_opens_as_wide_as_the_transcript_allows_and_keeps_its_own_width() {
+        for width in (700..=2600).step_by(25) {
+            let width = width as f32;
+            for sidebar_open in [true, false] {
+                let mut layout = Layout::default();
+                layout.open(PaneKind::Changes);
+                layout.right_width = Some(500.);
+                layout.open(PaneKind::Canvas);
+                let solved = solve(width, 900., sidebar_open, &layout);
+                let sidebar = if sidebar_open { f32::from(SIDEBAR_WIDTH) } else { 0. };
+                let context = format!("{width}, sidebar {sidebar_open}: {solved:?}");
+                if width - sidebar - TRANSCRIPT_MIN_WIDTH >= DOCK_MIN_WIDTH {
+                    assert_eq!(solved.sidebar, sidebar_open, "nothing steps aside for a default canvas: {context}");
+                    assert_eq!(solved.transcript.width, TRANSCRIPT_MIN_WIDTH, "{context}");
+                }
+                assert!(solved.transcript.width >= TRANSCRIPT_MIN_WIDTH, "{context}");
+
+                // Dragging sets the canvas's width; Changes in front keeps the user's own.
+                layout.set_size(Dock::Right, Some(640.));
+                assert_eq!((layout.canvas_width, layout.right_width), (Some(640.), Some(500.)));
+                let changes = layout.first_of(PaneKind::Changes).unwrap();
+                layout.activate(changes);
+                let solved = solve(width, 900., sidebar_open, &layout);
+                if width - sidebar - TRANSCRIPT_MIN_WIDTH >= 500. {
+                    assert_eq!(solved.right.unwrap().width, 500., "{context}");
+                }
+            }
+        }
     }
 
     #[test]

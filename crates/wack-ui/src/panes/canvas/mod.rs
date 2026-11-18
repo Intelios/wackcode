@@ -230,7 +230,7 @@ impl CanvasPane {
             let ids: Vec<String> = here.into_iter().map(|(id, _)| id).collect();
             if !ids.is_empty() {
                 if self.following {
-                    self.go_to(&ids, cx);
+                    self.follow(&ids, cx);
                 } else {
                     for id in ids {
                         if !self.unseen.contains(&id) {
@@ -313,6 +313,24 @@ impl CanvasPane {
         if let Some(bounds) = self.board().bounds_of(ids) {
             let to = fit_below_pills(bounds, width, height, 1.);
             self.glide_to(to, cx);
+        }
+    }
+
+    /// Brings the agent's changes into view without taking the user closer than they were: a
+    /// change already in view only glints, and one out of view is fitted at no more than the
+    /// current zoom. A canvas still waiting for its first fit is left to it.
+    fn follow(&mut self, ids: &[String], cx: &mut Context<Self>) {
+        let Some(current) = self.current.clone() else { return };
+        if self.fit_pending.as_ref() == Some(&current) || !self.cameras.contains_key(&current) {
+            return;
+        }
+        let (width, height) = self.size();
+        let Some(bounds) = self.board().bounds_of(ids) else { return };
+        let camera = self.camera();
+        let shown = camera.to_screen(bounds);
+        let in_view = shown.x >= 0. && shown.y >= EDGE + PILL_HEIGHT && shown.right() <= width && shown.bottom() <= height;
+        if !in_view {
+            self.glide_to(fit_below_pills(bounds, width, height, camera.zoom.min(1.)), cx);
         }
     }
 

@@ -524,7 +524,14 @@ impl Shell {
     /// Puts words after whatever the current chat's composer holds, and gives it the keyboard.
     fn write_in_composer(&mut self, text: &str, window: &mut Window, cx: &mut Context<Self>) {
         let Some(app) = self.app() else { return };
-        let Some(composer) = app.read(cx).current_chat().map(|session| session.read(cx).composer.clone()) else { return };
+        // The chat's composer, or the new-chat screen's draft.
+        let composer = {
+            let app = app.read(cx);
+            match app.current_chat() {
+                Some(session) => session.read(cx).composer.clone(),
+                None => app.draft.clone(),
+            }
+        };
         composer.update(cx, |field, cx| {
             let existing = field.text().trim_end().to_string();
             let joined = if existing.is_empty() { text.to_string() } else { format!("{existing}\n\n{text}") };

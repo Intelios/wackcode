@@ -13,6 +13,7 @@
 //! {"cmd":"drag","x":10,"y":20,"to_x":300,"to_y":20}   presses, moves in steps, releases
 //! {"cmd":"type","text":"hello"}                   types into whatever has focus
 //! {"cmd":"key","keys":"cmd-n enter"}              space-separated keystrokes
+//! {"cmd":"compose","text":"hello","send":true}    into the chat's composer, focus or not
 //! {"cmd":"resize","width":900,"height":600}
 //! {"cmd":"appearance","theme":"light"}            or "dark"
 //! {"cmd":"browser","action":"open","url":"https://example.com"}   a tab of the chat in front, as the agent
@@ -84,6 +85,13 @@ enum Command {
     },
     Type {
         text: String,
+    },
+    /// Writes into the chat's composer and, with `send`, sends it, through the app's own actions:
+    /// unlike `type`, it needs no focus, so it works while the window is in the background.
+    Compose {
+        text: String,
+        #[serde(default)]
+        send: bool,
     },
     Key {
         keys: String,
@@ -341,6 +349,16 @@ async fn run(command: Command, cx: &mut AsyncApp) -> Result<Value, String> {
                         key_char: Some(key),
                     };
                     window.dispatch_keystroke(keystroke, cx);
+                }
+            })?;
+            settle(window, cx).await;
+            Ok(json!({ "ok": true }))
+        }
+        Command::Compose { text, send } => {
+            on_window(window, cx, |window, cx| {
+                window.dispatch_action(Box::new(crate::actions::WriteInComposer { text }), cx);
+                if send {
+                    window.dispatch_action(Box::new(crate::actions::Send), cx);
                 }
             })?;
             settle(window, cx).await;

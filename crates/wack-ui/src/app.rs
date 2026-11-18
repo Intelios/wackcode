@@ -2235,6 +2235,15 @@ impl AppState {
         match self.store.run_setup(&chat) {
             Ok(mut setup) => {
                 setup.mcp_hub = Some(self.mcp.clone());
+                // browser_preview starts the Run command as the Run button does, and the Run
+                // pane hears of it the same way.
+                let tx = self.command_event_tx.clone();
+                setup.commands = Some(wack_core::preview::RunCommands {
+                    runner: self.runs.clone(),
+                    events: std::sync::Arc::new(move |event| {
+                        let _ = tx.unbounded_send(event);
+                    }),
+                });
                 session.update(cx, |session, cx| session.start(setup, job, cx));
                 let _ = self.store.touch_chat(chat_id);
                 cx.notify();

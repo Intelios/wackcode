@@ -66,6 +66,11 @@ pub struct RunSetup {
     /// The chat's browser tabs, which outlive the run. `None` offers no browser; the app hands
     /// the chat's own.
     pub browser: Option<wack_browser::ChatTabs>,
+    /// The project's Run command when the run starts, for `browser_preview`.
+    pub run_command: Option<String>,
+    /// The app's Build and Run commands, so `browser_preview` can start the Run command the
+    /// way the Run button does. `None` offers no `browser_preview`.
+    pub commands: Option<crate::preview::RunCommands>,
 }
 
 pub enum Job {
@@ -131,6 +136,8 @@ impl Store {
             mcp_hub: None,
             agents: self.agents_setup(children, &chat.id, &project.path, wack_agent::Agents::new()),
             browser: None,
+            run_command: project.command(crate::store::CommandKind::Run).map(str::to_string),
+            commands: None,
         })
     }
 }
@@ -178,7 +185,10 @@ pub async fn run(
     }
     // The chat's browser: its tabs outlive the run, and sub-agents get tabs of their own.
     if let Some(tabs) = &setup.browser {
-        tools.extend(wack_browser::tools::tools(tabs.clone()));
+        let preview = setup.commands.clone().map(|commands| {
+            Arc::new(crate::preview::RunPreview { commands, cwd: setup.cwd.clone(), command: setup.run_command.clone() }) as Arc<dyn wack_browser::tools::Preview>
+        });
+        tools.extend(wack_browser::tools::tools(tabs.clone(), preview));
     }
     // MCP servers: their tools, waiting only for a server with no tool list yet. A compaction
     // calls no tools, so it starts nothing.
@@ -283,6 +293,8 @@ mod tests {
             mcp_hub: None,
             agents: None,
             browser: None,
+            run_command: None,
+            commands: None,
         }
     }
 

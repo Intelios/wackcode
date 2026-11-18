@@ -110,6 +110,8 @@ struct Inner {
     generation: u64,
     emit: EventSink,
     has_output: AtomicBool,
+    /// What the command printed, for `browser_preview` (`crate::preview`).
+    heard: Mutex<crate::preview::Heard>,
 }
 
 /// Handle to a live or completed (or fixture-replayed) Build/Run session.
@@ -154,6 +156,7 @@ impl CommandSession {
                 generation: 1,
                 emit: Arc::new(|_| {}),
                 has_output: AtomicBool::new(has_output),
+                heard: Mutex::new(crate::preview::Heard::from_output(bytes)),
             }),
         }
     }
@@ -168,6 +171,13 @@ impl CommandSession {
 
     pub fn is_active(&self) -> bool {
         self.info().status.is_active()
+    }
+
+    /// The addresses on this Mac the command has printed, oldest first, and its last output as
+    /// plain text.
+    pub fn heard(&self) -> (Vec<String>, String) {
+        let heard = self.inner.heard.lock().unwrap_or_else(|e| e.into_inner());
+        (heard.addresses.clone(), heard.tail())
     }
 
     pub fn has_output(&self) -> bool {
@@ -663,6 +673,7 @@ fn spawn_pty(
             generation,
             emit,
             has_output: AtomicBool::new(false),
+            heard: Mutex::new(crate::preview::Heard::default()),
         }),
     };
     Ok((session, child, reader))
@@ -676,6 +687,7 @@ fn spawn_reader_thread(session: CommandSession, mut reader: File) {
                 Ok(0) => break,
                 Ok(n) => {
                     session.inner.has_output.store(true, Ordering::Release);
+                    session.inner.heard.lock().unwrap_or_else(|e| e.into_inner()).take(&buf[..n]);
                     let redraw = session
                         .inner
                         .screen

@@ -512,7 +512,7 @@ async fn browser(window: AnyWindowHandle, cx: &mut AsyncApp, args: BrowserArgs) 
             let name = name.ok_or("\"tool\" needs a \"name\".")?;
             let started = std::time::Instant::now();
             // On Tokio, as a run's tools are: they wait with its timers.
-            let call = wack_browser::tools::call(tabs.clone(), name, input.unwrap_or_else(|| json!({})), cwd.unwrap_or_else(|| PathBuf::from("/")), caller);
+            let call = wack_browser::tools::call(tabs.clone(), None, name, input.unwrap_or_else(|| json!({})), cwd.unwrap_or_else(|| PathBuf::from("/")), caller);
             let result = gpui_tokio::Tokio::spawn(cx, call).await.map_err(|_| "The tool call was dropped.".to_string())?;
             let ms = started.elapsed().as_millis() as u64;
             match result {

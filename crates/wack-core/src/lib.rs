@@ -16,6 +16,7 @@ pub mod appearance;
 pub mod git;
 pub mod mcp;
 pub mod memory;
+pub mod preview;
 pub mod run;
 pub mod runner;
 pub mod secrets;

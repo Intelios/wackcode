@@ -1,4 +1,4 @@
-//! The fifteen `browser_*` tools: their specs, and each one's work on the shared core (`mod.rs`).
+//! The sixteen `browser_*` tools: their specs, and each one's work on the shared core (`mod.rs`).
 
 use std::{sync::Arc, time::Duration};
 
@@ -35,13 +35,14 @@ pub(crate) enum Kind {
     Viewport,
     Dialog,
     Upload,
+    Preview,
     Batch,
 }
 
 pub const BATCH: &str = "browser_batch";
 
 /// Every browser tool's name, in the order they are listed.
-pub const NAMES: [&str; 15] = [
+pub const NAMES: [&str; 16] = [
     "browser_tabs",
     "browser_navigate",
     "browser_snapshot",
@@ -56,6 +57,7 @@ pub const NAMES: [&str; 15] = [
     "browser_viewport",
     "browser_dialog",
     "browser_upload",
+    "browser_preview",
     BATCH,
 ];
 
@@ -64,7 +66,7 @@ const TAB: &str = "The tab's number (browser_tabs lists them). Leave it out to u
 const THIS_MAC_ONLY: &str = "only on pages on this Mac (localhost and loopback addresses: the user's own dev servers). On other sites it is refused, because it could read the site's cookies and storage";
 
 impl Kind {
-    pub(crate) const ALL: [Kind; 15] = [
+    pub(crate) const ALL: [Kind; 16] = [
         Kind::Tabs,
         Kind::Navigate,
         Kind::Snapshot,
@@ -79,6 +81,7 @@ impl Kind {
         Kind::Viewport,
         Kind::Dialog,
         Kind::Upload,
+        Kind::Preview,
         Kind::Batch,
     ];
 
@@ -112,6 +115,7 @@ impl Kind {
             Kind::Viewport => "Lay a browser tab's page out at phone, tablet or desktop size, light or dark.",
             Kind::Dialog => "Answer an alert, confirm or prompt a browser tab's page opened.",
             Kind::Upload => "Choose files from the project for a file input in a browser tab's page.",
+            Kind::Preview => "Start the project's dev server (its Run command), or find it running, and open it in the chat's browser.",
             Kind::Batch => "Run several browser tool calls in one, stopping at the first that fails.",
         }
     }
@@ -122,7 +126,7 @@ impl Kind {
                 "Tabs of the chat's browser, which the user sees in the Browser pane. `list` shows every tab with whose it is; `new` opens one (at `url`, or blank) and makes it your current tab; `select` makes `tab` your current tab, which calls without a `tab` use; `close` closes `tab` (default: your current one). You may close your own tabs and, as the chat's agent, a sub-agent's; never the user's. Use the user's tabs only when the task is about them. {UNTRUSTED}"
             ),
             Kind::Navigate => format!(
-                "Opens `url` in your current tab (a new tab if you have none, or with `new_tab`), or goes `back`, `forward` or does a `reload`. It waits for the page to `load` (default), for the network to go `idle` as well, or `none`. Opening the address a tab already shows does nothing: pass `action: reload` to load it again. The agent may open http and https pages on the public web and this Mac (localhost, 127.0.0.1): addresses on the local network (routers, other machines) are refused, and so is anything a page redirects there. Start a project's dev server with `bash` and `run_in_background` (or the user's Run button) so it outlives this run, then open its address here. Then read the page with browser_snapshot, or see it with browser_screenshot. {UNTRUSTED}"
+                "Opens `url` in your current tab (a new tab if you have none, or with `new_tab`), or goes `back`, `forward` or does a `reload`. It waits for the page to `load` (default), for the network to go `idle` as well, or `none`. Opening the address a tab already shows does nothing: pass `action: reload` to load it again. The agent may open http and https pages on the public web and this Mac (localhost, 127.0.0.1): addresses on the local network (routers, other machines) are refused, and so is anything a page redirects there. For the project's own dev server, use browser_preview, which starts it the way the Run button does; start any other server with `bash` and `run_in_background` so it outlives this run, then open its address here. Then read the page with browser_snapshot, or see it with browser_screenshot. {UNTRUSTED}"
             ),
             Kind::Snapshot => format!(
                 "Outlines the page as its accessibility tree: one line per element, `role \"name\"`, with `[ref_N]` on everything you can act on (buttons, links, fields) and its state (value, checked, expanded, href, off-screen). Refs stay the same while the element exists and reset when a new page loads; resizing never changes them. Use a ref with browser_act and browser_fill. `query` keeps only matching lines; `ref` outlines only that part. Password, one-time-code and card fields never show their value. Frames from another site can't be outlined: browser_screenshot shows them. Prefer this to a screenshot for finding things and reading text. {UNTRUSTED}"
@@ -148,6 +152,7 @@ impl Kind {
             Kind::Viewport => "Lays the page out at `size`: `phone` (390 × 844, touch), `tablet` (820 × 1180, touch), `desktop` (1280 × 800), or `fit` (the Browser pane's own size). A fixed size stays the same whatever the user does with the pane, which shows it scaled to fit. `color_scheme` `light`, `dark` or `auto` sets the page's preferred colour scheme. Take a new screenshot afterwards before acting at coordinates.".to_string(),
             Kind::Dialog => "Answers the JavaScript dialog the page opened (alert, confirm, prompt, or leave-page): `accept` true for OK, false for Cancel, and `text` for a prompt's answer. A page with a dialog open does nothing else until it is answered.".to_string(),
             Kind::Upload => "Chooses files for a file input (`ref`, from browser_snapshot): `paths` are files in the project (relative to its folder, or absolute inside it). Files outside the project are refused.".to_string(),
+            Kind::Preview => "Opens the project's dev server in a tab of yours. If the project's Run command (the Run button) is running, it is used as it is, never restarted; otherwise it is started, the way the user's Run button starts it, so it keeps running after this run and the user sees it under Run. It waits (up to 90 seconds) for the address the server prints, or for `port` if you name it, to answer. A tab of yours already showing the address is chosen, not reloaded. If the project has no Run command, or it serves nothing (a build, a test), start the server with `bash` and `run_in_background` instead and open its address with browser_navigate.".to_string(),
             Kind::Batch => "Runs `steps` in order, each {`tool`: a browser tool's name, `input`: what you'd pass it}, and stops at the first that fails. Use it for a known sequence, like filling a form and submitting it, to save round trips. At most 20 steps; it can't hold another batch.".to_string(),
         }
     }
@@ -248,6 +253,10 @@ impl Kind {
                 "ref": { "type": "string" },
                 "paths": { "type": "array", "items": { "type": "string" } }
             }, "required": ["ref", "paths"] }),
+            Kind::Preview => json!({ "type": "object", "properties": {
+                "port": { "type": "integer", "description": "The port the server listens on, when its output doesn't print its address." },
+                "path": { "type": "string", "description": "A path to open on the server, like /signup." }
+            } }),
             Kind::Batch => json!({ "type": "object", "properties": {
                 "steps": { "type": "array", "items": { "type": "object", "properties": {
                     "tool": { "type": "string", "enum": NAMES[..14] },
@@ -346,6 +355,7 @@ impl Browser {
             Kind::Viewport => self.viewport(input, owner).await.map(Into::into),
             Kind::Dialog => self.dialog(input, context, owner).await.map(Into::into),
             Kind::Upload => self.upload(input, context, owner).await.map(Into::into),
+            Kind::Preview => self.preview(input, context, owner).await.map(Into::into),
             Kind::Batch => self.batch(input, context, owner).await,
         }
     }
@@ -1050,6 +1060,36 @@ impl Browser {
         Ok(format!("Chose {} file{} for {raw}.\n{}", files.len(), if files.len() == 1 { "" } else { "s" }, Self::changes(&tab, &mark, owner)))
     }
 
+    async fn preview(&self, input: &Value, context: &ToolContext<'_>, owner: &Owner) -> Result<String, String> {
+        let preview = self.preview.clone().ok_or("This chat has no project to start a dev server for.")?;
+        let port = match input.get("port") {
+            None | Some(Value::Null) => None,
+            Some(port) => Some(port.as_u64().and_then(|port| u16::try_from(port).ok()).filter(|port| *port > 0).ok_or("`port` is a number from 1 to 65535.")?),
+        };
+        let path = text_of(input, "path").map(|path| if path.starts_with('/') { path.to_string() } else { format!("/{path}") });
+        let served = tokio::select! {
+            served = preview.serve(port) => served?,
+            _ = context.cancel.cancelled() => return Err("Stopped.".into()),
+        };
+        let url = match &path {
+            Some(path) => format!("{}{path}", served.url.trim_end_matches('/')),
+            None => served.url.clone(),
+        };
+        let head = if served.started {
+            format!("Started the project's Run command (`{}`); it serves {}. It keeps running after this run: the user sees it under Run.", served.command, served.url)
+        } else {
+            format!("The project's Run command (`{}`) is already running at {}: used as it is.", served.command, served.url)
+        };
+        // A tab of the caller's on that address already: chosen, never reloaded.
+        let showing = self.tabs.tabs().into_iter().find(|tab| Self::owned_by(tab, owner) && same_address(&tab.state().url, &url));
+        if let Some(tab) = showing {
+            self.tabs.set_current(owner, tab.id);
+            return Ok(format!("{head}\n{} already shows it (not reloaded).", tab_line(&tab, &tab.state(), owner)));
+        }
+        let opened = self.navigate(&json!({ "url": url }), context, owner).await?;
+        Ok(format!("{head}\n{opened}"))
+    }
+
     async fn batch(&self, input: &Value, context: &ToolContext<'_>, owner: &Owner) -> Result<ToolOutput, String> {
         let steps = input.get("steps").and_then(Value::as_array).filter(|steps| !steps.is_empty()).ok_or("Give `steps`: a list of {tool, input}.")?;
         if steps.len() > 20 {
@@ -1059,7 +1099,7 @@ impl Browser {
         let mut images = Vec::new();
         for (index, step) in steps.iter().enumerate() {
             let name = step.get("tool").and_then(Value::as_str).unwrap_or("");
-            let kind = Kind::named(name).filter(|kind| *kind != Kind::Batch).ok_or_else(|| format!("Step {} names \"{name}\", which is not a browser tool a batch can run.", index + 1))?;
+            let kind = Kind::named(name).filter(|kind| !matches!(kind, Kind::Batch | Kind::Preview)).ok_or_else(|| format!("Step {} names \"{name}\", which is not a browser tool a batch can run.", index + 1))?;
             let step_input = step.get("input").cloned().unwrap_or_else(|| json!({}));
             match Box::pin(self.dispatch(kind, &step_input, context, owner)).await {
                 Ok(output) => {

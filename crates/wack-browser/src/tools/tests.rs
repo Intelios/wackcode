@@ -48,7 +48,7 @@ fn tabs_with(answer: impl Fn(&str, &Value) -> Result<Value, String> + Send + Syn
 }
 
 fn tool(tabs: &ChatTabs, name: &str) -> Arc<dyn Tool> {
-    super::tools(tabs.clone()).into_iter().find(|tool| tool.spec().name == name).unwrap()
+    super::tools(tabs.clone(), None).into_iter().find(|tool| tool.spec().name == name).unwrap()
 }
 
 fn page_answers(method: &str, _params: &Value) -> Result<Value, String> {
@@ -266,9 +266,42 @@ fn addresses_get_the_scheme_they_mean() {
 #[test]
 fn every_tool_is_deferred_and_only_lookers_are_safe() {
     let (tabs, _) = tabs_with(page_answers);
-    let specs: Vec<_> = super::tools(tabs).iter().map(|tool| tool.spec()).collect();
-    assert_eq!(specs.len(), super::NAMES.len());
+    let specs: Vec<_> = super::tools(tabs.clone(), None).iter().map(|tool| tool.spec()).collect();
+    assert_eq!(specs.len(), super::NAMES.len() - 1, "no browser_preview without a project");
+    assert!(specs.iter().all(|spec| spec.name != "browser_preview"));
+    let with_preview = super::tools(tabs.clone(), Some(Arc::new(Server::default()))).iter().map(|tool| tool.spec()).collect::<Vec<_>>();
+    assert_eq!(with_preview.len(), super::NAMES.len());
+    assert!(with_preview.iter().any(|spec| spec.name == "browser_preview" && !spec.parallel_safe), "it starts a command: not for Plan mode");
     assert!(specs.iter().all(|spec| spec.loading == wack_agent::Loading::Deferred));
     let safe: Vec<&str> = specs.iter().filter(|spec| spec.parallel_safe).map(|spec| spec.name.as_str()).collect();
     assert_eq!(safe, ["browser_tabs", "browser_navigate", "browser_snapshot", "browser_screenshot", "browser_wait", "browser_text", "browser_console", "browser_network"]);
+}
+
+/// A dev server that is always running, counting how often it was asked for.
+#[derive(Default)]
+struct Server {
+    asked: Mutex<u32>,
+}
+
+#[async_trait::async_trait]
+impl super::Preview for Server {
+    async fn serve(&self, _port: Option<u16>) -> Result<super::Served, String> {
+        let mut asked = self.asked.lock().unwrap();
+        *asked += 1;
+        Ok(super::Served { url: "http://localhost:5173/".into(), command: "npm run dev".into(), started: *asked == 1 })
+    }
+}
+
+#[tokio::test]
+async fn a_preview_opens_the_server_once_and_never_reloads_it() {
+    let (tabs, _) = tabs_with(page_answers);
+    let preview = super::tools(tabs.clone(), Some(Arc::new(Server::default()))).into_iter().find(|tool| tool.spec().name == "browser_preview").unwrap();
+    let context = ToolContext::detached(std::path::PathBuf::from("/"));
+    let first = preview.run(json!({}), &context).await.unwrap().text;
+    assert!(first.contains("Started the project's Run command (`npm run dev`)") && first.contains("Opened a new tab"), "{first}");
+    let page = tabs.tabs()[0].state().page;
+    let second = preview.run(json!({}), &context).await.unwrap().text;
+    assert!(second.contains("already running") && second.contains("already shows it (not reloaded)"), "{second}");
+    assert_eq!(tabs.tabs().len(), 1);
+    assert_eq!(tabs.tabs()[0].state().page, page, "the page was not loaded again");
 }

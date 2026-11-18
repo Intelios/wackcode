@@ -255,6 +255,7 @@ pub fn activity(rows: &[WorkRow]) -> Option<String> {
         "Extracted" => "Extracting",
         "Evaluated" => "Evaluating",
         "Batched" => "Running",
+        "Previewed" => "Starting",
         "Browsed" => "Browsing",
         AGENT_VERB => "Waiting on",
         "Stopped" => "Stopping",
@@ -715,10 +716,10 @@ pub fn tool_row(tool: &ToolStep, cwd: &Path, live: bool) -> WorkRow {
 /// The verbs `browser_words` gives, none shared with another tool's row, so a row's icon and
 /// the log's tally can tell a browser step by its verb alone.
 /// One word each where it can be, so the verb column never wraps.
-pub const BROWSER_VERBS: [&str; 24] = [
+pub const BROWSER_VERBS: [&str; 25] = [
     "Opened", "Went", "Reloaded", "Halted", "Switched", "Closed", "Checked", "Outlined", "Looked at", "Clicked", "Hovered",
     "Dragged", "Typed", "Pressed", "Scrolled", "Filled", "Awaited", "Extracted", "Evaluated", "Resized", "Answered", "Uploaded",
-    "Batched", "Browsed",
+    "Batched", "Browsed", "Previewed",
 ];
 
 /// A browser tool call in words: its verb and what it acted on.
@@ -781,6 +782,11 @@ fn browser_words(name: &str, input: Option<&Value>) -> (&'static str, String) {
         },
         "dialog" => ("Answered", if input.and_then(|input| input.get("accept")).and_then(Value::as_bool).unwrap_or(false) { "a dialog: OK".into() } else { "a dialog: Cancel".into() }),
         "upload" => ("Uploaded", plural(count("paths"), "file", "files")),
+        "preview" => ("Previewed", match (number("port"), field("path")) {
+            (Some(port), _) => format!("localhost:{port:.0}"),
+            (None, path) if !path.is_empty() => format!("the dev server at {}", short(path, 40)),
+            _ => "the dev server".into(),
+        }),
         "batch" => ("Batched", plural(count("steps"), "browser step", "browser steps")),
         _ => ("Browsed", "the page".into()),
     }
@@ -1071,7 +1077,7 @@ mod tests {
         assert_eq!(words("browser_viewport", json!({ "color_scheme": "dark" })), ("Switched", "the page to dark colours".into()));
         assert_eq!(words("browser_batch", json!({ "steps": [{}] })), ("Batched", "1 browser step".into()));
         assert_eq!(doing("browser_snapshot", ""), "Using the browser");
-        let all = ["tabs", "navigate", "snapshot", "screenshot", "act", "fill", "wait", "text", "eval", "console", "network", "viewport", "dialog", "upload", "batch", "unknown"];
+        let all = ["tabs", "navigate", "snapshot", "screenshot", "act", "fill", "wait", "text", "eval", "console", "network", "viewport", "dialog", "upload", "preview", "batch", "unknown"];
         for tool in all {
             let verb = words(&format!("browser_{tool}"), json!({})).0;
             assert!(BROWSER_VERBS.contains(&verb), "{verb} is listed");

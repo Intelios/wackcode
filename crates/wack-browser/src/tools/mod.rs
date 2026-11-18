@@ -44,18 +44,45 @@ use crate::{
 
 pub use tool::{BATCH, NAMES};
 
-/// The browser tools for a chat's tabs. Nothing when the build has no browser.
-pub fn tools(tabs: ChatTabs) -> Vec<Arc<dyn Tool>> {
+/// The browser tools for a chat's tabs. Nothing when the build has no browser; no
+/// `browser_preview` without a project to start a server for.
+pub fn tools(tabs: ChatTabs, preview: Option<Arc<dyn Preview>>) -> Vec<Arc<dyn Tool>> {
     if !tabs.available() {
         return Vec::new();
     }
-    let browser = Arc::new(Browser { tabs });
-    tool::Kind::ALL.iter().map(|kind| Arc::new(tool::BrowserTool { kind: *kind, browser: browser.clone() }) as Arc<dyn Tool>).collect()
+    let offers_preview = preview.is_some();
+    let browser = Arc::new(Browser { tabs, preview });
+    tool::Kind::ALL
+        .iter()
+        .filter(|kind| offers_preview || **kind != tool::Kind::Preview)
+        .map(|kind| Arc::new(tool::BrowserTool { kind: *kind, browser: browser.clone() }) as Arc<dyn Tool>)
+        .collect()
+}
+
+/// The project's dev server, for `browser_preview`: the app's Build and Run commands are behind
+/// it (`wack_core::preview`), so a server it starts is the one the Run button shows, and outlives
+/// the run.
+#[async_trait::async_trait]
+pub trait Preview: Send + Sync {
+    /// The server's address on this Mac once it answers: the project's Run command if it is
+    /// already running (never restarted), or started now. `port` names the server when its
+    /// output doesn't. The tool drops the future when the run is stopped.
+    async fn serve(&self, port: Option<u16>) -> Result<Served, String>;
+}
+
+/// A dev server `Preview` found or started.
+#[derive(Clone, Debug, PartialEq)]
+pub struct Served {
+    pub url: String,
+    /// The Run command, as the project has it.
+    pub command: String,
+    /// Started for this call, rather than found running.
+    pub started: bool,
 }
 
 /// Calls the tool `name` as a run would, outside one: for the dev app's automation socket.
-pub async fn call(tabs: ChatTabs, name: String, input: Value, cwd: std::path::PathBuf, caller: Option<String>) -> Result<wack_agent::ToolOutput, String> {
-    let tool = tools(tabs).into_iter().find(|tool| tool.spec().name == name).ok_or_else(|| format!("There is no browser tool {name}."))?;
+pub async fn call(tabs: ChatTabs, preview: Option<Arc<dyn Preview>>, name: String, input: Value, cwd: std::path::PathBuf, caller: Option<String>) -> Result<wack_agent::ToolOutput, String> {
+    let tool = tools(tabs, preview).into_iter().find(|tool| tool.spec().name == name).ok_or_else(|| format!("There is no browser tool {name}."))?;
     let mut context = ToolContext::detached(cwd);
     context.caller = caller;
     tool.run(input, &context).await
@@ -114,6 +141,7 @@ impl AgentView {
 
 pub(crate) struct Browser {
     tabs: ChatTabs,
+    preview: Option<Arc<dyn Preview>>,
 }
 
 /// How long one DevTools call may take before the tool gives up on the page.

@@ -230,8 +230,10 @@ pub fn outcome(result: &str) -> Option<Outcome> {
             drawn = false;
         } else if drawn && let Some(entry) = line.strip_prefix("- ") {
             let id = entry.split(':').next().unwrap_or_default();
-            let clean = entry.ends_with("No console errors.") && !entry.contains("overflows") && !entry.contains("cut off") && !entry.contains("never settled");
-            if !clean && !id.is_empty() {
+            // Errors, overflow, a stuck page or no picture: what the board badges. Warnings alone are not.
+            let errors = entry.contains("Console: error:") || entry.contains(" | error:");
+            let problem = errors || entry.contains("could not be drawn") || entry.contains("overflows") || entry.contains("cut off") || entry.contains("never settled");
+            if problem && !id.is_empty() {
                 outcome.problems.push(id.to_string());
             }
         }
@@ -393,6 +395,28 @@ pub fn collapse_data_urls(html: &str) -> String {
 
 #[cfg(test)]
 mod tests {
+    #[test]
+    fn what_summary_writes_outcome_reads() {
+        let planned = model::plan(&[], &json!({ "title": "Sign-up, “v2”", "artboards": [
+            { "name": "Calm", "width": 400, "height": 600, "html": "<p/>" },
+            { "name": "Loud", "width": 400, "height": 600, "html": "<p/>" },
+            { "name": "Quiet", "width": 400, "height": 600, "html": "<p/>" }
+        ] }))
+        .unwrap();
+        let report = |console: &[&str], overflow_y| Report { width: 400, height: 600, overflow_y, console: console.iter().map(|s| s.to_string()).collect(), ..Report::default() };
+        let drawn = vec![
+            ("calm".to_string(), Ok(report(&["warning: a deprecated API (calm.html:3)"], 0))),
+            ("loud".to_string(), Ok(report(&["warning: w", "error: Uncaught x (loud.html:9)"], 0))),
+            ("quiet".to_string(), Ok(report(&[], 40))),
+        ];
+        let text = summary(&planned, &drawn, &[]);
+        let read = outcome(&text).unwrap();
+        assert!(read.created);
+        assert_eq!((read.canvas.as_str(), read.title.as_str()), (planned.canvas.id.as_str(), "Sign-up, “v2”"));
+        assert_eq!(read.added, ["calm", "loud", "quiet"]);
+        assert_eq!(read.problems, ["loud", "quiet"], "{text}");
+    }
+
     #[test]
     fn a_result_reads_back_as_what_the_call_did() {
         let text = "Started canvas “Settings, “tidy” edition” (canvas: \"settings\").\nAdded: calm, dense.\nRevised: bold.\n\nDrawn:\n- calm: drawn 600×400. No console errors.\n- dense: drawn 600×400. Content overflows the bottom by 20 px. No console errors.\n- bold: could not be drawn. The page failed.\n\nArtboards on “Settings”:\n- calm — “Calm” 600×400\n\nThe user sees the canvas now.";

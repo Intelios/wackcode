@@ -497,7 +497,11 @@ wrap_request_context_handler! {
 
     impl RequestContextHandler {
         fn on_request_context_initialized(&self, request_context: Option<&mut RequestContext>) {
-            let Some(context) = request_context.map(|context| context.clone()) else { return };
+            let Some(context) = request_context.map(|context| context.clone()) else {
+                // Still settled, so ordinary pages open; site pages then refuse to.
+                main_thread::post(|| site_context_settled(Err(SITE_REFUSED.to_string())));
+                return;
+            };
             // Not from inside CEF's callback: flushing makes pages, which calls back into CEF.
             main_thread::post(move || {
                 let outcome = configure_site_context(&context).map(|()| context);

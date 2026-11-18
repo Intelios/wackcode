@@ -66,7 +66,11 @@ struct Shown {
     rev: u64,
     /// Its drawn height, for an auto-height artboard.
     height: Option<f32>,
-    errors: Vec<String>,
+    /// What its report says needs fixing: console errors, then overflow or a stuck page. The
+    /// same rule as the transcript card's "to fix" (`wack_canvas::tools::outcome`).
+    problems: Vec<String>,
+    /// The badge's words: "2 errors", "Overflows", "Stuck".
+    badge: Option<String>,
 }
 
 struct Glide {
@@ -195,7 +199,8 @@ impl CanvasPane {
                     thumb: self.canvases.thumbnail(&canvas.id, &artboard.id),
                     rev: picture.map_or(0, |(_, rev)| rev),
                     height: report.as_ref().map(|r| r.height as f32),
-                    errors: report.map(|r| r.console.into_iter().filter(|line| line.starts_with("error")).collect()).unwrap_or_default(),
+                    problems: report.as_ref().map(problems_of).unwrap_or_default(),
+                    badge: report.as_ref().and_then(badge_of),
                 };
                 self.shown.insert(key, shown);
             }
@@ -470,6 +475,30 @@ fn fit_below_pills(bounds: Rect, width: f32, height: f32, max_zoom: f32) -> Came
     Camera { y: camera.y + band, ..camera }
 }
 
+fn problems_of(report: &wack_canvas::Report) -> Vec<String> {
+    let mut problems: Vec<String> = report.errors().cloned().collect();
+    if report.stuck {
+        problems.push("Its page never settled: a script may be stuck in a loop.".into());
+    }
+    if report.overflow_y > 0 {
+        problems.push(format!("Content overflows the bottom by {} px.", report.overflow_y));
+    }
+    if report.overflow_x > 0 {
+        problems.push(format!("Content overflows the right edge by {} px.", report.overflow_x));
+    }
+    problems
+}
+
+fn badge_of(report: &wack_canvas::Report) -> Option<String> {
+    match report.errors().count() {
+        0 if report.stuck => Some("Stuck".into()),
+        0 if report.overflow_x > 0 || report.overflow_y > 0 => Some("Overflows".into()),
+        0 => None,
+        1 => Some("1 error".into()),
+        count => Some(format!("{count} errors")),
+    }
+}
+
 fn ease_out(t: f32) -> f32 {
     1. - (1. - t.clamp(0., 1.)).powi(3)
 }
@@ -615,8 +644,7 @@ impl Render for CanvasPane {
                         label
                             .child(div().typography(Type::Small).text_color(theme.text_faint).whitespace_nowrap().child(size))
                             .when(drawing, |label| label.child(div().typography(Type::Small).text_color(theme.text_dim).whitespace_nowrap().child("Drawing…")))
-                            .when(!shown.errors.is_empty(), |label| {
-                                let count = shown.errors.len();
+                            .when_some(shown.badge.clone(), |label, badge| {
                                 label.child(
                                     div()
                                         .px(px(6.))
@@ -625,7 +653,7 @@ impl Render for CanvasPane {
                                         .typography(Type::Small)
                                         .text_color(theme.danger)
                                         .whitespace_nowrap()
-                                        .child(if count == 1 { "1 error".to_string() } else { format!("{count} errors") }),
+                                        .child(badge),
                                 )
                             })
                     });
@@ -856,10 +884,10 @@ impl Render for CanvasPane {
             if let Some(group) = &artboard.group {
                 facts.push(group.clone());
             }
-            let errors = shown.errors.clone();
+            let errors = shown.problems.clone();
             let ask = (!errors.is_empty()).then(|| {
                 let text = format!(
-                    "The artboard {} on canvas “{}” (canvas: \"{}\") shows errors. Please fix them:\n{}",
+                    "The artboard {} on canvas “{}” (canvas: \"{}\") has problems. Please fix them:\n{}",
                     artboard.id,
                     canvas.title,
                     canvas.id,

@@ -17,6 +17,7 @@ use crate::{
     actions::ShowCanvas,
     icon::Icon,
     motion,
+    tags::Tag,
     theme::Theme,
     typography::{Type, Typography},
 };
@@ -238,7 +239,8 @@ pub fn view(card: &CanvasCard, theme: &Theme) -> impl IntoElement {
                 .typography(Type::Small)
                 .text_color(theme.accent_text)
                 .child("Open canvas"),
-        );
+        )
+        .tag("canvas-card");
     motion::enter(
         card.key.clone(),
         div()

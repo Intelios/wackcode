@@ -851,7 +851,13 @@ impl BrowserPane {
 impl Render for BrowserPane {
     fn render(&mut self, window: &mut Window, cx: &mut Context<Self>) -> impl IntoElement {
         if self.focus_out.is_none() {
-            self.focus_out = Some(cx.on_focus_out(&self.focus, window, |_, _, _, _| crate::browser::release_page_focus()));
+            // Not when the window goes inactive (another app in front): the page keeps the keyboard
+            // for when the window comes back, as a field in the app does.
+            self.focus_out = Some(cx.on_focus_out(&self.focus, window, |_, _, window, _| {
+                if window.is_window_active() {
+                    crate::browser::release_page_focus();
+                }
+            }));
         }
         let theme = Theme::get(cx).clone();
         let still = cx.reduce_motion();

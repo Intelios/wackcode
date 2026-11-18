@@ -24,6 +24,8 @@ The helpers are one binary, `apps/wackcode-helper`, copied five times. `apps/xta
 
 The framework is copied into the bundle only when the CEF distribution changes; the executables are copied on every run. `cargo run -p wackcode` still starts the bare binary, but that build has no browser.
 
+The app loads the framework first thing in `main`, before any other thread exists (`wack_browser::cef::load_library`): loading it swaps the process's malloc zones for Chromium's allocator, and a thread freeing memory while that happens crashes the app (seen once, loading it lazily on the first page, 2026-11-18). Loading starts nothing: Chromium itself starts, with its helper processes, the first time a tab is shown or used.
+
 ## Bumping
 
 A bump is its own task and its own commit, never folded into feature work. WackCode has no updater, so the bundled Chromium only gets security fixes when it is bumped. Bump it for every Chromium stable release that carries security fixes.

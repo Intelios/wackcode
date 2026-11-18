@@ -5,7 +5,8 @@
 //! tooltips draw over a page (`Window::enable_scene_overlay`, docs/gpui.md).
 //!
 //! Invariants:
-//! - Making the engine starts nothing: CEF starts the first time a tab is opened.
+//! - Making the engine starts nothing: CEF starts the first time a tab is shown or used (its
+//!   library is already loaded, by `main`; docs/cef.md).
 //! - The overlay plane is turned on only when a page is first shown, so the app draws exactly as
 //!   before until the browser is used.
 //! - A page is on screen only while a Browser pane painted its place in the frame that reached

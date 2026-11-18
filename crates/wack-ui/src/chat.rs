@@ -70,6 +70,8 @@ pub enum ChatEvent {
     AgentsNews,
     /// The browser tabs' addresses or titles changed: worth saving.
     BrowserTabsChanged(Vec<wack_browser::SavedTab>),
+    /// The agent or a sub-agent opened a tab (Settings › Browser may show the pane).
+    AgentOpenedTab,
 }
 
 pub struct ChatSession {
@@ -963,9 +965,21 @@ fn watch_browser(tabs: &wack_browser::ChatTabs, cx: &mut Context<ChatSession>) -
     });
     cx.spawn(async move |this, cx| {
         let mut saved = restored;
-        while receiver.next().await.is_some() {
-            while receiver.try_recv().is_ok() {}
+        while let Some(first) = receiver.next().await {
+            // Read every signal in the batch: an agent's new tab is one worth acting on.
+            let mut opened = vec![];
+            let mut signal = Some(first);
+            while let Some(next) = signal {
+                if let wack_browser::Signal::Opened(id) = next {
+                    opened.push(id);
+                }
+                signal = receiver.try_recv().ok();
+            }
             let kept = this.update(cx, |chat, cx| {
+                // Restored tabs were listed before this watch began, so these are new.
+                if opened.iter().any(|id| chat.tabs.get(*id).is_some_and(|tab| tab.owner != wack_browser::Owner::User)) {
+                    cx.emit(ChatEvent::AgentOpenedTab);
+                }
                 chat.panes.refresh_browser(cx);
                 let now = chat.tabs.saved();
                 if saved != now {

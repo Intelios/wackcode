@@ -350,6 +350,25 @@ struct State {
     /// Settings › Git.
     #[serde(default)]
     git: crate::git::GitConfig,
+    /// Settings › Browser.
+    #[serde(default)]
+    browser: BrowserConfig,
+}
+
+/// Settings › Browser.
+#[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(default)]
+pub struct BrowserConfig {
+    /// The Browser pane opens when the agent (or a sub-agent) opens a tab.
+    pub agent_opens_pane: bool,
+    /// The size new tabs open at. Tabs already open keep theirs.
+    pub default_viewport: wack_browser::Viewport,
+}
+
+impl Default for BrowserConfig {
+    fn default() -> Self {
+        Self { agent_opens_pane: true, default_viewport: wack_browser::Viewport::Fit }
+    }
 }
 
 fn recording_on() -> bool {
@@ -1032,6 +1051,20 @@ impl Store {
             return Ok(());
         }
         self.state.git = config;
+        self.save()
+    }
+
+    /// Settings › Browser.
+    pub fn browser_config(&self) -> &BrowserConfig {
+        &self.state.browser
+    }
+
+    /// Saves Settings › Browser.
+    pub fn set_browser_config(&mut self, config: BrowserConfig) -> Result<(), String> {
+        if self.state.browser == config {
+            return Ok(());
+        }
+        self.state.browser = config;
         self.save()
     }
 
@@ -1758,6 +1791,18 @@ mod tests {
         let old: Model = serde_json::from_str(r#"{"id":"old"}"#).unwrap();
         assert_eq!(old.choices(), vec![Reasoning::Off]);
         assert_eq!(serde_json::to_string(&old).unwrap(), r#"{"id":"old"}"#);
+    }
+
+    #[test]
+    fn browser_settings_default_and_round_trip() {
+        let folder = tempfile::tempdir().unwrap();
+        fs::write(folder.path().join("state.json"), r#"{"browser":{"default_viewport":"phone"}}"#).unwrap();
+        let mut store = Store::open(folder.path()).unwrap();
+        assert!(store.browser_config().agent_opens_pane, "a missing field keeps its default");
+        assert_eq!(store.browser_config().default_viewport, wack_browser::Viewport::Phone);
+        store.set_browser_config(BrowserConfig { agent_opens_pane: false, default_viewport: wack_browser::Viewport::Tablet }).unwrap();
+        let reopened = Store::open(folder.path()).unwrap();
+        assert_eq!(reopened.browser_config(), &BrowserConfig { agent_opens_pane: false, default_viewport: wack_browser::Viewport::Tablet });
     }
 
     #[test]

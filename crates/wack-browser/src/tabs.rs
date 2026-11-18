@@ -26,7 +26,7 @@ use std::{
 use serde::{Deserialize, Serialize};
 use serde_json::Value;
 
-use crate::state::TabState;
+use crate::state::{TabState, Viewport};
 
 pub type TabId = u64;
 pub type BoxFuture<T> = Pin<Box<dyn Future<Output = T> + Send + 'static>>;
@@ -371,12 +371,17 @@ impl ChatTabs {
         self.cdp(id, "Emulation.setTouchEmulationEnabled", touch).await.map(|_| ())
     }
 
-    /// Opens a new tab at `url`. The address is not checked here: the agent's tools check it
-    /// first (`policy`), and the user may open anything.
+    /// Opens a new tab at `url`, laid out at the default size (Settings › Browser). The address
+    /// is not checked here: the agent's tools check it first (`policy`), and the user may open
+    /// anything.
     pub async fn open(&self, owner: Owner, url: &str) -> Result<Arc<Tab>, String> {
         let backend = self.backend()?.clone();
         let tab = Tab::new(owner);
-        tab.update(|state| state.set_address(url));
+        let viewport = default_viewport();
+        tab.update(|state| {
+            state.set_address(url);
+            state.viewport = viewport;
+        });
         // Held before the tab is listed, so nothing that sees it can start a second page.
         let made = {
             let making = tab.making.try_lock().map_err(|_| "The browser is busy with that tab.".to_string())?;
@@ -389,7 +394,13 @@ impl ChatTabs {
             made
         };
         match made {
-            Ok(()) => Ok(tab),
+            Ok(()) => {
+                if viewport != Viewport::Fit {
+                    // The pane re-applies it with its own scale once it shows the tab.
+                    let _ = self.apply_viewport(tab.id).await;
+                }
+                Ok(tab)
+            }
             Err(error) => {
                 self.forget(tab.id);
                 Err(error)
@@ -510,6 +521,19 @@ impl ChatTabs {
             self.set_shown(self.tabs().first().map(|tab| tab.id));
         }
     }
+}
+
+/// The size new tabs are laid out at (Settings › Browser), for every chat.
+static DEFAULT_VIEWPORT: std::sync::atomic::AtomicU8 = std::sync::atomic::AtomicU8::new(0);
+
+/// Sets the size new tabs open at. Tabs already open keep theirs.
+pub fn set_default_viewport(viewport: Viewport) {
+    let index = Viewport::ALL.iter().position(|known| *known == viewport).unwrap_or(0);
+    DEFAULT_VIEWPORT.store(index as u8, std::sync::atomic::Ordering::Relaxed);
+}
+
+pub fn default_viewport() -> Viewport {
+    Viewport::ALL.get(DEFAULT_VIEWPORT.load(std::sync::atomic::Ordering::Relaxed) as usize).copied().unwrap_or_default()
 }
 
 /// Two addresses name the same page: equal, or equal but for a trailing slash on an empty path.

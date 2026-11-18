@@ -7194,6 +7194,7 @@ name = "wack-core"
 version = "3.0.0-dev.0"
 dependencies = [
  "alacritty_terminal",
+ "async-trait",
  "image",
  "libc",
  "serde",

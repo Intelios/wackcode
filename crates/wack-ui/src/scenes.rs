@@ -612,6 +612,7 @@ pub fn all() -> Vec<Scene> {
         integrations: Default::default(),
         web: Default::default(),
         mcp: Default::default(),
+        browser: Default::default(),
                 };
                 cx.new(|_| Shell::showing(fixtures::sidebar(Selected::None), Screen::Settings(Box::new(data)))).into()
             },
@@ -675,6 +676,30 @@ pub fn all() -> Vec<Scene> {
             description: "Settings › Git over a backdrop.",
             size: size(px(1180.), px(1000.)),
             build: |_, cx| git_scene(true, Some(over(fixtures::backdrop(wack_core::Texture::None), cx)), cx),
+        },
+        Scene {
+            name: "settings-browser",
+            description: "Settings › Browser: the agent's tabs open the pane, new tabs at Fit, clearing and the engine.",
+            size: size(px(1180.), px(1000.)),
+            build: |_, cx| browser_settings_scene(crate::browser_page::Clearing::Idle, None, cx),
+        },
+        Scene {
+            name: "settings-browser-confirm",
+            description: "Settings › Browser asking to confirm clearing the browsing data.",
+            size: size(px(1180.), px(1000.)),
+            build: |_, cx| browser_settings_scene(crate::browser_page::Clearing::Confirming, None, cx),
+        },
+        Scene {
+            name: "settings-browser-pending",
+            description: "Settings › Browser after clearing while the browser ran: cookies gone, the rest at the next start.",
+            size: size(px(1180.), px(1000.)),
+            build: |_, cx| browser_settings_scene(crate::browser_page::Clearing::Pending, None, cx),
+        },
+        Scene {
+            name: "settings-browser-backdrop",
+            description: "Settings › Browser over a backdrop.",
+            size: size(px(1180.), px(1000.)),
+            build: |_, cx| browser_settings_scene(crate::browser_page::Clearing::Idle, Some(over(fixtures::backdrop(wack_core::Texture::None), cx)), cx),
         },
         Scene {
             name: "settings-integrations",
@@ -1456,6 +1481,7 @@ fn providers_scene(state: Providers, sidebar_hidden: bool, cx: &mut App) -> AnyV
         integrations: Default::default(),
         web: Default::default(),
         mcp: Default::default(),
+        browser: Default::default(),
     };
     cx.new(|_| {
         let shell = Shell::showing(fixtures::sidebar(Selected::None), Screen::Settings(Box::new(data)));
@@ -1480,6 +1506,7 @@ fn settings_scene(backdrop: Option<crate::backdrop::Picture>, cx: &mut App) -> A
         integrations: Default::default(),
         web: Default::default(),
         mcp: Default::default(),
+        browser: Default::default(),
     };
     cx.new(|_| {
         let shell = Shell::showing(fixtures::sidebar(Selected::None), Screen::Settings(Box::new(data)));
@@ -1707,6 +1734,7 @@ fn subagents_scene(scene: SubagentsScene, backdrop: Option<crate::backdrop::Pict
         integrations: Default::default(),
         web: Default::default(),
         mcp: Default::default(),
+        browser: Default::default(),
     };
     cx.new(|_| {
         let shell = Shell::showing(fixtures::sidebar(Selected::None), Screen::Settings(Box::new(data)));
@@ -1856,6 +1884,7 @@ fn memory_scene(scene: MemoryScene, backdrop: Option<crate::backdrop::Picture>, 
         integrations: Default::default(),
         web: Default::default(),
         mcp: Default::default(),
+        browser: Default::default(),
     };
     cx.new(|_| {
         let shell = Shell::showing(fixtures::sidebar(Selected::None), Screen::Settings(Box::new(data)));
@@ -2079,6 +2108,7 @@ fn skills_scene(scene: SkillsScene, backdrop: bool, cx: &mut App) -> AnyView {
         integrations: Default::default(),
         web: Default::default(),
         mcp: Default::default(),
+        browser: Default::default(),
     };
     cx.new(|_| {
         let shell = Shell::showing(fixtures::sidebar(Selected::None), Screen::Settings(Box::new(data)));
@@ -2134,6 +2164,7 @@ fn commands_scene(editing: bool, cx: &mut App) -> AnyView {
         integrations: Default::default(),
         web: Default::default(),
         mcp: Default::default(),
+        browser: Default::default(),
     };
     cx.new(|_| Shell::showing(fixtures::sidebar(Selected::None), Screen::Settings(Box::new(data)))).into()
 }
@@ -2258,6 +2289,7 @@ fn mcp_scene(scene: McpScene, backdrop: Option<crate::backdrop::Picture>, cx: &m
         integrations: Default::default(),
         web: Default::default(),
         mcp,
+        browser: Default::default(),
     };
     cx.new(|_| {
         let shell = Shell::showing(fixtures::sidebar(Selected::None), Screen::Settings(Box::new(data)));
@@ -2381,6 +2413,7 @@ fn web_scene(scene: WebScene, backdrop: Option<crate::backdrop::Picture>, cx: &m
         integrations: Default::default(),
         web,
         mcp: Default::default(),
+        browser: Default::default(),
     };
     cx.new(|_| {
         let shell = Shell::showing(fixtures::sidebar(Selected::None), Screen::Settings(Box::new(data)));
@@ -2437,6 +2470,7 @@ fn integrations_scene(scene: UsageScene, backdrop: Option<crate::backdrop::Pictu
         integrations: crate::integrations_page::IntegrationsData { status },
         web: Default::default(),
         mcp: Default::default(),
+        browser: Default::default(),
     };
     cx.new(|_| {
         let shell = Shell::showing(fixtures::sidebar(Selected::None), Screen::Settings(Box::new(data)));
@@ -2464,6 +2498,40 @@ fn git_scene(commit_attribution: bool, backdrop: Option<crate::backdrop::Picture
         integrations: Default::default(),
         web: Default::default(),
         mcp: Default::default(),
+        browser: Default::default(),
+    };
+    cx.new(|_| {
+        let shell = Shell::showing(fixtures::sidebar(Selected::None), Screen::Settings(Box::new(data)));
+        match backdrop {
+            Some(picture) => shell.with_backdrop(picture),
+            None => shell,
+        }
+    })
+    .into()
+}
+
+fn browser_settings_scene(clearing: crate::browser_page::Clearing, backdrop: Option<crate::backdrop::Picture>, cx: &mut App) -> AnyView {
+    let form = ProviderForm::new(cx);
+    let data = SettingsData {
+        section: Section::Browser,
+        providers: ProvidersData::new(&fixtures::connections(), |_| true, &form, cx),
+        appearance: fixtures::appearance(backdrop.clone(), cx),
+        tools: Default::default(),
+        memory: Default::default(),
+        skills: Default::default(),
+        commands: Default::default(),
+        subagents: Default::default(),
+        git: Default::default(),
+        integrations: Default::default(),
+        web: Default::default(),
+        mcp: Default::default(),
+        browser: crate::browser_page::BrowserData {
+            agent_opens_pane: true,
+            default_viewport: wack_browser::Viewport::Fit,
+            clearing,
+            version: wack_browser::cef::version().into(),
+            error: None,
+        },
     };
     cx.new(|_| {
         let shell = Shell::showing(fixtures::sidebar(Selected::None), Screen::Settings(Box::new(data)));

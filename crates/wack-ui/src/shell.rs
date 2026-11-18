@@ -1215,6 +1215,22 @@ impl Render for Shell {
                 .on_action(cx.listener(|shell, _: &ToggleCommitAttribution, _, cx| {
                     shell.with_app(cx, |app, cx| app.toggle_commit_attribution(cx))
                 }))
+                .on_action(cx.listener(|shell, _: &crate::actions::ToggleAgentOpensPane, _, cx| {
+                    shell.with_app(cx, |app, cx| app.toggle_agent_opens_pane(cx))
+                }))
+                .on_action(cx.listener(|shell, action: &crate::actions::ChooseDefaultViewport, _, cx| {
+                    let viewport = action.viewport;
+                    shell.with_app(cx, |app, cx| app.choose_default_viewport(viewport, cx))
+                }))
+                .on_action(cx.listener(|shell, _: &crate::actions::AskClearBrowsingData, _, cx| {
+                    shell.with_app(cx, |app, cx| app.ask_clear_browsing_data(true, cx))
+                }))
+                .on_action(cx.listener(|shell, _: &crate::actions::CancelClearBrowsingData, _, cx| {
+                    shell.with_app(cx, |app, cx| app.ask_clear_browsing_data(false, cx))
+                }))
+                .on_action(cx.listener(|shell, _: &crate::actions::ConfirmClearBrowsingData, _, cx| {
+                    shell.with_app(cx, |app, cx| app.clear_browsing_data(cx))
+                }))
                 .on_action(cx.listener(|_, action: &RevealUsageFolder, _, _| crate::memory_page::reveal(&action.path)))
                 .on_action(cx.listener(|shell, action: &SwitchSkill, _, cx| {
                     let (key, on) = (action.key.clone(), action.on);
@@ -1773,6 +1789,7 @@ fn live_view(app: &AppState, cx: &App) -> (SidebarData, Screen, StripData) {
                 integrations: crate::integrations_page::IntegrationsData { status: store.usage().status() },
                 web: app.web_data(cx),
                 mcp: app.mcp_data(),
+                browser: app.browser_data(),
             }))
         }
         Selection::NewChat(project) => match info(project) {

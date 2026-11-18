@@ -157,6 +157,9 @@ pub struct AppState {
     subagent_subscriptions: Vec<Subscription>,
     /// Settings › Git's last save failure, if any.
     pub git_error: Option<SharedString>,
+    /// Settings › Browser.
+    pub browser_error: Option<SharedString>,
+    pub browser_clearing: crate::browser_page::Clearing,
     /// Long-lived Build and Run PTY commands keyed by `(canonical_cwd, kind)`.
     runs: Runner,
     command_event_tx: mpsc::UnboundedSender<CommandEvent>,
@@ -289,6 +292,10 @@ impl AppState {
             }
         })
         .detach();
+        // Before anything can start the browser: a clear the running browser couldn't finish
+        // (Settings › Browser), and the size new tabs open at.
+        wack_browser::cef::finish_clearing(&store.browser_folder());
+        wack_browser::set_default_viewport(store.browser_config().default_viewport);
         let browser = crate::browser::engine(&store);
         let mut app = Self {
             store,
@@ -326,6 +333,8 @@ impl AppState {
             subagents: Default::default(),
             subagent_subscriptions: Vec::new(),
             git_error: None,
+            browser_error: None,
+            browser_clearing: Default::default(),
             runs,
             command_event_tx,
             new_chat_panes: HashMap::new(),
@@ -946,6 +955,57 @@ impl AppState {
         config.commit_attribution = !config.commit_attribution;
         self.git_error = self.store.set_git_config(config).err().map(Into::into);
         cx.notify();
+    }
+
+    /// Settings › Browser: whether the Browser pane opens when the agent opens a tab.
+    pub fn toggle_agent_opens_pane(&mut self, cx: &mut Context<Self>) {
+        let mut config = self.store.browser_config().clone();
+        config.agent_opens_pane = !config.agent_opens_pane;
+        self.browser_error = self.store.set_browser_config(config).err().map(Into::into);
+        cx.notify();
+    }
+
+    /// Settings › Browser: the size new tabs open at.
+    pub fn choose_default_viewport(&mut self, viewport: wack_browser::Viewport, cx: &mut Context<Self>) {
+        let mut config = self.store.browser_config().clone();
+        config.default_viewport = viewport;
+        self.browser_error = self.store.set_browser_config(config).err().map(Into::into);
+        wack_browser::set_default_viewport(self.store.browser_config().default_viewport);
+        cx.notify();
+    }
+
+    /// Settings › Browser: shows or takes back the confirm for clearing the browsing data.
+    pub fn ask_clear_browsing_data(&mut self, asking: bool, cx: &mut Context<Self>) {
+        self.browser_clearing = if asking { crate::browser_page::Clearing::Confirming } else { crate::browser_page::Clearing::Idle };
+        cx.notify();
+    }
+
+    /// Settings › Browser: clears the shared profile, as far as the running browser allows.
+    pub fn clear_browsing_data(&mut self, cx: &mut Context<Self>) {
+        use crate::browser_page::Clearing;
+        self.browser_clearing = match wack_browser::cef::clear_browsing_data() {
+            Ok(wack_browser::cef::Cleared::Everything) => Clearing::Cleared,
+            Ok(wack_browser::cef::Cleared::CookiesNow) => Clearing::Pending,
+            Err(message) => Clearing::Failed(message.into()),
+        };
+        cx.notify();
+    }
+
+    pub fn browser_data(&self) -> crate::browser_page::BrowserData {
+        use crate::browser_page::Clearing;
+        let config = self.store.browser_config();
+        // A clear left for the next start still shows after leaving the page.
+        let clearing = match &self.browser_clearing {
+            Clearing::Idle if wack_browser::cef::clearing_pending(&self.store.browser_folder()) => Clearing::Pending,
+            other => other.clone(),
+        };
+        crate::browser_page::BrowserData {
+            agent_opens_pane: config.agent_opens_pane,
+            default_viewport: config.default_viewport,
+            clearing,
+            version: wack_browser::cef::version().into(),
+            error: self.browser_error.clone(),
+        }
     }
 
     /// Changes how the app looks; the theme follows at once.
@@ -1759,6 +1819,12 @@ impl AppState {
         if section == Section::Git {
             self.git_error = None;
         }
+        if section == Section::Browser {
+            self.browser_error = None;
+            if !matches!(self.browser_clearing, crate::browser_page::Clearing::Pending) {
+                self.browser_clearing = Default::default();
+            }
+        }
         cx.notify();
     }
 
@@ -2402,6 +2468,19 @@ impl AppState {
                     ChatEvent::LayoutChanged => app.layout_changed(&id, cx),
                     ChatEvent::ModeChanged(mode) => app.set_chat_mode(&id, *mode, cx),
                     ChatEvent::TasksNews | ChatEvent::AgentsNews => app.wake(&id, cx),
+                    ChatEvent::AgentOpenedTab => {
+                        // Only that chat's panes: a chat in the background never takes the
+                        // window there.
+                        if app.store.browser_config().agent_opens_pane
+                            && let Some(session) = app.sessions.get(&id).cloned()
+                        {
+                            session.update(cx, |session, cx| {
+                                session.change_layout(cx, |layout| {
+                                    layout.open(crate::panes::PaneKind::Browser);
+                                })
+                            });
+                        }
+                    }
                     ChatEvent::BrowserTabsChanged(tabs) => {
                         let value = (!tabs.is_empty()).then(|| serde_json::to_value(tabs).ok()).flatten();
                         if let Err(message) = app.store.set_browser_tabs(&id, value) {

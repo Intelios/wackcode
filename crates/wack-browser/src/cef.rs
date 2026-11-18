@@ -1350,6 +1350,67 @@ pub fn focus(id: TabId) {
     }
 }
 
+/// What `clear_browsing_data` did.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum Cleared {
+    /// The browser hadn't started: the whole profile is gone.
+    Everything,
+    /// The browser is running, and CEF can't start again in the same process: cookies and
+    /// saved site logins are gone now, the rest of the profile when WackCode next starts.
+    CookiesNow,
+}
+
+/// The mark that the profile is to go before the browser next starts.
+const CLEAR_MARK: &str = "clear-profile";
+
+/// Clears the shared profile: cookies (the user's site sign-ins), storage, cache and history.
+/// Main thread only. Tabs and the addresses chats saved stay.
+pub fn clear_browsing_data() -> Result<Cleared, String> {
+    let root = CONFIG.get().ok_or("The browser was not configured.")?.root.clone();
+    if !RUNNING.load(Ordering::Acquire) {
+        remove_profile(&root)?;
+        return Ok(Cleared::Everything);
+    }
+    std::fs::write(root.join(CLEAR_MARK), b"").map_err(|_| "Could not mark the browser's data to be cleared.".to_string())?;
+    // Cookies only. With `clear_http_auth_credentials` and `close_all_connections` on the
+    // global request context as well, CEF 156 crashed in its message loop moments later
+    // (2026-11-18); neither is kept on disk, so the restart's wipe covers them.
+    if let Some(cookies) = cef::cookie_manager_get_global_manager(None) {
+        cookies.delete_cookies(None, None, None);
+    }
+    Ok(Cleared::CookiesNow)
+}
+
+/// Finishes a clear the running browser couldn't: at launch, before anything starts it.
+pub fn finish_clearing(root: &std::path::Path) {
+    if root.join(CLEAR_MARK).exists() && remove_profile(root).is_ok() {
+        let _ = std::fs::remove_file(root.join(CLEAR_MARK));
+    }
+}
+
+/// Whether part of a clear waits for WackCode's next start.
+pub fn clearing_pending(root: &std::path::Path) -> bool {
+    root.join(CLEAR_MARK).exists()
+}
+
+fn remove_profile(root: &std::path::Path) -> Result<(), String> {
+    match std::fs::remove_dir_all(root.join("profile")) {
+        Ok(()) => Ok(()),
+        Err(error) if error.kind() == std::io::ErrorKind::NotFound => Ok(()),
+        Err(_) => Err("Could not delete the browser's data folder.".into()),
+    }
+}
+
+/// The engine, as Settings › Browser names it: "Chromium 156.0.8078.96 (CEF 156.0.30)".
+pub fn version() -> String {
+    let raw = std::str::from_utf8(cef::sys::CEF_VERSION).unwrap_or("").trim_end_matches('\0');
+    let cef_part = raw.split('+').next().unwrap_or(raw);
+    match raw.split("chromium-").nth(1) {
+        Some(chromium) => format!("Chromium {chromium} (CEF {cef_part})"),
+        None => format!("CEF {cef_part}"),
+    }
+}
+
 /// Closes every page and stops CEF. Main thread only; call once, when the app quits.
 pub fn shutdown() {
     if !RUNNING.load(Ordering::Acquire) {

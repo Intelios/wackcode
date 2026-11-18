@@ -129,6 +129,13 @@ actions!(
         ToggleUsageRecording,
         /// Settings › Git: turns commit co-author attribution on or off.
         ToggleCommitAttribution,
+        /// Settings › Browser: whether the Browser pane opens when the agent opens a tab.
+        ToggleAgentOpensPane,
+        /// Settings › Browser: asks to clear the browsing data (a confirm follows).
+        AskClearBrowsingData,
+        CancelClearBrowsingData,
+        /// Settings › Browser: clears it.
+        ConfirmClearBrowsingData,
         /// Adds a picture to the backdrop's library, and shows it.
         ChooseBackdrop,
         /// Settings › Memory: the master switch.
@@ -655,6 +662,13 @@ pub struct EditSearchProvider {
 #[action(namespace = wackcode, no_json)]
 pub struct ChooseSearchKey {
     pub connection: Option<String>,
+}
+
+/// Settings › Browser: the size new tabs open at.
+#[derive(Clone, Debug, PartialEq, Action)]
+#[action(namespace = wackcode, no_json)]
+pub struct ChooseDefaultViewport {
+    pub viewport: wack_browser::Viewport,
 }
 
 /// Settings › Web: a Custom provider's request method.

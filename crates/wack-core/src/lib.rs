@@ -35,7 +35,7 @@ pub use title::AutoTitleConfig;
 pub use runner::{CommandEvent, CommandInfo, CommandSession, CommandStatus, Runner};
 pub use usage::{RunRecorder, UsageStatus, UsageWriter};
 pub use store::{
-    Chat, CommandKind, Connection, Model, ModelChoice, NewConnection, Project, Reasoning, Resolved, Store, SuggestionOrigin, Ui,
+    BrowserConfig, Chat, CommandKind, Connection, Model, ModelChoice, NewConnection, Project, Reasoning, Resolved, Store, SuggestionOrigin, Ui,
     title_from,
 };
 

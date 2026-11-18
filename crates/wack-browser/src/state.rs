@@ -181,7 +181,8 @@ pub struct Dialog {
 
 /// The size a page is laid out at. `Fit` follows the pane; the others are fixed device sizes,
 /// shown scaled down to fit and letterboxed, so the page's layout never changes with the pane.
-#[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq, serde::Serialize, serde::Deserialize)]
+#[serde(rename_all = "lowercase")]
 pub enum Viewport {
     #[default]
     Fit,

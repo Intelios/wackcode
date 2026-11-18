@@ -18,4 +18,4 @@ pub mod tabs;
 pub mod tools;
 
 pub use state::{ConsoleEntry, Dialog, DialogKind, Level, NetworkEntry, TabState, Viewport};
-pub use tabs::{Backend, ChatTabs, Nav, Owner, SavedTab, Signal, Tab, TabId};
+pub use tabs::{Backend, ChatTabs, Nav, Owner, SavedTab, Signal, Tab, TabId, default_viewport, set_default_viewport};

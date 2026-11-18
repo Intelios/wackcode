@@ -18,6 +18,7 @@ pub mod composer;
 pub mod conversation;
 pub mod edge_fade;
 pub mod fixtures;
+pub mod browser_page;
 pub mod git_page;
 pub mod glass;
 pub mod highlight;

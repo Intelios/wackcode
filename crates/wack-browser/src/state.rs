@@ -193,6 +193,9 @@ pub struct TabState {
     pub dialog: Option<Dialog>,
     /// Main-frame navigations so far; entries are labelled with it.
     pub page: u64,
+    /// How many times the page has taken keyboard focus (a click in it). The pane moves the app's
+    /// own focus to itself when this changes, so the app's keys act on the pane, not the composer.
+    pub focused: u64,
     pub console: Ring<ConsoleEntry>,
     pub network: Ring<NetworkEntry>,
 }
@@ -209,6 +212,7 @@ impl Default for TabState {
             load_error: None,
             dialog: None,
             page: 0,
+            focused: 0,
             console: Ring::new(CONSOLE_CAPACITY),
             network: Ring::new(NETWORK_CAPACITY),
         }

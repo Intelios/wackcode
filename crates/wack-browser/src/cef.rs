@@ -484,7 +484,62 @@ fn restack(id: TabId) {
     }
 }
 
-/// Moves a page onto `frame`, or parks it with `None`.
+/// The page's view, or one inside it, has the window's keyboard focus.
+fn holds_focus(view: &NSView) -> bool {
+    let Some(window) = view.window() else { return false };
+    let Some(responder) = window.firstResponder() else { return false };
+    // SAFETY: a plain class check and a view-hierarchy query on live AppKit objects.
+    unsafe {
+        let is_view: bool = msg_send![&*responder, isKindOfClass: objc2::class!(NSView)];
+        if !is_view {
+            return false;
+        }
+        let responder = &*(Retained::as_ptr(&responder) as *const NSView);
+        responder.isDescendantOf(view)
+    }
+}
+
+/// Before AppKit routes a press in `window` at `point` (window coordinates): if a page has the
+/// keyboard and the press is not on it, the app's view takes the keyboard back.
+fn before_press(window: *mut AnyObject, point: NSPoint) {
+    let Some(host) = host_view() else { return };
+    let Some(host_window) = host.window() else { return };
+    if Retained::as_ptr(&host_window) as *mut AnyObject != window {
+        return;
+    }
+    let ids: Vec<TabId> = with_main(|main| main.pages.keys().copied().collect());
+    let Some(page) = ids.into_iter().filter_map(view_of).find(|view| holds_focus(view)) else { return };
+    // SAFETY: hit-testing the live window's frame view, as AppKit is about to.
+    let on_page = unsafe {
+        let content: *mut AnyObject = msg_send![window, contentView];
+        let frame: *mut AnyObject = msg_send![content, superview];
+        let hit: *mut AnyObject = msg_send![frame, hitTest: point];
+        hit.as_ref().is_some_and(|hit| {
+            let hit = &*(hit as *const AnyObject as *const NSView);
+            hit.isDescendantOf(&page)
+        })
+    };
+    if !on_page {
+        host_window.makeFirstResponder(Some(&host));
+    }
+}
+
+/// Gives keyboard focus back to the app's own view when a page has it. Main thread only.
+pub fn release_focus() {
+    let Some(host) = host_view() else { return };
+    let ids: Vec<TabId> = with_main(|main| main.pages.keys().copied().collect());
+    for id in ids {
+        if let Some(view) = view_of(id)
+            && holds_focus(&view)
+            && let Some(window) = host.window()
+        {
+            window.makeFirstResponder(Some(&host));
+            return;
+        }
+    }
+}
+
+/// Moves a page onto `frame`, or parks it with `None`. A parked page never keeps the keyboard.
 fn position(id: TabId, frame: Option<Frame2>) {
     let (Some(view), Some(host)) = (view_of(id), host_view()) else {
         return;
@@ -506,6 +561,12 @@ fn position(id: TabId, frame: Option<Frame2>) {
         ),
         None => NSRect::new(NSPoint::new(PARK_X, 0.0), NSSize::new(width, height)),
     };
+    if frame.is_none()
+        && holds_focus(&view)
+        && let Some(window) = host.window()
+    {
+        window.makeFirstResponder(Some(&host));
+    }
     view.setFrame(rect);
     view.setHidden(false);
     view.setWantsLayer(true);
@@ -615,6 +676,30 @@ wrap_client! {
         }
         fn download_handler(&self) -> Option<DownloadHandler> {
             Some(WackDownloads::new(self.tab))
+        }
+        fn focus_handler(&self) -> Option<FocusHandler> {
+            Some(WackFocus::new(self.tab))
+        }
+    }
+}
+
+wrap_focus_handler! {
+    struct WackFocus {
+        tab: TabId,
+    }
+
+    impl FocusHandler {
+        // A parked page never takes the keyboard (Chromium focuses a page as it loads), or keys
+        // would go to a page nobody can see.
+        fn on_set_focus(&self, _browser: Option<&mut Browser>, _source: FocusSource) -> i32 {
+            let parked = with_main(|main| main.pages.get(&self.tab).is_none_or(|page| page.shown.is_none()));
+            i32::from(parked)
+        }
+
+        fn on_got_focus(&self, _browser: Option<&mut Browser>) {
+            if let Some(tab) = tab_of(self.tab) {
+                tab.update(|state| state.focused += 1);
+            }
         }
     }
 }
@@ -1021,9 +1106,9 @@ impl Backend for CefBackend {
                         .main_frame()
                         .ok_or("That tab has no page.")?
                         .load_url(Some(&CefString::from(url.as_str()))),
+                    Nav::Reload => browser.reload(),
                     Nav::Back => browser.go_back(),
                     Nav::Forward => browser.go_forward(),
-                    Nav::Reload => browser.reload(),
                     Nav::Stop => browser.stop_load(),
                 }
                 Ok(())

@@ -30,6 +30,8 @@ pub enum PaneKind {
     Tasks,
     /// The chat's sub-agents and their work.
     Agents,
+    /// The chat's browser tabs.
+    Browser,
 }
 
 impl PaneKind {
@@ -41,18 +43,19 @@ impl PaneKind {
             PaneKind::Run => "Run",
             PaneKind::Tasks => "Tasks",
             PaneKind::Agents => "Agents",
+            PaneKind::Browser => "Browser",
         }
     }
 
     /// One per chat: opening it again shows the one there is.
     pub fn single(self) -> bool {
-        matches!(self, PaneKind::Changes | PaneKind::Build | PaneKind::Run | PaneKind::Tasks | PaneKind::Agents)
+        matches!(self, PaneKind::Changes | PaneKind::Build | PaneKind::Run | PaneKind::Tasks | PaneKind::Agents | PaneKind::Browser)
     }
 
     /// Where a new pane of this kind opens.
     pub fn home(self) -> Dock {
         match self {
-            PaneKind::Changes | PaneKind::Agents => Dock::Right,
+            PaneKind::Changes | PaneKind::Agents | PaneKind::Browser => Dock::Right,
             PaneKind::Terminal | PaneKind::Build | PaneKind::Run | PaneKind::Tasks => Dock::Bottom,
         }
     }

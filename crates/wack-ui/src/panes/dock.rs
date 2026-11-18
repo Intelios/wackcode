@@ -293,6 +293,7 @@ fn stack_view(place: &StackPlace, stack: &Stack, panes: &ChatPanes, theme: &Them
                 PaneKind::Run => "pane-tab-run",
                 PaneKind::Tasks => "pane-tab-tasks",
                 PaneKind::Agents => "pane-tab-agents",
+                PaneKind::Browser => "pane-tab-browser",
             })
     });
     let add_terminal = (active.kind == PaneKind::Terminal).then(|| {
@@ -325,6 +326,7 @@ fn stack_view(place: &StackPlace, stack: &Stack, panes: &ChatPanes, theme: &Them
         Some(PaneModel::Build(model)) | Some(PaneModel::Run(model)) => model.clone().into_any_element(),
         Some(PaneModel::Tasks(model)) => model.clone().into_any_element(),
         Some(PaneModel::Agents(model)) => model.clone().into_any_element(),
+        Some(PaneModel::Browser(model)) => model.clone().into_any_element(),
         None => div().into_any_element(),
     };
     // The pane in front arrives from the side its dock opens on.

@@ -44,7 +44,7 @@ use crate::{
         ClosePaneId, CloseSettings, CloseTab, Compact, DeleteChat, DiscardConnection, EditConnection, ToggleConnectionKey, EqualizeSplit, FocusNext, FocusPrevious, MovePane, AddModelRow, RemoveModelRow, SaveCommandEditor, SaveConnection,
         NewChat, NewChatIn, NewTerminal, NewTerminalWith, NextTab, OpenEffortMenu, OpenModelMenu, OpenSettings,
         OpenSettingsSection, PinProject, PreviousTab, RemoveConnection, RemovePicture, ShowCommandOutput, ShowPicture, RemoveProject, ResetDockSize,
-        PickCommand, SelectChat, Send, Stop, StopCommand, MoveToBackground, ToggleTasks, ToggleTasksPane, StopTask, ShowTask, ToggleAgentsPane, ShowAgent, StopAgent, ToggleChanges, ToggleProject, ToggleSidebar, ToggleTerminal, TriggerProjectCommand, Unqueue,
+        PickCommand, SelectChat, Send, Stop, StopCommand, MoveToBackground, ToggleTasks, ToggleTasksPane, StopTask, ShowTask, ToggleAgentsPane, ToggleBrowserPane, ShowAgent, StopAgent, ToggleChanges, ToggleProject, ToggleSidebar, ToggleTerminal, TriggerProjectCommand, Unqueue,
         ToggleAutoTitles, ToggleTitleModels, ChooseTitleModel, RenameChat, RenameChatAt, CancelRename, ToggleModelReasoning,
         StartSuggestion, DismissSuggestion, CopySuggestion, OpenChat,
         ToggleModelEffort, SwitchSkill, SwitchSkillFolder, RemoveSkillFolder, OpenSkill, CopySkill, ChooseSkillUse, NewSkill, SaveSkill,
@@ -1397,6 +1397,7 @@ impl Render for Shell {
                 }))
                 .on_action(cx.listener(|shell, _: &ToggleTasksPane, window, cx| shell.toggle_pane(PaneKind::Tasks, window, cx)))
                 .on_action(cx.listener(|shell, _: &ToggleAgentsPane, window, cx| shell.toggle_pane(PaneKind::Agents, window, cx)))
+                .on_action(cx.listener(|shell, _: &ToggleBrowserPane, window, cx| shell.toggle_pane(PaneKind::Browser, window, cx)))
                 .on_action(cx.listener(|shell, action: &ShowAgent, _, cx| {
                     let id = action.id.to_string();
                     shell.change_layout(cx, |layout| layout.open(PaneKind::Agents));
@@ -1623,12 +1624,20 @@ impl Render for Shell {
                 .bg(if over_picture { theme.window } else { theme.sidebar })
                 .text_color(theme.text)
                 .typography(Type::Ui)
+                // Browser pages are placed by what this frame painted between these two.
+                .child(present_mark(crate::browser::begin_frame))
                 .children(behind)
                 .children(sidebar)
                 .child(main)
-                .children(lights),
+                .children(lights)
+                .child(present_mark(crate::browser::end_frame)),
         )
     }
+}
+
+/// An empty element whose paint registers a presentation callback, at its place in paint order.
+fn present_mark(mark: fn(&mut Window)) -> impl IntoElement {
+    gpui::canvas(|_, _, _| (), move |_, _, window, _| mark(window)).absolute().size_0()
 }
 
 /// The words at the right of a chat's title strip that show and hide its panes.

@@ -30,6 +30,8 @@ actions!(
         ToggleTasksPane,
         /// Show the Agents pane: the chat's sub-agents and their work.
         ToggleAgentsPane,
+        /// Show the Browser pane: the chat's browser tabs.
+        ToggleBrowserPane,
         /// Summarise the current chat's older messages now.
         Compact,
         /// Step back: closes a menu or Settings, or stops the run.
@@ -827,6 +829,7 @@ pub fn init(cx: &mut App) {
         KeyBinding::new("cmd-shift-g", ToggleChanges, Some(CONTEXT)),
         KeyBinding::new("cmd-b", MoveToBackground, Some(CONTEXT)),
         KeyBinding::new("cmd-shift-a", ToggleAgentsPane, Some(CONTEXT)),
+        KeyBinding::new("cmd-shift-b", ToggleBrowserPane, Some(CONTEXT)),
         KeyBinding::new("ctrl-`", ToggleTerminal, Some(CONTEXT)),
         // macOS may report ⌃⇧` as either.
         KeyBinding::new("ctrl-shift-`", NewTerminal, Some(CONTEXT)),

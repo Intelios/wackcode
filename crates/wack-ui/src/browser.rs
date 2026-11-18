@@ -8,12 +8,20 @@
 //! - Making the engine starts nothing: CEF starts the first time a tab is opened.
 //! - The overlay plane is turned on only when a page is first shown, so the app draws exactly as
 //!   before until the browser is used.
+//! - A page is on screen only while a Browser pane painted its place in the frame that reached
+//!   the screen. Anything else (the pane closed, another chat, Settings) parks it, still rendering
+//!   for the agent. The bookkeeping runs in presentation callbacks, never in paint, because a
+//!   cached view replays its callbacks without painting again: `begin_frame` is painted first in
+//!   the window, each pane's `show` marks its page, and `end_frame`, painted last, parks the rest.
 
-use std::sync::Arc;
+use std::{cell::RefCell, collections::HashSet, sync::Arc};
 
-use gpui::Window;
+use gpui::{Bounds, Pixels, Window};
 use raw_window_handle::{HasWindowHandle, RawWindowHandle};
-use wack_browser::{Backend, cef::EngineConfig};
+use wack_browser::{
+    Backend, TabId,
+    cef::{EngineConfig, Frame2},
+};
 use wack_core::Store;
 
 pub fn engine(store: &Store) -> Arc<dyn Backend> {
@@ -49,4 +57,76 @@ pub fn enable_overlay(window: &Window) -> Result<(), String> {
     };
     wack_browser::cef::set_host(view, overlay.unwrap_or(std::ptr::null_mut()));
     Ok(())
+}
+
+#[derive(Default)]
+struct Presented {
+    /// Pages placed in the frame being presented.
+    marked: HashSet<TabId>,
+    /// Pages on screen after the last frame.
+    shown: HashSet<TabId>,
+    /// Whether the overlay plane is on, or why it could not be turned on.
+    overlay: Option<Result<(), String>>,
+}
+
+thread_local! {
+    static PRESENTED: RefCell<Presented> = RefCell::default();
+}
+
+/// Paint first in the window: starts the frame's bookkeeping.
+pub fn begin_frame(window: &mut Window) {
+    window.on_present(|| PRESENTED.with(|presented| presented.borrow_mut().marked.clear()));
+}
+
+/// Paint last in the window: parks every page that was on screen and was not placed this frame.
+pub fn end_frame(window: &mut Window) {
+    window.on_present(|| {
+        let parked: Vec<TabId> = PRESENTED.with(|presented| {
+            let mut presented = presented.borrow_mut();
+            let parked = presented.shown.difference(&presented.marked).copied().collect();
+            presented.shown = presented.marked.clone();
+            parked
+        });
+        for id in parked {
+            wack_browser::cef::place(id, None);
+        }
+    });
+}
+
+/// Puts `tab`'s page at `bounds` (window points) when this frame reaches the screen. Call from a
+/// paint pass. Errs when the window could not be prepared for pages; the page stays parked then.
+pub fn show(window: &mut Window, tab: TabId, bounds: Bounds<Pixels>, corner_radius: f32) -> Result<(), String> {
+    let overlay = PRESENTED.with(|presented| presented.borrow().overlay.clone());
+    let overlay = match overlay {
+        Some(overlay) => overlay,
+        None => {
+            let overlay = enable_overlay(window);
+            PRESENTED.with(|presented| presented.borrow_mut().overlay = Some(overlay.clone()));
+            overlay
+        }
+    };
+    overlay?;
+    let frame = Frame2 {
+        x: f64::from(f32::from(bounds.origin.x)),
+        y: f64::from(f32::from(bounds.origin.y)),
+        width: f64::from(f32::from(bounds.size.width)),
+        height: f64::from(f32::from(bounds.size.height)),
+        corner_radius: f64::from(corner_radius),
+    };
+    window.on_present(move || {
+        PRESENTED.with(|presented| presented.borrow_mut().marked.insert(tab));
+        wack_browser::cef::place(tab, Some(frame));
+    });
+    Ok(())
+}
+
+/// Takes the keyboard back from a page, before the app moves its own focus to a field. (A press
+/// outside the page does this by itself, in the engine.)
+pub fn release_page_focus() {
+    wack_browser::cef::release_focus();
+}
+
+/// Hands keyboard focus to a shown page.
+pub fn focus_page(tab: TabId) {
+    wack_browser::cef::focus(tab);
 }

@@ -15,7 +15,7 @@ url.workspace = true
 libc.workspace = true
 objc2 = "0.6"
 objc2-foundation = { version = "0.3", default-features = false, features = ["std", "NSString", "NSArray", "NSGeometry", "NSObjCRuntime"] }
-objc2-app-kit = { version = "0.3", default-features = false, features = ["std", "NSView", "NSResponder", "NSApplication", "NSEvent", "NSGraphics"] }
+objc2-app-kit = { version = "0.3", default-features = false, features = ["std", "NSView", "NSResponder", "NSApplication", "NSEvent", "NSGraphics", "NSWindow"] }
 
 [dev-dependencies]
 tokio = { workspace = true, features = ["test-util"] }

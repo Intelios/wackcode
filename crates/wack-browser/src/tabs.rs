@@ -8,6 +8,8 @@
 //!   or the last handle going away (the chat deleted). Nothing a view does recreates it.
 //! - Opening the address a tab already shows is not a reload (`navigate`).
 //! - Tab ids are unique for the life of the app and never reused.
+//! - A tab has at most one page: making it is exclusive per tab (`Tab::making`), so a view that
+//!   asks for a page while `open` is still making one waits for it rather than making a second.
 //! - Saved tabs come back lazily: `restore` lists them, and the engine makes a page only when one
 //!   is shown or used (`ensure_live`), so reopening a chat starts no browser on its own.
 //! - The engine is reached only through `Backend`, so every rule here is tested without CEF.
@@ -78,6 +80,8 @@ pub struct Tab {
     pub owner: Owner,
     state: Mutex<TabState>,
     live: AtomicBool,
+    /// Held while the engine makes this tab's page.
+    making: tokio::sync::Mutex<()>,
     user_control: AtomicBool,
     agent_driving: AtomicBool,
     notify: Mutex<Option<Notify>>,
@@ -92,6 +96,7 @@ impl Tab {
             owner,
             state: Mutex::new(TabState::default()),
             live: AtomicBool::new(false),
+            making: tokio::sync::Mutex::new(()),
             user_control: AtomicBool::new(false),
             // An agent's tab is the agent's from its first load, so the address policy covers it.
             agent_driving: AtomicBool::new(agents),
@@ -320,11 +325,18 @@ impl ChatTabs {
         let backend = self.backend()?.clone();
         let tab = Tab::new(owner);
         tab.update(|state| state.set_address(url));
-        self.adopt(&tab);
-        if self.shown().is_none() {
-            self.set_shown(Some(tab.id));
-        }
-        match backend.create(tab.clone(), url.to_string()).await {
+        // Held before the tab is listed, so nothing that sees it can start a second page.
+        let made = {
+            let making = tab.making.try_lock().map_err(|_| "The browser is busy with that tab.".to_string())?;
+            self.adopt(&tab);
+            if self.shown().is_none() {
+                self.set_shown(Some(tab.id));
+            }
+            let made = backend.create(tab.clone(), url.to_string()).await;
+            drop(making);
+            made
+        };
+        match made {
             Ok(()) => Ok(tab),
             Err(error) => {
                 self.forget(tab.id);
@@ -372,6 +384,7 @@ impl ChatTabs {
         let tab = self
             .get(id)
             .ok_or_else(|| "That tab is closed.".to_string())?;
+        let making = tab.making.lock().await;
         if !tab.is_live() {
             let url = tab.state().url.clone();
             let url = if url.is_empty() {
@@ -381,6 +394,7 @@ impl ChatTabs {
             };
             self.backend()?.create(tab.clone(), url).await?;
         }
+        drop(making);
         Ok(tab)
     }
 
@@ -465,6 +479,8 @@ pub(crate) mod tests {
     pub struct FakeBackend {
         pub calls: StdMutex<Vec<String>>,
         pub fail_create: AtomicBool,
+        /// Makes pages after a pause, as the real engine does.
+        pub slow: AtomicBool,
     }
 
     impl Backend for FakeBackend {
@@ -474,7 +490,11 @@ pub(crate) mod tests {
                 .unwrap()
                 .push(format!("create {} {url}", tab.id));
             let fail = self.fail_create.load(Ordering::Relaxed);
+            let slow = self.slow.load(Ordering::Relaxed);
             Box::pin(async move {
+                if slow {
+                    tokio::time::sleep(std::time::Duration::from_millis(10)).await;
+                }
                 if fail {
                     return Err("engine failed".into());
                 }
@@ -670,6 +690,26 @@ pub(crate) mod tests {
         let user = tabs.open(Owner::User, "https://c.example/").await.unwrap();
         assert!(agent.agent_driving() && sub.agent_driving());
         assert!(!user.agent_driving());
+    }
+
+    #[tokio::test]
+    async fn a_page_asked_for_while_open_makes_it_is_made_once() {
+        let backend = Arc::new(FakeBackend::default());
+        backend.slow.store(true, Ordering::Relaxed);
+        let tabs = ChatTabs::new(Some(backend.clone()));
+        // A view that sees the new tab before its page exists asks for one, as the pane does.
+        let view = tabs.clone();
+        tabs.set_observer(move |signal| {
+            if let Signal::Opened(id) = signal {
+                let view = view.clone();
+                tokio::spawn(async move { view.ensure_live(id).await.map(|_| ()) });
+            }
+        });
+        let tab = tabs.open(Owner::User, "https://a.example/").await.unwrap();
+        tokio::time::sleep(std::time::Duration::from_millis(50)).await;
+        let calls = backend.calls.lock().unwrap().clone();
+        assert_eq!(calls.iter().filter(|call| call.starts_with("create")).count(), 1, "{calls:?}");
+        assert!(tab.is_live());
     }
 
     #[test]

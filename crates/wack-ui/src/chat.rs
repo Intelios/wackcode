@@ -123,6 +123,7 @@ pub struct ChatSession {
     pub tabs: wack_browser::ChatTabs,
     _tasks_watch: Task<()>,
     _agents_watch: Task<()>,
+    _browser_watch: Task<()>,
 }
 
 /// A question the agent is waiting on, and the answers so far.
@@ -213,6 +214,9 @@ impl ChatSession {
         agents.restore(saved_agents);
         let agents_watch = watch_agents(&agents, cx);
         panes.set_agents(agents.clone());
+        let tabs = wack_browser::ChatTabs::new(Some(browser));
+        let browser_watch = watch_browser(&tabs, cx);
+        panes.set_browser(tabs.clone());
         let mut chat = Self {
             id: id.to_string(),
             cwd,
@@ -243,9 +247,10 @@ impl ChatSession {
             wakes: 0,
             wake_paused: false,
             agents,
-            tabs: wack_browser::ChatTabs::new(Some(browser)),
+            tabs,
             _tasks_watch: tasks_watch,
             _agents_watch: agents_watch,
+            _browser_watch: browser_watch,
         };
         chat.conversation.agents = chat.agent_rows();
         chat.refresh_from(0);
@@ -946,6 +951,25 @@ fn watch_tasks(tasks: &Tasks, cx: &mut Context<ChatSession>) -> Task<()> {
 
 /// Redraws the chat as its sub-agents work, and tells the app when one in the background has
 /// reported. While any works, it also redraws each second, so their times keep counting.
+/// Redraws the Browser pane as the chat's tabs change. A page sends many events (every request,
+/// every console line), so they are taken in batches, at most ten redraws a second.
+fn watch_browser(tabs: &wack_browser::ChatTabs, cx: &mut Context<ChatSession>) -> Task<()> {
+    let (sender, mut receiver) = mpsc::unbounded::<wack_browser::Signal>();
+    tabs.set_observer(move |signal| {
+        let _ = sender.unbounded_send(signal);
+    });
+    cx.spawn(async move |this, cx| {
+        while receiver.next().await.is_some() {
+            while receiver.try_recv().is_ok() {}
+            let kept = this.update(cx, |chat, cx| chat.panes.refresh_browser(cx));
+            if kept.is_err() {
+                return;
+            }
+            cx.background_executor().timer(Duration::from_millis(100)).await;
+        }
+    })
+}
+
 fn watch_agents(agents: &Agents, cx: &mut Context<ChatSession>) -> Task<()> {
     let (sender, mut receiver) = mpsc::unbounded::<AgentSignal>();
     agents.set_observer(move |signal| {

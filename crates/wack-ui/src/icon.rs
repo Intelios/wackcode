@@ -14,6 +14,18 @@ pub enum Icon {
     /// A flagged problem, on a suggestion card.
     Alert,
     ArrowUp,
+    /// Back, in the browser.
+    ArrowLeft,
+    /// Forward, in the browser.
+    ArrowRight,
+    /// Reload a page.
+    Reload,
+    /// A web page.
+    Globe,
+    /// The agent's pointer, and taking control of a page from it.
+    Cursor,
+    /// A page's viewport size.
+    Phone,
     /// A skill.
     Book,
     /// Memory: a note kept for later chats.
@@ -66,6 +78,12 @@ pub enum Icon {
 const FILES: &[(&str, &[u8])] = &[
     ("icons/alert.svg", include_bytes!("../assets/icons/alert.svg")),
     ("icons/arrow-up.svg", include_bytes!("../assets/icons/arrow-up.svg")),
+    ("icons/arrow-left.svg", include_bytes!("../assets/icons/arrow-left.svg")),
+    ("icons/arrow-right.svg", include_bytes!("../assets/icons/arrow-right.svg")),
+    ("icons/reload.svg", include_bytes!("../assets/icons/reload.svg")),
+    ("icons/globe.svg", include_bytes!("../assets/icons/globe.svg")),
+    ("icons/cursor.svg", include_bytes!("../assets/icons/cursor.svg")),
+    ("icons/phone.svg", include_bytes!("../assets/icons/phone.svg")),
     ("icons/book.svg", include_bytes!("../assets/icons/book.svg")),
     ("icons/bookmark.svg", include_bytes!("../assets/icons/bookmark.svg")),
     ("icons/brain.svg", include_bytes!("../assets/icons/brain.svg")),
@@ -108,6 +126,12 @@ impl Icon {
         match self {
             Icon::Alert => "icons/alert.svg",
             Icon::ArrowUp => "icons/arrow-up.svg",
+            Icon::ArrowLeft => "icons/arrow-left.svg",
+            Icon::ArrowRight => "icons/arrow-right.svg",
+            Icon::Reload => "icons/reload.svg",
+            Icon::Globe => "icons/globe.svg",
+            Icon::Cursor => "icons/cursor.svg",
+            Icon::Phone => "icons/phone.svg",
             Icon::Book => "icons/book.svg",
             Icon::Brain => "icons/brain.svg",
             Icon::Branch => "icons/branch.svg",
@@ -184,6 +208,12 @@ mod tests {
     fn every_icon_has_a_file() {
         for icon in [
             Icon::ArrowUp,
+            Icon::ArrowLeft,
+            Icon::ArrowRight,
+            Icon::Reload,
+            Icon::Globe,
+            Icon::Cursor,
+            Icon::Phone,
             Icon::Bookmark,
             Icon::Brain,
             Icon::Branch,

@@ -197,7 +197,7 @@ const START: u64 = 1_800_000_000_000;
 fn call(conversation: &mut Conversation, id: &str, name: &str, input: serde_json::Value, result: Option<&str>, at: u64) {
     conversation.apply(&Event::ToolCall { id: id.into(), name: name.into(), input }, at);
     if let Some(content) = result {
-        conversation.apply(&Event::ToolResult { id: id.into(), name: name.into(), content: content.into(), is_error: false }, at);
+        conversation.apply(&Event::ToolResult { id: id.into(), name: name.into(), content: content.into(), is_error: false, images: Vec::new() }, at);
     }
 }
 
@@ -1060,4 +1060,47 @@ pub fn attachments(count: usize) -> Vec<crate::attachments::Attachment> {
             crate::attachments::Attachment::from_bytes(png, names[index % names.len()]).unwrap()
         })
         .collect()
+}
+
+/// Saved pictures for transcript scenes: `count` made-up screenshots with ids, as the session
+/// keeps them.
+pub fn saved_pictures(count: usize, label: &str) -> Vec<wack_core::llm::Image> {
+    attachments(count)
+        .into_iter()
+        .enumerate()
+        .map(|(index, attachment)| {
+            let mut image = attachment.image();
+            image.label = Some(format!("{label} {}", index + 1));
+            image.id = Some(format!("{:0>16}", format!("a{index}b{}", label.len())));
+            image
+        })
+        .collect()
+}
+
+/// A chat about pictures: the user sends two with words, the agent takes screenshots, and its
+/// reply shows one of them; the work log is open so the screenshots show under their step.
+pub fn pictures_turn() -> Vec<Item> {
+    use crate::pictures::Picture;
+    let mut conversation = Conversation::default();
+    let attached = saved_pictures(2, "mockup");
+    let pictures: Vec<Picture> = attached.iter().map(Picture::of_image).collect();
+    conversation.send_pictures("Make the login page match these mockups.", None, pictures, START);
+    let input = serde_json::json!({ "steps": [{ "tool": "browser_screenshot", "input": {} }] });
+    conversation.apply(&Event::ToolCall { id: "shot-1".into(), name: "browser_screenshot".into(), input }, START + 4_000);
+    let shots = saved_pictures(3, "screenshot of http://localhost:3000/login");
+    let reference = wack_core::images::reference(shots[2].id.as_deref().unwrap());
+    conversation.apply(
+        &Event::ToolResult {
+            id: "shot-1".into(),
+            name: "browser_screenshot".into(),
+            content: "Screenshot, 1280 × 800 pixels.".into(),
+            is_error: false,
+            images: shots,
+        },
+        START + 6_000,
+    );
+    conversation.apply(&Event::Text(format!("The page now matches the mockups: the form is centred and the button is full width.\n\n![The login page now]({reference})")), START + 9_000);
+    conversation.apply(&Event::Reply { usage: None }, START + 9_000);
+    conversation.finish(&Ok(wack_core::Outcome::Done), START + 9_000);
+    items(&conversation, &["turn-1"], START + 10_000)
 }

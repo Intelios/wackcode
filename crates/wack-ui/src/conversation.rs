@@ -27,14 +27,18 @@ use wack_core::{
     todo::{TODO_STATE, TodoList},
 };
 
-use crate::suggestions::{self, Started, View as SuggestionView};
+use crate::{
+    pictures::Picture,
+    suggestions::{self, Started, View as SuggestionView},
+};
 
 #[derive(Clone, Debug, PartialEq)]
 pub enum Entry {
     /// What the user sent. For a slash command `text` is the expanded prompt the model got and
     /// `command` what the user typed, which the transcript shows instead. `suggestion` is the
     /// suggested task the message started, its tail already split from `text`.
-    Prompt { text: String, steered: bool, command: Option<CommandUse>, suggestion: Option<Started> },
+    /// `pictures` are the ones the user attached.
+    Prompt { text: String, steered: bool, command: Option<CommandUse>, suggestion: Option<Started>, pictures: Vec<Picture> },
     Turn(Turn),
     /// The older conversation was summarised here.
     Compacted,
@@ -117,6 +121,8 @@ pub struct ToolStep {
 pub struct ToolResult {
     pub text: String,
     pub is_error: bool,
+    /// The pictures it returned, as the model was sent them.
+    pub pictures: Vec<Picture>,
 }
 
 #[derive(Clone, Debug, PartialEq)]
@@ -162,6 +168,9 @@ pub struct Conversation {
     pub suggestion_view: SuggestionView,
     /// MCP notes saved before the message of the run they belong to, held for its turn.
     held_notices: Vec<String>,
+    /// Every saved picture of the conversation, oldest first: what a reply's `img:` reference
+    /// is looked up in.
+    pub pictures: Vec<Picture>,
 }
 
 impl Turn {
@@ -214,10 +223,10 @@ impl Turn {
         }
     }
 
-    fn push_result(&mut self, id: &str, text: &str, is_error: bool) {
+    fn push_result(&mut self, id: &str, text: &str, is_error: bool, pictures: Vec<Picture>) {
         self.thinking_open = false;
         if let Some(tool) = self.tool(id) {
-            tool.result = Some(ToolResult { text: text.to_string(), is_error });
+            tool.result = Some(ToolResult { text: text.to_string(), is_error, pictures });
         }
     }
 
@@ -278,18 +287,25 @@ impl Conversation {
                     .content
                     .iter()
                     .filter_map(|block| match block {
-                        Block::ToolResult { tool_use_id, content, is_error, .. } => Some((tool_use_id, content, *is_error)),
+                        Block::ToolResult { tool_use_id, content, is_error, images } => {
+                            Some((tool_use_id, content, *is_error, images.iter().map(Picture::of_image).collect::<Vec<_>>()))
+                        }
                         _ => None,
                     })
                     .collect();
                 let text = message.text();
+                let attached = Picture::of_message(&message.content);
+                self.remember(&attached);
                 if results.is_empty() {
-                    self.begin(&text, false, at, false, command);
+                    self.begin(&text, false, at, false, command, attached);
                     return;
                 }
+                for (.., pictures) in &results {
+                    self.remember(pictures);
+                }
                 if let Some(turn) = self.current() {
-                    for (id, content, is_error) in results {
-                        turn.push_result(id, content, is_error);
+                    for (id, content, is_error, pictures) in results {
+                        turn.push_result(id, content, is_error, pictures);
                     }
                     if at.is_some() {
                         turn.ended = at;
@@ -297,7 +313,7 @@ impl Conversation {
                 }
                 // Text beside tool results was sent while the agent worked.
                 if !text.trim().is_empty() {
-                    self.begin(&text, true, at, false, None);
+                    self.begin(&text, true, at, false, None, attached);
                 }
             }
             Role::Assistant => {
@@ -441,7 +457,16 @@ impl Conversation {
         self.entries.push(Entry::Turn(Turn::new(Some(now), true)));
     }
 
-    fn begin(&mut self, text: &str, steered: bool, at: Option<u64>, live: bool, command: Option<CommandUse>) {
+    /// Keeps the saved pictures among `pictures` for replies to name.
+    fn remember(&mut self, pictures: &[Picture]) {
+        for picture in pictures {
+            if picture.id.is_some() && !self.pictures.iter().any(|known| known.key == picture.key) {
+                self.pictures.push(picture.clone());
+            }
+        }
+    }
+
+    fn begin(&mut self, text: &str, steered: bool, at: Option<u64>, live: bool, command: Option<CommandUse>, pictures: Vec<Picture>) {
         // A turn left waiting after news, which nothing answered, is not shown.
         if let Some(Entry::Turn(turn)) = self.entries.last()
             && !turn.live
@@ -462,7 +487,7 @@ impl Conversation {
             self.started.insert(started.id.clone());
             self.suggestion_view.queued.remove(&started.id);
         }
-        self.entries.push(Entry::Prompt { text, steered, command, suggestion });
+        self.entries.push(Entry::Prompt { text, steered, command, suggestion, pictures });
         let mut turn = Turn::new(at, live);
         turn.notices = std::mem::take(&mut self.held_notices);
         self.entries.push(Entry::Turn(turn));
@@ -482,17 +507,22 @@ impl Conversation {
 
     /// The user sent a message and a run is starting.
     pub fn send(&mut self, text: &str, now: u64) {
-        self.begin(text, false, Some(now), true, None);
+        self.begin(text, false, Some(now), true, None, Vec::new());
     }
 
     /// The user sent a slash command: `text` is what the model gets.
     pub fn send_command(&mut self, text: &str, command: CommandUse, now: u64) {
-        self.begin(text, false, Some(now), true, Some(command));
+        self.begin(text, false, Some(now), true, Some(command), Vec::new());
+    }
+
+    /// The user sent pictures, with words or a slash command.
+    pub fn send_pictures(&mut self, text: &str, command: Option<CommandUse>, pictures: Vec<Picture>, now: u64) {
+        self.begin(text, false, Some(now), true, command, pictures);
     }
 
     pub fn apply(&mut self, event: &Event, now: u64) {
         if let Event::Steered(text) = event {
-            self.begin(text, true, Some(now), true, None);
+            self.begin(text, true, Some(now), true, None, Vec::new());
             return;
         }
         if let Event::Noted { tag, text } = event {
@@ -504,6 +534,10 @@ impl Conversation {
             }
             return;
         }
+        if let Event::ToolResult { images, .. } = event {
+            let pictures: Vec<Picture> = images.iter().map(Picture::of_image).collect();
+            self.remember(&pictures);
+        }
         let Some(turn) = self.current() else {
             return;
         };
@@ -513,7 +547,10 @@ impl Conversation {
             Event::ToolStart { id, name } => turn.push_tool(id, name, None),
             Event::ToolInput { .. } => {}
             Event::ToolCall { id, name, input } => turn.push_tool(id, name, Some(input.clone())),
-            Event::ToolResult { id, content, is_error, .. } => turn.push_result(id, content, *is_error),
+            Event::ToolResult { id, content, is_error, images, .. } => {
+                let pictures: Vec<Picture> = images.iter().map(Picture::of_image).collect();
+                turn.push_result(id, content, *is_error, pictures);
+            }
             Event::Reply { usage } => turn.add_usage(*usage),
             Event::Retrying(notice) => turn.retrying = Some(retry_text(notice)),
             Event::Compacting => {
@@ -745,7 +782,7 @@ mod tests {
         }
         conversation.apply(&Event::Retrying(RetryNotice { attempt: 2, wait: std::time::Duration::from_secs(2), reason: "Rate limited.".into() }), 250);
         assert_eq!(conversation.last_turn().unwrap().retrying.as_deref(), Some("Rate limited: trying again in 2s (attempt 2)"));
-        conversation.apply(&Event::ToolResult { id: "t".into(), name: "bash".into(), content: "a\nb".into(), is_error: false }, 300);
+        conversation.apply(&Event::ToolResult { id: "t".into(), name: "bash".into(), content: "a\nb".into(), is_error: false, images: Vec::new() }, 300);
         conversation.apply(&Event::Text("All good.".into()), 400);
         conversation.finish(&Ok(Outcome::Stopped), 500);
         let turn = conversation.last_turn().unwrap();
@@ -787,7 +824,7 @@ mod tests {
         let mut conversation = Conversation::default();
         conversation.send("Build it", 1);
         conversation.apply(&Event::ToolCall { id: "a".into(), name: "bash".into(), input: json!({ "command": "make" }) }, 2);
-        conversation.apply(&Event::ToolResult { id: "a".into(), name: "bash".into(), content: "ok".into(), is_error: false }, 3);
+        conversation.apply(&Event::ToolResult { id: "a".into(), name: "bash".into(), content: "ok".into(), is_error: false, images: Vec::new() }, 3);
         conversation.apply(&Event::Noted { tag: "task:ab12:end".into(), text: "Background task ab12 (`npm test`) finished: exit code 0 after 4s.".into() }, 4);
         conversation.apply(&Event::Noted { tag: "contract:plan".into(), text: "Plan rules".into() }, 4);
         let Some(Entry::Turn(turn)) = conversation.entries.last() else { panic!("no turn") };

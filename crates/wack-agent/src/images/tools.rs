@@ -66,7 +66,7 @@ impl Tool for ListImages {
     fn spec(&self) -> ToolSpec {
         ToolSpec {
             name: LIST_IMAGES.into(),
-            description: "List the pictures in this conversation, newest first: the ones tools returned (screenshots, image files read) and the ones the user attached. Each has a reference such as img:3f2a9c01b4d7 that read_image reopens.".into(),
+            description: "List the pictures in this conversation, newest first: the ones tools returned (screenshots, image files read) and the ones the user attached. Each has a reference such as img:3f2a9c01b4d7 that read_image reopens, and that ![what it shows](img:3f2a9c01b4d7) in your reply shows the user.".into(),
             input_schema: json!({
                 "type": "object",
                 "properties": {
@@ -116,7 +116,7 @@ impl Tool for ReadImage {
     fn spec(&self) -> ToolSpec {
         ToolSpec {
             name: READ_IMAGE.into(),
-            description: "Reopen a picture from this conversation by its reference (img:…), as an elision line or list_images gives it. Use it only when you need to look at a picture again: a picture you have already seen and described rarely needs reopening.".into(),
+            description: "Reopen a picture from this conversation by its reference (img:…), as an elision line or list_images gives it. Use it only when you need to look at a picture again: a picture you have already seen and described rarely needs reopening. To show the user a picture of this conversation in your reply, write ![what it shows](img:3f2a9c01b4d7) with its reference: the app draws it under your reply.".into(),
             input_schema: json!({
                 "type": "object",
                 "properties": {

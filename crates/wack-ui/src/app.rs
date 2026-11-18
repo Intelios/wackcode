@@ -123,6 +123,8 @@ pub struct AppState {
     pub draft: Entity<TextField>,
     /// Pictures attached to the new chat's first message.
     pub draft_attachments: Vec<crate::attachments::Attachment>,
+    /// The picture open over the window.
+    pub lightbox: Option<crate::pictures::Lightbox>,
     /// The mode the new chat starts in.
     pub new_chat_mode: AgentMode,
     /// Why the last chat could not start, shown under the new-chat composer.
@@ -313,6 +315,7 @@ impl AppState {
             branches: HashMap::new(),
             draft,
             draft_attachments: Vec::new(),
+            lightbox: None,
             slash: None,
             slash_dismissed: None,
             commands: Vec::new(),

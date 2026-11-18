@@ -349,8 +349,10 @@ impl ChatSession {
         match &job {
             Job::Prompt(text) => self.conversation.send(text, now_millis()),
             Job::Command { text, command } => self.conversation.send_command(text, command.clone(), now_millis()),
-            Job::Attached { text, command: None, .. } => self.conversation.send(text, now_millis()),
-            Job::Attached { text, command: Some(command), .. } => self.conversation.send_command(text, command.clone(), now_millis()),
+            Job::Attached { text, command, images } => {
+                let pictures = images.iter().map(crate::pictures::Picture::of_image).collect();
+                self.conversation.send_pictures(text, command.clone(), pictures, now_millis());
+            }
             Job::Compact(_) => self.conversation.begin_compaction(),
             Job::Wake => self.conversation.wake(now_millis()),
         }

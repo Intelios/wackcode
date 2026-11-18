@@ -1,7 +1,9 @@
 //! Markdown in replies, parsed into the few shapes the transcript draws.
 //!
 //! CommonMark plus tables, strikethrough and task lists (pulldown-cmark). Raw HTML is shown as
-//! text, never interpreted. A reply is parsed again while it streams; an unfinished construct
+//! text, never interpreted. An image whose address is a picture reference (`![the page](img:3f2a…)`)
+//! becomes a span with `picture` set and no text: the transcript shows that picture of the
+//! conversation under the reply (`crate::pictures`). Any other image reads as a link. A reply is parsed again while it streams; an unfinished construct
 //! (an open code fence) simply parses as what it is so far.
 
 use pulldown_cmark::{CodeBlockKind, Event, HeadingLevel, Options, Parser, Tag, TagEnd};
@@ -33,6 +35,8 @@ pub struct Span {
     pub strike: bool,
     pub code: bool,
     pub link: Option<String>,
+    /// A picture of the conversation the reply shows, by its `img:` reference.
+    pub picture: Option<String>,
 }
 
 /// One open container while parsing.
@@ -54,6 +58,8 @@ struct Style {
     italic: u32,
     strike: u32,
     links: Vec<String>,
+    /// Inside `![…](img:…)`: its reference, and its words (the alt text) are not drawn.
+    picture: Option<String>,
 }
 
 pub fn parse(text: &str) -> Vec<Block> {
@@ -97,6 +103,7 @@ pub fn parse(text: &str) -> Vec<Block> {
                     Tag::Emphasis => style.italic += 1,
                     Tag::Strong => style.bold += 1,
                     Tag::Strikethrough => style.strike += 1,
+                    Tag::Image { dest_url, .. } if dest_url.starts_with("img:") => style.picture = Some(dest_url.to_string()),
                     Tag::Link { dest_url, .. } | Tag::Image { dest_url, .. } => style.links.push(dest_url.to_string()),
                     _ => {}
                 }
@@ -105,6 +112,10 @@ pub fn parse(text: &str) -> Vec<Block> {
                 TagEnd::Emphasis => style.italic = style.italic.saturating_sub(1),
                 TagEnd::Strong => style.bold = style.bold.saturating_sub(1),
                 TagEnd::Strikethrough => style.strike = style.strike.saturating_sub(1),
+                TagEnd::Image if style.picture.is_some() => {
+                    let picture = style.picture.take();
+                    push_span(&mut stack, &mut done, Span { picture, ..Span::default() });
+                }
                 TagEnd::Link | TagEnd::Image => {
                     style.links.pop();
                 }
@@ -159,6 +170,7 @@ pub fn parse(text: &str) -> Vec<Block> {
                 }
                 _ => {}
             },
+            Event::Text(_) if style.picture.is_some() => {}
             Event::Text(text) => {
                 if let Some(Open::Code(_, code)) = stack.last_mut() {
                     code.push_str(&text);
@@ -220,6 +232,7 @@ fn span(text: &str, style: &Style, code: bool) -> Span {
         strike: style.strike > 0,
         code,
         link: style.links.last().cloned(),
+        picture: None,
     }
 }
 
@@ -259,6 +272,8 @@ fn push_span(stack: &mut Vec<Open>, done: &mut Vec<Block>, span: Span) {
         && last.strike == span.strike
         && last.code == span.code
         && last.link == span.link
+        && last.picture.is_none()
+        && span.picture.is_none()
     {
         last.text.push_str(&span.text);
     } else {

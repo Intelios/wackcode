@@ -30,6 +30,7 @@ pub mod mcp_page;
 pub mod memory_page;
 pub mod motion;
 pub mod panes;
+pub mod pictures;
 pub mod plan_card;
 pub mod question;
 pub mod run_button;

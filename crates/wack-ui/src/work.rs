@@ -71,7 +71,7 @@ pub fn entry_items(
     };
     {
         match entry {
-            Entry::Prompt { text, steered, command, suggestion } => {
+            Entry::Prompt { text, steered, command, suggestion, pictures } => {
                 let key = format!("prompt-{index}");
                 items.push(Item::Prompt {
                     text: text.clone().into(),
@@ -83,6 +83,7 @@ pub fn entry_items(
                         key: key.into(),
                     }),
                     suggestion: suggestion.as_ref().map(|started| suggestions::sent_label(started.origin.as_ref())),
+                    pictures: pictures.clone(),
                 })
             }
             Entry::Compacted => items.push(Item::Compacted),
@@ -116,7 +117,20 @@ pub fn entry_items(
                     None => turn.reply.clone(),
                 };
                 if !reply.trim().is_empty() {
-                    items.push(Item::Reply(cache.get(index, &reply)));
+                    let blocks = cache.get(index, &reply);
+                    let named = crate::pictures::referenced(&blocks);
+                    items.push(Item::Reply(blocks));
+                    if !named.is_empty() {
+                        let (found, missing): (Vec<_>, Vec<_>) = named
+                            .into_iter()
+                            .map(|reference| conversation.pictures.iter().find(|picture| picture.answers_to(&reference)).cloned().ok_or(reference))
+                            .partition(Result::is_ok);
+                        items.push(Item::ReplyPictures {
+                            key: format!("reply-pictures-{index}").into(),
+                            pictures: found.into_iter().flatten().collect(),
+                            missing: missing.into_iter().filter_map(Result::err).map(Into::into).collect(),
+                        });
+                    }
                 }
                 if let Some(proposal) = &turn.proposal {
                     let current = conversation.awaiting == Some(index);
@@ -356,6 +370,7 @@ fn step_row(step: &Step, key: &str, cwd: &Path, live: bool, open: &HashSet<Strin
             detail: (text.trim().contains('\n') || text.trim().len() > 120).then(|| Detail::Text(text.trim().to_string().into())),
             open: false,
             agent: None,
+            pictures: Vec::new(),
         },
         Step::Note(text) => WorkRow {
             key: key.to_string().into(),
@@ -365,6 +380,7 @@ fn step_row(step: &Step, key: &str, cwd: &Path, live: bool, open: &HashSet<Strin
             detail: None,
             open: false,
             agent: None,
+            pictures: Vec::new(),
         },
         Step::Event(text) => WorkRow {
             key: key.to_string().into(),
@@ -374,6 +390,7 @@ fn step_row(step: &Step, key: &str, cwd: &Path, live: bool, open: &HashSet<Strin
             detail: None,
             open: false,
             agent: None,
+            pictures: Vec::new(),
         },
         Step::Tool(tool) if is_agent_row(tool, agents) => agent_row(tool, agents.get(&tool.id), live, now),
         Step::Tool(tool) => tool_row(tool, cwd, live),
@@ -447,7 +464,7 @@ pub fn news_row(news: &News, key: &str) -> WorkRow {
             }
         }
     };
-    WorkRow { key: key.to_string().into(), verb: verb.into(), target, meta, detail, open: false, agent: None }
+    WorkRow { key: key.to_string().into(), verb: verb.into(), target, meta, detail, open: false, agent: None, pictures: Vec::new() }
 }
 
 fn first_line(text: &str) -> String {
@@ -710,7 +727,7 @@ pub fn tool_row(tool: &ToolStep, cwd: &Path, live: bool) -> WorkRow {
             _ => (success_meta.map(|text| Meta::Note(text.into())).unwrap_or(Meta::None), detail),
         },
     };
-    WorkRow { key: tool.id.clone().into(), verb: verb.to_string().into(), target, meta, detail, open: false, agent: None }
+    WorkRow { key: tool.id.clone().into(), verb: verb.to_string().into(), target, meta, detail, open: false, agent: None, pictures: result.map(|result| result.pictures.clone()).unwrap_or_default() }
 }
 
 /// The verbs `browser_words` gives, none shared with another tool's row, so a row's icon and
@@ -942,6 +959,7 @@ fn agent_row(tool: &ToolStep, info: Option<&AgentInfo>, live: bool, now: u64) ->
         detail: None,
         open: false,
         agent: Some(AgentLine { id: id.into(), role: role_name(&role).into(), task: task.into(), state, words: words.into(), round }),
+        pictures: Vec::new(),
     }
 }
 
@@ -1054,6 +1072,7 @@ fn agent_news_row(news: &News, id: &str, key: &str) -> WorkRow {
         detail: report.map(|report| Detail::Text(report.into())),
         open: false,
         agent: None,
+        pictures: Vec::new(),
     }
 }
 
@@ -1106,6 +1125,7 @@ mod tests {
             detail: None,
             open: false,
             agent: None,
+            pictures: Vec::new(),
         };
         let read = row("Read", Target::Code("crates/wack-llm/src/sse.rs".into()), false);
         let edit = row("Edited", Target::Code("crates/wack-llm/src/retry.rs".into()), true);
@@ -1125,6 +1145,7 @@ mod tests {
             detail: None,
             open: false,
             agent: None,
+            pictures: Vec::new(),
         };
         let rows = [row("Thought"), row("Read"), row("Read"), row("Searched"), row("Found"), row("Edited"), row("Wrote"), row("Ran"), row("")];
         assert_eq!(tally(&rows), "2 reads · 2 searches · 2 edits · 1 command");
@@ -1136,7 +1157,7 @@ mod tests {
             id: "t".into(),
             name: name.into(),
             input: Some(input),
-            result: result.map(|(text, is_error)| ToolResult { text: text.into(), is_error }),
+            result: result.map(|(text, is_error)| ToolResult { text: text.into(), is_error, pictures: Vec::new() }),
         }
     }
 

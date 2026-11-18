@@ -250,6 +250,36 @@ pub fn all() -> Vec<Scene> {
             build: |_, cx| slash_scene(None, "/pdf", Some("[file]  ·  added after the skill's instructions"), cx),
         },
         Scene {
+            name: "transcript-pictures",
+            description: "Pictures in a chat: two the user sent, the agent's screenshots under their step, and the one its reply shows.",
+            size: WINDOW,
+            build: |_, cx| {
+                cx.new(|_| {
+                    Shell::showing(
+                        fixtures::sidebar(Selected::Finished),
+                        Screen::Chat {
+                            title: "Match the login mockups".into(),
+                            project: fixtures::project(),
+                            body: Body::Items(fixtures::pictures_turn()),
+                            composer: fixtures::composer_after_turn(Input::Drawn { text: None, placeholder: crate::chat::FOLLOW_UP_PLACEHOLDER.into() }),
+                        },
+                    )
+                })
+                .into()
+            },
+        },
+        Scene {
+            name: "lightbox",
+            description: "A screenshot open in the lightbox over the chat, second of three.",
+            size: WINDOW,
+            build: |_, cx| {
+                let pictures: Vec<crate::pictures::Picture> =
+                    fixtures::saved_pictures(3, "screenshot of http://localhost:3000/login").iter().map(crate::pictures::Picture::of_image).collect();
+                let lightbox = crate::pictures::Lightbox::new(std::sync::Arc::new(pictures), 1);
+                cx.new(|_| LightboxScene { lightbox }).into()
+            },
+        },
+        Scene {
             name: "transcript-command",
             description: "A chat opened with a skill: the /pdf bubble and the skill it used.",
             size: WINDOW,
@@ -2562,4 +2592,26 @@ fn browser_settings_scene(clearing: crate::browser_page::Clearing, backdrop: Opt
         }
     })
     .into()
+}
+
+/// The lightbox over a chat, as the shell draws it.
+struct LightboxScene {
+    lightbox: crate::pictures::Lightbox,
+}
+
+impl Render for LightboxScene {
+    fn render(&mut self, _: &mut Window, cx: &mut Context<Self>) -> impl IntoElement {
+        let shell = cx.new(|_| {
+            Shell::showing(
+                fixtures::sidebar(Selected::Finished),
+                Screen::Chat {
+                    title: "Match the login mockups".into(),
+                    project: fixtures::project(),
+                    body: Body::Items(fixtures::pictures_turn()),
+                    composer: fixtures::composer_after_turn(Input::Drawn { text: None, placeholder: crate::chat::FOLLOW_UP_PLACEHOLDER.into() }),
+                },
+            )
+        });
+        gpui::div().size_full().relative().child(shell).child(crate::pictures::LightboxView { lightbox: self.lightbox.clone() })
+    }
 }

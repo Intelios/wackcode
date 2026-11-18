@@ -248,7 +248,8 @@ pub enum Event {
     ToolInput { id: String, json: String },
     /// A complete tool call, about to run.
     ToolCall { id: String, name: String, input: Value },
-    ToolResult { id: String, name: String, content: String, is_error: bool },
+    /// `images` are the viewing copies the model is sent (each with its saved original's id).
+    ToolResult { id: String, name: String, content: String, is_error: bool, images: Vec<Image> },
     /// One reply from the model is complete and saved.
     Reply { usage: Option<Usage> },
     Retrying(RetryNotice),
@@ -721,7 +722,7 @@ impl Agent {
                     }
                     Err(content) => (content, Vec::new(), true),
                 };
-                events(Event::ToolResult { id: id.clone(), name: name.clone(), content: content.clone(), is_error });
+                events(Event::ToolResult { id: id.clone(), name: name.clone(), content: content.clone(), is_error, images: images.clone() });
                 Block::ToolResult { tool_use_id: id.clone(), content, is_error, images }
             }
         };

@@ -400,6 +400,31 @@ pub struct ToggleModelReasoning {
     pub index: usize,
 }
 
+/// Opens the lightbox on `pictures[index]`, with the others a step away.
+#[derive(Clone, Debug, PartialEq, Action)]
+#[action(namespace = wackcode, no_json)]
+pub struct OpenPicture {
+    pub pictures: std::sync::Arc<Vec<crate::pictures::Picture>>,
+    pub index: usize,
+}
+
+/// Closes the lightbox.
+#[derive(Clone, Debug, PartialEq, Action)]
+#[action(namespace = wackcode, no_json)]
+pub struct ClosePicture;
+
+/// The lightbox's previous (-1) or next (1) picture.
+#[derive(Clone, Debug, PartialEq, Action)]
+#[action(namespace = wackcode, no_json)]
+pub struct StepPicture {
+    pub by: i32,
+}
+
+/// The lightbox between fitting the window and the picture's own size.
+#[derive(Clone, Debug, PartialEq, Action)]
+#[action(namespace = wackcode, no_json)]
+pub struct ZoomPicture;
+
 /// The composer's attach button: choose pictures to send with the message.
 #[derive(Clone, Debug, PartialEq, Action)]
 #[action(namespace = wackcode, no_json)]

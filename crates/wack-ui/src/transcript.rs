@@ -34,9 +34,12 @@ use crate::{
 pub enum Item {
     /// What the user sent. A slash command shows as `command`, with `text` (the prompt the model
     /// got) behind its name. `suggestion` captions a message that started a suggested task.
-    Prompt { text: SharedString, steered: bool, command: Option<CommandShown>, suggestion: Option<SharedString> },
+    /// `pictures` are the ones the user attached, under the bubble.
+    Prompt { text: SharedString, steered: bool, command: Option<CommandShown>, suggestion: Option<SharedString>, pictures: Vec<crate::pictures::Picture> },
     Work(Work),
     Reply(Rc<Vec<markdown::Block>>),
+    /// The pictures a reply named (`![…](img:…)`), under it, and the references nothing answered.
+    ReplyPictures { key: SharedString, pictures: Vec<crate::pictures::Picture>, missing: Vec<SharedString> },
     /// Facts about a finished turn: time, tokens.
     Footer(SharedString),
     Notice { text: SharedString, failed: bool },
@@ -82,6 +85,8 @@ pub struct WorkRow {
     pub open: bool,
     /// A sub-agent's call: drawn as a row of its own, which opens the agent's pane.
     pub agent: Option<AgentLine>,
+    /// What the call returned to look at (a screenshot), under the row.
+    pub pictures: Vec<crate::pictures::Picture>,
 }
 
 /// A sub-agent as its row in the work log shows it.
@@ -281,7 +286,7 @@ fn gap_above(item: &Item, previous: Option<&Item>) -> f32 {
 /// One transcript item, with the space it keeps from the one before.
 pub fn item(item: &Item, previous: Option<&Item>, theme: &Theme, handlers: &Handlers) -> AnyElement {
     let body = match item {
-        Item::Prompt { text, steered, command, suggestion } => {
+        Item::Prompt { text, steered, command, suggestion, pictures } => {
             let bubble = div()
                 .max_w(relative(BUBBLE_SHARE))
                 .px(px(14.))
@@ -307,7 +312,10 @@ pub fn item(item: &Item, previous: Option<&Item>, theme: &Theme, handlers: &Hand
                 .when(*steered, |prompt| {
                     prompt.child(div().pr(px(6.)).typography(Type::Small).text_color(theme.text_faint).child("Sent while working"))
                 })
-                .child(bubble)
+                .when(!pictures.is_empty(), |prompt| {
+                    prompt.child(crate::pictures::Strip { pictures: pictures.clone(), key: format!("prompt-{}", pictures[0].key).into(), align_end: true })
+                })
+                .when(!text.is_empty() || command.is_some(), |prompt| prompt.child(bubble))
                 .when_some(suggestion.as_ref(), |prompt, caption| {
                     prompt.child(
                         div()
@@ -328,6 +336,13 @@ pub fn item(item: &Item, previous: Option<&Item>, theme: &Theme, handlers: &Hand
         }
         Item::Work(work) => work_log(work, theme, handlers).into_any_element(),
         Item::Reply(blocks) => reply(blocks, theme, handlers).into_any_element(),
+        Item::ReplyPictures { key, pictures, missing } => div()
+            .flex()
+            .flex_col()
+            .gap(px(6.))
+            .when(!pictures.is_empty(), |column| column.child(crate::pictures::Strip { pictures: pictures.clone(), key: key.clone(), align_end: false }))
+            .children(missing.iter().map(|reference| crate::pictures::missing(reference, theme)))
+            .into_any_element(),
         Item::Plan(card) => crate::plan_card::plan_card(card, theme, handlers).into_any_element(),
         Item::Suggestions(tray) => crate::suggestion::tray(tray, theme, handlers).into_any_element(),
         Item::Footer(text) => div().typography(Type::Small).text_color(theme.text_faint).child(text.clone()).into_any_element(),
@@ -518,6 +533,13 @@ fn log_row(row: &WorkRow, theme: &Theme, handlers: &Handlers) -> AnyElement {
                 .child(div().flex_1().min_w_0().truncate().child(target))
                 .child(div().flex_none().typography(Type::Small).child(meta)),
         )
+        .when(!row.pictures.is_empty(), |line| {
+            line.child(div().pl(px(SHEET_INDENT)).pt(px(2.)).pb(px(6.)).child(crate::pictures::Strip {
+                pictures: row.pictures.clone(),
+                key: format!("{}-shots", row.key).into(),
+                align_end: false,
+            }))
+        })
         .when_some(row.detail.as_ref().filter(|_| row.open), |line, detail| {
             line.child(div().pt(px(4.)).pb(px(8.)).child(detail_view(detail, &row.key, theme)))
         })
@@ -735,6 +757,8 @@ pub(crate) fn reply(blocks: &[markdown::Block], theme: &Theme, handlers: &Handle
 fn block_view(block: &markdown::Block, key: &str, theme: &Theme, handlers: &Handlers) -> AnyElement {
     use markdown::Block;
     match block {
+        // A paragraph of nothing but pictures: they show under the reply.
+        Block::Paragraph(spans) if spans.iter().all(|span| span.picture.is_some() || span.text.trim().is_empty()) => div().into_any_element(),
         Block::Paragraph(spans) => {
             div().typography(Type::Body).text_color(theme.text_body).child(rich(spans, key, theme, handlers)).into_any_element()
         }

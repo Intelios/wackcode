@@ -45,7 +45,7 @@ use crate::{
         NewChat, NewChatIn, NewTerminal, NewTerminalWith, NextTab, OpenEffortMenu, OpenModelMenu, OpenSettings,
         OpenSettingsSection, PinProject, PreviousTab, RemoveConnection, RemovePicture, ShowCommandOutput, ShowPicture, RemoveProject, ResetDockSize,
         PickCommand, SelectChat, Send, Stop, StopCommand, MoveToBackground, ToggleTasks, ToggleTasksPane, StopTask, ShowTask, ToggleAgentsPane, ToggleBrowserPane, ShowAgent, StopAgent, ToggleChanges, ToggleProject, ToggleSidebar, ToggleTerminal, TriggerProjectCommand, Unqueue,
-        ToggleAutoTitles, ToggleTitleModels, ChooseTitleModel, RenameChat, RenameChatAt, CancelRename, ToggleModelReasoning, ToggleModelVision, AttachPictures, AttachFiles, RemoveAttachment,
+        ToggleAutoTitles, ToggleTitleModels, ChooseTitleModel, RenameChat, RenameChatAt, CancelRename, ToggleModelReasoning, ToggleModelVision, AttachPictures, AttachFiles, RemoveAttachment, OpenPicture, ClosePicture, StepPicture, ZoomPicture,
         StartSuggestion, DismissSuggestion, CopySuggestion, OpenChat,
         ToggleModelEffort, SwitchSkill, SwitchSkillFolder, RemoveSkillFolder, OpenSkill, CopySkill, ChooseSkillUse, NewSkill, SaveSkill,
         CloseSkill, AskDeleteSkill, ConfirmSkillDelete, CancelSkillDelete, AddSkillFolder, ImportSkills, SwitchSlashCommand, OpenSlashCommand,
@@ -416,6 +416,13 @@ impl Shell {
         let Some(app) = self.app() else {
             return;
         };
+        if app.read(cx).lightbox.is_some() {
+            app.update(cx, |app, cx| {
+                app.lightbox = None;
+                cx.notify();
+            });
+            return;
+        }
         if app.read(cx).command_editor.is_some() {
             app.update(cx, |app, cx| app.close_command_editor(cx));
             self.focus_composer(window, cx);
@@ -1017,6 +1024,10 @@ impl Render for Shell {
                 .children((0..3).map(|_| div().size(px(12.)).rounded_full().bg(theme.border_strong)))
         });
 
+        let lightbox = match &self.source {
+            Source::Live(app) => app.read(cx).lightbox.clone(),
+            _ => None,
+        };
         tags::root(
             div()
                 .key_context(actions::context())
@@ -1506,6 +1517,36 @@ impl Render for Shell {
                     shell.with_app(cx, |app, cx| app.toggle_model_reasoning(index, cx));
                 }))
                 .on_action(cx.listener(|shell, _: &AttachPictures, _, cx| shell.attach_pictures(cx)))
+                .on_action(cx.listener(|shell, action: &OpenPicture, _, cx| {
+                    let lightbox = crate::pictures::Lightbox::new(action.pictures.clone(), action.index);
+                    shell.with_app(cx, |app, cx| {
+                        app.lightbox = Some(lightbox);
+                        cx.notify();
+                    });
+                }))
+                .on_action(cx.listener(|shell, _: &ClosePicture, _, cx| {
+                    shell.with_app(cx, |app, cx| {
+                        app.lightbox = None;
+                        cx.notify();
+                    });
+                }))
+                .on_action(cx.listener(|shell, action: &StepPicture, _, cx| {
+                    let by = action.by;
+                    shell.with_app(cx, |app, cx| {
+                        if let Some(lightbox) = &mut app.lightbox {
+                            lightbox.step(by);
+                            cx.notify();
+                        }
+                    });
+                }))
+                .on_action(cx.listener(|shell, _: &ZoomPicture, _, cx| {
+                    shell.with_app(cx, |app, cx| {
+                        if let Some(lightbox) = &mut app.lightbox {
+                            lightbox.zoomed = !lightbox.zoomed;
+                            cx.notify();
+                        }
+                    });
+                }))
                 .on_action(cx.listener(|shell, action: &AttachFiles, _, cx| {
                     let paths = action.paths.clone();
                     shell.with_app(cx, |app, cx| {
@@ -1685,6 +1726,7 @@ impl Render for Shell {
                 .children(sidebar)
                 .child(main)
                 .children(lights)
+                .children(lightbox.map(|lightbox| crate::pictures::LightboxView { lightbox }))
                 .child(present_mark(crate::browser::end_frame)),
         )
     }

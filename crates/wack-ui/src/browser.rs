@@ -71,6 +71,13 @@ struct Presented {
 
 thread_local! {
     static PRESENTED: RefCell<Presented> = RefCell::default();
+    /// A pane tab is being dragged: pages park, so the drop zones under them show.
+    static TAB_DRAG: std::cell::Cell<bool> = const { std::cell::Cell::new(false) };
+}
+
+/// The shell says whether a pane tab is being dragged, as it renders.
+pub fn set_tab_drag(on: bool) {
+    TAB_DRAG.with(|drag| drag.set(on));
 }
 
 /// Paint first in the window: starts the frame's bookkeeping.
@@ -114,6 +121,10 @@ pub fn show(window: &mut Window, tab: TabId, bounds: Bounds<Pixels>, corner_radi
         corner_radius: f64::from(corner_radius),
     };
     window.on_present(move || {
+        // Read when the frame is presented, not painted: a cached pane replays this unpainted.
+        if TAB_DRAG.with(std::cell::Cell::get) {
+            return;
+        }
         PRESENTED.with(|presented| presented.borrow_mut().marked.insert(tab));
         wack_browser::cef::place(tab, Some(frame));
     });

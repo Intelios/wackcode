@@ -773,6 +773,7 @@ impl Render for Shell {
         if !cx.has_active_drag() {
             self.dragging = None;
         }
+        crate::browser::set_tab_drag(self.dragging.is_some());
         let (sidebar_data, screen, strip) = match &self.source {
             Source::Live(app) => live_view(app.read(cx), cx),
             Source::Fixed(fixed) => fixed.as_ref().clone(),

@@ -101,6 +101,11 @@ impl ChatPanes {
         self.browser = Some(tabs);
     }
 
+    /// The tabs the Browser pane shows, if this tree was given any.
+    pub fn browser(&self) -> Option<&wack_browser::ChatTabs> {
+        self.browser.as_ref()
+    }
+
     /// Redraws the Browser pane: a tab changed.
     pub fn refresh_browser(&self, cx: &mut App) {
         for (model, _) in self.models.values() {

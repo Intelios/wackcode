@@ -49,7 +49,7 @@ ask '{"cmd":"appearance","theme":"light"}'
 ask '{"cmd":"quit"}'
 ```
 
-A failure answers `{"ok":false,"error":"…"}` with a sentence saying what went wrong. Screenshots show what the app drew, at 2x, without the traffic lights (the system draws those). The full protocol is in `crates/wack-ui/src/automation.rs`.
+A failure answers `{"ok":false,"error":"…"}` with a sentence saying what went wrong. Screenshots show what the app drew, at 2x, without the traffic lights (the system draws those). They leave out the browser pane's page, which is a native view, not something GPUI draws: to see it, capture the window with `screencapture -l <window id>`. The full protocol is in `crates/wack-ui/src/automation.rs`.
 
 The dev app keeps its data in `~/Library/Application Support/com.wackcode.desktop.dev/`, apart from the installed app's `com.wackcode.desktop`. The installed app's folder is the owner's real data: never read or write it.
 

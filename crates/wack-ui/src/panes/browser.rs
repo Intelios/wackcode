@@ -5,15 +5,16 @@
 //!   page. Nothing here makes or closes a page except the user's own tab buttons.
 //! - The page is a native view laid over the pane's page area (`crate::browser::show`), placed
 //!   only while that area is painted whole: not while the pane slides in, while a pane tab is
-//!   dragged (the drop zones would hide under it), or while a card stands in for the page (a crash,
-//!   a failed load). A page that is not placed is parked, still rendering for the agent.
+//!   dragged (the drop zones would hide under it; resizing a dock keeps it), or while a card stands
+//!   in for the page (a crash, a failed load). A page that is not placed is parked, still rendering for the agent.
 //! - Nothing drawn over the page is deferred except the dialog card: GPUI's overlay plane takes
 //!   the page's input while anything is drawn on it. The agent's glow rings the page from outside.
 //! - The address field belongs to the user: what they type opens even an address the agent may
 //!   not (only http and https, and never a web search, which would add a network origin). Typing
 //!   an address makes the user the tab's driver, so the agent's address rule stops applying to it.
-//! - When the page takes keyboard focus (a click in it) the pane takes the app's focus too, so the
-//!   app's own keys (⌘W, ⌘⇧B) act on the pane and not on whatever had focus before.
+//! - A press on the page gives the pane the app's focus in the same event, so the app's own keys
+//!   (⌘W, ⌘⇧B) act on the pane and not on whatever had focus before. Where the keyboard itself goes
+//!   is decided before the press is routed, in the engine (`cef::before_press`).
 
 use std::{
     cell::{Cell, RefCell},
@@ -67,8 +68,6 @@ pub struct BrowserPane {
     note: Option<SharedString>,
     /// Why the window could not show pages, set from a paint pass.
     unshowable: Rc<RefCell<Option<String>>>,
-    /// The page focus count last acted on, per tab (`TabState::focused`).
-    seen_focus: (TabId, u64),
     /// Restored tabs whose page has been asked for.
     waking: HashSet<TabId>,
     /// The viewport menu is open.
@@ -107,7 +106,6 @@ impl BrowserPane {
             synced: String::new(),
             note: None,
             unshowable: Rc::default(),
-            seen_focus: (0, 0),
             waking: HashSet::new(),
             viewport_menu: false,
             fitted: Rc::default(),
@@ -150,7 +148,8 @@ impl BrowserPane {
         let url = self.current().map(|tab| tab.state().url.clone()).unwrap_or_default();
         let shown = if url == "about:blank" { String::new() } else { url };
         if self.address.read(cx).text() != shown {
-            self.address.update(cx, |field, cx| field.set_text(&shown, cx));
+            // From its start: the host is the part that says where the page is.
+            self.address.update(cx, |field, cx| field.set_text_at_start(&shown, cx));
         }
         self.synced = shown;
     }
@@ -543,44 +542,48 @@ impl BrowserPane {
                 .tag("browser-viewport"),
         );
 
-        // Taking control is offered on a tab the agent opened or has driven.
-        if let Some(tab) = tab.filter(|tab| tab.owner != Owner::User || tab.agent_driving()) {
-            let taken = tab.user_has_control();
-            let tab = tab.clone();
-            bar = bar.child(
-                div()
-                    .id("take-control")
-                    .flex_none()
-                    .ml(px(4.))
-                    .h(px(CIRCLE + 4.))
-                    .px(px(11.))
-                    .rounded_full()
-                    .cursor_pointer()
-                    .flex()
-                    .items_center()
-                    .gap(px(6.))
-                    .border_1()
-                    .border_color(if taken { theme.accent_line } else { theme.border })
-                    .when(taken, |pill| pill.bg(theme.accent_wash))
-                    .hover(|pill| pill.bg(theme.hover))
-                    .tooltip(tip(if taken {
-                        "Give the page back: the agent may use it again"
-                    } else {
-                        "Take control: the agent's tools leave this page alone until you give it back"
-                    }))
-                    .on_click(move |_, _, _| tab.set_user_control(!taken))
-                    .child(Icon::Cursor.view(px(12.), if taken { theme.accent_text } else { theme.text_soft }))
-                    .child(div().typography(Type::Small).text_color(if taken { theme.accent_text } else { theme.text_soft }).child(
-                        if taken { "You have control" } else { "Take control" },
-                    ))
-                    .tag("take-control"),
-            );
-        }
         bar
     }
 
+    /// Take control, offered on a tab the agent opened or has driven: at the right of the tab row,
+    /// so the address keeps the toolbar's width.
+    fn take_control(tab: Option<&Arc<Tab>>, theme: &Theme) -> Option<gpui::AnyElement> {
+        let tab = tab.filter(|tab| tab.owner != Owner::User || tab.agent_driving())?;
+        let taken = tab.user_has_control();
+        let tab = tab.clone();
+        Some(
+            div()
+                .id("take-control")
+                .flex_none()
+                .ml(px(6.))
+                .h(px(26.))
+                .px(px(10.))
+                .rounded_full()
+                .cursor_pointer()
+                .flex()
+                .items_center()
+                .gap(px(6.))
+                .border_1()
+                .border_color(if taken { theme.accent_line } else { theme.border })
+                .when(taken, |pill| pill.bg(theme.accent_wash))
+                .hover(|pill| pill.bg(theme.hover))
+                .tooltip(tip(if taken {
+                    "Give the page back: the agent may use it again"
+                } else {
+                    "Take control: the agent's tools leave this page alone until you give it back"
+                }))
+                .on_click(move |_, _, _| tab.set_user_control(!taken))
+                .child(Icon::Cursor.view(px(12.), if taken { theme.accent_text } else { theme.text_soft }))
+                .child(div().typography(Type::Small).text_color(if taken { theme.accent_text } else { theme.text_soft }).child(
+                    if taken { "You have control" } else { "Take control" },
+                ))
+                .tag("take-control")
+                .into_any_element(),
+        )
+    }
+
     fn strip(&self, list: &[Arc<Tab>], shown: Option<TabId>, theme: &Theme, cx: &mut Context<Self>) -> impl IntoElement + use<> {
-        let mut strip = div().id("browser-tabs").flex_none().px(px(10.)).pb(px(6.)).flex().items_center().gap(px(6.)).overflow_x_scroll();
+        let mut strip = div().id("browser-tabs").flex_1().min_w_0().flex().items_center().gap(px(6.)).overflow_x_scroll();
         for tab in list {
             let picked = Some(tab.id) == shown;
             let state = tab.state();
@@ -851,17 +854,6 @@ impl Render for BrowserPane {
         }
         self.apply_viewport(cx);
 
-        // A click in the page: the app's keys act on this pane now.
-        if let (Some(id), Some(state)) = (shown, &state)
-            && (id, state.focused) != self.seen_focus
-        {
-            let first_look = self.seen_focus.0 != id;
-            self.seen_focus = (id, state.focused);
-            if !first_look && !self.focus.is_focused(window) {
-                window.focus(&self.focus, cx);
-            }
-        }
-
         // A prompt() arriving: its field starts on the page's default answer, and takes the keys.
         if let (Some(id), Some(dialog)) = (shown, state.as_ref().and_then(|state| state.dialog.as_ref()))
             && dialog.kind == DialogKind::Prompt
@@ -878,9 +870,16 @@ impl Render for BrowserPane {
         }
 
         let toolbar = self.toolbar(tab.as_ref(), state.as_ref(), &theme, cx);
-        let strip = (!list.is_empty()).then(|| self.strip(&list, shown, &theme, cx));
+        let take_control = Self::take_control(tab.as_ref(), &theme);
+        let strip = (!list.is_empty() || take_control.is_some()).then(|| {
+            div().flex_none().px(px(10.)).pb(px(6.)).flex().items_center().child(self.strip(&list, shown, &theme, cx)).children(take_control)
+        });
         let loading = state.as_ref().is_some_and(|state| state.loading);
-        let note = self.note.clone().map(|note| {
+        // The agent's address rule stopped a navigation: the page it would have left stays, and
+        // this says why under the toolbar. A tab with no page yet shows it as a card instead.
+        let blank = state.as_ref().is_none_or(|state| state.url.is_empty() || state.url == "about:blank");
+        let refused = state.as_ref().and_then(|state| state.refused.clone());
+        let note = self.note.clone().or_else(|| refused.as_ref().filter(|_| !blank).map(|(_, why)| SharedString::from(format!("Not opened: {why}")))).map(|note| {
             div().flex_none().px(px(18.)).pb(px(6.)).typography(Type::Small).text_color(theme.danger).child(note).tag("browser-note")
         });
         let unshowable = self.unshowable.borrow().clone();
@@ -897,9 +896,14 @@ impl Render for BrowserPane {
                         .into_any_element(),
                 ),
                 Some(state) if state.crashed.is_some() => Some(
-                    Self::card(Icon::Alert, "This page stopped working".into(), state.crashed.clone(), Some(("Reload", Nav::Reload)), &theme, cx)
+                    Self::card(Icon::Alert, "This page stopped working".into(), state.crashed.clone().filter(|reason| !reason.is_empty()), Some(("Reload", Nav::Reload)), &theme, cx)
                         .into_any_element(),
                 ),
+                Some(state) if blank && state.refused.is_some() => {
+                    let (url, why) = state.refused.clone().unwrap_or_default();
+                    let host = host_of(&url).unwrap_or_else(|| url.clone());
+                    Some(Self::card(Icon::Alert, format!("Didn't open {host}").into(), Some(why), None, &theme, cx).into_any_element())
+                }
                 Some(state) if state.load_error.is_some() => {
                     let (url, error) = state.load_error.clone().unwrap_or_default();
                     let host = host_of(&url).unwrap_or_else(|| url.clone());
@@ -929,12 +933,11 @@ impl Render for BrowserPane {
                 let unshowable = self.unshowable.clone();
                 let fitted = self.fitted.clone();
                 let viewport = state.as_ref().map_or(Viewport::Fit, |state| state.viewport);
-                let dragging = cx.has_active_drag();
                 canvas(
                     |_, _, _| (),
                     move |bounds, _, window, _| {
                         let mask = window.content_mask().bounds;
-                        if dragging || !inside(mask, bounds) {
+                        if !inside(mask, bounds) {
                             return;
                         }
                         let (frame, scale) = match viewport.size() {
@@ -1009,6 +1012,13 @@ impl Render for BrowserPane {
                         .child(self.dialog_card(&dialog, &host, &theme, cx)),
                 ))
             })
+            // A press on the page reaches here too (Chromium passes it up the views): the app's
+            // keys act on this pane from now, so ⌘W closes the pane and not the chat.
+            .on_mouse_down(gpui::MouseButton::Left, cx.listener(|pane, _, window, cx| {
+                if !pane.focus.is_focused(window) {
+                    window.focus(&pane.focus, cx);
+                }
+            }))
             .tag("browser-page");
 
         div()

@@ -224,12 +224,12 @@ pub struct TabState {
     pub crashed: Option<String>,
     /// The page failed to load: `(url, error)`, until the next navigation.
     pub load_error: Option<(String, String)>,
+    /// The agent's address rule stopped a navigation: `(url, why)`, until the next load. The page
+    /// it would have left is still there, so this is news, not a failed page.
+    pub refused: Option<(String, String)>,
     pub dialog: Option<Dialog>,
     /// Main-frame navigations so far; entries are labelled with it.
     pub page: u64,
-    /// How many times the page has taken keyboard focus (a click in it). The pane moves the app's
-    /// own focus to itself when this changes, so the app's keys act on the pane, not the composer.
-    pub focused: u64,
     /// The size the page is laid out at.
     pub viewport: Viewport,
     pub console: Ring<ConsoleEntry>,
@@ -246,9 +246,9 @@ impl Default for TabState {
             can_go_forward: false,
             crashed: None,
             load_error: None,
+            refused: None,
             dialog: None,
             page: 0,
-            focused: 0,
             viewport: Viewport::Fit,
             console: Ring::new(CONSOLE_CAPACITY),
             network: Ring::new(NETWORK_CAPACITY),
@@ -300,6 +300,7 @@ impl TabState {
         self.can_go_forward = can_go_forward;
         if loading {
             self.load_error = None;
+            self.refused = None;
         }
     }
 

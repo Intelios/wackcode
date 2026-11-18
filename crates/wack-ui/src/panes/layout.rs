@@ -647,10 +647,10 @@ pub(crate) mod tests {
                 layout.add(PaneKind::Terminal);
             }
             1 => {
-                layout.open([PaneKind::Changes, PaneKind::Build, PaneKind::Run][random.below(3)]);
+                layout.open([PaneKind::Changes, PaneKind::Build, PaneKind::Run, PaneKind::Browser][random.below(4)]);
             }
             2 => {
-                layout.toggle([PaneKind::Changes, PaneKind::Terminal, PaneKind::Build, PaneKind::Run][random.below(4)]);
+                layout.toggle([PaneKind::Changes, PaneKind::Terminal, PaneKind::Build, PaneKind::Run, PaneKind::Browser][random.below(5)]);
             }
             3 => {
                 if let Some(id) = any(random) {

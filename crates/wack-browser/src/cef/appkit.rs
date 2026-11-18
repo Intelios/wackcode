@@ -30,7 +30,7 @@ extern "C-unwind" fn set_handling_send_event(_this: &AnyObject, _sel: Sel, value
 
 extern "C-unwind" fn send_event(this: &NSApplication, _sel: Sel, event: &NSEvent) {
     let was = HANDLING_SEND_EVENT.swap(true, Ordering::Relaxed);
-    // A press outside every page takes the keyboard back from a page, before AppKit routes it.
+    // A press decides where the keyboard goes, before AppKit routes it (`before_press`).
     // Done here because the app's own views may never hear of the press (Chromium consumes
     // some, and passes others on), so they cannot be the ones to decide.
     // SAFETY: reads the event's type and location; NSEventType values are AppKit's.

@@ -480,6 +480,7 @@ async fn browser(window: AnyWindowHandle, cx: &mut AsyncApp, args: BrowserArgs) 
                         "page": state.page,
                         "dialog": state.dialog.as_ref().map(|d| d.message.clone()),
                         "load_error": state.load_error,
+                        "refused": state.refused,
                         "console": state.console.iter().map(|(_, e)| format!("[{}] {}", e.level.name(), e.text)).collect::<Vec<_>>(),
                         "network": state.network.iter().map(|(_, e)| format!("{} {} {:?} {:?}", e.method, e.url, e.status, e.failed)).collect::<Vec<_>>(),
                     })

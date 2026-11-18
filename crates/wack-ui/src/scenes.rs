@@ -1265,6 +1265,12 @@ pub fn all() -> Vec<Scene> {
             build: |_, cx| browser_scene(BrowserScene::Failed, None, cx),
         },
         Scene {
+            name: "browser-pane-crashed",
+            description: "A page whose process ended: a card in its place, with Reload.",
+            size: size(px(1480.), px(940.)),
+            build: |_, cx| browser_scene(BrowserScene::Crashed, None, cx),
+        },
+        Scene {
             name: "browser-pane-empty",
             description: "The Browser pane with no pages open.",
             size: size(px(1480.), px(940.)),
@@ -1496,13 +1502,14 @@ fn panes_scene(layout: Layout, ids: &[u32], sidebar_hidden: bool, cx: &mut App) 
     .into()
 }
 
-/// A chat with its agents at work and the Agents pane open on the one exploring.
+/// What the Browser pane shows in a browser scene.
 #[derive(Clone, Copy, PartialEq)]
 enum BrowserScene {
     Page,
     Agent,
     Dialog,
     Failed,
+    Crashed,
     Empty,
     Phone,
     Sizes,
@@ -1540,6 +1547,7 @@ fn browser_scene(scene: BrowserScene, backdrop: Option<crate::backdrop::Picture>
                         default_prompt: String::new(),
                     })
                 }),
+                BrowserScene::Crashed => tab.update(|state| state.crashed = Some("Out of memory".into())),
                 BrowserScene::Failed => tab.update(|state| {
                     state.load_error = Some(("http://localhost:5173/signup".into(), "ERR_CONNECTION_REFUSED".into()))
                 }),

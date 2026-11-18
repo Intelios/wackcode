@@ -182,7 +182,7 @@ impl ChatSession {
         runner: Runner,
         commands: (Option<String>, Option<String>),
         tasks_folder: PathBuf,
-        browser: (Arc<dyn wack_browser::Backend>, Vec<wack_browser::SavedTab>),
+        tabs: wack_browser::ChatTabs,
         cx: &mut Context<Self>,
     ) -> Self {
         let mut context_tokens = None;
@@ -216,10 +216,6 @@ impl ChatSession {
         agents.restore(saved_agents);
         let agents_watch = watch_agents(&agents, cx);
         panes.set_agents(agents.clone());
-        let (browser, saved_tabs) = browser;
-        let tabs = wack_browser::ChatTabs::new(Some(browser));
-        // Listed now, made into pages only when shown or used.
-        tabs.restore(saved_tabs);
         let browser_watch = watch_browser(&tabs, cx);
         panes.set_browser(tabs.clone());
         let mut chat = Self {
@@ -960,21 +956,22 @@ fn watch_tasks(tasks: &Tasks, cx: &mut Context<ChatSession>) -> Task<()> {
 /// every console line), so they are taken in batches, at most ten redraws a second.
 fn watch_browser(tabs: &wack_browser::ChatTabs, cx: &mut Context<ChatSession>) -> Task<()> {
     let (sender, mut receiver) = mpsc::unbounded::<wack_browser::Signal>();
+    // What the chat loaded with, so the first change after it is saved.
+    let restored = tabs.saved();
     tabs.set_observer(move |signal| {
         let _ = sender.unbounded_send(signal);
     });
     cx.spawn(async move |this, cx| {
-        let mut saved: Option<Vec<wack_browser::SavedTab>> = None;
+        let mut saved = restored;
         while receiver.next().await.is_some() {
             while receiver.try_recv().is_ok() {}
             let kept = this.update(cx, |chat, cx| {
                 chat.panes.refresh_browser(cx);
                 let now = chat.tabs.saved();
-                // The first look is what was restored, already saved.
-                if saved.as_ref().is_some_and(|saved| *saved != now) {
+                if saved != now {
                     cx.emit(ChatEvent::BrowserTabsChanged(now.clone()));
+                    saved = now;
                 }
-                saved = Some(now);
             });
             if kept.is_err() {
                 return;

@@ -499,28 +499,38 @@ fn holds_focus(view: &NSView) -> bool {
     }
 }
 
-/// Before AppKit routes a press in `window` at `point` (window coordinates): if a page has the
-/// keyboard and the press is not on it, the app's view takes the keyboard back.
+/// Before AppKit routes a press in `window` at `point` (window coordinates), the keyboard goes
+/// where the press is, at once: to the page under it (Chromium would take it only after a round
+/// trip through the page, so keys typed straight after the click went astray), or, off every
+/// page, back to the app's view if a page has it.
 fn before_press(window: *mut AnyObject, point: NSPoint) {
     let Some(host) = host_view() else { return };
     let Some(host_window) = host.window() else { return };
     if Retained::as_ptr(&host_window) as *mut AnyObject != window {
         return;
     }
-    let ids: Vec<TabId> = with_main(|main| main.pages.keys().copied().collect());
-    let Some(page) = ids.into_iter().filter_map(view_of).find(|view| holds_focus(view)) else { return };
     // SAFETY: hit-testing the live window's frame view, as AppKit is about to.
-    let on_page = unsafe {
+    let hit: Option<Retained<NSView>> = unsafe {
         let content: *mut AnyObject = msg_send![window, contentView];
         let frame: *mut AnyObject = msg_send![content, superview];
         let hit: *mut AnyObject = msg_send![frame, hitTest: point];
-        hit.as_ref().is_some_and(|hit| {
-            let hit = &*(hit as *const AnyObject as *const NSView);
-            hit.isDescendantOf(&page)
-        })
+        Retained::retain(hit as *mut NSView)
     };
-    if !on_page {
-        host_window.makeFirstResponder(Some(&host));
+    let ids: Vec<TabId> = with_main(|main| main.pages.keys().copied().collect());
+    let pages: Vec<(TabId, Retained<NSView>)> = ids.into_iter().filter_map(|id| Some((id, view_of(id)?))).collect();
+    let pressed = hit.as_ref().and_then(|hit| pages.iter().find(|(_, page)| hit.isDescendantOf(page)));
+    match pressed {
+        Some((id, page)) => {
+            let shown = with_main(|main| main.pages.get(id).is_some_and(|page| page.shown.is_some()));
+            if shown && !holds_focus(page) && let Some(hit) = &hit {
+                host_window.makeFirstResponder(Some(hit));
+            }
+        }
+        None => {
+            if pages.iter().any(|(_, page)| holds_focus(page)) {
+                host_window.makeFirstResponder(Some(&host));
+            }
+        }
     }
 }
 
@@ -696,11 +706,6 @@ wrap_focus_handler! {
             i32::from(parked)
         }
 
-        fn on_got_focus(&self, _browser: Option<&mut Browser>) {
-            if let Some(tab) = tab_of(self.tab) {
-                tab.update(|state| state.focused += 1);
-            }
-        }
     }
 }
 
@@ -951,8 +956,8 @@ wrap_request_handler! {
             error_string: Option<&CefString>,
         ) {
             if let Some(tab) = tab_of(self.tab) {
+                // Chromium's own words, which may be none: the pane says the rest.
                 let reason = text(error_string);
-                let reason = if reason.is_empty() { "The page stopped working.".to_string() } else { reason };
                 tab.update(|state| state.crashed = Some(reason));
             }
         }
@@ -964,7 +969,7 @@ fn refuse(id: TabId, url: &str, error: &str) {
     if let Some(tab) = tab_of(id) {
         tab.update(|state| {
             state.push_console(Level::Error, &format!("Navigation blocked: {error}"), None);
-            state.load_error = Some((url.to_string(), error.to_string()));
+            state.refused = Some((url.to_string(), error.to_string()));
         });
     }
 }

@@ -162,6 +162,9 @@ pub struct AppState {
     command_event_tx: mpsc::UnboundedSender<CommandEvent>,
     /// Draft panes (for example Build / Run output) open on `Screen::NewChat` before a chat starts.
     new_chat_panes: HashMap<String, ChatPanes>,
+    /// Browser tabs opened on `Screen::NewChat`, handed to the chat its first message made, by
+    /// chat id, so its pages carry on rather than load again.
+    handed_tabs: HashMap<String, wack_browser::ChatTabs>,
     /// The open Build/Run command editor popover, if any.
     pub command_editor: Option<CommandEditorState>,
     /// Chats open as tabs, in order.
@@ -326,6 +329,7 @@ impl AppState {
             runs,
             command_event_tx,
             new_chat_panes: HashMap::new(),
+            handed_tabs: HashMap::new(),
             command_editor: None,
             appearance_notice: None,
             importing: false,
@@ -1418,11 +1422,20 @@ impl AppState {
         };
         // Preserve any Build/Run output panes opened on NewChat into the new chat's layout so
         // live command output stays visible seamlessly after the first message sends.
-        if let Some(draft_panes) = self.new_chat_panes.remove(&project)
+        let draft_panes = self.new_chat_panes.remove(&project);
+        if let Some(draft_panes) = &draft_panes
             && !draft_panes.layout.panes().is_empty()
             && let Some(value) = serde_json::to_value(&draft_panes.layout).ok()
         {
             let _ = self.store.set_layout(&chat.id, Some(value));
+        }
+        // Pages opened before the chat existed are the chat's now, still live.
+        if let Some(tabs) = draft_panes.as_ref().and_then(|panes| panes.browser()).filter(|tabs| !tabs.saved().is_empty()) {
+            let value = serde_json::to_value(tabs.saved()).ok();
+            if let Err(message) = self.store.set_browser_tabs(&chat.id, value) {
+                self.notice = Some(message.into());
+            }
+            self.handed_tabs.insert(chat.id.clone(), tabs.clone());
         }
         // The next new chat starts in Build again: a chat's mode is its own.
         self.new_chat_mode = AgentMode::Build;
@@ -2353,10 +2366,15 @@ impl AppState {
         let layout = Layout::from_saved(chat.layout.as_ref());
         let runner = self.runs.clone();
         let tasks_folder = self.store.tasks_folder(chat);
-        let saved_tabs: Vec<wack_browser::SavedTab> =
-            chat.browser_tabs.as_ref().and_then(|value| serde_json::from_value(value.clone()).ok()).unwrap_or_default();
-        let browser = (self.browser.clone(), saved_tabs);
-        let session = cx.new(|cx| ChatSession::load(&chat.id, cwd, &path, layout, runner, commands, tasks_folder, browser, cx));
+        let tabs = self.handed_tabs.remove(&chat.id).unwrap_or_else(|| {
+            let saved: Vec<wack_browser::SavedTab> =
+                chat.browser_tabs.as_ref().and_then(|value| serde_json::from_value(value.clone()).ok()).unwrap_or_default();
+            let tabs = wack_browser::ChatTabs::new(Some(self.browser.clone()));
+            // Listed now, made into pages only when shown or used.
+            tabs.restore(saved);
+            tabs
+        });
+        let session = cx.new(|cx| ChatSession::load(&chat.id, cwd, &path, layout, runner, commands, tasks_folder, tabs, cx));
         let id = chat.id.clone();
         // Cards read their dismissals and opened links from the store as it stands now.
         let view = self.suggestion_view(chat);
@@ -2675,6 +2693,30 @@ impl AppState {
                 project.command(CommandKind::Run).map(str::to_string),
                 cx,
             );
+            // Tabs of their own, so the Browser pane works before the first message; that
+            // message's chat takes them over (`handed_tabs`).
+            let tabs = wack_browser::ChatTabs::new(Some(self.browser.clone()));
+            let (sender, mut receiver) = mpsc::unbounded::<wack_browser::Signal>();
+            tabs.set_observer(move |signal| {
+                let _ = sender.unbounded_send(signal);
+            });
+            let watched = project_id.clone();
+            cx.spawn(async move |app, cx| {
+                while receiver.next().await.is_some() {
+                    while receiver.try_recv().is_ok() {}
+                    let kept = app.update(cx, |app, cx| {
+                        if let Some(panes) = app.new_chat_panes.get(&watched) {
+                            panes.refresh_browser(cx);
+                        }
+                    });
+                    if kept.is_err() {
+                        return;
+                    }
+                    cx.background_executor().timer(std::time::Duration::from_millis(100)).await;
+                }
+            })
+            .detach();
+            panes.set_browser(tabs);
             self.new_chat_panes.insert(project_id.clone(), panes);
         }
         let panes = self.new_chat_panes.get_mut(&project_id)?;

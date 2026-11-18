@@ -1,6 +1,6 @@
 # Architecture
 
-WackCode 3 is one Rust process. There is no Node worker, no IPC protocol and no web UI. The browser (in progress) adds Chromium's own helper processes through CEF, which is why the app runs from a bundle ([cef.md](cef.md)).
+WackCode 3 is one Rust process. There is no Node worker, no IPC protocol and no web UI. The browser adds Chromium's own helper processes through CEF, which is why the app runs from a bundle ([cef.md](cef.md)).
 
 ## Crates
 
@@ -118,7 +118,7 @@ Built so far:
 Known gaps in the agent core, to close as the features that need them arrive:
 
 - Only the Chat Completions format has run against a live endpoint (the Testing connection: multi-tool tasks, resume across models, stop mid-command, a message sent mid-run). The Anthropic and OpenAI Responses formats are tested against recorded streams only.
-- Tools can return pictures, but only future ones (the browser) do: `read` still refuses images, MCP results still name their images without sending them, and Settings › Providers has no switch for a model's `accepts_images` yet. The transcript shows a result's text, not its pictures.
+- Tools can return pictures, but only the browser's screenshots do: `read` still refuses images, MCP results still name their images without sending them, and Settings › Providers has no switch for a model's `accepts_images` yet. The transcript shows a result's text, not its pictures.
 - Settings › Prompts (editing the built-in prompts, as version 2 allowed) is deferred; the prompt builders are written so overrides can slot in.
 - MCP is tools only: no resources, prompts, sampling or OAuth sign-in (a token goes in a header). There is no context breakdown yet, so MCP tools have no group of their own to show in one.
 
@@ -135,6 +135,6 @@ Known gaps in identity:
 
 - The window's own controls follow macOS's light or dark, not the one chosen in Settings.
 
-The foundation (phases 0 to 4) is complete: the owner signed off its look on 2026-11-15. Features now return in this order, each with its own plan: Plan and Ultra Plan with the question dialog, todo list and Ultra reasoning (done); Memory (done); Build and Run (done); auto titles and renaming a chat (done); skills and slash commands (done); background shell jobs (done); the usage ledger writer (done); git (done); MCP and web tools (done); sub-agents (done); task suggestions (done); the browser pane, visual replies and canvas; the Chat area; computer use, the skill creator, signature motion and Liquid Glass.
+The foundation (phases 0 to 4) is complete: the owner signed off its look on 2026-11-15. Features now return in this order, each with its own plan: Plan and Ultra Plan with the question dialog, todo list and Ultra reasoning (done); Memory (done); Build and Run (done); auto titles and renaming a chat (done); skills and slash commands (done); background shell jobs (done); the usage ledger writer (done); git (done); MCP and web tools (done); sub-agents (done); task suggestions (done); the browser (done: the pane, the agent's tools, previews and Settings › Browser); visual replies and canvas; the Chat area; computer use, the skill creator, signature motion and Liquid Glass.
 
 Update this section as each piece lands.

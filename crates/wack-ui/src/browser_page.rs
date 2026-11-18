@@ -95,10 +95,10 @@ pub fn page(data: BrowserData, theme: &Theme) -> impl IntoElement {
     };
     let outcome: Option<(SharedString, bool)> = match &data.clearing {
         Clearing::Idle => None,
-        Clearing::Confirming => Some(("Every site signs you out, and what they stored is deleted. This can’t be undone.".into(), false)),
+        Clearing::Confirming => Some(("What every site stored here is deleted, sign-ins included. This can’t be undone.".into(), false)),
         Clearing::Cleared => Some(("Cleared: no site has anything stored in WackCode’s browser.".into(), false)),
         Clearing::Pending => Some((
-            "Cookies are gone, so sites have signed you out. The rest (site storage, cache, history) is deleted when WackCode next starts, with anything you sign in to before then."
+            "Cookies are gone, which signs you out of most sites. The rest (site storage, cache, history) is deleted when WackCode next starts, with anything you sign in to before then; a site that keeps its sign-in in storage stays signed in until then."
                 .into(),
             false,
         )),

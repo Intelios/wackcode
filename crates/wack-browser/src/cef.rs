@@ -1372,9 +1372,10 @@ pub fn clear_browsing_data() -> Result<Cleared, String> {
         return Ok(Cleared::Everything);
     }
     std::fs::write(root.join(CLEAR_MARK), b"").map_err(|_| "Could not mark the browser's data to be cleared.".to_string())?;
-    // Cookies only. With `clear_http_auth_credentials` and `close_all_connections` on the
-    // global request context as well, CEF 156 crashed in its message loop moments later
-    // (2026-11-18); neither is kept on disk, so the restart's wipe covers them.
+    // Cookies only. With the cookie store's `flush_store` and the global request context's
+    // `clear_http_auth_credentials` and `close_all_connections` as well, CEF 156 crashed in its
+    // message loop moments later (2026-11-18; which of the three was not narrowed down).
+    // None of them is needed: the restart's wipe covers the rest.
     if let Some(cookies) = cef::cookie_manager_get_global_manager(None) {
         cookies.delete_cookies(None, None, None);
     }
@@ -1460,5 +1461,35 @@ mod tests {
         for host in BLOCKED_HOSTS {
             assert!(host.contains("google") || host.contains("gvt1"), "{host}");
         }
+    }
+}
+
+#[cfg(test)]
+mod clearing_tests {
+    use super::*;
+
+    #[test]
+    fn a_clear_left_for_the_next_start_takes_the_profile_and_its_mark() {
+        let root = tempfile::tempdir().unwrap();
+        std::fs::create_dir_all(root.path().join("profile/Default")).unwrap();
+        std::fs::write(root.path().join("profile/Default/Cookies"), b"x").unwrap();
+        finish_clearing(root.path());
+        assert!(root.path().join("profile/Default/Cookies").exists(), "no mark: the profile stays");
+        assert!(!clearing_pending(root.path()));
+
+        std::fs::write(root.path().join(CLEAR_MARK), b"").unwrap();
+        assert!(clearing_pending(root.path()));
+        finish_clearing(root.path());
+        assert!(!root.path().join("profile").exists());
+        assert!(!clearing_pending(root.path()));
+        std::fs::write(root.path().join("browser.log"), b"kept").unwrap();
+        finish_clearing(root.path());
+        assert!(root.path().join("browser.log").exists(), "only the profile goes");
+    }
+
+    #[test]
+    fn the_version_names_chromium_and_cef() {
+        let version = version();
+        assert!(version.starts_with("Chromium ") && version.contains(" (CEF "), "{version}");
     }
 }

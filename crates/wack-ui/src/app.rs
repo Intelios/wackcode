@@ -1286,6 +1286,10 @@ impl AppState {
                 if self.settings_section == Section::Git {
                     self.git_error = None;
                 }
+                // A confirm left open is not still waiting when Settings opens again.
+                if matches!(self.browser_clearing, crate::browser_page::Clearing::Confirming) {
+                    self.browser_clearing = Default::default();
+                }
             }
             Selection::Welcome => {}
         }

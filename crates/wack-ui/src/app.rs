@@ -2204,8 +2204,9 @@ impl AppState {
         };
         match outgoing {
             Outgoing::Builtin { name, args } => {
+                // WackCode's own commands take words only: the pictures wait for a message.
                 if self.builtin(chat, name, &args, cx) {
-                    clear(cx);
+                    composer.update(cx, |composer, cx| composer.set_text("", cx));
                 }
             }
             outgoing if running => {

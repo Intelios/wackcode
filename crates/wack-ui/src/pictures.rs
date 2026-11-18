@@ -319,6 +319,8 @@ impl RenderOnce for LightboxView {
                 .top_0()
                 .size_full()
                 .bg(scrim)
+                // Nothing under the lightbox takes a click, a scroll or a hover while it is open.
+                .occlude()
                 .flex()
                 .flex_col()
                 .items_center()

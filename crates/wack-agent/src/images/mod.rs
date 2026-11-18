@@ -5,13 +5,14 @@
 //! - A model that does not accept images gets none: tool results' pictures are dropped and their
 //!   text says so, and a picture the user attached becomes a line saying it was left out. Decided
 //!   per request, since a chat can carry on with another model.
-//! - Otherwise the newest message's pictures are always sent: the model has not seen them yet,
+//! - Otherwise every picture after the model's last reply is always sent (the turn's results, the
+//!   user's message, and the app's notes that may follow them): the model has not seen them yet,
 //!   and eliding a batch it just asked for is what traps a model in taking it again and again (the
 //!   loop version 2 fell into). Older pictures, the user's and the tools' alike, are sent while the
 //!   request stays within [`MAX_IMAGES`] and [`MAX_BYTES`]; past that the oldest are elided, each
 //!   leaving a line that says what it was and that the model already saw it.
-//! - The cut moves only in steps of `BATCH` and only forward: it is a function of the pictures
-//!   before the newest message, a list that only ever grows at its end, so between moves the start
+//! - The cut moves only in steps of `BATCH` and only forward: it is a function of the pictures up
+//!   to the model's last reply, a list that only ever grows at its end, so between moves the start
 //!   of the request is unchanged and the provider's prompt cache holds.
 //!
 //! [`cap_turn`] keeps the newest message itself within the budget: it runs once, when a turn's
@@ -31,7 +32,7 @@ pub mod view;
 
 pub use store::{Images, reference};
 
-use wack_llm::{Block, Image, Message};
+use wack_llm::{Block, Image, Message, Role};
 
 use crate::tool::ToolOutput;
 
@@ -48,8 +49,11 @@ pub fn prepare(messages: &mut [Message], accepts_images: bool) {
         leave_out(messages);
         return;
     }
-    let Some((newest, older)) = messages.split_last_mut() else { return };
-    let kept: Vec<usize> = pictures(std::slice::from_ref(newest)).collect();
+    // Unseen: everything after the model's last reply. A note saved after a turn's results
+    // (a task's news) must not make those results "older".
+    let seen = messages.iter().rposition(|message| message.role == Role::Assistant).map_or(0, |at| at + 1);
+    let (older, unseen) = messages.split_at_mut(seen);
+    let kept: Vec<usize> = pictures(unseen).collect();
     let sizes: Vec<usize> = pictures(older).collect();
     let mut elide = elided_count(&sizes, kept.len(), kept.iter().sum());
     for block in older.iter_mut().flat_map(|message| message.content.iter_mut()) {
@@ -244,9 +248,16 @@ mod tests {
             .collect()
     }
 
-    fn prepared(mut messages: Vec<Message>) -> Vec<Message> {
-        prepare(&mut messages, true);
-        messages
+    fn reply() -> Message {
+        Message { role: Role::Assistant, content: vec![Block::Text { text: "next".into() }] }
+    }
+
+    /// `messages` prepared as turns, each after a reply from the model (taken out again, so the
+    /// indices are the test's own).
+    fn prepared(messages: Vec<Message>) -> Vec<Message> {
+        let mut turns: Vec<Message> = messages.into_iter().flat_map(|message| [reply(), message]).collect();
+        prepare(&mut turns, true);
+        turns.into_iter().filter(|message| message.role == Role::User).collect()
     }
 
     #[test]
@@ -277,6 +288,20 @@ mod tests {
         let Block::ToolResult { images, .. } = &messages[10].content[0] else { panic!() };
         assert_eq!(images.len(), MAX_IMAGES);
         assert_eq!(sent(&messages).len(), MAX_IMAGES, "all ten older ones go to make room");
+    }
+
+    #[test]
+    fn a_note_after_the_results_leaves_them_unseen() {
+        // The app saves a task's news as its own message after a turn's results, before the
+        // next request: the results are still the batch the model hasn't seen.
+        let mut messages: Vec<Message> = conversation(15).into_iter().flat_map(|message| [reply(), message]).collect();
+        messages.push(reply());
+        messages.push(turn(vec![result("batch", (0..10).map(|index| image(&format!("b{index}"))))]));
+        messages.push(Message::user("Task 3 finished."));
+        prepare(&mut messages, true);
+        let Block::ToolResult { images, .. } = &messages[messages.len() - 2].content[0] else { panic!() };
+        assert_eq!(images.len(), 10);
+        assert!(sent(&messages).len() <= MAX_IMAGES);
     }
 
     #[test]

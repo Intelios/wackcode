@@ -89,6 +89,11 @@ pub struct ChatSession {
     pub panes: ChatPanes,
     /// Sent one at a time after the run ends.
     pub queue: Vec<String>,
+    /// Pictures attached to the message being written.
+    pub attachments: Vec<crate::attachments::Attachment>,
+    /// Pictures of queued messages, by the message's text: sent with it, or back in the tray
+    /// when it comes back to the composer. A message with pictures always queues, never steers.
+    pub queued_pictures: Vec<(String, Vec<crate::attachments::Attachment>)>,
     /// Handed to the run, not yet delivered to the model.
     pub steering: Vec<String>,
     run: Option<Running>,
@@ -208,7 +213,7 @@ impl ChatSession {
         let mut panes = ChatPanes::new(layout, cwd.clone());
         panes.set_runner(runner);
         panes.set_commands(commands.0, commands.1, cx);
-        let composer = cx.new(|cx| TextField::new(Type::Body, FOLLOW_UP_PLACEHOLDER, cx).multiline(12));
+        let composer = cx.new(|cx| TextField::new(Type::Body, FOLLOW_UP_PLACEHOLDER, cx).multiline(12).takes_pictures());
         let tasks = Tasks::new(tasks_folder);
         let tasks_watch = watch_tasks(&tasks, cx);
         panes.set_tasks(tasks.clone());
@@ -233,6 +238,8 @@ impl ChatSession {
             composer,
             panes,
             queue: Vec::new(),
+            attachments: Vec::new(),
+            queued_pictures: Vec::new(),
             steering: Vec::new(),
             run: None,
             runs_started: 0,
@@ -342,6 +349,8 @@ impl ChatSession {
         match &job {
             Job::Prompt(text) => self.conversation.send(text, now_millis()),
             Job::Command { text, command } => self.conversation.send_command(text, command.clone(), now_millis()),
+            Job::Attached { text, command: None, .. } => self.conversation.send(text, now_millis()),
+            Job::Attached { text, command: Some(command), .. } => self.conversation.send_command(text, command.clone(), now_millis()),
             Job::Compact(_) => self.conversation.begin_compaction(),
             Job::Wake => self.conversation.wake(now_millis()),
         }
@@ -437,7 +446,7 @@ impl ChatSession {
                 }
                 TextFieldEvent::Enter => chat.next_question(cx),
                 TextFieldEvent::SendNow => chat.submit_answers(cx),
-                TextFieldEvent::Moved | TextFieldEvent::Menu(_) => {}
+                TextFieldEvent::Moved | TextFieldEvent::Menu(_) | TextFieldEvent::PastedPictures => {}
             }));
             others.push(field);
         }
@@ -556,6 +565,14 @@ impl ChatSession {
             run.control.steer(text.clone());
             self.steering.push(text);
             cx.notify();
+        }
+    }
+
+    /// The pictures queued with `text`, taken out of the queue's keeping.
+    pub fn take_queued_pictures(&mut self, text: &str) -> Vec<crate::attachments::Attachment> {
+        match self.queued_pictures.iter().position(|(queued, _)| queued == text) {
+            Some(at) => self.queued_pictures.remove(at).1,
+            None => Vec::new(),
         }
     }
 

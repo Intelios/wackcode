@@ -279,6 +279,27 @@ pub fn all() -> Vec<Scene> {
             },
         },
         Scene {
+            name: "composer-attachments",
+            description: "Pictures attached to a message: three in the tray, words with two, and a model without Vision holding Send.",
+            size: size(px(760.), px(640.)),
+            build: |_, cx| {
+                let drawn = |text: Option<&str>| Input::Drawn { text: text.map(|text| text.to_string().into()), placeholder: crate::chat::FOLLOW_UP_PLACEHOLDER.into() };
+                let composer = |text, count| ComposerData { attachments: fixtures::attachments(count), ..fixtures::composer_after_turn(drawn(text)) };
+                let rows = vec![
+                    ("Three pictures, no words", composer(None, 3)),
+                    ("Words and two pictures", composer(Some("Make the login page match the mockup."), 2)),
+                    (
+                        "A model without Vision",
+                        ComposerData {
+                            pictures_refused: Some("GLM-5.3-Flash doesn't accept pictures. Turn on Vision for it in Settings › Providers, or remove the pictures.".into()),
+                            ..composer(Some("What's wrong here?"), 1)
+                        },
+                    ),
+                ];
+                cx.new(|_| ComposerSheet { rows }).into()
+            },
+        },
+        Scene {
             name: "effort-slider",
             description: "The effort slider at High, opened from the effort's pill in the smallest window.",
             size: size(px(716.), px(720.)),

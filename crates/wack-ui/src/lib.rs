@@ -4,6 +4,7 @@
 
 pub mod actions;
 pub mod app;
+pub mod attachments;
 pub mod appearance_page;
 #[cfg(feature = "automation")]
 pub mod automation;

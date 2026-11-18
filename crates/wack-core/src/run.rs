@@ -79,6 +79,10 @@ pub enum Job {
     /// Send a message the user wrote as a slash command: `text` is what the model gets, already
     /// expanded, and `command` what they typed, kept for the transcript.
     Command { text: String, command: CommandUse },
+    /// A message with pictures the user attached (originals, as read from their files or the
+    /// clipboard): `text` as `Prompt`'s, or `Command`'s when `command` is set. The agent makes
+    /// the viewing copies and saves the originals for the chat.
+    Attached { text: String, command: Option<CommandUse>, images: Vec<wack_llm::Image> },
     /// Summarise the older part of the conversation now, with an optional focus (`/compact`'s).
     Compact(Option<String>),
     /// Tell the model what its background tasks reported while the chat was idle, and let it
@@ -172,7 +176,7 @@ pub async fn run(
     }
     if let Some(agents) = setup.agents {
         // A message from the user lets sub-agents start again.
-        if matches!(job, Job::Prompt(_) | Job::Command { .. }) {
+        if matches!(job, Job::Prompt(_) | Job::Command { .. } | Job::Attached { .. }) {
             agents.agents.reset_budget();
         }
         kit = kit.with_agents(&session, agents);
@@ -228,6 +232,7 @@ pub async fn run(
     let result = match job {
         Job::Prompt(prompt) => agent.run(&prompt, &control, &sink).await,
         Job::Command { text, command } => agent.run_as(&text, Some(command), &control, &sink).await,
+        Job::Attached { text, command, images } => agent.run_with(&text, images, command, &control, &sink).await,
         Job::Wake => agent.wake(&control, &sink).await,
         Job::Compact(focus) => agent
             .compact(focus.as_deref().filter(|focus| !focus.trim().is_empty()), false, &control, &sink)

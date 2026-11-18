@@ -163,6 +163,18 @@ pub enum TextFieldEvent {
     Moved,
     /// A list's key, while [`TextField::set_completing`] is on.
     Menu(MenuKey),
+    /// Pictures or files were pasted into a field that takes them ([`TextField::takes_pictures`]):
+    /// collect them with [`TextField::take_pasted`].
+    PastedPictures,
+}
+
+/// Something pasted into a field that takes pictures.
+#[derive(Clone, Debug, PartialEq)]
+pub enum Pasted {
+    /// A picture's bytes, as the clipboard held it.
+    Picture(Vec<u8>),
+    /// A file copied in the Finder.
+    File(std::path::PathBuf),
 }
 
 /// What the last frame drew, for turning positions into offsets and back.
@@ -197,6 +209,9 @@ pub struct TextField {
     completing: bool,
     /// Drawn in the accent colour.
     highlight: Option<Range<usize>>,
+    /// Pastes pictures and files instead of ignoring them.
+    pictures: bool,
+    pasted: Vec<Pasted>,
 }
 
 impl EventEmitter<TextFieldEvent> for TextField {}
@@ -224,7 +239,21 @@ impl TextField {
             goal_x: None,
             completing: false,
             highlight: None,
+            pictures: false,
+            pasted: Vec::new(),
         }
+    }
+
+    /// Takes pasted pictures and files: a paste with no text holds them for
+    /// [`TextField::take_pasted`] and emits [`TextFieldEvent::PastedPictures`].
+    pub fn takes_pictures(mut self) -> Self {
+        self.pictures = true;
+        self
+    }
+
+    /// What was pasted since the last call.
+    pub fn take_pasted(&mut self) -> Vec<Pasted> {
+        std::mem::take(&mut self.pasted)
     }
 
     /// Lets the text run over several rows, scrolling past `max_rows`.
@@ -599,7 +628,39 @@ impl TextField {
     }
 
     fn paste(&mut self, _: &Paste, _: &mut Window, cx: &mut Context<Self>) {
-        let Some(text) = cx.read_from_clipboard().and_then(|item| item.text()) else {
+        let Some(item) = cx.read_from_clipboard() else {
+            return;
+        };
+        // Files copied in the Finder come as paths (their names ride along as text). Otherwise text
+        // wins: a copy from a web page or an editor often carries a picture of itself too.
+        let text = item.text();
+        if self.pictures {
+            let files: Vec<Pasted> = item
+                .entries()
+                .iter()
+                .filter_map(|entry| match entry {
+                    gpui::ClipboardEntry::ExternalPaths(paths) => Some(paths.paths().iter().cloned().map(Pasted::File)),
+                    _ => None,
+                })
+                .flatten()
+                .collect();
+            let pictures: Vec<Pasted> = item
+                .entries()
+                .iter()
+                .filter_map(|entry| match entry {
+                    gpui::ClipboardEntry::Image(image) => Some(Pasted::Picture(image.bytes.clone())),
+                    _ => None,
+                })
+                .collect();
+            let no_text = text.as_deref().is_none_or(|text| text.trim().is_empty());
+            let pasted = if !files.is_empty() { files } else if no_text { pictures } else { Vec::new() };
+            if !pasted.is_empty() {
+                self.pasted.extend(pasted);
+                cx.emit(TextFieldEvent::PastedPictures);
+                return;
+            }
+        }
+        let Some(text) = text else {
             return;
         };
         let text = text.replace("\r\n", "\n").replace('\r', "\n");

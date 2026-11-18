@@ -121,6 +121,8 @@ pub struct AppState {
     branches: HashMap<String, Option<String>>,
     /// The new-chat composer, shared by every project.
     pub draft: Entity<TextField>,
+    /// Pictures attached to the new chat's first message.
+    pub draft_attachments: Vec<crate::attachments::Attachment>,
     /// The mode the new chat starts in.
     pub new_chat_mode: AgentMode,
     /// Why the last chat could not start, shown under the new-chat composer.
@@ -244,7 +246,7 @@ impl AppState {
     }
 
     pub fn new(store: Store, cx: &mut Context<Self>) -> Self {
-        let draft = cx.new(|cx| TextField::new(Type::Body, NEW_CHAT_PLACEHOLDER, cx).multiline(14));
+        let draft = cx.new(|cx| TextField::new(Type::Body, NEW_CHAT_PLACEHOLDER, cx).multiline(14).takes_pictures());
         let draft_subscription = cx.subscribe(&draft, |app, _, event, cx| match event {
             TextFieldEvent::Enter | TextFieldEvent::SendNow => app.start_chat(cx),
             TextFieldEvent::Changed => {
@@ -255,6 +257,7 @@ impl AppState {
             }
             TextFieldEvent::Moved => app.composer_changed(None, cx),
             TextFieldEvent::Menu(key) => app.slash_key(None, *key, cx),
+            TextFieldEvent::PastedPictures => app.paste_pictures(None, cx),
         });
         let form = ProviderForm::new(cx);
         let mcp = wack_core::mcp_client::Hub::new(Some(store.mcp_cache_folder()));
@@ -309,6 +312,7 @@ impl AppState {
             open_projects: HashSet::new(),
             branches: HashMap::new(),
             draft,
+            draft_attachments: Vec::new(),
             slash: None,
             slash_dismissed: None,
             commands: Vec::new(),
@@ -605,7 +609,7 @@ impl AppState {
                     }
                     cx.notify();
                 }
-                TextFieldEvent::Moved | TextFieldEvent::Menu(_) => {}
+                TextFieldEvent::Moved | TextFieldEvent::Menu(_) | TextFieldEvent::PastedPictures => {}
             }));
         }
     }
@@ -936,7 +940,7 @@ impl AppState {
                     }
                     cx.notify();
                 }
-                TextFieldEvent::Moved | TextFieldEvent::Menu(_) => {}
+                TextFieldEvent::Moved | TextFieldEvent::Menu(_) | TextFieldEvent::PastedPictures => {}
             }));
         }
     }
@@ -1441,7 +1445,8 @@ impl AppState {
             return;
         };
         let text = self.draft.read(cx).text().trim().to_string();
-        if text.is_empty() {
+        let pictures = self.draft_attachments.clone();
+        if text.is_empty() && pictures.is_empty() {
             return;
         }
         let cwd = self.store.project(&project).map(|project| project.path.clone()).unwrap_or_else(|| PathBuf::from("/"));
@@ -1472,8 +1477,15 @@ impl AppState {
             cx.notify();
             return;
         }
+        if let Some(refused) = self.pictures_refused(&choice, pictures.len()) {
+            self.notice = Some(refused.into());
+            cx.notify();
+            return;
+        }
+        let job = with_pictures(job, &pictures);
+        let opening = if opening.is_empty() { pictures.iter().map(|picture| picture.name.to_string()).collect::<Vec<_>>().join(", ") } else { opening };
         let title = match &job {
-            Job::Command { command, .. } => title_from(&command.line()),
+            Job::Command { command, .. } | Job::Attached { command: Some(command), .. } => title_from(&command.line()),
             _ => title_from(&text),
         };
         let chat = match self.store.create_chat(&project, &title, choice, self.new_chat_mode, None) {
@@ -1507,6 +1519,7 @@ impl AppState {
             draft.set_text("", cx);
             draft.set_placeholder(placeholder(AgentMode::Build, true), cx);
         });
+        self.draft_attachments.clear();
         self.select(Selection::Chat(chat.id.clone()), cx);
         self.run(&chat.id, job, cx);
         self.start_title(&chat.id, &opening, cx);
@@ -1596,6 +1609,114 @@ impl AppState {
     }
 
     /// A word to the user in a chat's transcript.
+    /// The chat whose composer is on screen, or `None` for the new chat's.
+    pub fn composing_in(&self) -> Option<Option<String>> {
+        match &self.selection {
+            Selection::Chat(id) => Some(Some(id.clone())),
+            Selection::NewChat(_) => Some(None),
+            _ => None,
+        }
+    }
+
+    /// The pictures attached to `chat`'s message, or the new chat's.
+    pub fn attachments(&self, chat: Option<&str>, cx: &App) -> Vec<crate::attachments::Attachment> {
+        match chat {
+            Some(chat) => self.sessions.get(chat).map(|session| session.read(cx).attachments.clone()).unwrap_or_default(),
+            None => self.draft_attachments.clone(),
+        }
+    }
+
+    fn set_attachments(&mut self, chat: Option<&str>, attachments: Vec<crate::attachments::Attachment>, cx: &mut Context<Self>) {
+        match chat {
+            Some(chat) => {
+                if let Some(session) = self.sessions.get(chat) {
+                    session.update(cx, |session, cx| {
+                        session.attachments = attachments;
+                        cx.notify();
+                    });
+                }
+            }
+            None => self.draft_attachments = attachments,
+        }
+        cx.notify();
+    }
+
+    /// A refusal while attaching: in the chat's transcript, or the new chat's notice.
+    fn attach_problem(&mut self, chat: Option<&str>, problem: String, cx: &mut Context<Self>) {
+        match chat {
+            Some(chat) => self.note(chat, &problem, cx),
+            None => {
+                self.notice = Some(problem.into());
+                cx.notify();
+            }
+        }
+    }
+
+    /// Attaches the files at `paths` to `chat`'s message (the new chat's for `None`), reading them
+    /// off the main thread.
+    pub fn attach_paths(&mut self, chat: Option<String>, paths: Vec<PathBuf>, cx: &mut Context<Self>) {
+        let sources = paths.into_iter().map(crate::text_field::Pasted::File).collect();
+        self.attach(chat, sources, cx);
+    }
+
+    /// What was pasted into `chat`'s composer (the new chat's for `None`).
+    pub fn paste_pictures(&mut self, chat: Option<String>, cx: &mut Context<Self>) {
+        let field = match chat.as_deref() {
+            Some(chat) => self.sessions.get(chat).map(|session| session.read(cx).composer.clone()),
+            None => Some(self.draft.clone()),
+        };
+        let Some(field) = field else { return };
+        let pasted = field.update(cx, |field, _| field.take_pasted());
+        self.attach(chat, pasted, cx);
+    }
+
+    fn attach(&mut self, chat: Option<String>, sources: Vec<crate::text_field::Pasted>, cx: &mut Context<Self>) {
+        if sources.is_empty() {
+            return;
+        }
+        let read = cx.background_spawn(async move {
+            sources
+                .into_iter()
+                .map(|source| match source {
+                    crate::text_field::Pasted::File(path) => crate::attachments::Attachment::from_path(&path),
+                    crate::text_field::Pasted::Picture(bytes) => crate::attachments::Attachment::from_bytes(bytes, "Pasted picture"),
+                })
+                .collect::<Vec<_>>()
+        });
+        cx.spawn(async move |app, cx| {
+            let read = read.await;
+            let _ = app.update(cx, |app, cx| {
+                let mut list = app.attachments(chat.as_deref(), cx);
+                let problem = crate::attachments::add(&mut list, read);
+                app.set_attachments(chat.as_deref(), list, cx);
+                if let Some(problem) = problem {
+                    app.attach_problem(chat.as_deref(), problem, cx);
+                }
+            });
+        })
+        .detach();
+    }
+
+    pub fn remove_attachment(&mut self, chat: Option<String>, index: usize, cx: &mut Context<Self>) {
+        let mut list = self.attachments(chat.as_deref(), cx);
+        if index < list.len() {
+            list.remove(index);
+            self.set_attachments(chat.as_deref(), list, cx);
+        }
+    }
+
+    /// Why `choice`'s model can't take the attached pictures, when it can't.
+    pub fn pictures_refused_for(&self, choice: &ModelChoice, pictures: usize) -> Option<String> {
+        self.pictures_refused(choice, pictures)
+    }
+
+    fn pictures_refused(&self, choice: &ModelChoice, pictures: usize) -> Option<String> {
+        let resolved = self.store.resolve(choice)?;
+        (pictures > 0 && !resolved.model.accepts_images).then(|| {
+            format!("{} doesn't accept pictures. Turn on Vision for it in Settings › Providers, or remove the pictures.", resolved.model.id)
+        })
+    }
+
     fn note(&mut self, chat: &str, message: &str, cx: &mut Context<Self>) {
         if let Some(session) = self.sessions.get(chat) {
             session.update(cx, |session, cx| session.note(message.to_string(), cx));
@@ -1942,7 +2063,7 @@ impl AppState {
         let save_on_enter = move |app: &mut AppState, event: &TextFieldEvent, cx: &mut Context<AppState>| match event {
             TextFieldEvent::Enter | TextFieldEvent::SendNow => app.save_memory(cx),
             TextFieldEvent::Changed => changed(app, cx),
-            TextFieldEvent::Moved | TextFieldEvent::Menu(_) => {}
+            TextFieldEvent::Moved | TextFieldEvent::Menu(_) | TextFieldEvent::PastedPictures => {}
         };
         self.memory_subscriptions.push(cx.subscribe(&title, move |app, _, event: &TextFieldEvent, cx| {
             if matches!(event, TextFieldEvent::Changed) && app.memory.editor.as_ref().is_some_and(|editor| editor.name_follows) {
@@ -1971,7 +2092,7 @@ impl AppState {
             TextFieldEvent::Enter => field.update(cx, |field, cx| field.insert_line_break(cx)),
             TextFieldEvent::SendNow => app.save_memory(cx),
             TextFieldEvent::Changed => changed(app, cx),
-            TextFieldEvent::Moved | TextFieldEvent::Menu(_) => {}
+            TextFieldEvent::Moved | TextFieldEvent::Menu(_) | TextFieldEvent::PastedPictures => {}
         }));
     }
 
@@ -2051,7 +2172,12 @@ impl AppState {
         };
         let composer = session.read(cx).composer.clone();
         let text = composer.read(cx).text().trim().to_string();
-        if text.is_empty() {
+        let pictures = session.read(cx).attachments.clone();
+        if text.is_empty() && pictures.is_empty() {
+            return;
+        }
+        if let Some(refused) = self.store.chat(chat).and_then(|listed| self.pictures_refused(&listed.choice, pictures.len())) {
+            session.update(cx, |session, cx| session.note(refused, cx));
             return;
         }
         let cwd = session.read(cx).cwd().to_path_buf();
@@ -2066,7 +2192,13 @@ impl AppState {
             let session = session.read(cx);
             (session.running(), session.compacting())
         };
-        let clear = |cx: &mut Context<Self>| composer.update(cx, |composer, cx| composer.set_text("", cx));
+        let clear = |cx: &mut Context<Self>| {
+            composer.update(cx, |composer, cx| composer.set_text("", cx));
+            session.update(cx, |session, cx| {
+                session.attachments.clear();
+                cx.notify();
+            });
+        };
         match outgoing {
             Outgoing::Builtin { name, args } => {
                 if self.builtin(chat, name, &args, cx) {
@@ -2076,9 +2208,13 @@ impl AppState {
             outgoing if running => {
                 session.update(cx, |session, cx| {
                     let plain = matches!(outgoing, Outgoing::Message(_));
-                    if steer && !compacting && plain {
+                    // Steering is words only: a message with pictures waits its turn.
+                    if steer && !compacting && plain && pictures.is_empty() {
                         session.steer(text, cx);
                     } else {
+                        if !pictures.is_empty() {
+                            session.queued_pictures.push((text.clone(), pictures.clone()));
+                        }
                         session.queue.push(text);
                         session.sync_suggestion_queue(cx);
                     }
@@ -2086,12 +2222,12 @@ impl AppState {
                 clear(cx);
             }
             Outgoing::Message(text) => {
-                if self.run(chat, Job::Prompt(text), cx) {
+                if self.run(chat, with_pictures(Job::Prompt(text), &pictures), cx) {
                     clear(cx);
                 }
             }
             Outgoing::Prompt { text, command } => {
-                if self.run(chat, Job::Command { text, command }, cx) {
+                if self.run(chat, with_pictures(Job::Command { text, command }, &pictures), cx) {
                     clear(cx);
                 }
             }
@@ -2296,7 +2432,7 @@ impl AppState {
         };
         let session = self.ensure_session(&chat, cx);
         // A message from the user lets task news wake the chat again.
-        if matches!(job, Job::Prompt(_) | Job::Command { .. }) {
+        if matches!(job, Job::Prompt(_) | Job::Command { .. } | Job::Attached { .. }) {
             session.update(cx, |session, _| {
                 session.wakes = 0;
                 session.wake_paused = false;
@@ -2408,10 +2544,25 @@ impl AppState {
     /// Sends a message that waited for a run to end, resolving a `/command` in it now. False when
     /// it could not be sent, the reason in the transcript.
     fn send_queued(&mut self, chat: &str, text: &str, cx: &mut Context<Self>) -> bool {
+        let pictures = match self.sessions.get(chat) {
+            Some(session) => session.update(cx, |session, _| session.take_queued_pictures(text)),
+            None => Vec::new(),
+        };
+        let sent = self.send_queued_with(chat, text, &pictures, cx);
+        if !sent && !pictures.is_empty()
+            && let Some(session) = self.sessions.get(chat)
+        {
+            // Not sent: they go back with the text (`restore`).
+            session.update(cx, |session, _| session.queued_pictures.push((text.to_string(), pictures)));
+        }
+        sent
+    }
+
+    fn send_queued_with(&mut self, chat: &str, text: &str, pictures: &[crate::attachments::Attachment], cx: &mut Context<Self>) -> bool {
         // A queued suggested task's title may start with `/`: it was recorded literal when it
         // queued, so it sends as written rather than trying to resolve a command.
         if self.literal.take().is_some_and(|(from, literal)| from.as_deref() == Some(chat) && literal == text) {
-            return self.run(chat, Job::Prompt(text.to_string()), cx);
+            return self.run(chat, with_pictures(Job::Prompt(text.to_string()), pictures), cx);
         }
         let Some(cwd) = self.sessions.get(chat).map(|session| session.read(cx).cwd().to_path_buf()) else {
             return false;
@@ -2423,9 +2574,9 @@ impl AppState {
             false
         };
         match parse_line(text).map(|_| resolve_message(&self.store.command_catalog(), text, &cwd)) {
-            None => self.run(chat, Job::Prompt(text.to_string()), cx),
-            Some(Ok(Outgoing::Message(text))) => self.run(chat, Job::Prompt(text), cx),
-            Some(Ok(Outgoing::Prompt { text, command })) => self.run(chat, Job::Command { text, command }, cx),
+            None => self.run(chat, with_pictures(Job::Prompt(text.to_string()), pictures), cx),
+            Some(Ok(Outgoing::Message(text))) => self.run(chat, with_pictures(Job::Prompt(text), pictures), cx),
+            Some(Ok(Outgoing::Prompt { text, command })) => self.run(chat, with_pictures(Job::Command { text, command }, pictures), cx),
             Some(Ok(Outgoing::Builtin { name, args })) => self.builtin(chat, name, &args, cx) || true,
             Some(Err(message)) => refused(self, message, cx),
         }
@@ -2501,6 +2652,7 @@ impl AppState {
                     TextFieldEvent::SendNow => app.submit(&id, true, cx),
                     TextFieldEvent::Changed | TextFieldEvent::Moved => app.composer_changed(Some(id.clone()), cx),
                     TextFieldEvent::Menu(key) => app.slash_key(Some(id.clone()), *key, cx),
+                    TextFieldEvent::PastedPictures => app.paste_pictures(Some(id.clone()), cx),
                 }
             }),
         ];
@@ -2678,7 +2830,7 @@ impl AppState {
             self.form_subscriptions.push(cx.subscribe(&field, |app, _, event: &TextFieldEvent, cx| match event {
                 TextFieldEvent::Enter | TextFieldEvent::SendNow => app.save_connection(cx),
                 TextFieldEvent::Changed => app.form_changed(cx),
-                TextFieldEvent::Moved | TextFieldEvent::Menu(_) => {}
+                TextFieldEvent::Moved | TextFieldEvent::Menu(_) | TextFieldEvent::PastedPictures => {}
             }));
         }
     }
@@ -2927,7 +3079,7 @@ impl AppState {
                     cx.notify();
                 }
             }
-            TextFieldEvent::Moved | TextFieldEvent::Menu(_) => {}
+            TextFieldEvent::Moved | TextFieldEvent::Menu(_) | TextFieldEvent::PastedPictures => {}
         });
         self.menu = None;
         self.command_editor = Some(CommandEditorState {
@@ -3186,7 +3338,29 @@ fn after_run(done: bool, holding_plan: bool, steering: Vec<String>, queue: Vec<S
     }
 }
 
+/// `job` carrying `pictures` the user attached, when there are any.
+fn with_pictures(job: Job, pictures: &[crate::attachments::Attachment]) -> Job {
+    if pictures.is_empty() {
+        return job;
+    }
+    let images = pictures.iter().map(crate::attachments::Attachment::image).collect();
+    match job {
+        Job::Prompt(text) => Job::Attached { text, command: None, images },
+        Job::Command { text, command } => Job::Attached { text, command: Some(command), images },
+        other => other,
+    }
+}
+
+/// Messages that were not sent go back to the composer, their pictures back to its tray.
 fn restore(session: &Entity<ChatSession>, messages: Vec<String>, cx: &mut App) {
+    session.update(cx, |session, cx| {
+        for message in &messages {
+            let pictures = session.take_queued_pictures(message);
+            let room = crate::attachments::MAX_ATTACHMENTS.saturating_sub(session.attachments.len());
+            session.attachments.extend(pictures.into_iter().take(room));
+        }
+        cx.notify();
+    });
     let composer = session.read(cx).composer.clone();
     composer.update(cx, |composer, cx| {
         let mut parts = messages;
@@ -3409,7 +3583,7 @@ impl AppState {
                 TextFieldEvent::Enter if !one_line => field.update(cx, |field, cx| field.insert_line_break(cx)),
                 TextFieldEvent::Enter | TextFieldEvent::SendNow => app.save_skill(cx),
                 TextFieldEvent::Changed => changed(app, cx),
-                TextFieldEvent::Moved | TextFieldEvent::Menu(_) => {}
+                TextFieldEvent::Moved | TextFieldEvent::Menu(_) | TextFieldEvent::PastedPictures => {}
             }));
         }
     }
@@ -3526,7 +3700,7 @@ impl AppState {
                     }
                     cx.notify();
                 }
-                TextFieldEvent::Moved | TextFieldEvent::Menu(_) => {}
+                TextFieldEvent::Moved | TextFieldEvent::Menu(_) | TextFieldEvent::PastedPictures => {}
             }));
         }
     }
@@ -3696,7 +3870,7 @@ impl AppState {
                     }
                     cx.notify();
                 }
-                TextFieldEvent::Moved | TextFieldEvent::Menu(_) => {}
+                TextFieldEvent::Moved | TextFieldEvent::Menu(_) | TextFieldEvent::PastedPictures => {}
             }));
         }
     }

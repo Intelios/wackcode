@@ -110,6 +110,8 @@ pub fn composer_empty(roomy: bool) -> ComposerData {
         tasks_open: false,
         foreground: false,
         agents: 0,
+        attachments: Vec::new(),
+        pictures_refused: None,
     }
 }
 
@@ -1040,4 +1042,22 @@ pub fn page_picture(width: u32, height: u32) -> PathBuf {
     });
     let _ = picture.save(&path);
     path
+}
+
+/// `count` attached pictures for scenes: made-up screenshots, banded so each reads apart.
+pub fn attachments(count: usize) -> Vec<crate::attachments::Attachment> {
+    let names = ["login-page.png", "mockup.jpg", "error.png", "chart.png", "logo.png", "header.png", "footer.png", "icon.png"];
+    (0..count)
+        .map(|index| {
+            let (width, height) = if index % 2 == 0 { (640, 400) } else { (400, 520) };
+            let shade = (index as u32 * 53) % 200;
+            let picture = image::RgbImage::from_fn(width, height, |x, y| {
+                let band = ((y / 40) % 2) as u8 * 30;
+                image::Rgb([(40 + shade) as u8 + band, (90 + x * 100 / width) as u8, (160 - shade / 2) as u8])
+            });
+            let mut png = Vec::new();
+            image::DynamicImage::ImageRgb8(picture).write_to(&mut std::io::Cursor::new(&mut png), image::ImageFormat::Png).unwrap();
+            crate::attachments::Attachment::from_bytes(png, names[index % names.len()]).unwrap()
+        })
+        .collect()
 }

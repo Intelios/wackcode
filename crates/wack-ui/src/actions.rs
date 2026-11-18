@@ -400,6 +400,25 @@ pub struct ToggleModelReasoning {
     pub index: usize,
 }
 
+/// The composer's attach button: choose pictures to send with the message.
+#[derive(Clone, Debug, PartialEq, Action)]
+#[action(namespace = wackcode, no_json)]
+pub struct AttachPictures;
+
+/// Files dropped on the composer, to attach as pictures.
+#[derive(Clone, Debug, PartialEq, Action)]
+#[action(namespace = wackcode, no_json)]
+pub struct AttachFiles {
+    pub paths: Vec<std::path::PathBuf>,
+}
+
+/// Takes one picture back off the message being written.
+#[derive(Clone, Debug, PartialEq, Action)]
+#[action(namespace = wackcode, no_json)]
+pub struct RemoveAttachment {
+    pub index: usize,
+}
+
 /// Settings › Providers: one model's Vision switch (whether it is sent pictures).
 #[derive(Clone, Debug, PartialEq, Action)]
 #[action(namespace = wackcode, no_json)]

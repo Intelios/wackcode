@@ -38,7 +38,7 @@ use wack_core::{AgentMode, Reasoning};
 
 use crate::{
     actions::{
-        ChooseEffort, ChooseModel, CloseMenu, Compact, MoveToBackground, OpenEffortMenu, OpenModelMenu, Send, SetAgentMode, ShowTask,
+        AttachFiles, AttachPictures, ChooseEffort, ChooseModel, CloseMenu, RemoveAttachment, Compact, MoveToBackground, OpenEffortMenu, OpenModelMenu, Send, SetAgentMode, ShowTask,
         SlideEffort, Stop, StopTask, ToggleAgentsPane, ToggleTasks, ToggleTodos, ToggleWaiting, Unqueue,
     },
     app::Menu,
@@ -100,6 +100,10 @@ pub struct ComposerData {
     pub foreground: bool,
     /// Sub-agents queued or working.
     pub agents: usize,
+    /// Pictures attached to the message being written, shown in a tray above the field.
+    pub attachments: Vec<crate::attachments::Attachment>,
+    /// Why the message's pictures can't go to this model, when they can't: Send waits on it.
+    pub pictures_refused: Option<SharedString>,
 }
 
 /// A background command as its list above the composer shows it.
@@ -182,6 +186,8 @@ impl RenderOnce for Composer {
             Input::Field(field) => !field.read(cx).text().trim().is_empty(),
             Input::Drawn { text, .. } => text.is_some(),
         };
+        // Pictures alone make a message; pictures this model can't take hold Send back.
+        let has_text = (has_text || !data.attachments.is_empty()) && data.pictures_refused.is_none();
 
         let send = if data.working && !has_text {
             div()
@@ -235,7 +241,22 @@ impl RenderOnce for Composer {
             .flex()
             .items_center()
             .gap(px(6.))
-            .child(div().flex_none().w(px(24.)).flex().justify_center().child(Icon::Plus.view(px(16.), theme.text_dim)))
+            .child(
+                div()
+                    .id("attach")
+                    .flex_none()
+                    .size(px(26.))
+                    .rounded_full()
+                    .flex()
+                    .items_center()
+                    .justify_center()
+                    .cursor_pointer()
+                    .hover(|button| button.bg(theme.hover))
+                    .tooltip(tip("Attach pictures — or paste or drop them here"))
+                    .on_click(dispatch(AttachPictures))
+                    .child(Icon::Plus.view(px(16.), theme.text_dim))
+                    .tag("attach"),
+            )
             .child(ModeToggle { mode: data.mode, locked: data.working, key: data.key.clone() })
             // In a narrow composer the model's name gives way first; the send button never does.
             .child(picker(
@@ -287,6 +308,20 @@ impl RenderOnce for Composer {
             .rounded(px(CARD_RADIUS))
             .bg(theme.surface)
             .when(!ultra_plan, |card| card.border_1().border_color(theme.border))
+            .when(!data.attachments.is_empty(), |card| card.child(tray(&data.attachments, &theme)))
+            .when_some(data.pictures_refused.clone(), |card, refused| {
+                card.child(
+                    div()
+                        .flex()
+                        .items_center()
+                        .gap(px(6.))
+                        .typography(Type::Small)
+                        .text_color(theme.warning)
+                        .child(Icon::Alert.view(px(12.), theme.warning))
+                        .child(refused)
+                        .tag("pictures-refused"),
+                )
+            })
             .child(
                 field
                     .min_h(px(field_height))
@@ -303,6 +338,18 @@ impl RenderOnce for Composer {
             )
             .child(controls)
             .tag("composer");
+        // Files dragged over from the Finder: the card lights its edge and takes them.
+        let card = div()
+            .id("composer-drop")
+            .rounded(px(CARD_RADIUS))
+            .drag_over::<gpui::ExternalPaths>(|card, _, _, cx| {
+                let theme = Theme::get(cx);
+                card.border_2().border_color(theme.accent_text).bg(theme.accent_wash)
+            })
+            .on_drop(|paths: &gpui::ExternalPaths, window, cx| {
+                window.dispatch_action(Box::new(AttachFiles { paths: paths.paths().to_vec() }), cx);
+            })
+            .child(card);
         let card = if ultra_plan { prism_edge(CARD_RADIUS, card, &theme).into_any_element() } else { card.into_any_element() };
         // The `/` menu rises from the card's top edge, over whatever is above it.
         let card = div().relative().child(card).when_some(data.slash.clone(), |card, slash| {
@@ -453,6 +500,51 @@ const MODEL_MIN: f32 = 64.;
 const PICKER_GAP: f32 = 6.;
 /// A status pill's height.
 const STATUS_HEIGHT: f32 = 26.;
+
+/// A thumbnail's side in the tray.
+const THUMB: f32 = 56.;
+
+/// The pictures attached to the message, each with its remove button.
+fn tray(attachments: &[crate::attachments::Attachment], theme: &Theme) -> impl IntoElement {
+    let thumbs = attachments.iter().enumerate().map(|(index, attachment)| {
+        let (width, height) = attachment.size;
+        div()
+            .id(("attachment", index))
+            .relative()
+            .flex_none()
+            .size(px(THUMB))
+            .tooltip(tip(format!("{} · {width} × {height}", attachment.name)))
+            .child(
+                gpui::img(attachment.thumb.clone())
+                    .size(px(THUMB))
+                    .rounded(px(12.))
+                    .object_fit(gpui::ObjectFit::Cover)
+                    .border_1()
+                    .border_color(theme.border),
+            )
+            .child(
+                div()
+                    .id(("remove-attachment", index))
+                    .absolute()
+                    .top(px(-6.))
+                    .right(px(-6.))
+                    .size(px(20.))
+                    .rounded_full()
+                    .flex()
+                    .items_center()
+                    .justify_center()
+                    .bg(theme.raised)
+                    .border_1()
+                    .border_color(theme.border_strong)
+                    .cursor_pointer()
+                    .hover(|button| button.bg(theme.hover))
+                    .on_click(dispatch(RemoveAttachment { index }))
+                    .child(Icon::Close.view(px(10.), theme.text_soft))
+                    .tag("remove-attachment"),
+            )
+    });
+    div().flex().flex_wrap().gap(px(8.)).pt(px(2.)).children(thumbs).tag("attachments")
+}
 
 /// A round control in the composer's bar.
 fn pill(tag: &'static str) -> gpui::Stateful<gpui::Div> {

@@ -82,5 +82,10 @@ pub mod tasks {
 
 /// The provider-neutral conversation model, for code that reads messages.
 pub mod llm {
-    pub use wack_llm::Block;
+    pub use wack_llm::{Block, Image};
+}
+
+/// Pictures: recognising them, viewing copies and a chat's saved originals.
+pub mod images {
+    pub use wack_agent::images::{Images, reference, store::SHORT, view::{MAX_EDGE, decode, dimensions, encode, media_type}};
 }

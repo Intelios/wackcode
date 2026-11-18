@@ -45,7 +45,7 @@ use crate::{
         NewChat, NewChatIn, NewTerminal, NewTerminalWith, NextTab, OpenEffortMenu, OpenModelMenu, OpenSettings,
         OpenSettingsSection, PinProject, PreviousTab, RemoveConnection, RemovePicture, ShowCommandOutput, ShowPicture, RemoveProject, ResetDockSize,
         PickCommand, SelectChat, Send, Stop, StopCommand, MoveToBackground, ToggleTasks, ToggleTasksPane, StopTask, ShowTask, ToggleAgentsPane, ToggleBrowserPane, ShowAgent, StopAgent, ToggleChanges, ToggleProject, ToggleSidebar, ToggleTerminal, TriggerProjectCommand, Unqueue,
-        ToggleAutoTitles, ToggleTitleModels, ChooseTitleModel, RenameChat, RenameChatAt, CancelRename, ToggleModelReasoning, ToggleModelVision,
+        ToggleAutoTitles, ToggleTitleModels, ChooseTitleModel, RenameChat, RenameChatAt, CancelRename, ToggleModelReasoning, ToggleModelVision, AttachPictures, AttachFiles, RemoveAttachment,
         StartSuggestion, DismissSuggestion, CopySuggestion, OpenChat,
         ToggleModelEffort, SwitchSkill, SwitchSkillFolder, RemoveSkillFolder, OpenSkill, CopySkill, ChooseSkillUse, NewSkill, SaveSkill,
         CloseSkill, AskDeleteSkill, ConfirmSkillDelete, CancelSkillDelete, AddSkillFolder, ImportSkills, SwitchSlashCommand, OpenSlashCommand,
@@ -705,6 +705,23 @@ impl Shell {
         });
         // The new section's field, if it has one, takes focus.
         self.focused = None;
+    }
+
+    /// The composer's attach button: pictures for the message on screen.
+    fn attach_pictures(&mut self, cx: &mut Context<Self>) {
+        let Some(app) = self.app() else {
+            return;
+        };
+        let Some(chat) = app.read(cx).composing_in() else {
+            return;
+        };
+        let paths = cx.prompt_for_paths(PathPromptOptions { files: true, directories: false, multiple: true, prompt: Some("Attach".into()) });
+        cx.spawn(async move |_, cx| {
+            if let Ok(Ok(Some(paths))) = paths.await {
+                app.update(cx, |app, cx| app.attach_paths(chat, paths, cx));
+            }
+        })
+        .detach();
     }
 
     fn choose_backdrop(&mut self, _: &ChooseBackdrop, _: &mut Window, cx: &mut Context<Self>) {
@@ -1488,6 +1505,23 @@ impl Render for Shell {
                     let index = action.index;
                     shell.with_app(cx, |app, cx| app.toggle_model_reasoning(index, cx));
                 }))
+                .on_action(cx.listener(|shell, _: &AttachPictures, _, cx| shell.attach_pictures(cx)))
+                .on_action(cx.listener(|shell, action: &AttachFiles, _, cx| {
+                    let paths = action.paths.clone();
+                    shell.with_app(cx, |app, cx| {
+                        if let Some(chat) = app.composing_in() {
+                            app.attach_paths(chat, paths, cx);
+                        }
+                    });
+                }))
+                .on_action(cx.listener(|shell, action: &RemoveAttachment, _, cx| {
+                    let index = action.index;
+                    shell.with_app(cx, |app, cx| {
+                        if let Some(chat) = app.composing_in() {
+                            app.remove_attachment(chat, index, cx);
+                        }
+                    });
+                }))
                 .on_action(cx.listener(|shell, action: &ToggleModelVision, _, cx| {
                     let index = action.index;
                     shell.with_app(cx, |app, cx| app.toggle_model_vision(index, cx));
@@ -1826,6 +1860,8 @@ fn live_view(app: &AppState, cx: &App) -> (SidebarData, Screen, StripData) {
                         tasks_open: false,
                         foreground: false,
                         agents: 0,
+                        attachments: app.draft_attachments.clone(),
+                        pictures_refused: app.pictures_refused_for(&choice, app.draft_attachments.len()).map(Into::into),
                     },
                     notice: app.notice.clone(),
                 }
@@ -1883,6 +1919,8 @@ fn live_view(app: &AppState, cx: &App) -> (SidebarData, Screen, StripData) {
                     tasks_open: state.tasks_open,
                     foreground: state.tasks.has_foreground() || state.agents.active().iter().any(|info| !info.background),
                     agents: state.agents.active().len(),
+                    attachments: state.attachments.clone(),
+                    pictures_refused: app.pictures_refused_for(&chat.choice, state.attachments.len()).map(Into::into),
                 },
             }
         }

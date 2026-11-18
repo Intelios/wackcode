@@ -33,7 +33,7 @@ use serde_json::Value;
 use tokio::sync::oneshot;
 use tokio_util::sync::CancellationToken;
 use wack_llm::{
-    Block, Delta, Effort, ErrorKind, Message, Provider, Request, RetryNotice, Role, StopReason, SystemPart, Usage,
+    Block, Delta, Effort, ErrorKind, Image, Message, Provider, Request, RetryNotice, Role, StopReason, SystemPart, Usage,
     stream_with_retry,
 };
 
@@ -395,12 +395,34 @@ impl Agent {
     /// [`Agent::run`] for a message the user sent as a slash command: `prompt` is the expanded
     /// text the model gets, and `command` what they typed, saved beside it for the transcript.
     pub async fn run_as(&mut self, prompt: &str, command: Option<CommandUse>, control: &Control, events: EventSink<'_>) -> Result<Outcome, String> {
+        self.run_with(prompt, Vec::new(), command, control, events).await
+    }
+
+    /// [`Agent::run_as`] with pictures the user attached, after the text. Each is saved for the
+    /// chat and sent as its viewing copy (`images::ingest`), as a tool's are; one that can't be
+    /// read is left out, which the user was told when they attached it.
+    pub async fn run_with(
+        &mut self,
+        prompt: &str,
+        images: Vec<Image>,
+        command: Option<CommandUse>,
+        control: &Control,
+        events: EventSink<'_>,
+    ) -> Result<Outcome, String> {
         for feature in &self.features {
             feature.on_run_start();
         }
         self.save_state(events)?;
         self.save_notes(events)?;
-        self.session.push_as(Message::user(prompt), None, command)?;
+        let mut message = Message::user(prompt);
+        if prompt.is_empty() {
+            message.content.clear();
+        }
+        if !images.is_empty() {
+            let ready = images::ingest(&self.images, ToolOutput::with_images(String::new(), images)).await;
+            message.content.extend(ready.images.into_iter().map(|image| Block::Image { media_type: image.media_type, data: image.data, label: image.label, id: image.id }));
+        }
+        self.session.push_as(message, None, command)?;
         self.turns(control, events).await
     }
 
@@ -1990,6 +2012,22 @@ mod tests {
         let reopened = Session::open(rig.agent.session().path()).unwrap();
         assert_eq!(reopened.messages(), rig.agent.session().messages());
         assert!(matches!(&reopened.messages()[2].content[0], Block::ToolResult { images, .. } if images.len() == 1));
+    }
+
+    #[tokio::test]
+    async fn the_users_pictures_follow_their_words_saved_for_the_chat() {
+        let mut rig = rig(vec![say("A duck.")], Vec::new());
+        let mut png = Vec::new();
+        image::DynamicImage::new_rgb8(2, 2).write_to(&mut std::io::Cursor::new(&mut png), image::ImageFormat::Png).unwrap();
+        let attached = Image::new("image/png", crate::images::view::encode(&png)).labelled("duck.png");
+        let outcome = rig.agent.run_with("What is this?", vec![attached], None, &Control::new(), &|_| {}).await;
+        assert_eq!(outcome, Ok(Outcome::Done));
+        let sent = &rig.provider.requests()[0].messages;
+        let Some(Block::Image { label, id, .. }) = sent.last().unwrap().content.get(1) else { panic!("no picture: {sent:?}") };
+        assert_eq!(label.as_deref(), Some("duck.png"));
+        let store = crate::images::Images::for_session(rig.agent.session().path());
+        assert_eq!(std::fs::read(store.find(id.as_deref().unwrap()).unwrap()).unwrap(), png);
+        assert_eq!(sent.last().unwrap().text(), "What is this?");
     }
 
     #[tokio::test]

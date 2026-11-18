@@ -372,7 +372,7 @@ mod tests {
 
     #[test]
     fn tool_result_pictures_are_estimated_and_named_but_never_sent_to_the_summariser() {
-        let image = wack_llm::Image { media_type: "image/png".into(), data: "x".repeat(400_000) };
+        let image = wack_llm::Image::new("image/png", "x".repeat(400_000));
         let shot = Message {
             role: Role::User,
             content: vec![Block::ToolResult { tool_use_id: "t".into(), content: "Shot.".into(), is_error: false, images: vec![image.clone(), image] }],

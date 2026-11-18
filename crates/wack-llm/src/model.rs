@@ -86,10 +86,14 @@ pub enum Block {
         #[serde(default, skip_serializing_if = "Vec::is_empty")]
         images: Vec<Image>,
     },
+    /// A picture the user attached. `label` (its file name, say) is ours, never sent: it names
+    /// the picture when a request leaves it out.
     Image {
         media_type: String,
         /// Base64.
         data: String,
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        label: Option<String>,
     },
     Opaque {
         format: WireFormat,
@@ -98,15 +102,28 @@ pub enum Block {
 }
 
 /// A picture a tool returned, as the providers take it inline.
-#[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
+#[derive(Clone, Debug, Default, PartialEq, Eq, Serialize, Deserialize)]
 pub struct Image {
     /// `image/png`, `image/jpeg`, `image/gif` or `image/webp`: what every format accepts.
     pub media_type: String,
     /// Base64.
     pub data: String,
+    /// What the picture is ("screenshot of http://localhost:3000"), ours and never sent: it names
+    /// the picture when a request leaves it out, so the model knows it already saw it.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub label: Option<String>,
 }
 
 impl Image {
+    pub fn new(media_type: impl Into<String>, data: impl Into<String>) -> Self {
+        Self { media_type: media_type.into(), data: data.into(), label: None }
+    }
+
+    pub fn labelled(mut self, label: impl Into<String>) -> Self {
+        self.label = Some(label.into());
+        self
+    }
+
     pub fn data_url(&self) -> String {
         format!("data:{};base64,{}", self.media_type, self.data)
     }

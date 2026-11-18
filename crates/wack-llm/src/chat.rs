@@ -95,7 +95,7 @@ fn push_message(message: &Message, out: &mut Vec<Value>) {
                         }
                     }
                     Block::Text { text } if !text.is_empty() => parts.push(json!({ "type": "text", "text": text })),
-                    Block::Image { media_type, data } => parts.push(image_url(&format!("data:{media_type};base64,{data}"))),
+                    Block::Image { media_type, data, .. } => parts.push(image_url(&format!("data:{media_type};base64,{data}"))),
                     _ => {}
                 }
             }
@@ -254,7 +254,7 @@ mod tests {
 
     #[test]
     fn tool_result_images_follow_every_tool_message_and_precede_the_users_words() {
-        let image = |data: &str| crate::Image { media_type: "image/png".into(), data: data.into() };
+        let image = |data: &str| crate::Image::new("image/png", data);
         let request = Request {
             model: "m".into(),
             system: vec![],

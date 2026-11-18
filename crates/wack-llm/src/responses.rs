@@ -74,7 +74,7 @@ fn push_message(message: &Message, out: &mut Vec<Value>) {
             (Block::Text { text }, _) if text.is_empty() => {}
             (Block::Text { text }, Role::User) => parts.push(json!({ "type": "input_text", "text": text })),
             (Block::Text { text }, Role::Assistant) => parts.push(json!({ "type": "output_text", "text": text })),
-            (Block::Image { media_type, data }, Role::User) => parts.push(json!({
+            (Block::Image { media_type, data, .. }, Role::User) => parts.push(json!({
                 "type": "input_image",
                 "image_url": format!("data:{media_type};base64,{data}"),
             })),
@@ -264,7 +264,7 @@ mod tests {
 
     #[test]
     fn tool_result_images_are_input_images_in_the_output() {
-        let image = crate::Image { media_type: "image/jpeg".into(), data: "BBBB".into() };
+        let image = crate::Image::new("image/jpeg", "BBBB");
         let request = Request {
             model: "m".into(),
             system: vec![],

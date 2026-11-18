@@ -535,6 +535,7 @@ impl Agent {
 
             let cut_off = response.stop == StopReason::MaxTokens;
             let mut content = self.run_tools(&calls, cut_off, control, events).await?;
+            images::cap_turn(&mut content);
             if control.stopped() {
                 self.session.push(Message { role: Role::User, content }, None)?;
                 self.save_state(events)?;
@@ -1943,7 +1944,7 @@ mod tests {
         }
 
         async fn run(&self, _: Value, _: &ToolContext<'_>) -> Result<ToolOutput, String> {
-            let image = wack_llm::Image { media_type: "image/png".into(), data: "iVBORw0KGgo=".into() };
+            let image = wack_llm::Image::new("image/png", "iVBORw0KGgo=");
             Ok(ToolOutput::with_images("The page.", vec![image]))
         }
     }

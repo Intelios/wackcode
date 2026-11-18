@@ -114,7 +114,7 @@ fn block(block: &Block) -> Option<Value> {
             parts.extend(images.iter().map(|image| image_block(&image.media_type, &image.data)));
             json!({ "type": "tool_result", "tool_use_id": tool_use_id, "content": parts, "is_error": is_error })
         }
-        Block::Image { media_type, data } => image_block(media_type, data),
+        Block::Image { media_type, data, .. } => image_block(media_type, data),
         Block::Opaque { format: WireFormat::AnthropicMessages, value } => value.clone(),
         Block::Opaque { .. } => return None,
     })
@@ -342,7 +342,7 @@ mod tests {
     #[test]
     fn tool_result_images_go_inside_the_result() {
         let mut request = request();
-        let image = crate::Image { media_type: "image/png".into(), data: "AAAA".into() };
+        let image = crate::Image::new("image/png", "AAAA");
         request.messages.push(Message {
             role: Role::User,
             content: vec![

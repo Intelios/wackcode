@@ -559,7 +559,14 @@ impl Browser {
         let data = answer["data"].as_str().ok_or("The page sent no picture.")?.to_string();
         let bytes = base64::engine::general_purpose::STANDARD.decode(&data).map_err(|_| "The picture came back damaged.".to_string())?;
         let (image_w, image_h) = shot::jpeg_size(&bytes).ok_or("The picture came back damaged.")?;
-        let line = tab_line(&tab, &tab.state(), owner);
+        let state = tab.state();
+        let line = tab_line(&tab, &state, owner);
+        let address = if state.url.is_empty() { "about:blank" } else { state.url.as_str() };
+        let label = match zoom {
+            None => format!("screenshot of {address}"),
+            Some(_) => format!("zoomed screenshot of {address}"),
+        };
+        drop(state);
         let text = match zoom {
             None => {
                 Self::view(&tab).frame = Some(Frame { css: (width, height), image: (f64::from(image_w), f64::from(image_h)) });
@@ -570,7 +577,7 @@ impl Browser {
                 values[0], values[1], values[2], values[3]
             ),
         };
-        Ok(ToolOutput::with_images(text, vec![Image { media_type: "image/jpeg".into(), data }]))
+        Ok(ToolOutput::with_images(text, vec![Image::new("image/jpeg", data).labelled(label)]))
     }
 
     /// Where a ref's element is, scrolled into view.

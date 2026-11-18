@@ -509,7 +509,7 @@ mod tests {
         let path = folder.path().join("chat.jsonl");
         let mut session = Session::create(&path, folder.path()).unwrap();
         session.push(tool_call(), None).unwrap();
-        let image = wack_llm::Image { media_type: "image/png".into(), data: "AAAA".into() };
+        let image = wack_llm::Image::new("image/png", "AAAA");
         let result = Message {
             role: Role::User,
             content: vec![Block::ToolResult { tool_use_id: "t1".into(), content: "Shot.".into(), is_error: false, images: vec![image] }],

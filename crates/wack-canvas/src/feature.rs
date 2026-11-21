@@ -34,6 +34,28 @@ impl Feature for CanvasFeature {
         }
         notes
     }
+
+    /// The chat's canvases survive a compaction by name: their ids, artboards and what is open,
+    /// read from the canvases themselves (they live on disk, not in the session).
+    fn summary_sections(&self) -> Vec<String> {
+        let lines: Vec<String> = self.canvases.list().iter().map(|canvas| canvas_line(&self.canvases, canvas)).collect();
+        if lines.is_empty() {
+            return Vec::new();
+        }
+        vec![format!("## Canvases\nThe chat's canvases, kept by the app; the user sees them in the Canvas pane. Revise them with the canvas tool by these ids.\n{}", lines.join("\n"))]
+    }
+}
+
+/// A canvas as a compaction keeps it: `- “Settings” (canvas: "settings"): artboards calm, dense; 2 open comments`.
+fn canvas_line(canvases: &Canvases, canvas: &Canvas) -> String {
+    let ids: Vec<&str> = canvas.artboards.iter().map(|a| a.id.as_str()).collect();
+    let waiting = crate::comments::waiting(canvases.store(), &canvas.id).len();
+    let open = match waiting {
+        0 => String::new(),
+        1 => "; 1 open comment".to_string(),
+        n => format!("; {n} open comments"),
+    };
+    format!("- “{}” (canvas: \"{}\"): artboards {}{open}", canvas.title, canvas.id, ids.join(", "))
 }
 
 impl CanvasFeature {
@@ -105,6 +127,17 @@ mod tests {
         let relaunched = Canvases::new(dir.path(), None);
         assert_eq!(relaunched.take_tweaked(), vec![("settings".to_string(), "calm".to_string())]);
         assert!(Canvases::new(dir.path(), None).take_tweaked().is_empty(), "telling is saved");
+    }
+
+    #[test]
+    fn a_compaction_keeps_the_canvases_by_id() {
+        let dir = tempfile::tempdir().unwrap();
+        let canvases = Canvases::new(dir.path(), None);
+        let feature = CanvasFeature::new(canvases.clone());
+        assert!(feature.summary_sections().is_empty());
+        canvases.apply(&json!({ "title": "Settings", "artboards": [{ "name": "Calm", "width": 400, "height": 300, "html": "<p/>" }, { "name": "Dense", "width": 400, "height": 300, "html": "<p/>" }] })).unwrap();
+        let sections = feature.summary_sections();
+        assert!(sections[0].ends_with("- “Settings” (canvas: \"settings\"): artboards calm, dense"), "{}", sections[0]);
     }
 
     #[test]

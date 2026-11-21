@@ -1120,11 +1120,26 @@ pub fn canvases(dir: &Path) -> wack_canvas::Canvases {
     ];
     let artboards: Vec<serde_json::Value> = boards
         .iter()
-        .map(|(name, group, width, height)| json!({ "name": name, "group": group, "width": width, "height": height, "html": "<main><h1>Settings</h1></main>" }))
+        .map(|(name, group, width, height)| {
+            let mut artboard = json!({ "name": name, "group": group, "width": width, "height": height, "html": "<main><h1>Settings</h1></main>" });
+            if *name == "Calm" {
+                artboard["tweaks"] = json!([
+                    { "id": "accent", "label": "Accent", "kind": "color", "default": "#2f6df6", "var": "--accent" },
+                    { "id": "density", "label": "Density", "kind": "choice", "default": "Comfortable", "options": ["Comfortable", "Compact", "Spacious"], "attr": "density" },
+                    { "id": "radius", "label": "Card corners", "kind": "number", "default": 12, "min": 0, "max": 24, "step": 2, "unit": "px", "var": "--radius" },
+                    { "id": "dark", "label": "Dark", "kind": "toggle", "default": false, "attr": "dark" }
+                ]);
+            }
+            artboard
+        })
         .collect();
-    let planned = canvases.apply(&json!({ "title": "Settings", "artboards": artboards })).expect("the fixture canvas is valid");
+    canvases.apply(&json!({ "title": "Settings", "artboards": artboards })).expect("the fixture canvas is valid");
+    // The user moved two of Calm's tweaks.
+    let _ = canvases.set_tweak("settings", "calm", "accent", Some(json!("#d9467a")));
+    let _ = canvases.set_tweak("settings", "calm", "radius", Some(json!(18)));
     let store = canvases.store();
-    for artboard in &planned.canvas.artboards {
+    let canvas = canvases.get("settings").expect("the fixture canvas was saved");
+    for artboard in &canvas.artboards {
         let (width, height) = (artboard.width, artboard.height.unwrap_or(600));
         let picture = std::fs::read(page_picture(width * 2, height * 2)).unwrap_or_default();
         let console: Vec<String> = if artboard.id == "empty-state" {

@@ -171,6 +171,11 @@ impl Renderer {
         printed
     }
 
+    /// Runs one expression in an open live page, answering its value.
+    pub async fn evaluate(&self, tab: &Arc<Tab>, expression: &str) -> Result<Value, String> {
+        Page { backend: self.backend.clone(), tab: tab.clone() }.evaluate(expression).await
+    }
+
     /// Shows an open live page at another scale, its layout unchanged.
     pub async fn rescale(&self, tab: &Arc<Tab>, width: u32, height: u32, display: f64) -> Result<(), String> {
         Page { backend: self.backend.clone(), tab: tab.clone() }.lay_out(width, height, 0., display).await

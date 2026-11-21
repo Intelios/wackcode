@@ -71,6 +71,10 @@ pub struct Artboard {
     /// The user's settings of `tweaks`, by tweak id; a missing one is at its default.
     #[serde(default, skip_serializing_if = "BTreeMap::is_empty")]
     pub tweak_values: BTreeMap<String, Value>,
+    /// The user moved a tweak since the model was last told (`Canvases::take_tweaked`). Kept in
+    /// the index, so a move just before quitting still reaches the model.
+    #[serde(default, skip_serializing_if = "std::ops::Not::not")]
+    pub tweaks_untold: bool,
     /// Bumped by every change, so a picture of an older revision is never shown as this one.
     #[serde(default)]
     pub rev: u64,

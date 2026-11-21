@@ -14,6 +14,7 @@
 pub mod canvases;
 pub mod comments;
 pub mod export;
+pub mod feature;
 pub mod guide;
 pub mod model;
 pub mod render;
@@ -21,6 +22,7 @@ pub mod store;
 pub mod tools;
 
 pub use canvases::{Canvases, Signal};
+pub use feature::CanvasFeature;
 pub use model::{Artboard, Canvas, Tweak, TweakKind};
 pub use render::{Element, Report};
 pub use store::Store;

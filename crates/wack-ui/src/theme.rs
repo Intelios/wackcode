@@ -582,6 +582,25 @@ pub fn hex(colour: Hsla) -> String {
     Srgb { r: rgba.r as f64, g: rgba.g as f64, b: rgba.b as f64 }.to_hex()
 }
 
+/// A design's own colour, shown as data (a canvas tweak's swatch), never as the app's: `#rgb` or
+/// `#rrggbb`. The one way a view may draw a colour that is not the theme's.
+pub fn design_colour(hex: &str) -> Option<Hsla> {
+    Srgb::from_hex(hex).map(to_hsla)
+}
+
+/// Hue turns of a design colour, for a colour tweak with no options of its own: the colour
+/// itself first, then `count - 1` turns at its lightness and chroma, as `#rrggbb`.
+pub fn hue_turns(hex: &str, count: usize) -> Vec<String> {
+    let Some(base) = Srgb::from_hex(hex) else { return Vec::new() };
+    let lch = base.to_lch();
+    let mut turns = vec![base.to_hex()];
+    for step in 1..count {
+        let h = (lch.h + 360. * step as f64 / count as f64) % 360.;
+        turns.push(Lch::new(lch.l, lch.c.max(0.06), h).to_srgb().to_hex());
+    }
+    turns
+}
+
 fn to_hsla(colour: Srgb) -> Hsla {
     Rgba { r: colour.r as f32, g: colour.g as f32, b: colour.b as f32, a: 1. }.into()
 }

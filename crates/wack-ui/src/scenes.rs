@@ -1361,6 +1361,24 @@ pub fn all() -> Vec<Scene> {
             build: |_, cx| canvas_scene(CanvasScene::Play, None, cx),
         },
         Scene {
+            name: "canvas-tweaks",
+            description: "The Tweaks panel on the selected artboard: a colour, a choice, a number and a toggle, two of them moved.",
+            size: size(px(1680.), px(1000.)),
+            build: |_, cx| canvas_scene(CanvasScene::Tweaks, None, cx),
+        },
+        Scene {
+            name: "canvas-tweaks-play",
+            description: "Tweaks while playing: the live page fits beside the panel, so the panel is never under it.",
+            size: size(px(1680.), px(1000.)),
+            build: |_, cx| canvas_scene(CanvasScene::TweaksPlay, None, cx),
+        },
+        Scene {
+            name: "canvas-tweaks-narrow",
+            description: "Tweaks while playing in a 1,000 pt window: too narrow to play beside the panel, so the page keeps the whole width.",
+            size: size(px(1000.), px(760.)),
+            build: |_, cx| canvas_scene(CanvasScene::TweaksPlay, None, cx),
+        },
+        Scene {
             name: "canvas-present",
             description: "Present: one artboard over the whole window, stepping with the arrows.",
             size: size(px(1680.), px(1000.)),
@@ -1677,6 +1695,8 @@ enum CanvasScene {
     Empty,
     Play,
     Present,
+    Tweaks,
+    TweaksPlay,
 }
 
 /// A chat with its Canvas pane in the right dock, at its default width. Pictures are fixtures:
@@ -1702,6 +1722,14 @@ fn canvas_scene(scene: CanvasScene, backdrop: Option<crate::backdrop::Picture>, 
                     CanvasScene::Errors => pane.stage(Some("empty-state"), None),
                     CanvasScene::Far => pane.stage(None, Some(0.16)),
                     CanvasScene::Play => pane.stage_play("dense"),
+                    CanvasScene::Tweaks => {
+                        pane.stage(Some("calm"), None);
+                        pane.stage_tweaks();
+                    }
+                    CanvasScene::TweaksPlay => {
+                        pane.stage_play("calm");
+                        pane.stage_tweaks();
+                    }
                     CanvasScene::Present => {
                         pane.stage(Some("dense"), None);
                         pane.present(cx);

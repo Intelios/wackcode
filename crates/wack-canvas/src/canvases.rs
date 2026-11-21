@@ -154,6 +154,7 @@ impl Canvases {
             }
         }
         board.rev += 1;
+        board.tweaks_untold = true;
         let rev = board.rev;
         let snapshot = found.clone();
         self.inner.store.save_index(&snapshot)?;
@@ -269,6 +270,42 @@ impl Canvases {
                 renderer.pdf(&job, height).await
             }
         }
+    }
+
+    /// Sets one tweak on a live page at once (Play), as the runtime would on load. The value is
+    /// checked against the declaration first; `None` puts the default back.
+    pub async fn apply_live_tweak(&self, tab: &Arc<wack_browser::Tab>, canvas: &str, artboard: &str, tweak: &str, value: Option<Value>) -> Result<(), String> {
+        let renderer = self.inner.renderer.clone().ok_or(NO_ENGINE)?;
+        let found = self.get(canvas).ok_or("That canvas is gone.")?;
+        let board = found.artboards.iter().find(|a| a.id == artboard).ok_or("That artboard is gone.")?;
+        let declared = board.tweaks.iter().find(|t| t.id == tweak).ok_or("That tweak is gone.")?;
+        let value = match value {
+            Some(value) => {
+                declared.accepts(&value)?;
+                value
+            }
+            None => declared.default.clone(),
+        };
+        let argument = serde_json::json!({ "var": declared.var, "attr": declared.attr, "value": declared.css_value(&value) });
+        renderer.evaluate(tab, &format!("window.__wack && window.__wack.setTweak({argument})")).await.map(|_| ())
+    }
+
+    /// The artboards whose tweaks the user moved since this was last asked, each once.
+    pub fn take_tweaked(&self) -> Vec<(String, String)> {
+        let mut canvases = self.loaded();
+        let mut told = Vec::new();
+        for canvas in canvases.iter_mut().flatten() {
+            let before = told.len();
+            for board in canvas.artboards.iter_mut().filter(|a| a.tweaks_untold) {
+                board.tweaks_untold = false;
+                told.push((canvas.id.clone(), board.id.clone()));
+            }
+            if told.len() > before {
+                // Unsaved, the model is told again after a relaunch: better than never.
+                let _ = self.inner.store.save_index(canvas);
+            }
+        }
+        told
     }
 
     pub fn close_live(&self, tab: wack_browser::TabId) {

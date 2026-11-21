@@ -236,6 +236,10 @@ pub async fn run(
         Some(feature) => agent.with_feature(Box::new(feature)),
         None => agent,
     };
+    let agent = match &setup.canvases {
+        Some(canvases) => agent.with_feature(Box::new(wack_canvas::CanvasFeature::new(canvases.clone()))),
+        None => agent,
+    };
     let mut agent = kit.attach(agent);
     let sink = |event: Event| events(RunEvent::Agent(event));
     let result = match job {

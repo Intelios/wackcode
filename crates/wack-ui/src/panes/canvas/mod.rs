@@ -11,6 +11,8 @@
 //!   it, and it is shown only while wholly inside the pane (a page is a native view, drawn over
 //!   anything GPUI does not mask). The pane owns the page: Done, Esc, a press on the board, a
 //!   revision (which reopens it) or the pane going away closes it.
+//! - Tweaks (`tweaks.rs`) are the agent's levers on the selected or played artboard, moved with
+//!   no model call. Play fits beside their panel, so the live page never covers it.
 //! - Present shows pictures, not live pages: it draws over the whole window, and pages sit
 //!   beneath GPUI's overlay plane.
 //! - A picture shown is the newest the store has, which may be a revision behind while the next
@@ -22,6 +24,7 @@
 //!   canvases signal (`refresh`), never read from disk while drawing a frame.
 
 pub mod board;
+mod tweaks;
 
 use std::{
     cell::Cell,
@@ -149,6 +152,15 @@ pub struct CanvasPane {
     export_note: Option<(String, bool)>,
     /// Presenting: the artboard shown, as an index into the board's order.
     presenting: Option<usize>,
+    /// The Tweaks panel is open; it shows the played or selected artboard's tweaks.
+    tweaks_open: bool,
+    tweak_drag: Option<tweaks::TweakDrag>,
+    /// A number mid-drag: (artboard, tweak, value), shown but not saved yet.
+    tweak_preview: Option<(String, String, serde_json::Value)>,
+    tweak_tracks: tweaks::Tracks,
+    /// The revision the last tweak made, so a played page that already has it is not reopened.
+    tweak_rev: Option<(String, String, u64)>,
+    tweak_error: Option<String>,
 }
 
 impl CanvasPane {
@@ -177,6 +189,12 @@ impl CanvasPane {
             export_menu: false,
             export_note: None,
             presenting: None,
+            tweaks_open: false,
+            tweak_drag: None,
+            tweak_preview: None,
+            tweak_tracks: Default::default(),
+            tweak_rev: None,
+            tweak_error: None,
         };
         pane.reload(false, cx);
         pane
@@ -221,6 +239,11 @@ impl CanvasPane {
         self.playing = Some(Playing { canvas, artboard: id.to_string(), tab: None, zoom: 0., size: (0., 0.), failed: None, turn: 0 });
     }
 
+    /// Opens the Tweaks panel for a gallery scene.
+    pub fn stage_tweaks(&mut self) {
+        self.tweaks_open = true;
+    }
+
     /// The chat's canvases changed, or a picture was drawn.
     pub fn refresh(&mut self, cx: &mut Context<Self>) {
         self.reload(true, cx);
@@ -260,6 +283,11 @@ impl CanvasPane {
         }
         if announce && let Some(id) = newest_new {
             self.current = Some(id);
+        }
+        // The user's own tweak is no arrival, and a played page has it already (`move_tweak`),
+        // so it neither reopens nor offers to go and look.
+        if let Some((canvas, id, at)) = &self.tweak_rev {
+            changed.retain(|(c, a, _)| !(c == canvas && a == id && revs.get(&(c.clone(), a.clone())) == Some(at)));
         }
         self.list = list;
         self.revs = revs;
@@ -399,7 +427,6 @@ impl CanvasPane {
         }
         let (width, height) = self.size();
         let Some(bounds) = self.board().frame(id).map(|frame| frame.rect) else { return };
-        let to = fit_below_pills(bounds, width, (height - PLAY_BAND).max(1.), 1.);
         if let Some(old) = self.playing.take().and_then(|p| p.tab) {
             self.canvases.close_live(old.id);
         }
@@ -408,7 +435,12 @@ impl CanvasPane {
         self.selected = Some(id.to_string());
         self.following = false;
         self.drag = None;
-        self.playing = Some(Playing { canvas: canvas.clone(), artboard: id.to_string(), tab: None, zoom: to.zoom, size: (width, height), failed: None, turn });
+        self.playing = Some(Playing { canvas: canvas.clone(), artboard: id.to_string(), tab: None, zoom: 1., size: (width, height), failed: None, turn });
+        // Fitted beside the Tweaks panel when it shows this artboard's tweaks.
+        let to = fit_below_pills(bounds, (width - self.panel_room()).max(1.), (height - PLAY_BAND).max(1.), 1.);
+        if let Some(playing) = self.playing.as_mut() {
+            playing.zoom = to.zoom;
+        }
         self.glide_to(to, cx);
         let canvases = self.canvases.clone();
         let artboard = id.to_string();
@@ -514,7 +546,7 @@ impl CanvasPane {
         let Some(playing) = self.playing.as_ref() else { return };
         let (width, height) = self.size();
         let Some(bounds) = self.board().frame(&playing.artboard).map(|frame| frame.rect) else { return };
-        let to = fit_below_pills(bounds, width, (height - PLAY_BAND).max(1.), 1.);
+        let to = fit_below_pills(bounds, (width - self.panel_room()).max(1.), (height - PLAY_BAND).max(1.), 1.);
         let (canvas, artboard, tab) = (playing.canvas.clone(), playing.artboard.clone(), playing.tab.clone());
         if let Some(playing) = self.playing.as_mut() {
             playing.zoom = to.zoom;
@@ -598,6 +630,10 @@ impl CanvasPane {
     }
 
     fn on_move(&mut self, event: &MouseMoveEvent, _: &mut Window, cx: &mut Context<Self>) {
+        if self.tweak_drag.is_some() {
+            self.drag_tweak(event.position.x, event.pressed_button != Some(MouseButton::Left), cx);
+            return;
+        }
         let (x, y) = self.local(event.position);
         let Some(drag) = self.drag.as_mut() else { return };
         if event.pressed_button != Some(MouseButton::Left) {
@@ -616,6 +652,9 @@ impl CanvasPane {
     }
 
     fn on_up(&mut self, event: &MouseUpEvent, _: &mut Window, cx: &mut Context<Self>) {
+        if self.drag_tweak(event.position.x, true, cx) {
+            return;
+        }
         let Some(drag) = self.drag.take() else { return };
         if !drag.moved {
             if self.selected != drag.on {
@@ -701,6 +740,10 @@ impl CanvasPane {
         if self.export_menu {
             self.export_menu = false;
             cx.notify();
+            return;
+        }
+        if self.tweak_target().is_some() {
+            self.toggle_tweaks(cx);
             return;
         }
         if self.playing.is_some() {
@@ -908,6 +951,19 @@ impl Render for CanvasPane {
                         label
                             .child(div().typography(Type::Small).text_color(theme.text_faint).whitespace_nowrap().child(size))
                             .when(drawing, |label| label.child(div().typography(Type::Small).text_color(theme.text_dim).whitespace_nowrap().child("Drawing…")))
+                            .when(!artboard.tweak_values.is_empty(), |label| {
+                                label.child(
+                                    div()
+                                        .flex()
+                                        .items_center()
+                                        .gap(px(4.))
+                                        .typography(Type::Small)
+                                        .text_color(theme.accent_text)
+                                        .whitespace_nowrap()
+                                        .child(div().size(px(6.)).rounded_full().bg(theme.accent_line))
+                                        .child("Tweaked"),
+                                )
+                            })
                             .when_some(shown.badge.clone(), |label, badge| {
                                 label.child(
                                     div()
@@ -951,7 +1007,10 @@ impl Render for CanvasPane {
                 .bg(theme.raised)
                 .shadow_lg()
                 .when_some(shown.full.or(shown.thumb), |stage, path| stage.child(img(path).size_full().object_fit(ObjectFit::Fill)));
-            if let (Some(tab), true) = (playing.tab.as_ref(), arrived) {
+            // A pane too narrow to play beside the Tweaks panel keeps the page behind its
+            // picture while the panel would cover it.
+            let covered = self.panel_left().is_some_and(|left| screen.right() > left);
+            if let (Some(tab), true, false) = (playing.tab.as_ref(), arrived, covered) {
                 let (id, focus) = (tab.id, self.focus.clone());
                 stage = stage.child(
                     gpui::canvas(
@@ -971,9 +1030,12 @@ impl Render for CanvasPane {
             }
             layer = layer.child(stage);
             let artboard = canvas.artboards.iter().find(|a| a.id == playing.artboard);
+            let has_tweaks = artboard.is_some_and(|a| !a.tweaks.is_empty());
+            let room = self.panel_room();
             let status = match (&playing.failed, &playing.tab) {
                 (Some(error), _) => error.clone(),
                 (None, None) => "Opening the live page…".into(),
+                (None, Some(_)) if covered => "Close Tweaks to use it".into(),
                 (None, Some(_)) => format!("Live · {}%", (playing.zoom * 100.).round()),
             };
             let pane = cx.entity();
@@ -982,7 +1044,7 @@ impl Render for CanvasPane {
                     .absolute()
                     .bottom(px(EDGE))
                     .left_0()
-                    .right_0()
+                    .right(px(room))
                     .flex()
                     .justify_center()
                     .child(
@@ -990,7 +1052,7 @@ impl Render for CanvasPane {
                             .h(px(PILL_HEIGHT + 4.))
                             .pl(px(14.))
                             .pr(px(4.))
-                            .max_w(px((width - 2. * EDGE).max(160.)))
+                            .max_w(px((width - room - 2. * EDGE).max(160.)))
                             .rounded_full()
                             .bg(theme.raised)
                             .border_1()
@@ -1003,6 +1065,15 @@ impl Render for CanvasPane {
                             .child(Icon::Play.view(px(12.), if playing.failed.is_some() { theme.danger } else { theme.accent_text }))
                             .child(div().min_w_0().flex_shrink(1.).typography(Type::UiStrong).text_color(theme.text).whitespace_nowrap().text_ellipsis().child(artboard.map(|a| a.name.clone()).unwrap_or_default()))
                             .child(div().flex_none().typography(Type::Small).text_color(if playing.failed.is_some() { theme.danger } else { theme.text_dim }).whitespace_nowrap().child(status))
+                            .when(has_tweaks, |row| {
+                                let pane = pane.clone();
+                                row.child(
+                                    circle("canvas-play-tweaks", Icon::Sliders, "Tweaks", &theme)
+                                        .when(self.tweaks_open, |circle| circle.bg(theme.accent_wash))
+                                        .on_click(move |_, _, cx| pane.update(cx, |pane, cx| pane.toggle_tweaks(cx)))
+                                        .tag("canvas-play-tweaks"),
+                                )
+                            })
                             .child(
                                 div()
                                     .id("canvas-play-done")
@@ -1335,6 +1406,16 @@ impl Render for CanvasPane {
                                     .tag("canvas-play-button"),
                             )
                         })
+                        .when(!artboard.tweaks.is_empty(), |row| {
+                            let pane = pane.clone();
+                            row.child(
+                                circle("canvas-tweaks-button", Icon::Sliders, "Tweaks", &theme)
+                                    .when(self.tweaks_open, |circle| circle.bg(theme.accent_wash))
+                                    .on_mouse_down(MouseButton::Left, |_, _, cx| cx.stop_propagation())
+                                    .on_click(move |_, _, cx| pane.update(cx, |pane, cx| pane.toggle_tweaks(cx)))
+                                    .tag("canvas-tweaks-button"),
+                            )
+                        })
                         .child({
                             let pane = pane.clone();
                             circle("canvas-export", Icon::Download, "Export, copy or mention", &theme)
@@ -1477,6 +1558,7 @@ impl Render for CanvasPane {
             .with_priority(20)
         });
 
+        let tweaks_panel = self.tweak_target().map(|artboard| self.tweaks_panel(&canvas, artboard, height, &theme, pane.clone()));
         let playing = self.playing.is_some();
         root.child(title)
             .children(switcher)
@@ -1484,6 +1566,7 @@ impl Render for CanvasPane {
             .children(arrivals.filter(|_| !playing))
             .children(hint.filter(|_| !playing))
             .children(play_pill)
+            .children(tweaks_panel)
             .children(presented)
             .tag("canvas-pane")
             .into_any_element()
@@ -1512,7 +1595,7 @@ fn artboards(count: usize) -> String {
     if count == 1 { "1 artboard".into() } else { format!("{count} artboards") }
 }
 
-fn circle(id: &'static str, icon: Icon, tooltip: &'static str, theme: &Theme) -> gpui::Stateful<gpui::Div> {
+fn circle(id: impl Into<gpui::ElementId>, icon: Icon, tooltip: impl Into<SharedString>, theme: &Theme) -> gpui::Stateful<gpui::Div> {
     div()
         .id(id)
         .flex_none()

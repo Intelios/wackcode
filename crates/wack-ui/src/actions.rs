@@ -47,6 +47,8 @@ actions!(
         CanvasEscape,
         /// The Canvas pane: play the selected artboard as a live page.
         CanvasPlay,
+        /// The Canvas pane: show its artboards one at a time over the whole window.
+        CanvasPresent,
         /// Summarise the current chat's older messages now.
         Compact,
         /// Step back: closes a menu or Settings, or stops the run.
@@ -946,6 +948,8 @@ pub fn init(cx: &mut App) {
         KeyBinding::new("cmd--", CanvasZoomOut, Some(CANVAS_CONTEXT)),
         KeyBinding::new("escape", CanvasEscape, Some(CANVAS_CONTEXT)),
         KeyBinding::new("enter", CanvasPlay, Some(CANVAS_CONTEXT)),
+        KeyBinding::new("cmd-enter", CanvasPresent, Some(CANVAS_CONTEXT)),
+        KeyBinding::new("space", CanvasMove { dx: 1, dy: 0 }, Some(CANVAS_CONTEXT)),
         KeyBinding::new("left", CanvasMove { dx: -1, dy: 0 }, Some(CANVAS_CONTEXT)),
         KeyBinding::new("right", CanvasMove { dx: 1, dy: 0 }, Some(CANVAS_CONTEXT)),
         KeyBinding::new("up", CanvasMove { dx: 0, dy: -1 }, Some(CANVAS_CONTEXT)),

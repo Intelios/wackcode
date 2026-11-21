@@ -1355,6 +1355,18 @@ pub fn all() -> Vec<Scene> {
             build: |_, cx| canvas_scene(CanvasScene::Far, None, cx),
         },
         Scene {
+            name: "canvas-play",
+            description: "Playing an artboard: the board dims, the artboard fits above its pill while its live page opens.",
+            size: size(px(1680.), px(1000.)),
+            build: |_, cx| canvas_scene(CanvasScene::Play, None, cx),
+        },
+        Scene {
+            name: "canvas-present",
+            description: "Present: one artboard over the whole window, stepping with the arrows.",
+            size: size(px(1680.), px(1000.)),
+            build: |_, cx| canvas_scene(CanvasScene::Present, None, cx),
+        },
+        Scene {
             name: "canvas-empty",
             description: "The Canvas pane before the agent has drawn anything.",
             size: size(px(1480.), px(940.)),
@@ -1663,6 +1675,8 @@ enum CanvasScene {
     Errors,
     Far,
     Empty,
+    Play,
+    Present,
 }
 
 /// A chat with its Canvas pane in the right dock, at its default width. Pictures are fixtures:
@@ -1687,6 +1701,11 @@ fn canvas_scene(scene: CanvasScene, backdrop: Option<crate::backdrop::Picture>, 
                 match scene {
                     CanvasScene::Errors => pane.stage(Some("empty-state"), None),
                     CanvasScene::Far => pane.stage(None, Some(0.16)),
+                    CanvasScene::Play => pane.stage_play("dense"),
+                    CanvasScene::Present => {
+                        pane.stage(Some("dense"), None);
+                        pane.present(cx);
+                    }
                     _ => {}
                 }
                 pane

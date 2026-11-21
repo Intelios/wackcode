@@ -22,6 +22,7 @@
 //! {"cmd":"browser","action":"state"}                     every tab's address, title, console and network
 //! {"cmd":"browser","action":"dialog","accept":true,"text":"reply"}   answers the page's dialog
 //! {"cmd":"browser","action":"close"}
+//! {"cmd":"canvas-export","canvas":"c","artboard":"a","format":"pdf","path":"/abs/a.pdf"}   png, html or pdf
 //! {"cmd":"canvas","name":"canvas","input":{…}}         one of the canvas tools, on the chat in front
 //! {"cmd":"canvas","name":"canvas_look","input":{…},"path":"/abs/a.png"}   its first picture saved there
 //! {"cmd":"quit"}
@@ -104,6 +105,14 @@ enum Command {
         theme: String,
     },
     Browser(Box<BrowserArgs>),
+    /// An artboard exported as the canvas pane's menu would, written to `path` (no save panel).
+    #[serde(rename = "canvas-export")]
+    CanvasExport {
+        canvas: String,
+        artboard: String,
+        format: String,
+        path: PathBuf,
+    },
     Canvas {
         name: String,
         #[serde(default)]
@@ -399,6 +408,25 @@ async fn run(command: Command, cx: &mut AsyncApp) -> Result<Value, String> {
         }
         Command::Browser(args) => browser(window, cx, *args).await,
         Command::Canvas { name, input, path } => canvas_tool(window, cx, name, input, path).await,
+        Command::CanvasExport { canvas, artboard, format, path } => {
+            use wack_canvas::export::Format;
+            let format = match format.as_str() {
+                "png" => Format::Png,
+                "html" => Format::Html,
+                "pdf" => Format::Pdf,
+                other => return Err(format!("\"{other}\" is not png, html or pdf.")),
+            };
+            let canvases: wack_canvas::Canvases = on_window(window, cx, |window, cx| {
+                window.root::<crate::shell::Shell>().flatten().and_then(|shell| shell.read(cx).current_canvases(cx))
+            })?
+            .ok_or("Open a chat first: canvases belong to a chat.")?;
+            let started = std::time::Instant::now();
+            let bytes = gpui_tokio::Tokio::spawn(cx, async move { canvases.export(&canvas, &artboard, format).await })
+                .await
+                .map_err(|_| "The export was dropped.".to_string())??;
+            std::fs::write(&path, &bytes).map_err(|e| format!("Could not write {}: {e}", path.display()))?;
+            Ok(json!({ "ok": true, "bytes": bytes.len(), "ms": started.elapsed().as_millis() as u64 }))
+        }
         Command::Quit => {
             cx.update(|cx| cx.quit());
             Ok(json!({ "ok": true }))

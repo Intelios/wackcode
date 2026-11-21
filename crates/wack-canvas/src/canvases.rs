@@ -222,6 +222,61 @@ impl Canvases {
     }
 
     /// What drawing an artboard's current revision takes.
+    /// The height an artboard's live page is laid out at: its own, or for an auto one the height
+    /// it was last drawn at.
+    pub fn live_height(&self, canvas: &str, id: &str) -> Result<u32, String> {
+        let job = self.job(canvas, id)?;
+        Ok(job.height.or_else(|| self.report(canvas, id).map(|report| report.height)).unwrap_or(crate::render::FIRST_HEIGHT))
+    }
+
+    /// A live page of an artboard (Play), shown scaled by `display`, and the revision it shows.
+    /// The caller closes it with `close_live`.
+    pub async fn open_live(&self, canvas: &str, id: &str, display: f64) -> Result<(Arc<wack_browser::Tab>, u64), String> {
+        let renderer = self.inner.renderer.clone().ok_or(NO_ENGINE)?;
+        let job = self.job(canvas, id)?;
+        let height = self.live_height(canvas, id)?;
+        let tab = renderer.open(&job, height, display).await?;
+        Ok((tab, job.rev))
+    }
+
+    pub async fn rescale_live(&self, tab: &Arc<wack_browser::Tab>, canvas: &str, id: &str, display: f64) -> Result<(), String> {
+        let renderer = self.inner.renderer.clone().ok_or(NO_ENGINE)?;
+        let job = self.job(canvas, id)?;
+        let height = self.live_height(canvas, id)?;
+        renderer.rescale(tab, job.width, height, display).await
+    }
+
+    /// An artboard exported as `format`: the bytes to save.
+    pub async fn export(&self, canvas: &str, id: &str, format: crate::export::Format) -> Result<Vec<u8>, String> {
+        use crate::export::Format;
+        let found = self.get(canvas).ok_or("That canvas is gone.")?;
+        let artboard = found.artboards.iter().find(|a| a.id == id).ok_or("That artboard is gone.")?.clone();
+        match format {
+            Format::Html => Ok(crate::export::standalone(&self.inner.store.dir(canvas), &found, &artboard).into_bytes()),
+            Format::Png => {
+                if self.picture(canvas, id).is_none_or(|(_, rev)| rev != artboard.rev)
+                    && let Some((_, Err(error))) = self.draw(canvas, &[id.to_string()]).await.into_iter().next()
+                {
+                    return Err(error);
+                }
+                let (path, _) = self.picture(canvas, id).ok_or("The artboard has no picture yet.")?;
+                std::fs::read(path).map_err(|_| "The artboard's picture could not be read.".to_string())
+            }
+            Format::Pdf => {
+                let renderer = self.inner.renderer.clone().ok_or(NO_ENGINE)?;
+                let job = self.job(canvas, id)?;
+                let height = self.live_height(canvas, id)?;
+                renderer.pdf(&job, height).await
+            }
+        }
+    }
+
+    pub fn close_live(&self, tab: wack_browser::TabId) {
+        if let Some(renderer) = &self.inner.renderer {
+            renderer.backend().close(tab);
+        }
+    }
+
     pub fn job(&self, canvas: &str, id: &str) -> Result<Job, String> {
         let found = self.get(canvas).ok_or("That canvas is gone.")?;
         let artboard = found.artboards.iter().find(|a| a.id == id).ok_or_else(|| format!("There is no artboard “{id}” on “{}”.", found.title))?;

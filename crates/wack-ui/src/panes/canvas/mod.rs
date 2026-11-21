@@ -4,8 +4,15 @@
 //! - The pane only views and steers: canvases belong to the chat's `Canvases` (`wack-canvas`), and
 //!   their pictures to its store, so closing the pane, moving it or switching chats loses nothing.
 //! - The board is drawn here, in GPUI, from pictures of the artboards (the owner's call): panning
-//!   and zooming never wait on Chromium, and glass, labels and pills draw over it freely. Only an
-//!   artboard being played is a live page (`play.rs`), placed over the pane like the Browser pane's.
+//!   and zooming never wait on Chromium, and glass, labels and pills draw over it freely.
+//! - Only an artboard being played is a live page (`play`): a canvas page laid out at the
+//!   artboard's size, scaled to the camera's zoom and placed exactly over its picture once the
+//!   camera has arrived. The camera holds still while it plays, a pane resize fits and rescales
+//!   it, and it is shown only while wholly inside the pane (a page is a native view, drawn over
+//!   anything GPUI does not mask). The pane owns the page: Done, Esc, a press on the board, a
+//!   revision (which reopens it) or the pane going away closes it.
+//! - Present shows pictures, not live pages: it draws over the whole window, and pages sit
+//!   beneath GPUI's overlay plane.
 //! - A picture shown is the newest the store has, which may be a revision behind while the next
 //!   is drawn; the label says so. At a distance the board draws the small copy, so a large picture
 //!   never shimmers.
@@ -33,7 +40,7 @@ use wack_canvas::{Canvas, Canvases};
 
 use self::board::{Board, Camera, FAR_ZOOM, Rect};
 use crate::{
-    actions::{CanvasActualSize, CanvasEscape, CanvasFit, CanvasMove, CanvasZoomIn, CanvasZoomOut, CanvasZoomSelection, WriteInComposer},
+    actions::{CanvasActualSize, CanvasEscape, CanvasFit, CanvasMove, CanvasPlay, CanvasPresent, CanvasZoomIn, CanvasZoomOut, CanvasZoomSelection, WriteInComposer},
     icon::Icon,
     tags::Tag,
     theme::Theme,
@@ -45,8 +52,13 @@ use crate::{
 pub const CANVAS_CONTEXT: &str = "CanvasPane";
 const CIRCLE: f32 = 26.;
 const PILL_HEIGHT: f32 = 32.;
-/// About how wide the zoom pill draws (− 100% + Fit).
-const ZOOM_PILL: f32 = 176.;
+const PLAY_RADIUS: f32 = 6.;
+/// Room kept under a played artboard for its pill.
+const PLAY_BAND: f32 = 56.;
+/// About how wide the zoom pill draws (− 100% + Fit, Present).
+const ZOOM_PILL: f32 = 206.;
+/// The room a presented artboard keeps from the window's edges.
+const PRESENT_MARGIN: f32 = 64.;
 /// Below this pane width the pills say less.
 const NARROW: f32 = 480.;
 const EDGE: f32 = 12.;
@@ -77,6 +89,21 @@ struct Glide {
     from: Camera,
     to: Camera,
     since: Instant,
+}
+
+/// An artboard being played: its live page placed over its picture, at the camera's zoom.
+struct Playing {
+    canvas: String,
+    artboard: String,
+    /// The page, once open; until then the picture shows with "Opening…".
+    tab: Option<std::sync::Arc<wack_browser::Tab>>,
+    /// The zoom the page is scaled to, and the pane size it was fitted in: the page is shown
+    /// only while the camera is exactly there, so it never sits off its picture.
+    zoom: f32,
+    size: (f32, f32),
+    failed: Option<String>,
+    /// Bumped on every (re)open, so a late answer for an older page is closed, not shown.
+    turn: u64,
 }
 
 struct Drag {
@@ -114,6 +141,14 @@ pub struct CanvasPane {
     fit_pending: Option<String>,
     /// A zoom for that fit to end at instead, about the pane's middle (gallery scenes).
     fit_zoom: Option<f32>,
+    playing: Option<Playing>,
+    play_turns: u64,
+    /// The selected artboard's export menu is open.
+    export_menu: bool,
+    /// What an export is doing, or how it ended: shown in the selection pill.
+    export_note: Option<(String, bool)>,
+    /// Presenting: the artboard shown, as an index into the board's order.
+    presenting: Option<usize>,
 }
 
 impl CanvasPane {
@@ -137,6 +172,11 @@ impl CanvasPane {
             switcher: false,
             fit_pending: None,
             fit_zoom: None,
+            playing: None,
+            play_turns: 0,
+            export_menu: false,
+            export_note: None,
+            presenting: None,
         };
         pane.reload(false, cx);
         pane
@@ -171,6 +211,14 @@ impl CanvasPane {
     pub fn stage(&mut self, selected: Option<&str>, zoom: Option<f32>) {
         self.selected = selected.map(str::to_string);
         self.fit_zoom = zoom;
+    }
+
+    /// Sets the pane up for a gallery scene of Play: the artboard playing, its page still
+    /// opening (scenes have no engine). The first paint fits it.
+    pub fn stage_play(&mut self, id: &str) {
+        let Some(canvas) = self.current.clone() else { return };
+        self.selected = Some(id.to_string());
+        self.playing = Some(Playing { canvas, artboard: id.to_string(), tab: None, zoom: 0., size: (0., 0.), failed: None, turn: 0 });
     }
 
     /// The chat's canvases changed, or a picture was drawn.
@@ -219,6 +267,14 @@ impl CanvasPane {
             && !self.cameras.contains_key(&current)
         {
             self.fit_pending = Some(current);
+        }
+        // The played artboard changed: its page opens again on the new revision.
+        let replay = self.playing.as_ref().is_some_and(|p| changed.iter().any(|(canvas, id, _)| canvas == &p.canvas && id == &p.artboard));
+        let gone = self.playing.as_ref().is_some_and(|p| !self.list.iter().any(|c| c.id == p.canvas && c.artboards.iter().any(|a| a.id == p.artboard)));
+        if gone {
+            self.stop_playing(cx);
+        } else if replay && let Some(id) = self.playing.as_ref().map(|p| p.artboard.clone()) {
+            self.play(&id, cx);
         }
         if announce {
             let here: Vec<(String, bool)> =
@@ -334,7 +390,147 @@ impl CanvasPane {
         }
     }
 
+    /// Plays an artboard: fits it in the pane (never above 100%), then opens its live page
+    /// there. A second Play of the same artboard leaves it playing.
+    pub fn play(&mut self, id: &str, cx: &mut Context<Self>) {
+        let Some(canvas) = self.current.clone() else { return };
+        if !self.canvases.available() {
+            return;
+        }
+        let (width, height) = self.size();
+        let Some(bounds) = self.board().frame(id).map(|frame| frame.rect) else { return };
+        let to = fit_below_pills(bounds, width, (height - PLAY_BAND).max(1.), 1.);
+        if let Some(old) = self.playing.take().and_then(|p| p.tab) {
+            self.canvases.close_live(old.id);
+        }
+        self.play_turns += 1;
+        let turn = self.play_turns;
+        self.selected = Some(id.to_string());
+        self.following = false;
+        self.drag = None;
+        self.playing = Some(Playing { canvas: canvas.clone(), artboard: id.to_string(), tab: None, zoom: to.zoom, size: (width, height), failed: None, turn });
+        self.glide_to(to, cx);
+        let canvases = self.canvases.clone();
+        let artboard = id.to_string();
+        let pane = cx.entity().downgrade();
+        let display = f64::from(to.zoom);
+        let opened = Tokio::spawn(cx, async move { canvases.open_live(&canvas, &artboard, display).await });
+        cx.spawn(async move |_, cx| {
+            let result = opened.await.unwrap_or_else(|_| Err("The page could not be opened.".into()));
+            let _ = pane.update(cx, |pane, cx| {
+                match (pane.playing.as_mut().filter(|p| p.turn == turn), result) {
+                    (Some(playing), Ok((tab, _))) => playing.tab = Some(tab),
+                    (Some(playing), Err(error)) => playing.failed = Some(error),
+                    // Play ended or moved on while the page opened.
+                    (None, Ok((tab, _))) => pane.canvases.close_live(tab.id),
+                    (None, Err(_)) => {}
+                }
+                cx.notify();
+            });
+        })
+        .detach();
+        cx.notify();
+    }
+
+    /// Saves an artboard as `format` where the user picks, starting in Downloads.
+    fn export(&mut self, id: &str, format: wack_canvas::export::Format, cx: &mut Context<Self>) {
+        self.export_menu = false;
+        let Some(canvas) = self.canvas().cloned() else { return };
+        let Some(artboard) = canvas.artboards.iter().find(|a| a.id == id).cloned() else { return };
+        let name = wack_canvas::export::file_name(&canvas, &artboard, format);
+        let downloads = std::env::var_os("HOME").map(|home| PathBuf::from(home).join("Downloads")).unwrap_or_else(|| PathBuf::from("/"));
+        let chosen = cx.prompt_for_new_path(&downloads, Some(&name));
+        let canvases = self.canvases.clone();
+        let (canvas_id, id) = (canvas.id.clone(), id.to_string());
+        cx.spawn(async move |pane, cx| {
+            let Ok(Ok(Some(path))) = chosen.await else { return };
+            let file = path.file_name().map(|name| name.to_string_lossy().to_string()).unwrap_or_default();
+            let _ = pane.update(cx, |pane, cx| {
+                pane.export_note = Some((format!("Saving {file}…"), false));
+                cx.notify();
+            });
+            let exported = Tokio::spawn(cx, async move { canvases.export(&canvas_id, &id, format).await }).await;
+            let note = match exported.unwrap_or_else(|_| Err("The export stopped.".into())) {
+                Ok(bytes) => match std::fs::write(&path, bytes) {
+                    Ok(()) => (format!("Saved {file}"), false),
+                    Err(error) => (format!("Could not save {file}: {error}."), true),
+                },
+                Err(error) => (error, true),
+            };
+            let _ = pane.update(cx, |pane, cx| {
+                pane.export_note = Some(note);
+                cx.notify();
+            });
+        })
+        .detach();
+        cx.notify();
+    }
+
+    /// Presents the canvas from the selected artboard (or the first): each one fitted to the
+    /// whole window, from its picture. Play is how an artboard is used live.
+    pub fn present(&mut self, cx: &mut Context<Self>) {
+        self.stop_playing(cx);
+        let board = self.board();
+        if board.frames.is_empty() {
+            return;
+        }
+        let start = self.selected.as_ref().and_then(|id| board.frames.iter().position(|f| &f.id == id)).unwrap_or(0);
+        self.presenting = Some(start);
+        self.export_menu = false;
+        self.selected = Some(board.frames[start].id.clone());
+        cx.notify();
+    }
+
+    fn step_presenting(&mut self, by: i32, cx: &mut Context<Self>) {
+        let board = self.board();
+        let Some(index) = self.presenting else { return };
+        let next = (index as i64 + i64::from(by)).clamp(0, board.frames.len().saturating_sub(1) as i64) as usize;
+        self.presenting = Some(next);
+        self.selected = board.frames.get(next).map(|f| f.id.clone());
+        cx.notify();
+    }
+
+    /// Copies the artboard's own markup (a variant's with its CSS), as the agent wrote it.
+    fn copy_html(&mut self, id: &str, cx: &mut Context<Self>) {
+        self.export_menu = false;
+        let Some(canvas) = self.canvas() else { return };
+        let Some(artboard) = canvas.artboards.iter().find(|a| a.id == id) else { return };
+        let html = wack_canvas::model::resolve_html(canvas, artboard);
+        cx.write_to_clipboard(gpui::ClipboardItem::new_string(html));
+        self.export_note = Some(("Copied the HTML".into(), false));
+        cx.notify();
+    }
+
+    /// Ends Play: the page closes and the picture shows again, the camera where it was.
+    pub fn stop_playing(&mut self, cx: &mut Context<Self>) {
+        if let Some(tab) = self.playing.take().and_then(|p| p.tab) {
+            self.canvases.close_live(tab.id);
+        }
+        cx.notify();
+    }
+
+    /// The pane changed size while playing: fit again and rescale the page to match.
+    fn refit_playing(&mut self, cx: &mut Context<Self>) {
+        let Some(playing) = self.playing.as_ref() else { return };
+        let (width, height) = self.size();
+        let Some(bounds) = self.board().frame(&playing.artboard).map(|frame| frame.rect) else { return };
+        let to = fit_below_pills(bounds, width, (height - PLAY_BAND).max(1.), 1.);
+        let (canvas, artboard, tab) = (playing.canvas.clone(), playing.artboard.clone(), playing.tab.clone());
+        if let Some(playing) = self.playing.as_mut() {
+            playing.zoom = to.zoom;
+            playing.size = (width, height);
+        }
+        self.set_camera(to);
+        if let Some(tab) = tab {
+            let canvases = self.canvases.clone();
+            let display = f64::from(to.zoom);
+            Tokio::spawn(cx, async move { canvases.rescale_live(&tab, &canvas, &artboard, display).await }).detach();
+        }
+        cx.notify();
+    }
+
     fn fit_all(&mut self, cx: &mut Context<Self>) {
+        self.stop_playing(cx);
         let (width, height) = self.size();
         if let Some(bounds) = self.board().bounds() {
             self.following = true;
@@ -355,6 +551,10 @@ impl CanvasPane {
     }
 
     fn on_scroll(&mut self, event: &ScrollWheelEvent, _: &mut Window, cx: &mut Context<Self>) {
+        // While playing the camera holds still, so the page stays on its picture.
+        if self.playing.is_some() {
+            return;
+        }
         let (x, y) = self.local(event.position);
         let delta = match event.delta {
             ScrollDelta::Pixels(point) => (f32::from(point.x), f32::from(point.y)),
@@ -372,6 +572,9 @@ impl CanvasPane {
     }
 
     fn on_pinch(&mut self, event: &PinchEvent, _: &mut Window, cx: &mut Context<Self>) {
+        if self.playing.is_some() {
+            return;
+        }
         let (x, y) = self.local(event.position);
         let next = self.camera().zoom_at(x, y, 1. + event.delta);
         self.moved_by_hand();
@@ -382,6 +585,11 @@ impl CanvasPane {
     fn on_down(&mut self, event: &MouseDownEvent, window: &mut Window, cx: &mut Context<Self>) {
         window.focus(&self.focus, cx);
         self.switcher = false;
+        // A press on the board around a played artboard ends Play.
+        if self.playing.is_some() {
+            self.stop_playing(cx);
+            return;
+        }
         let (x, y) = self.local(event.position);
         let (wx, wy) = self.camera().to_world(x, y);
         let on = self.board().at(wx, wy).map(|frame| frame.id.clone());
@@ -407,15 +615,26 @@ impl CanvasPane {
         cx.notify();
     }
 
-    fn on_up(&mut self, _: &MouseUpEvent, _: &mut Window, cx: &mut Context<Self>) {
+    fn on_up(&mut self, event: &MouseUpEvent, _: &mut Window, cx: &mut Context<Self>) {
         let Some(drag) = self.drag.take() else { return };
         if !drag.moved {
-            self.selected = drag.on;
+            if self.selected != drag.on {
+                self.export_menu = false;
+                self.export_note = None;
+            }
+            self.selected = drag.on.clone();
+            // A double-click plays.
+            if event.click_count == 2
+                && let Some(id) = drag.on
+            {
+                self.play(&id, cx);
+            }
         }
         cx.notify();
     }
 
     fn zoom_by(&mut self, inwards: bool, cx: &mut Context<Self>) {
+        self.stop_playing(cx);
         let (width, height) = self.size();
         let camera = self.camera();
         let to = camera.zoom_to(width / 2., height / 2., board::step(camera.zoom, inwards));
@@ -424,6 +643,7 @@ impl CanvasPane {
     }
 
     fn zoom_to_selection(&mut self, cx: &mut Context<Self>) {
+        self.stop_playing(cx);
         if let Some(id) = self.selected.clone() {
             let (width, height) = self.size();
             if let Some(bounds) = self.board().bounds_of(&[id]) {
@@ -434,6 +654,7 @@ impl CanvasPane {
     }
 
     fn actual_size(&mut self, cx: &mut Context<Self>) {
+        self.stop_playing(cx);
         let (width, height) = self.size();
         let to = self.camera().zoom_to(width / 2., height / 2., 1.);
         self.moved_by_hand();
@@ -441,6 +662,10 @@ impl CanvasPane {
     }
 
     fn step_selection(&mut self, dx: i32, dy: i32, cx: &mut Context<Self>) {
+        if self.presenting.is_some() {
+            self.step_presenting(if dx + dy >= 0 { 1 } else { -1 }, cx);
+            return;
+        }
         let board = self.board();
         let next = match &self.selected {
             Some(from) => board.neighbour(from, dx, dy).map(|frame| frame.id.clone()),
@@ -465,6 +690,23 @@ impl CanvasPane {
     }
 
     fn escape(&mut self, cx: &mut Context<Self>) {
+        if self.presenting.take().is_some() {
+            // Back on the board at the artboard last shown.
+            if let Some(id) = self.selected.clone() {
+                self.go_to(&[id], cx);
+            }
+            cx.notify();
+            return;
+        }
+        if self.export_menu {
+            self.export_menu = false;
+            cx.notify();
+            return;
+        }
+        if self.playing.is_some() {
+            self.stop_playing(cx);
+            return;
+        }
         if self.switcher {
             self.switcher = false;
         } else {
@@ -540,6 +782,10 @@ impl Render for CanvasPane {
                 }
                 self.cameras.insert(id, camera);
             }
+        }
+        // The pane changed size under a played artboard: fit again, rescale its page.
+        if self.playing.as_ref().is_some_and(|p| self.bounds.get().is_some() && ((p.size.0 - width).abs() > 0.5 || (p.size.1 - height).abs() > 0.5)) {
+            self.refit_playing(cx);
         }
         let mut animating = false;
         if let Some(glide) = &self.glide {
@@ -679,6 +925,108 @@ impl Render for CanvasPane {
             }
         }
 
+        // Play: the board dims, and the played artboard's live page sits exactly on its picture
+        // once the camera has arrived at the zoom the page is scaled to.
+        let mut play_pill = None;
+        if let (Some(playing), Some(canvas)) = (&self.playing, &canvas)
+            && let Some(frame) = board.frame(&playing.artboard)
+        {
+            let screen = camera.to_screen(frame.rect);
+            let arrived = self.glide.is_none() && (camera.zoom - playing.zoom).abs() < 1e-4;
+            layer = layer.child(
+                div()
+                    .absolute()
+                    .inset_0()
+                    .bg(Hsla { a: 0.72, ..theme.window }),
+            );
+            let shown = self.shown.get(&(canvas.id.clone(), playing.artboard.clone())).cloned().unwrap_or_default();
+            let mut stage = div()
+                .absolute()
+                .left(px(screen.x))
+                .top(px(screen.y))
+                .w(px(screen.width.max(1.)))
+                .h(px(screen.height.max(1.)))
+                .rounded(px(PLAY_RADIUS))
+                .overflow_hidden()
+                .bg(theme.raised)
+                .shadow_lg()
+                .when_some(shown.full.or(shown.thumb), |stage, path| stage.child(img(path).size_full().object_fit(ObjectFit::Fill)));
+            if let (Some(tab), true) = (playing.tab.as_ref(), arrived) {
+                let (id, focus) = (tab.id, self.focus.clone());
+                stage = stage.child(
+                    gpui::canvas(
+                        |_, _, _| (),
+                        move |bounds, _, window, _| {
+                            // Never over the pane's edge: a page is a native view, drawn over
+                            // anything GPUI does not mask.
+                            let mask = window.content_mask().bounds;
+                            if contains(mask, bounds) {
+                                let _ = crate::browser::show(window, id, &focus, bounds, PLAY_RADIUS);
+                            }
+                        },
+                    )
+                    .absolute()
+                    .inset_0(),
+                );
+            }
+            layer = layer.child(stage);
+            let artboard = canvas.artboards.iter().find(|a| a.id == playing.artboard);
+            let status = match (&playing.failed, &playing.tab) {
+                (Some(error), _) => error.clone(),
+                (None, None) => "Opening the live page…".into(),
+                (None, Some(_)) => format!("Live · {}%", (playing.zoom * 100.).round()),
+            };
+            let pane = cx.entity();
+            play_pill = Some(
+                div()
+                    .absolute()
+                    .bottom(px(EDGE))
+                    .left_0()
+                    .right_0()
+                    .flex()
+                    .justify_center()
+                    .child(
+                        div()
+                            .h(px(PILL_HEIGHT + 4.))
+                            .pl(px(14.))
+                            .pr(px(4.))
+                            .max_w(px((width - 2. * EDGE).max(160.)))
+                            .rounded_full()
+                            .bg(theme.raised)
+                            .border_1()
+                            .border_color(theme.border)
+                            .shadow_sm()
+                            .flex()
+                            .items_center()
+                            .gap(px(10.))
+                            .on_mouse_down(MouseButton::Left, |_, _, cx| cx.stop_propagation())
+                            .child(Icon::Play.view(px(12.), if playing.failed.is_some() { theme.danger } else { theme.accent_text }))
+                            .child(div().min_w_0().flex_shrink(1.).typography(Type::UiStrong).text_color(theme.text).whitespace_nowrap().text_ellipsis().child(artboard.map(|a| a.name.clone()).unwrap_or_default()))
+                            .child(div().flex_none().typography(Type::Small).text_color(if playing.failed.is_some() { theme.danger } else { theme.text_dim }).whitespace_nowrap().child(status))
+                            .child(
+                                div()
+                                    .id("canvas-play-done")
+                                    .flex_none()
+                                    .h(px(PILL_HEIGHT - 4.))
+                                    .px(px(12.))
+                                    .rounded_full()
+                                    .bg(theme.hover)
+                                    .flex()
+                                    .items_center()
+                                    .cursor_pointer()
+                                    .hover(|done| done.bg(theme.accent_wash))
+                                    .typography(Type::Ui)
+                                    .text_color(theme.text)
+                                    .tooltip(tip("Back to the board (Esc)"))
+                                    .on_click(move |_, _, cx| pane.update(cx, |pane, cx| pane.stop_playing(cx)))
+                                    .child("Done")
+                                    .tag("canvas-play-done"),
+                            ),
+                    )
+                    .tag("canvas-play"),
+            );
+        }
+
         let pane = cx.entity();
         let root = div()
             .id("canvas-pane")
@@ -709,6 +1057,12 @@ impl Render for CanvasPane {
             .on_action(cx.listener(|pane, _: &CanvasZoomSelection, _, cx| pane.zoom_to_selection(cx)))
             .on_action(cx.listener(|pane, _: &CanvasActualSize, _, cx| pane.actual_size(cx)))
             .on_action(cx.listener(|pane, _: &CanvasEscape, _, cx| pane.escape(cx)))
+            .on_action(cx.listener(|pane, _: &CanvasPresent, _, cx| pane.present(cx)))
+            .on_action(cx.listener(|pane, _: &CanvasPlay, _, cx| {
+                if let Some(id) = pane.selected.clone() {
+                    pane.play(&id, cx);
+                }
+            }))
             .on_action(cx.listener(|pane, action: &CanvasMove, _, cx| pane.step_selection(action.dx, action.dy, cx)))
             .child(layer);
 
@@ -853,6 +1207,10 @@ impl Render for CanvasPane {
                     })
                     .child("Fit"),
             )
+            .child(circle("canvas-present", Icon::Eye, "Present  ⌘↩", &theme).on_click({
+                let pane = pane.clone();
+                move |_, _, cx| pane.update(cx, |pane, cx| pane.present(cx))
+            }))
             .tag("canvas-zoom");
 
         // Bottom: what is new elsewhere, and the selected artboard.
@@ -949,21 +1307,205 @@ impl Render for CanvasPane {
                         .flex()
                         .items_center()
                         .gap(px(10.))
-                        .child(div().typography(Type::Ui).text_color(theme.text).whitespace_nowrap().text_ellipsis().child(facts.join(" · ")))
-                        .children(ask),
+                        .child(div().min_w_0().flex_shrink(1.).typography(Type::Ui).text_color(theme.text).whitespace_nowrap().text_ellipsis().child(facts.join(" · ")))
+                        .children(ask)
+                        .when(self.canvases.available(), |row| {
+                            let (pane, id) = (pane.clone(), artboard.id.clone());
+                            row.child(
+                                div()
+                                    .id("canvas-play-button")
+                                    .flex_none()
+                                    .h(px(24.))
+                                    .pl(px(8.))
+                                    .pr(px(10.))
+                                    .rounded_full()
+                                    .bg(theme.accent_wash)
+                                    .flex()
+                                    .items_center()
+                                    .gap(px(5.))
+                                    .cursor_pointer()
+                                    .hover(|play| play.bg(theme.hover))
+                                    .typography(Type::Small)
+                                    .text_color(theme.accent_text)
+                                    .tooltip(tip("Use it as a live page (↩)"))
+                                    .on_mouse_down(MouseButton::Left, |_, _, cx| cx.stop_propagation())
+                                    .on_click(move |_, _, cx| pane.update(cx, |pane, cx| pane.play(&id, cx)))
+                                    .child(Icon::Play.view(px(10.), theme.accent_text))
+                                    .child("Play")
+                                    .tag("canvas-play-button"),
+                            )
+                        })
+                        .child({
+                            let pane = pane.clone();
+                            circle("canvas-export", Icon::Download, "Export, copy or mention", &theme)
+                                .when(self.export_menu, |circle| circle.bg(theme.hover))
+                                .on_mouse_down(MouseButton::Left, |_, _, cx| cx.stop_propagation())
+                                .on_click(move |_, _, cx| {
+                                    pane.update(cx, |pane, cx| {
+                                        pane.export_menu = !pane.export_menu;
+                                        cx.notify();
+                                    })
+                                })
+                                .tag("canvas-export")
+                        }),
                 )
                 .when_some(artboard.notes.clone(), |hint, notes| hint.child(div().typography(Type::Small).text_color(theme.text_dim).child(notes)))
+                .when_some(self.export_note.clone(), |hint, (note, failed)| {
+                    hint.child(div().typography(Type::Small).text_color(if failed { theme.danger } else { theme.success }).child(note))
+                })
+                .when(self.export_menu, |hint| {
+                    use wack_canvas::export::Format;
+                    type Act = Box<dyn Fn(&mut CanvasPane, &mut Window, &mut Context<CanvasPane>)>;
+                    let row = |id: &'static str, label: String, act: Act| {
+                        let pane = pane.clone();
+                        div()
+                            .id(id)
+                            .px(px(10.))
+                            .py(px(6.))
+                            .rounded(px(8.))
+                            .cursor_pointer()
+                            .hover(|row| row.bg(theme.hover))
+                            .typography(Type::Ui)
+                            .text_color(theme.text)
+                            .on_click(move |_, window, cx| pane.update(cx, |pane, cx| act(pane, window, cx)))
+                            .child(label)
+                            .tag(id)
+                    };
+                    let id = artboard.id.clone();
+                    let mention = format!("the artboard “{}” ({}) on the canvas “{}” (canvas: \"{}\")", artboard.name, artboard.id, canvas.title, canvas.id);
+                    let mut menu = div()
+                        .id("canvas-export-menu")
+                        .absolute()
+                        .bottom_full()
+                        .left_0()
+                        .mb(px(6.))
+                        .min_w(px(200.))
+                        .p(px(4.))
+                        .rounded(px(12.))
+                        .bg(theme.raised)
+                        .border_1()
+                        .border_color(theme.border)
+                        .shadow_lg()
+                        .on_mouse_down(MouseButton::Left, |_, _, cx| cx.stop_propagation());
+                    for (tag, format) in [("canvas-export-png", Format::Png), ("canvas-export-html", Format::Html), ("canvas-export-pdf", Format::Pdf)] {
+                        let id = id.clone();
+                        menu = menu.child(row(tag, format!("Save as {}…", format.label()), Box::new(move |pane, _, cx| pane.export(&id, format, cx))));
+                    }
+                    let copy = id.clone();
+                    menu = menu
+                        .child(div().h(px(1.)).mx(px(6.)).my(px(4.)).bg(theme.border))
+                        .child(row("canvas-copy-html", "Copy HTML".into(), Box::new(move |pane, _, cx| pane.copy_html(&copy, cx))))
+                        .child(row(
+                            "canvas-mention",
+                            "Mention in chat".into(),
+                            Box::new(move |pane, window, cx| {
+                                pane.export_menu = false;
+                                window.dispatch_action(Box::new(WriteInComposer { text: mention.clone() }), cx);
+                                cx.notify();
+                            }),
+                        ));
+                    hint.child(deferred(menu.tag("canvas-export-menu")))
+                })
                 .tag("canvas-selection")
         });
 
+        // Present: one artboard at a time over the whole window, from its picture.
+        let presented = self.presenting.and_then(|index| board.frames.get(index).map(|frame| (index, frame.clone()))).map(|(index, frame)| {
+            let viewport = window.viewport_size();
+            let (view_width, view_height) = (f32::from(viewport.width), f32::from(viewport.height));
+            let origin = self.bounds.get().map_or(gpui::point(px(0.), px(0.)), |bounds| bounds.origin);
+            let shown = self.shown.get(&(canvas.id.clone(), frame.id.clone())).cloned().unwrap_or_default();
+            let (width, height) = (frame.rect.width.max(1.), frame.rect.height.max(1.));
+            // Up to twice its size: the pictures are drawn at 2x.
+            let fit = ((view_width - 2. * PRESENT_MARGIN) / width).min((view_height - 2.6 * PRESENT_MARGIN) / height).clamp(0.05, 2.);
+            let name = canvas.artboards.iter().find(|a| a.id == frame.id).map(|a| a.name.clone()).unwrap_or_default();
+            let count = board.frames.len();
+            let step = |by: i32| {
+                let pane = pane.clone();
+                move |_: &gpui::ClickEvent, _: &mut Window, cx: &mut gpui::App| pane.update(cx, |pane, cx| pane.step_presenting(by, cx))
+            };
+            let close = {
+                let pane = pane.clone();
+                move |_: &gpui::ClickEvent, _: &mut Window, cx: &mut gpui::App| pane.update(cx, |pane, cx| pane.escape(cx))
+            };
+            let picture = div()
+                .w(px(width * fit))
+                .h(px(height * fit))
+                .rounded(px(10.))
+                .overflow_hidden()
+                .bg(theme.raised)
+                .shadow_lg()
+                .when_some(shown.full.or(shown.thumb), |picture, path| picture.child(img(path).size_full().object_fit(ObjectFit::Fill)));
+            deferred(
+                div()
+                    .id("canvas-present")
+                    .absolute()
+                    .left(-origin.x)
+                    .top(-origin.y)
+                    .w(viewport.width)
+                    .h(viewport.height)
+                    .bg(Hsla { a: 1., ..theme.window })
+                    .occlude()
+                    .flex()
+                    .flex_col()
+                    .items_center()
+                    .justify_center()
+                    .gap(px(16.))
+                    .on_mouse_down(MouseButton::Left, |_, _, cx| cx.stop_propagation())
+                    .on_scroll_wheel(|_, _, cx| cx.stop_propagation())
+                    .child(crate::motion::enter(SharedString::from(format!("canvas-present-{}", frame.id)), picture))
+                    .child(
+                        div()
+                            .flex()
+                            .items_center()
+                            .gap(px(12.))
+                            .child(circle("canvas-present-previous", Icon::ArrowLeft, "Previous  ←", &theme).bg(theme.raised).on_click(step(-1)))
+                            .child(
+                                div()
+                                    .flex()
+                                    .flex_col()
+                                    .items_center()
+                                    .max_w(px(480.))
+                                    .child(div().max_w(px(480.)).truncate().typography(Type::UiStrong).text_color(theme.text).child(name))
+                                    .child(div().typography(Type::Small).text_color(theme.text_dim).child(format!("{} of {count} · ← → to step · esc to close", index + 1))),
+                            )
+                            .child(circle("canvas-present-next", Icon::ArrowRight, "Next  →", &theme).bg(theme.raised).on_click(step(1)))
+                            .child(circle("canvas-present-close", Icon::Close, "Back to the board  esc", &theme).bg(theme.raised).on_click(close)),
+                    )
+                    .tag("canvas-present"),
+            )
+            .with_priority(20)
+        });
+
+        let playing = self.playing.is_some();
         root.child(title)
             .children(switcher)
             .child(zoom_pill)
-            .children(arrivals)
-            .children(hint)
+            .children(arrivals.filter(|_| !playing))
+            .children(hint.filter(|_| !playing))
+            .children(play_pill)
+            .children(presented)
             .tag("canvas-pane")
             .into_any_element()
     }
+}
+
+impl Drop for CanvasPane {
+    /// A played page is the pane's own: it closes with the pane.
+    fn drop(&mut self) {
+        if let Some(tab) = self.playing.take().and_then(|p| p.tab) {
+            self.canvases.close_live(tab.id);
+        }
+    }
+}
+
+/// `inner` lies inside `outer`, give or take a point of rounding.
+fn contains(outer: Bounds<Pixels>, inner: Bounds<Pixels>) -> bool {
+    let slack = px(1.);
+    inner.origin.x + slack >= outer.origin.x
+        && inner.origin.y + slack >= outer.origin.y
+        && inner.origin.x + inner.size.width <= outer.origin.x + outer.size.width + slack
+        && inner.origin.y + inner.size.height <= outer.origin.y + outer.size.height + slack
 }
 
 fn artboards(count: usize) -> String {

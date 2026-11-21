@@ -26,7 +26,7 @@ use crate::model::{MAX_ARTBOARD_HEIGHT, MIN_ARTBOARD_SIZE};
 /// How long a page may take to load and settle before it is reported as stuck.
 const SETTLE: Duration = Duration::from_secs(8);
 /// The height an auto-height artboard is first laid out at, before it is measured.
-const FIRST_HEIGHT: u32 = 800;
+pub const FIRST_HEIGHT: u32 = 800;
 /// The most pixels one picture may have (8 MP).
 pub const MAX_PIXELS: f64 = 8_000_000.;
 const MAX_CONSOLE_LINES: usize = 10;
@@ -127,15 +127,55 @@ impl Renderer {
         drawn
     }
 
-    /// The live page for an artboard, laid out at its size, for Play and export. The caller
-    /// closes it (`Backend::close`).
-    pub async fn open(&self, job: &Job, scale: f64) -> Result<Arc<Tab>, String> {
+    /// The live page for an artboard (Play, export), laid out at `width` × `height` CSS pixels
+    /// and shown scaled by `display`. Not behind the drawing turn: it is its own page. The
+    /// caller closes it (`Backend::close`).
+    pub async fn open(&self, job: &Job, height: u32, display: f64) -> Result<Arc<Tab>, String> {
         let tab = Tab::for_site(job.site.clone());
         self.backend.create(tab.clone(), job.address.clone()).await?;
         let page = Page { backend: self.backend.clone(), tab: tab.clone() };
-        page.lay_out(job.width, job.height.unwrap_or(FIRST_HEIGHT), scale, 1.).await?;
+        if let Err(error) = page.lay_out(job.width, height, 0., display).await {
+            self.backend.close(tab.id);
+            return Err(error);
+        }
         Ok(tab)
     }
+
+    /// Prints an artboard to PDF from its live page, settled, at `width` × `height`.
+    pub async fn pdf(&self, job: &Job, height: u32) -> Result<Vec<u8>, String> {
+        let _turn = self.turn.lock().await;
+        let tab = Tab::for_site(job.site.clone());
+        self.backend.create(tab.clone(), job.address.clone()).await?;
+        let page = Page { backend: self.backend.clone(), tab: tab.clone() };
+        let printed = async {
+            page.lay_out(job.width, height, 1., 1.).await?;
+            page.settle().await?;
+            // CSS pixels are 1/96 inch; a page per artboard height, edge to edge.
+            let printed = page
+                .cdp(
+                    "Page.printToPDF",
+                    json!({
+                        "printBackground": true,
+                        "paperWidth": f64::from(job.width) / 96.,
+                        "paperHeight": f64::from(height) / 96.,
+                        "marginTop": 0, "marginBottom": 0, "marginLeft": 0, "marginRight": 0,
+                        "preferCSSPageSize": false,
+                    }),
+                )
+                .await?;
+            let data = printed["data"].as_str().ok_or("The page printed nothing.")?;
+            base64::engine::general_purpose::STANDARD.decode(data).map_err(|_| "The printed PDF could not be read.".to_string())
+        }
+        .await;
+        self.backend.close(tab.id);
+        printed
+    }
+
+    /// Shows an open live page at another scale, its layout unchanged.
+    pub async fn rescale(&self, tab: &Arc<Tab>, width: u32, height: u32, display: f64) -> Result<(), String> {
+        Page { backend: self.backend.clone(), tab: tab.clone() }.lay_out(width, height, 0., display).await
+    }
+
 }
 
 struct Page {

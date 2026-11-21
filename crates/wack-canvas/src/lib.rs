@@ -13,6 +13,7 @@
 
 pub mod canvases;
 pub mod comments;
+pub mod export;
 pub mod guide;
 pub mod model;
 pub mod render;

@@ -158,6 +158,15 @@ impl Tool for Draw {
     }
 }
 
+/// The last artboard name in a `canvas` call still being written (its partial JSON): what the
+/// board and the tool row say is being drawn. Only names are read, never anything the page holds.
+pub fn writing_name(partial: &str) -> Option<String> {
+    static NAME: std::sync::OnceLock<regex::Regex> = std::sync::OnceLock::new();
+    let name = NAME.get_or_init(|| regex::Regex::new(r#""name"\s*:\s*"((?:[^"\\]|\\.){1,120})""#).expect("a valid pattern"));
+    let found = name.captures_iter(partial).last()?.get(1)?.as_str();
+    serde_json::from_str::<String>(&format!("\"{found}\"")).ok().map(|name| name.trim().to_string()).filter(|name| !name.is_empty())
+}
+
 /// What a `canvas` call tells the model.
 fn summary(planned: &model::Planned, drawn: &[(String, Result<Report, String>)], resolved: &[String]) -> String {
     let canvas = &planned.canvas;
@@ -402,6 +411,13 @@ pub fn collapse_data_urls(html: &str) -> String {
 
 #[cfg(test)]
 mod tests {
+    #[test]
+    fn a_call_being_written_names_its_latest_artboard() {
+        assert_eq!(writing_name(r#"{"title":"S","artboards":[{"name":"Calm","html":"<main>"#).as_deref(), Some("Calm"));
+        assert_eq!(writing_name(r#"[{"name":"Calm","html":"x"},{"name":"Dense \"2\"","html":"<p"#).as_deref(), Some("Dense \"2\""));
+        assert_eq!(writing_name(r#"{"artboards":[{"name":"Ca"#), None, "a name still being written waits");
+    }
+
     #[test]
     fn what_summary_writes_outcome_reads() {
         let planned = model::plan(&[], &json!({ "title": "Sign-up, “v2”", "artboards": [

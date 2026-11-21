@@ -126,6 +126,15 @@ impl ChatPanes {
         }
     }
 
+    /// Tells the Canvas pane what the model is drawing now (`None`: nothing).
+    pub fn canvas_writing(&self, writing: Option<crate::conversation::Writing>, cx: &mut App) {
+        for (model, _) in self.models.values() {
+            if let PaneModel::Canvas(pane) = model {
+                pane.update(cx, |pane, cx| pane.set_writing(writing.clone(), cx));
+            }
+        }
+    }
+
     /// Shows a canvas in the Canvas pane, if one has been made.
     pub fn show_canvas(&self, canvas: &str, artboards: &[String], cx: &mut App) {
         for (model, _) in self.models.values() {

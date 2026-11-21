@@ -305,6 +305,9 @@ pub fn activity(rows: &[WorkRow]) -> Option<String> {
         "Checked" => "Checking",
         "Answered" => "Answering",
         "Uploaded" => "Uploading",
+        "Drew" => "Drawing",
+        "Viewed" => "Viewing",
+        "Studied" => "Reading",
         other => other,
     };
     let target = match &row.target {
@@ -710,6 +713,11 @@ pub fn tool_row(tool: &ToolStep, cwd: &Path, live: bool) -> WorkRow {
             text_field(input, "description").map(|description| Detail::Text(description.to_string().into())),
         ),
         // "Drew “Settings” · 2 new, 1 revised": the card under the log shows the pictures.
+        // While the model writes the call: the artboard it is on and how much has come.
+        wack_canvas::tools::CANVAS if input.is_none() && tool.writing.is_some() => {
+            let writing = tool.writing.as_ref().map(writing_words).unwrap_or_default();
+            ("Drew", Target::Words(writing.into()), None, None)
+        }
         wack_canvas::tools::CANVAS => {
             let (target, note) = canvas_words(input.as_ref(), ok);
             ("Drew", Target::Words(target.into()), note, ok.map(|text| Detail::Output(tail(text, DETAIL_LINES).into())))
@@ -783,6 +791,29 @@ fn canvas_words(input: Option<&Value>, result: Option<&str>) -> (String, Option<
         parts.push(format!("{count} artboard{}", if count == 1 { "" } else { "s" }));
     }
     (if parts.is_empty() { "the canvas".into() } else { parts.join(" · ") }, None)
+}
+
+/// A canvas call being written, as its row and the board say it: "Calm · 12,340 characters".
+pub fn writing_words(writing: &crate::conversation::Writing) -> String {
+    let count = thousands(writing.chars);
+    let chars = if writing.chars == 1 { "1 character".to_string() } else { format!("{count} characters") };
+    match &writing.artboard {
+        Some(name) => format!("{name} · {chars}"),
+        None => chars,
+    }
+}
+
+/// 12340 as "12,340".
+fn thousands(n: usize) -> String {
+    let digits = n.to_string();
+    let mut out = String::new();
+    for (index, digit) in digits.chars().enumerate() {
+        if index > 0 && (digits.len() - index).is_multiple_of(3) {
+            out.push(',');
+        }
+        out.push(digit);
+    }
+    out
 }
 
 /// The strings in an input's array field (names, ids), others skipped.
@@ -1219,12 +1250,26 @@ mod tests {
         assert_eq!(tally(&[row("Thought")]), "");
     }
 
+    #[test]
+    fn a_canvas_call_being_written_says_what_and_how_much() {
+        let writing = crate::conversation::Writing::shown(16_884, Some("Bold"));
+        assert_eq!(writing_words(&writing), "Bold · 16,884 characters");
+        assert_eq!(writing_words(&crate::conversation::Writing::shown(1, None)), "1 character");
+        assert_eq!(thousands(1_234_567), "1,234,567");
+        let mut step = tool(wack_canvas::tools::CANVAS, json!({}), None);
+        step.input = None;
+        step.writing = Some(writing);
+        let row = tool_row(&step, Path::new("/"), true);
+        assert_eq!(activity(&[row]).as_deref(), Some("Drawing Bold · 16,884 characters"));
+    }
+
     fn tool(name: &str, input: Value, result: Option<(&str, bool)>) -> ToolStep {
         ToolStep {
             id: "t".into(),
             name: name.into(),
             input: Some(input),
             result: result.map(|(text, is_error)| ToolResult { text: text.into(), is_error, pictures: Vec::new() }),
+            writing: None,
         }
     }
 

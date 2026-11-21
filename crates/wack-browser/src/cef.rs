@@ -1378,9 +1378,11 @@ fn refuse(id: TabId, url: &str, error: &str) {
 
 // The ⌘ keys. Chromium expects the Edit menu's standard selectors for copy, paste and the rest,
 // which GPUI's menus don't send, so they are done here; any other ⌘ key the page leaves alone
-// goes to the app's own shortcuts.
+// goes to the app's own shortcuts, as does Esc on a canvas page.
 const SHIFT: u32 = 2;
 const COMMAND: u32 = 128;
+/// Esc's Windows key code, which CEF reports on every platform.
+const ESCAPE: i32 = 0x1B;
 
 wrap_keyboard_handler! {
     struct WackKeys {
@@ -1416,8 +1418,21 @@ wrap_keyboard_handler! {
 
         fn on_key_event(&self, _browser: Option<&mut Browser>, event: Option<&KeyEvent>, os_event: *mut u8) -> i32 {
             let Some(event) = event else { return 0 };
-            if event.type_ != KeyEventType::RAWKEYDOWN || event.modifiers & COMMAND == 0 || os_event.is_null() {
+            if event.type_ != KeyEventType::RAWKEYDOWN || os_event.is_null() {
                 return 0;
+            }
+            // Esc a canvas page leaves alone (CEF asks only after the page had it) goes back to
+            // the app, which ends Play as it does on the board; the keyboard goes back with it.
+            if event.modifiers & COMMAND == 0 {
+                let canvas = tab_of(self.tab).is_some_and(|tab| tab.site().is_some());
+                if !canvas || event.windows_key_code != ESCAPE {
+                    return 0;
+                }
+                let Some(host) = host_view() else { return 0 };
+                release_focus();
+                // SAFETY: as below; the host view hands the key to GPUI's focused element.
+                let () = unsafe { msg_send![&*host, keyDown: os_event.cast::<AnyObject>()] };
+                return 1;
             }
             let Some(host) = host_view() else { return 0 };
             // SAFETY: `os_event` is the NSEvent CEF is handling; the host view takes key

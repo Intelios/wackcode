@@ -176,6 +176,12 @@ pub struct CanvasPane {
     comment_list: HashMap<String, Vec<wack_canvas::comments::Comment>>,
     /// Pins resolved while on screen, fading: (canvas, comment) and since when.
     fading: HashMap<(String, String), Instant>,
+    /// The canvas call the model is writing now: the artboard and how much has come.
+    writing: Option<crate::conversation::Writing>,
+    /// Bumped as the camera moves, so only the last move of a burst is saved.
+    camera_moves: u64,
+    /// The cameras last kept on disk, by canvas.
+    saved_cameras: HashMap<String, Camera>,
 }
 
 impl CanvasPane {
@@ -216,6 +222,9 @@ impl CanvasPane {
             editing: None,
             comment_list: HashMap::new(),
             fading: HashMap::new(),
+            writing: None,
+            camera_moves: 0,
+            saved_cameras: HashMap::new(),
         };
         pane.reload(false, cx);
         pane
@@ -258,6 +267,19 @@ impl CanvasPane {
         let Some(canvas) = self.current.clone() else { return };
         self.selected = Some(id.to_string());
         self.playing = Some(Playing { canvas, artboard: id.to_string(), tab: None, zoom: 0., size: (0., 0.), failed: None, turn: 0 });
+    }
+
+    /// What the model is drawing now, from the chat's live turn.
+    pub fn set_writing(&mut self, writing: Option<crate::conversation::Writing>, cx: &mut Context<Self>) {
+        if self.writing != writing {
+            self.writing = writing;
+            cx.notify();
+        }
+    }
+
+    /// Opens the switcher for a gallery scene.
+    pub fn stage_switcher(&mut self) {
+        self.switcher = true;
     }
 
     /// Opens the Tweaks panel for a gallery scene.
@@ -314,7 +336,7 @@ impl CanvasPane {
         self.list = list;
         self.revs = revs;
         if let Some(current) = self.current.clone()
-            && !self.cameras.contains_key(&current)
+            && !self.restore_camera(&current)
         {
             self.fit_pending = Some(current);
         }
@@ -396,6 +418,41 @@ impl CanvasPane {
 
     fn size(&self) -> (f32, f32) {
         self.bounds.get().map_or((800., 600.), |b| (f32::from(b.size.width), f32::from(b.size.height)))
+    }
+
+    /// A canvas's camera: the one in hand, else where it was left last time (`view.json`).
+    /// False when it has none yet, and the first paint fits it.
+    fn restore_camera(&mut self, canvas: &str) -> bool {
+        if self.cameras.contains_key(canvas) {
+            return true;
+        }
+        let Some([x, y, zoom]) = self.canvases.camera(canvas) else { return false };
+        let camera = Camera { x, y, zoom: zoom.clamp(board::MIN_ZOOM, board::MAX_ZOOM) };
+        self.cameras.insert(canvas.to_string(), camera);
+        self.saved_cameras.insert(canvas.to_string(), camera);
+        true
+    }
+
+    /// Keeps where the camera came to rest, once it has rested a moment: a pan or a pinch
+    /// moves it every frame, and only the last of a burst is written.
+    fn keep_camera(&mut self, cx: &mut Context<Self>) {
+        let Some(id) = self.current.clone() else { return };
+        let Some(camera) = self.cameras.get(&id).copied() else { return };
+        if self.glide.is_some() || self.saved_cameras.get(&id) == Some(&camera) {
+            return;
+        }
+        self.saved_cameras.insert(id.clone(), camera);
+        self.camera_moves += 1;
+        let turn = self.camera_moves;
+        let canvases = self.canvases.clone();
+        cx.spawn(async move |pane, cx| {
+            cx.background_executor().timer(Duration::from_millis(600)).await;
+            let latest = pane.update(cx, |pane, _| pane.camera_moves == turn).unwrap_or(false);
+            if latest {
+                let _ = canvases.save_camera(&id, [camera.x, camera.y, camera.zoom]);
+            }
+        })
+        .detach();
     }
 
     fn set_camera(&mut self, camera: Camera) {
@@ -806,7 +863,7 @@ impl CanvasPane {
         self.selected = None;
         self.switcher = false;
         self.unseen.clear();
-        if !self.cameras.contains_key(&id) {
+        if !self.restore_camera(&id) {
             self.fit_pending = Some(id);
         }
         self.ask_for_pictures(cx);
@@ -896,6 +953,8 @@ impl Render for CanvasPane {
         }
         if animating {
             window.request_animation_frame();
+        } else {
+            self.keep_camera(cx);
         }
 
         let camera = self.camera();
@@ -977,13 +1036,16 @@ impl Render for CanvasPane {
                     .absolute()
                     .left(px(screen.x))
                     .top(px(screen.y - 22.))
-                    .max_w(px(screen.width.max(80.)))
+                    // No wider than the artboard and most of the gap after it, so names never run together.
+                    .max_w(px((screen.width + (board::ARTBOARD_GAP - 12.) * camera.zoom).max(24.)))
                     .flex()
                     .items_center()
                     .gap(px(6.))
                     .overflow_hidden()
                     .child(
                         div()
+                            .min_w_0()
+                            .flex_shrink(1.)
                             .typography(Type::Small)
                             .text_color(if selected { theme.text } else { theme.text_soft })
                             .whitespace_nowrap()
@@ -1203,6 +1265,9 @@ impl Render for CanvasPane {
 
         // Top left: which canvas, and the others.
         let many = self.list.len() > 1;
+        // The switcher also lists the canvas's open comments.
+        let open_here = self.open_comments(&canvas.id);
+        let openable = many || open_here > 0;
         let title = div()
             .id("canvas-switcher")
             .absolute()
@@ -1221,7 +1286,7 @@ impl Render for CanvasPane {
             .items_center()
             .gap(px(8.))
             .on_mouse_down(MouseButton::Left, |_, _, cx| cx.stop_propagation())
-            .when(many, |pill| {
+            .when(openable, |pill| {
                 let pane = pane.clone();
                 pill.cursor_pointer().hover(|pill| pill.bg(theme.hover)).on_click(move |_, _, cx| {
                     pane.update(cx, |pane, cx| {
@@ -1234,10 +1299,25 @@ impl Render for CanvasPane {
             .when(width >= NARROW, |pill| {
                 pill.child(div().flex_none().typography(Type::Small).text_color(theme.text_dim).whitespace_nowrap().child(artboards(canvas.artboards.len())))
             })
-            .when(many, |pill| pill.child(Icon::ChevronDown.view(px(12.), theme.text_dim)))
+            .when(open_here > 0, |pill| {
+                pill.child(
+                    div()
+                        .flex_none()
+                        .flex()
+                        .items_center()
+                        .gap(px(4.))
+                        .typography(Type::Small)
+                        .text_color(theme.accent_text)
+                        .child(Icon::Comment.view(px(11.), theme.accent_text))
+                        .child(open_here.to_string())
+                        .tag("canvas-comment-count"),
+                )
+            })
+            .when(openable, |pill| pill.child(Icon::ChevronDown.view(px(12.), theme.text_dim)))
             .tag("canvas-switcher");
-        let switcher = (self.switcher && many).then(|| {
+        let switcher = (self.switcher && openable).then(|| {
             let current = self.current.clone();
+            let comment_rows = self.comment_rows(&canvas, &theme, &pane);
             deferred(
                 div()
                     .id("canvas-switcher-menu")
@@ -1245,6 +1325,7 @@ impl Render for CanvasPane {
                     .top(px(EDGE + PILL_HEIGHT + 6.))
                     .left(px(EDGE))
                     .min_w(px(220.))
+                    .max_w(px((width - 2. * EDGE).clamp(220., 360.)))
                     .p(px(4.))
                     .rounded(px(12.))
                     .bg(theme.raised)
@@ -1270,7 +1351,12 @@ impl Render for CanvasPane {
                             .on_click(move |_, _, cx| pane.update(cx, |pane, cx| pane.choose(id.clone(), cx)))
                             .child(div().typography(Type::Ui).text_color(if picked { theme.accent_text } else { theme.text }).child(other.title.clone()))
                             .child(div().typography(Type::Small).text_color(theme.text_dim).child(artboards(other.artboards.len())))
-                    })),
+                    }).filter(|_| many))
+                    .when(!comment_rows.is_empty(), |menu| {
+                        menu.when(many, |menu| menu.child(div().h(px(1.)).mx(px(6.)).my(px(4.)).bg(theme.border)))
+                            .child(div().px(px(10.)).pt(px(6.)).pb(px(2.)).typography(Type::Small).text_color(theme.text_dim).child(format!("Comments on “{}”", canvas.title)))
+                            .children(comment_rows)
+                    }),
             )
         });
 
@@ -1629,6 +1715,35 @@ impl Render for CanvasPane {
 
         let tweaks_panel = self.tweak_target().map(|artboard| self.tweaks_panel(&canvas, artboard, height, &theme, pane.clone()));
         let editor = self.comment_editor(&canvas, &board, camera, (width, height), &theme, &pane);
+        // What the model is writing now, under the top pills (and clear of the Tweaks panel).
+        let writing = self.writing.as_ref().filter(|_| self.playing.is_none()).map(|writing| {
+            let right = if self.tweak_target().is_some() { tweaks::PANEL_WIDTH + 2. * EDGE } else { 0. };
+            div()
+                .absolute()
+                .top(px(EDGE + PILL_HEIGHT + 8.))
+                .left_0()
+                .right(px(right))
+                .flex()
+                .justify_center()
+                .child(
+                    div()
+                        .h(px(PILL_HEIGHT))
+                        .max_w(px((width - right - 2. * EDGE).max(160.)))
+                        .px(px(14.))
+                        .rounded_full()
+                        .flex()
+                        .items_center()
+                        .gap(px(8.))
+                        .bg(theme.raised)
+                        .border_1()
+                        .border_color(theme.accent_line)
+                        .shadow_sm()
+                        .child(Icon::Board.view(px(12.), theme.accent_text))
+                        .child(div().flex_none().typography(Type::UiStrong).text_color(theme.text).child("Drawing"))
+                        .child(div().min_w_0().flex_shrink(1.).typography(Type::Small).text_color(theme.text_dim).whitespace_nowrap().text_ellipsis().child(crate::work::writing_words(writing)))
+                        .tag("canvas-writing"),
+                )
+        });
         let comment_hint = self.comment_hint(&theme, &canvas.id);
         let playing = self.playing.is_some();
         let commenting = self.commenting;
@@ -1638,6 +1753,7 @@ impl Render for CanvasPane {
             .children(arrivals.filter(|_| !playing))
             .children(hint.filter(|_| !playing && !commenting))
             .children(comment_hint)
+            .children(writing)
             .children(editor)
             .children(play_pill)
             .children(tweaks_panel)

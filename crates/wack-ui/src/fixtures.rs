@@ -1188,6 +1188,23 @@ pub fn canvas_elements(width: u32) -> Vec<wack_canvas::Element> {
     ]
 }
 
+/// A turn writing its second canvas call: the first drew three directions, and the model is
+/// now partway through a fourth, "Bold", whose row says how much has come.
+pub fn canvas_drawing_turn(canvases: &wack_canvas::Canvases) -> Vec<Item> {
+    let mut conversation = Conversation::default();
+    let now = START + 60_000;
+    conversation.send("Add a bolder direction that leads with the account.", now - 20_000);
+    call(&mut conversation, "c-1", "canvas_guide", json!({ "sections": ["explore"] }), Some("Canvas guide…"), now - 12_000);
+    conversation.apply(&Event::ToolStart { id: "c-2".into(), name: wack_canvas::tools::CANVAS.into() }, now);
+    let html = "<main class=\"bold\"><header>…</header>".repeat(420);
+    let partial = format!("{{\"canvas\":\"settings\",\"artboards\":[{{\"name\":\"Bold\",\"group\":\"Phone\",\"width\":400,\"html\":\"{html}");
+    for piece in partial.as_bytes().chunks(512) {
+        conversation.apply(&Event::ToolInput { id: "c-2".into(), json: String::from_utf8_lossy(piece).to_string() }, now);
+    }
+    let _ = canvases;
+    items(&conversation, &[], now + 2_000)
+}
+
 /// A turn that drew on a canvas: the guide, the drawing, a look, its card and the reply. The
 /// card's faces come from `canvases`, as a chat's would.
 pub fn canvas_turn(canvases: &wack_canvas::Canvases, live: bool) -> Vec<Item> {

@@ -117,16 +117,18 @@ impl CanvasPane {
     /// A press with the Comment tool: on an artboard it starts a pin (or an area). False when
     /// the press is the board's (empty space pans as ever).
     pub(super) fn comment_down(&mut self, x: f32, y: f32, cx: &mut Context<Self>) -> bool {
-        if !self.commenting {
-            return false;
-        }
-        // A press beside an editor with words in it keeps them: Esc or Cancel lets go.
+        // A press beside an editor with new words in it keeps them: Esc or Cancel lets go.
         if let Some(editing) = &self.editing {
-            if editing.field.read(cx).text().trim().is_empty() || editing.sent {
+            let text = editing.field.read(cx).text().trim().to_string();
+            if editing.sent || text.is_empty() || text == editing.body.trim() {
                 self.editing = None;
+                cx.notify();
             } else {
                 return true;
             }
+        }
+        if !self.commenting {
+            return false;
         }
         let Some((artboard, _, _)) = self.on_artboard(x, y) else { return false };
         if self.map_of(&artboard).is_none() {
@@ -275,6 +277,65 @@ impl CanvasPane {
             next.insert(canvas.id.clone(), list);
         }
         self.comment_list = next;
+    }
+
+    /// The canvas's open comments, as the switcher lists them: each opens on its artboard.
+    pub(super) fn comment_rows(&self, canvas: &Canvas, theme: &Theme, pane: &Entity<CanvasPane>) -> Vec<gpui::AnyElement> {
+        let list = self.comment_list.get(&canvas.id).map(Vec::as_slice).unwrap_or_default();
+        list.iter()
+            .filter(|c| c.state != State::Resolved)
+            .map(|comment| {
+                let artboard = canvas.artboards.iter().find(|a| a.id == comment.artboard).map_or(comment.artboard.clone(), |a| a.name.clone());
+                let state = match (comment.state, comment.detached) {
+                    (_, true) => "its element changed",
+                    (State::Draft, _) => "draft",
+                    _ => "sent",
+                };
+                let (pane, id, board) = (pane.clone(), comment.id.clone(), comment.artboard.clone());
+                let draft = comment.state == State::Draft;
+                div()
+                    .id(SharedString::from(format!("canvas-comment-row-{}", comment.id)))
+                    .px(px(10.))
+                    .py(px(6.))
+                    .rounded(px(8.))
+                    .flex()
+                    .items_center()
+                    .gap(px(10.))
+                    .cursor_pointer()
+                    .hover(|row| row.bg(theme.hover))
+                    .on_click(move |_, window, cx| {
+                        pane.update(cx, |pane, cx| {
+                            pane.switcher = false;
+                            pane.go_to(std::slice::from_ref(&board), cx);
+                            pane.open_comment(&id, window, cx);
+                        })
+                    })
+                    .child(
+                        div()
+                            .flex_none()
+                            .size(px(20.))
+                            .rounded_full()
+                            .flex()
+                            .items_center()
+                            .justify_center()
+                            .when(draft, |pin| pin.bg(theme.accent).text_color(theme.on_accent))
+                            .when(!draft, |pin| pin.border_2().border_color(theme.accent_line).text_color(theme.accent_text))
+                            .typography(Type::Small)
+                            .child(number(comment)),
+                    )
+                    .child(
+                        div()
+                            .min_w_0()
+                            .flex_1()
+                            .flex()
+                            .flex_col()
+                            .child(div().truncate().typography(Type::Ui).text_color(theme.text).child(comment.body.clone()))
+                            .child(div().truncate().typography(Type::Small).text_color(theme.text_dim).child(format!("{artboard} · {state}"))),
+                    )
+                    .tag("canvas-comment-row")
+                    .into_any_element()
+            })
+            .collect()
     }
 
     /// Open comments of the canvas on screen.

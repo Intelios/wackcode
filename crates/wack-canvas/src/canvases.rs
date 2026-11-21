@@ -41,6 +41,9 @@ pub enum Signal {
 
 type Observer = Arc<dyn Fn(Signal) + Send + Sync>;
 
+/// Where the board's camera was left, in a canvas's folder.
+const VIEW: &str = "view.json";
+
 struct Inner {
     store: Store,
     renderer: Option<Arc<Renderer>>,
@@ -470,6 +473,23 @@ impl Canvases {
         let mut png = Vec::new();
         cut.write_to(&mut std::io::Cursor::new(&mut png), image::ImageFormat::Png).ok()?;
         Some(png)
+    }
+
+    /// Where the board's camera was left on a canvas: `[x, y, zoom]`, the pane's own numbers.
+    pub fn camera(&self, canvas: &str) -> Option<[f32; 3]> {
+        let bytes = std::fs::read(self.inner.store.dir(canvas).join(VIEW)).ok()?;
+        let [x, y, zoom]: [f32; 3] = serde_json::from_slice(&bytes).ok()?;
+        (x.is_finite() && y.is_finite() && zoom.is_finite() && zoom > 0.).then_some([x, y, zoom])
+    }
+
+    /// Keeps where the board's camera is on a canvas, for the next time it is shown.
+    pub fn save_camera(&self, canvas: &str, camera: [f32; 3]) -> Result<(), String> {
+        let dir = self.inner.store.dir(canvas);
+        if !dir.exists() {
+            return Err("That canvas is gone.".into());
+        }
+        let bytes = serde_json::to_vec(&camera).map_err(|_| "Could not keep the view.".to_string())?;
+        crate::store::write_atomic(&dir.join(VIEW), &bytes)
     }
 
     /// Removes every canvas of the chat, with the chat.

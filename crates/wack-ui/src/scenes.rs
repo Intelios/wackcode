@@ -1394,6 +1394,18 @@ pub fn all() -> Vec<Scene> {
             },
         },
         Scene {
+            name: "canvas-drawing",
+            description: "The model writing an artboard: its row and the board's pill say which and how much has come.",
+            size: size(px(1680.), px(1000.)),
+            build: |_, cx| canvas_scene(CanvasScene::Drawing, None, cx),
+        },
+        Scene {
+            name: "canvas-comment-list",
+            description: "The switcher listing the canvas's open comments, drafts and sent.",
+            size: size(px(1680.), px(1000.)),
+            build: |_, cx| canvas_scene(CanvasScene::CommentList, None, cx),
+        },
+        Scene {
             name: "canvas-present",
             description: "Present: one artboard over the whole window, stepping with the arrows.",
             size: size(px(1680.), px(1000.)),
@@ -1713,6 +1725,8 @@ enum CanvasScene {
     Tweaks,
     TweaksPlay,
     Comments,
+    Drawing,
+    CommentList,
 }
 
 /// A chat with its Canvas pane in the right dock, at its default width. Pictures are fixtures:
@@ -1729,7 +1743,11 @@ fn canvas_scene(scene: CanvasScene, backdrop: Option<crate::backdrop::Picture>, 
         } else {
             fixtures::canvases(&folder)
         };
-        let items = if scene == CanvasScene::Empty { fixtures::agent_turn() } else { fixtures::canvas_turn(&canvases, false) };
+        let items = match scene {
+            CanvasScene::Empty => fixtures::agent_turn(),
+            CanvasScene::Drawing => fixtures::canvas_drawing_turn(&canvases),
+            _ => fixtures::canvas_turn(&canvases, false),
+        };
         panes.insert(
             id,
             PaneModel::Canvas(cx.new(|cx| {
@@ -1743,6 +1761,8 @@ fn canvas_scene(scene: CanvasScene, backdrop: Option<crate::backdrop::Picture>, 
                         pane.stage_tweaks();
                     }
                     CanvasScene::Comments => pane.stage_comments("calm", "0/1", Some(("0/3", "Group these two fields under one heading")), cx),
+                    CanvasScene::Drawing => pane.set_writing(Some(crate::conversation::Writing::shown(16_884, Some("Bold"))), cx),
+                    CanvasScene::CommentList => pane.stage_switcher(),
                     CanvasScene::TweaksPlay => {
                         pane.stage_play("calm");
                         pane.stage_tweaks();

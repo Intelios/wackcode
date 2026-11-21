@@ -115,6 +115,41 @@ pub struct ToolStep {
     /// `None` while the call is still being written.
     pub input: Option<Value>,
     pub result: Option<ToolResult>,
+    /// A canvas call as it is written, before its input is whole: what it is drawing.
+    pub writing: Option<Writing>,
+}
+
+/// A `canvas` call while the model writes it: how much has come, and the artboard it is on.
+#[derive(Clone, Debug, Default, PartialEq)]
+pub struct Writing {
+    pub chars: usize,
+    pub artboard: Option<String>,
+    /// The end of what has come, where the next name may start.
+    tail: String,
+}
+
+impl Writing {
+    /// A call this far along, for gallery scenes.
+    pub fn shown(chars: usize, artboard: Option<&str>) -> Self {
+        Self { chars, artboard: artboard.map(str::to_string), tail: String::new() }
+    }
+
+    /// Takes the next piece of the call's input.
+    fn push(&mut self, json: &str) {
+        const TAIL: usize = 400;
+        self.chars += json.chars().count();
+        self.tail.push_str(json);
+        if let Some(name) = wack_canvas::tools::writing_name(&self.tail) {
+            self.artboard = Some(name);
+        }
+        if self.tail.len() > TAIL {
+            let mut cut = self.tail.len() - TAIL;
+            while !self.tail.is_char_boundary(cut) {
+                cut += 1;
+            }
+            self.tail.drain(..cut);
+        }
+    }
 }
 
 #[derive(Clone, Debug, PartialEq)]
@@ -219,7 +254,18 @@ impl Turn {
                     tool.input = input;
                 }
             }
-            None => self.steps.push(Step::Tool(ToolStep { id: id.into(), name: name.into(), input, result: None })),
+            None => self.steps.push(Step::Tool(ToolStep { id: id.into(), name: name.into(), input, result: None, writing: None })),
+        }
+    }
+
+    /// A piece of a call's input as the model writes it: followed only for canvas calls, whose
+    /// artboards take long enough to write that the board says what is coming.
+    fn push_tool_input(&mut self, id: &str, json: &str) {
+        if let Some(tool) = self.tool(id)
+            && tool.name == wack_canvas::tools::CANVAS
+            && tool.input.is_none()
+        {
+            tool.writing.get_or_insert_with(Writing::default).push(json);
         }
     }
 
@@ -256,6 +302,15 @@ fn retry_text(notice: &RetryNotice) -> String {
 }
 
 impl Conversation {
+    /// The canvas call the model is writing now, if any: what the board says is coming.
+    pub fn canvas_writing(&self) -> Option<Writing> {
+        let Some(Entry::Turn(turn)) = self.entries.last() else { return None };
+        turn.steps.iter().rev().find_map(|step| match step {
+            Step::Tool(tool) if tool.name == wack_canvas::tools::CANVAS && tool.input.is_none() => tool.writing.clone(),
+            _ => None,
+        })
+    }
+
     /// The transcript of a saved chat.
     pub fn from_history(history: &[HistoryEntry]) -> Self {
         let mut conversation = Self::default();
@@ -545,7 +600,7 @@ impl Conversation {
             Event::Text(text) => turn.push_text(text),
             Event::Thinking(text) => turn.push_thinking(text, true),
             Event::ToolStart { id, name } => turn.push_tool(id, name, None),
-            Event::ToolInput { .. } => {}
+            Event::ToolInput { id, json } => turn.push_tool_input(id, json),
             Event::ToolCall { id, name, input } => turn.push_tool(id, name, Some(input.clone())),
             Event::ToolResult { id, content, is_error, images, .. } => {
                 let pictures: Vec<Picture> = images.iter().map(Picture::of_image).collect();

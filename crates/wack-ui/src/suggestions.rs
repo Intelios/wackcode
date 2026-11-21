@@ -314,7 +314,7 @@ mod tests {
 
     #[test]
     fn a_call_is_a_card_only_once_accepted() {
-        let running = ToolStep { id: "call-1".into(), name: SUGGEST_TASK.into(), input: Some(json!({ "title": "t", "kind": "bug", "description": "d" })), result: None };
+        let running = ToolStep { id: "call-1".into(), name: SUGGEST_TASK.into(), input: Some(json!({ "title": "t", "kind": "bug", "description": "d" })), result: None, writing: None };
         assert!(card_from_step(&running).is_none());
         let mut refused = running.clone();
         refused.result = Some(crate::conversation::ToolResult { text: "no".into(), is_error: true, pictures: Vec::new() });
@@ -323,7 +323,7 @@ mod tests {
         accepted.result = Some(crate::conversation::ToolResult { text: "ok".into(), is_error: false, pictures: Vec::new() });
         assert_eq!(card_from_step(&accepted).unwrap().title, "t");
         // An input still being written, or not ours, is not a card.
-        assert!(card_from_step(&ToolStep { id: "x".into(), name: "bash".into(), input: None, result: accepted.result.clone() }).is_none());
+        assert!(card_from_step(&ToolStep { id: "x".into(), name: "bash".into(), input: None, result: accepted.result.clone(), writing: None }).is_none());
     }
 
     #[test]

@@ -7,6 +7,7 @@
 //!   <artboard>.css         a variant's css
 //!   assets/<sha256>.<ext>  local images the agent named, copied in
 //!   comments.json          the user's comments (comments.rs)
+//!   view.json              where the board's camera was left: x, y and zoom (the pane's own)
 //!   renders/<id>@<rev>.png the latest picture of each artboard, and .json its report and map
 //! ```
 //!

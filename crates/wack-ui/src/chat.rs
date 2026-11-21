@@ -757,6 +757,9 @@ impl ChatSession {
             from = from.min(before);
         }
         self.refresh_from(from);
+        // What the model is drawing on the canvas, for the board (cleared as the call ends).
+        let writing = if self.running() { self.conversation.canvas_writing() } else { None };
+        self.panes.canvas_writing(writing, cx);
         if self.conversation.plan.mode != mode_before {
             cx.emit(ChatEvent::ModeChanged(self.conversation.plan.mode));
         }

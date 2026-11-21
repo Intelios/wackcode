@@ -2174,10 +2174,16 @@ impl AppState {
             return;
         };
         let composer = session.read(cx).composer.clone();
-        let text = composer.read(cx).text().trim().to_string();
+        let mut text = composer.read(cx).text().trim().to_string();
         let pictures = session.read(cx).attachments.clone();
-        if text.is_empty() && pictures.is_empty() {
+        // Comments drafted on a canvas go with this message (`run`); alone, they send under a
+        // stand-in line, since a message needs words.
+        let comments = session.read(cx).canvases.draft_count() > 0;
+        if text.is_empty() && pictures.is_empty() && !comments {
             return;
+        }
+        if text.is_empty() && comments {
+            text = COMMENTS_ONLY.to_string();
         }
         if let Some(refused) = self.store.chat(chat).and_then(|listed| self.pictures_refused(&listed.choice, pictures.len())) {
             session.update(cx, |session, cx| session.note(refused, cx));
@@ -2212,8 +2218,8 @@ impl AppState {
             outgoing if running => {
                 session.update(cx, |session, cx| {
                     let plain = matches!(outgoing, Outgoing::Message(_));
-                    // Steering is words only: a message with pictures waits its turn.
-                    if steer && !compacting && plain && pictures.is_empty() {
+                    // Steering is words only: a message with pictures or comments waits its turn.
+                    if steer && !compacting && plain && pictures.is_empty() && !comments {
                         session.steer(text, cx);
                     } else {
                         if !pictures.is_empty() {
@@ -2454,7 +2460,26 @@ impl AppState {
                         let _ = tx.unbounded_send(event);
                     }),
                 });
-                session.update(cx, |session, cx| session.start(setup, job, cx));
+                // Comments drafted on the chat's canvases go with the user's message: armed now,
+                // told in the note before it (`CanvasFeature`), with a picture of each element
+                // for a model that sees pictures.
+                let armed = if matches!(job, Job::Prompt(_) | Job::Command { .. } | Job::Attached { .. }) {
+                    session.read(cx).canvases.arm_drafts()
+                } else {
+                    Vec::new()
+                };
+                let sees = self.store.resolve(&chat.choice).is_some_and(|resolved| resolved.model.accepts_images);
+                if armed.is_empty() || !sees {
+                    session.update(cx, |session, cx| session.start(setup, job, cx));
+                } else {
+                    let canvases = session.read(cx).canvases.clone();
+                    let session = session.clone();
+                    cx.spawn(async move |_, cx| {
+                        let crops = cx.background_spawn(async move { comment_crops(&canvases, &armed) }).await;
+                        session.update(cx, |session, cx| session.start(setup, with_images(job, crops), cx));
+                    })
+                    .detach();
+                }
                 let _ = self.store.touch_chat(chat_id);
                 cx.notify();
                 true
@@ -3349,6 +3374,46 @@ fn after_run(done: bool, holding_plan: bool, steering: Vec<String>, queue: Vec<S
         AfterRun { next: Some(next), queue: waiting, unsent: Vec::new() }
     } else {
         AfterRun { next: None, queue: Vec::new(), unsent: waiting }
+    }
+}
+
+/// What a message made of comments alone says.
+const COMMENTS_ONLY: &str = "I left comments on the canvas.";
+/// The most pictures of commented elements one message carries.
+const MOST_CROPS: usize = 6;
+
+/// A picture of each commented element, for a model that sees pictures.
+fn comment_crops(canvases: &wack_canvas::Canvases, armed: &[(String, wack_canvas::comments::Comment)]) -> Vec<wack_core::llm::Image> {
+    armed
+        .iter()
+        .filter_map(|(canvas, comment)| {
+            let png = canvases.crop(canvas, comment)?;
+            Some(wack_core::llm::Image::new("image/png", wack_core::images::encode(&png)).labelled(format!("the element of comment {} on artboard {}", comment.id, comment.artboard)))
+        })
+        .take(MOST_CROPS)
+        .collect()
+}
+
+/// `job` with more pictures, kept to what one message may carry.
+fn with_images(job: Job, mut extra: Vec<wack_core::llm::Image>) -> Job {
+    if extra.is_empty() {
+        return job;
+    }
+    match job {
+        Job::Prompt(text) => {
+            extra.truncate(crate::attachments::MAX_ATTACHMENTS);
+            Job::Attached { text, command: None, images: extra }
+        }
+        Job::Command { text, command } => {
+            extra.truncate(crate::attachments::MAX_ATTACHMENTS);
+            Job::Attached { text, command: Some(command), images: extra }
+        }
+        Job::Attached { text, command, mut images } => {
+            extra.truncate(crate::attachments::MAX_ATTACHMENTS.saturating_sub(images.len()));
+            images.extend(extra);
+            Job::Attached { text, command, images }
+        }
+        other => other,
     }
 }
 

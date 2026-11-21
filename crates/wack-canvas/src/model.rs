@@ -435,7 +435,15 @@ pub fn plan(canvases: &[Canvas], input: &Value) -> Result<Planned, String> {
         return Err(format!("One call can add or change at most {MAX_ARTBOARDS_PER_CALL} artboards. Split the rest into another call."));
     }
     let removals = string_list(params.get("remove"), "remove must be a list of artboard ids.")?;
-    let resolve_comments = string_list(params.get("resolve_comments"), "resolve_comments must be a list of comment ids.")?;
+    let mut resolve_comments = string_list(params.get("resolve_comments"), "resolve_comments must be a list of comment ids.")?;
+    // Models often put it on the artboard the comment was on: taken there too, never ignored.
+    for entry in &entries {
+        for id in string_list(entry.get("resolve_comments"), "resolve_comments must be a list of comment ids.")? {
+            if !resolve_comments.contains(&id) {
+                resolve_comments.push(id);
+            }
+        }
+    }
     if base.is_none() && !removals.is_empty() {
         return Err("A new canvas has nothing to remove.".into());
     }
@@ -748,6 +756,13 @@ mod tests {
         assert_eq!(planned.canvas.artboards[1].rev, 2, "a variant's picture changes with its base");
         assert_eq!(planned.canvas.last_changed, ["base"]);
         assert_eq!(planned.canvas.artboards[0].name, "Base", "fields not given stay");
+    }
+
+    #[test]
+    fn comments_resolved_on_an_artboard_count_too() {
+        let canvas = start();
+        let planned = applied(&[canvas], json!({ "canvas": "settings-directions", "resolve_comments": ["k1"], "artboards": [{ "id": "base", "html": "<main>b</main>", "resolve_comments": ["k2", "k1"] }] }));
+        assert_eq!(planned.resolve_comments, ["k1", "k2"]);
     }
 
     #[test]

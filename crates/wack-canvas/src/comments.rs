@@ -5,7 +5,14 @@
 //! (`note`). The agent settles one with `resolve_comments` on a `canvas` call.
 //!
 //! Invariants:
-//! - Comments live in the canvas's own folder (`comments.json`), saved whole and atomically.
+//! - Comments live in the canvas's own folder (`comments.json`), saved whole and atomically,
+//!   with the next id: an id is never reused, so one the model was told of names one comment.
+//! - A draft goes to the model only with a message the user sends (`arm_drafts`, when that
+//!   message starts a run), never in the middle of a turn. Armed comments are `untold` until
+//!   the note carrying them is written (`take_untold`), so a relaunch before then loses none.
+//! - The model sees only comments sent to it (`waiting`): drafts are the user's until sent.
+//! - A comment's `rev` is the revision of the element map it was pinned on, so the next drawing
+//!   re-anchors it.
 //! - An anchor keeps what found its element (path, tag, id, classes, words) and where it was, so
 //!   after a revision the pin finds the element again (`reanchor`) or stays at its last place,
 //!   marked as detached; it never jumps to an unrelated element.
@@ -19,6 +26,8 @@ use crate::{render::Element, store::{Store, write_atomic}};
 const FILE: &str = "comments.json";
 pub const MAX_COMMENT_CHARS: usize = 2000;
 pub const MAX_COMMENTS: usize = 200;
+/// How much of an element's markup a comment keeps.
+pub const MAX_MARKUP_CHARS: usize = 1500;
 
 #[derive(Clone, Copy, Debug, Default, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(rename_all = "lowercase")]
@@ -84,24 +93,52 @@ pub struct Comment {
     /// The pin no longer finds its element on the artboard's current revision.
     #[serde(default)]
     pub detached: bool,
+    /// Sent with a message whose note has not been written yet.
+    #[serde(default, skip_serializing_if = "std::ops::Not::not")]
+    pub untold: bool,
 }
 
-pub fn load(store: &Store, canvas: &str) -> Vec<Comment> {
-    std::fs::read(store.dir(canvas).join(FILE)).ok().and_then(|bytes| serde_json::from_slice(&bytes).ok()).unwrap_or_default()
+#[derive(Default, Serialize, Deserialize)]
+struct Saved {
+    /// The number the next comment's id takes.
+    next: u32,
+    comments: Vec<Comment>,
 }
 
-pub fn save(store: &Store, canvas: &str, comments: &[Comment]) -> Result<(), String> {
+fn read(store: &Store, canvas: &str) -> Saved {
+    let Ok(bytes) = std::fs::read(store.dir(canvas).join(FILE)) else { return Saved::default() };
+    serde_json::from_slice::<Saved>(&bytes)
+        .or_else(|_| serde_json::from_slice::<Vec<Comment>>(&bytes).map(|comments| Saved { next: 0, comments }))
+        .unwrap_or_default()
+}
+
+fn write(store: &Store, canvas: &str, saved: &Saved) -> Result<(), String> {
     let dir = store.dir(canvas);
     if !dir.exists() {
         return Err("That canvas is gone.".into());
     }
-    let bytes = serde_json::to_vec_pretty(comments).map_err(|_| "Could not save the comments.".to_string())?;
+    let bytes = serde_json::to_vec_pretty(saved).map_err(|_| "Could not save the comments.".to_string())?;
     write_atomic(&dir.join(FILE), &bytes)
 }
 
-/// Every comment not yet resolved.
-pub fn open(store: &Store, canvas: &str) -> Vec<Comment> {
-    load(store, canvas).into_iter().filter(|c| c.state != State::Resolved).collect()
+/// Every comment on a canvas, resolved ones too, in the order they were made.
+pub fn load(store: &Store, canvas: &str) -> Vec<Comment> {
+    read(store, canvas).comments
+}
+
+/// Changes a canvas's comments, keeping its next id.
+fn change<T>(store: &Store, canvas: &str, change: impl FnOnce(&mut Vec<Comment>) -> Result<(T, bool), String>) -> Result<T, String> {
+    let mut saved = read(store, canvas);
+    let (out, changed) = change(&mut saved.comments)?;
+    if changed {
+        write(store, canvas, &saved)?;
+    }
+    Ok(out)
+}
+
+/// The comments the model was sent and has not settled: what `canvas_look` shows it.
+pub fn waiting(store: &Store, canvas: &str) -> Vec<Comment> {
+    load(store, canvas).into_iter().filter(|c| c.state == State::Sent).collect()
 }
 
 /// Pins a new draft comment. Its id is short and never reused on the canvas.
@@ -113,43 +150,85 @@ pub fn add(store: &Store, canvas: &str, artboard: &str, rev: u64, anchor: Anchor
     if body.chars().count() > MAX_COMMENT_CHARS {
         return Err(format!("A comment can be at most {MAX_COMMENT_CHARS} characters."));
     }
-    let mut comments = load(store, canvas);
-    if comments.len() >= MAX_COMMENTS {
-        comments.retain(|c| c.state != State::Resolved);
-        if comments.len() >= MAX_COMMENTS {
+    let mut saved = read(store, canvas);
+    if saved.comments.len() >= MAX_COMMENTS {
+        saved.comments.retain(|c| c.state != State::Resolved);
+        if saved.comments.len() >= MAX_COMMENTS {
             return Err("This canvas has too many open comments. Resolve or delete some first.".into());
         }
     }
-    let next = comments.iter().filter_map(|c| c.id.strip_prefix('k')?.parse::<u32>().ok()).max().unwrap_or(0) + 1;
-    let comment = Comment { id: format!("k{next}"), artboard: artboard.to_string(), rev, anchor, body: body.to_string(), state: State::Draft, detached: false };
-    comments.push(comment.clone());
-    save(store, canvas, &comments)?;
+    let used = saved.comments.iter().filter_map(|c| c.id.strip_prefix('k')?.parse::<u32>().ok()).max().unwrap_or(0);
+    let next = saved.next.max(used + 1).max(1);
+    saved.next = next + 1;
+    let comment = Comment {
+        id: format!("k{next}"),
+        artboard: artboard.to_string(),
+        rev,
+        anchor,
+        body: body.to_string(),
+        state: State::Draft,
+        detached: false,
+        untold: false,
+    };
+    saved.comments.push(comment.clone());
+    write(store, canvas, &saved)?;
     Ok(comment)
 }
 
 /// Changes a comment's words, or deletes it (`None`).
 pub fn edit(store: &Store, canvas: &str, id: &str, body: Option<&str>) -> Result<(), String> {
-    let mut comments = load(store, canvas);
-    match body.map(str::trim) {
-        Some("") => return Err("A comment needs some words.".into()),
-        Some(body) => comments.iter_mut().find(|c| c.id == id).ok_or("That comment is gone.")?.body = body.to_string(),
-        None => comments.retain(|c| c.id != id),
-    }
-    save(store, canvas, &comments)
+    change(store, canvas, |comments| {
+        match body.map(str::trim) {
+            Some("") => return Err("A comment needs some words.".into()),
+            Some(body) if body.chars().count() > MAX_COMMENT_CHARS => return Err(format!("A comment can be at most {MAX_COMMENT_CHARS} characters.")),
+            Some(body) => comments.iter_mut().find(|c| c.id == id).ok_or("That comment is gone.")?.body = body.to_string(),
+            None => comments.retain(|c| c.id != id),
+        }
+        Ok(((), true))
+    })
 }
 
-/// Marks drafts sent (with the message that carries them) and returns them.
-pub fn send_drafts(store: &Store, canvas: &str) -> Result<Vec<Comment>, String> {
-    let mut comments = load(store, canvas);
-    let mut sent = Vec::new();
-    for comment in comments.iter_mut().filter(|c| c.state == State::Draft) {
-        comment.state = State::Sent;
-        sent.push(comment.clone());
-    }
-    if !sent.is_empty() {
-        save(store, canvas, &comments)?;
-    }
-    Ok(sent)
+/// Keeps an element's markup with its comment, cut short.
+pub fn set_markup(store: &Store, canvas: &str, id: &str, markup: &str) -> Result<(), String> {
+    change(store, canvas, |comments| {
+        let Some(comment) = comments.iter_mut().find(|c| c.id == id) else { return Ok(((), false)) };
+        let mut kept: String = markup.chars().take(MAX_MARKUP_CHARS).collect();
+        if kept.len() < markup.len() {
+            kept.push('…');
+        }
+        comment.anchor.markup = kept;
+        Ok(((), true))
+    })
+}
+
+/// Marks drafts sent, with the message that starts a run, and returns them. They stay `untold`
+/// until their note is written.
+pub fn arm_drafts(store: &Store, canvas: &str) -> Result<Vec<Comment>, String> {
+    change(store, canvas, |comments| {
+        let mut armed = Vec::new();
+        for comment in comments.iter_mut().filter(|c| c.state == State::Draft) {
+            comment.state = State::Sent;
+            comment.untold = true;
+            armed.push(comment.clone());
+        }
+        let changed = !armed.is_empty();
+        Ok((armed, changed))
+    })
+}
+
+/// The sent comments whose note is still to be written, marked told.
+pub fn take_untold(store: &Store, canvas: &str) -> Result<Vec<Comment>, String> {
+    change(store, canvas, |comments| {
+        let mut told = Vec::new();
+        for comment in comments.iter_mut().filter(|c| c.untold) {
+            comment.untold = false;
+            if comment.state == State::Sent {
+                told.push(comment.clone());
+            }
+        }
+        let changed = !told.is_empty();
+        Ok((told, changed))
+    })
 }
 
 /// Resolves the comments the agent named; returns the ids it knew. Unknown ids are left out.
@@ -157,16 +236,17 @@ pub fn resolve(store: &Store, canvas: &str, ids: &[String]) -> Result<Vec<String
     if ids.is_empty() {
         return Ok(Vec::new());
     }
-    let mut comments = load(store, canvas);
-    let mut resolved = Vec::new();
-    for comment in comments.iter_mut().filter(|c| ids.contains(&c.id) && c.state != State::Resolved) {
-        comment.state = State::Resolved;
-        resolved.push(comment.id.clone());
-    }
-    if !resolved.is_empty() {
-        save(store, canvas, &comments)?;
-    }
-    Ok(resolved)
+    change(store, canvas, |comments| {
+        let mut resolved = Vec::new();
+        // Only what the model was sent: a draft is still the user's.
+        for comment in comments.iter_mut().filter(|c| ids.contains(&c.id) && c.state == State::Sent) {
+            comment.state = State::Resolved;
+            comment.untold = false;
+            resolved.push(comment.id.clone());
+        }
+        let changed = !resolved.is_empty();
+        Ok((resolved, changed))
+    })
 }
 
 /// Finds an anchor's element in an artboard's newer map: the same path and tag, else the same id,
@@ -181,21 +261,22 @@ pub fn reanchor<'a>(anchor: &Anchor, elements: &'a [Element]) -> Option<&'a Elem
 
 /// Moves every pin of `artboard` onto its element in the newest map, marking those that lost it.
 pub fn follow(store: &Store, canvas: &str, artboard: &str, rev: u64, elements: &[Element]) -> Result<(), String> {
-    let mut comments = load(store, canvas);
-    let mut changed = false;
-    for comment in comments.iter_mut().filter(|c| c.artboard == artboard && c.state != State::Resolved && c.rev != rev) {
-        match reanchor(&comment.anchor, elements) {
-            Some(found) => {
-                let markup = std::mem::take(&mut comment.anchor.markup);
-                comment.anchor = Anchor { markup, ..Anchor::from_element(found) };
-                comment.detached = false;
+    change(store, canvas, |comments| {
+        let mut changed = false;
+        for comment in comments.iter_mut().filter(|c| c.artboard == artboard && c.state != State::Resolved && c.rev < rev) {
+            match reanchor(&comment.anchor, elements) {
+                Some(found) => {
+                    let markup = std::mem::take(&mut comment.anchor.markup);
+                    comment.anchor = Anchor { markup, ..Anchor::from_element(found) };
+                    comment.detached = false;
+                }
+                None => comment.detached = true,
             }
-            None => comment.detached = true,
+            comment.rev = rev;
+            changed = true;
         }
-        comment.rev = rev;
-        changed = true;
-    }
-    if changed { save(store, canvas, &comments) } else { Ok(()) }
+        Ok(((), changed))
+    })
 }
 
 /// The smallest element under a point (artboard CSS pixels): what a click pins to.
@@ -272,12 +353,30 @@ mod tests {
         assert!(add(&store, "t", "a", 1, anchor.clone(), " ").is_err());
         let second = add(&store, "t", "a", 1, anchor, "Bigger").unwrap();
         assert_eq!(second.id, "k2");
-        let sent = send_drafts(&store, "t").unwrap();
+        assert!(waiting(&store, "t").is_empty(), "drafts are the user's");
+        assert!(resolve(&store, "t", &["k1".into()]).unwrap().is_empty(), "a draft can't be resolved");
+        let sent = arm_drafts(&store, "t").unwrap();
         assert_eq!(sent.len(), 2);
-        assert!(send_drafts(&store, "t").unwrap().is_empty());
+        assert!(arm_drafts(&store, "t").unwrap().is_empty());
+        assert_eq!(take_untold(&store, "t").unwrap().len(), 2);
+        assert!(take_untold(&store, "t").unwrap().is_empty(), "told once");
         assert_eq!(resolve(&store, "t", &["k1".into(), "k9".into()]).unwrap(), ["k1"]);
-        assert_eq!(open(&store, "t").len(), 1);
+        assert_eq!(waiting(&store, "t").len(), 1);
         let note = note("T", "t", &sent);
         assert!(note.contains("Comment k1 on artboard a, at <button> at 0/1 (“Save”):\n“Make this the primary action”"), "{note}");
+    }
+
+    #[test]
+    fn an_id_is_never_reused() {
+        let dir = tempfile::tempdir().unwrap();
+        let store = Store::new(dir.path());
+        std::fs::create_dir_all(store.dir("t")).unwrap();
+        let anchor = Anchor::from_element(&element("0", "main", [0., 0., 10., 10.], ""));
+        add(&store, "t", "a", 1, anchor.clone(), "One").unwrap();
+        let two = add(&store, "t", "a", 1, anchor.clone(), "Two").unwrap();
+        edit(&store, "t", &two.id, None).unwrap();
+        assert_eq!(add(&store, "t", "a", 1, anchor, "Three").unwrap().id, "k3");
+        set_markup(&store, "t", "k1", &"x".repeat(MAX_MARKUP_CHARS + 10)).unwrap();
+        assert_eq!(load(&store, "t")[0].anchor.markup.chars().count(), MAX_MARKUP_CHARS + 1);
     }
 }

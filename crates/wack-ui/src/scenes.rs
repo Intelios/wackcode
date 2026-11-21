@@ -1379,6 +1379,21 @@ pub fn all() -> Vec<Scene> {
             build: |_, cx| canvas_scene(CanvasScene::TweaksPlay, None, cx),
         },
         Scene {
+            name: "canvas-comments",
+            description: "The Comment tool: pins on Calm (two drafts) and Dense (sent), the element under the pointer outlined, and a new comment being written.",
+            size: size(px(1680.), px(1000.)),
+            build: |_, cx| canvas_scene(CanvasScene::Comments, None, cx),
+        },
+        Scene {
+            name: "canvas-comments-backdrop",
+            description: "The Comment tool over an image backdrop.",
+            size: size(px(1680.), px(1000.)),
+            build: |_, cx| {
+                let picture = over(fixtures::backdrop(wack_core::Texture::None), cx);
+                canvas_scene(CanvasScene::Comments, Some(picture), cx)
+            },
+        },
+        Scene {
             name: "canvas-present",
             description: "Present: one artboard over the whole window, stepping with the arrows.",
             size: size(px(1680.), px(1000.)),
@@ -1697,6 +1712,7 @@ enum CanvasScene {
     Present,
     Tweaks,
     TweaksPlay,
+    Comments,
 }
 
 /// A chat with its Canvas pane in the right dock, at its default width. Pictures are fixtures:
@@ -1726,6 +1742,7 @@ fn canvas_scene(scene: CanvasScene, backdrop: Option<crate::backdrop::Picture>, 
                         pane.stage(Some("calm"), None);
                         pane.stage_tweaks();
                     }
+                    CanvasScene::Comments => pane.stage_comments("calm", "0/1", Some(("0/3", "Group these two fields under one heading")), cx),
                     CanvasScene::TweaksPlay => {
                         pane.stage_play("calm");
                         pane.stage_tweaks();
@@ -1746,7 +1763,10 @@ fn canvas_scene(scene: CanvasScene, backdrop: Option<crate::backdrop::Picture>, 
                 title: fixtures::FINISHED_TITLE.into(),
                 project: fixtures::project(),
                 body: Body::Items(items),
-                composer: fixtures::composer_after_turn(Input::Drawn { text: None, placeholder: crate::chat::FOLLOW_UP_PLACEHOLDER.into() }),
+                composer: ComposerData {
+                    comments: (scene == CanvasScene::Comments).then(|| (2, "settings".to_string())),
+                    ..fixtures::composer_after_turn(Input::Drawn { text: None, placeholder: crate::chat::FOLLOW_UP_PLACEHOLDER.into() })
+                },
             },
             fixtures::strip(Some(fixtures::FINISHED_TITLE)),
         )

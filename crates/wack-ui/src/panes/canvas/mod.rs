@@ -13,6 +13,8 @@
 //!   revision (which reopens it) or the pane going away closes it.
 //! - Tweaks (`tweaks.rs`) are the agent's levers on the selected or played artboard, moved with
 //!   no model call. Play fits beside their panel, so the live page never covers it.
+//! - Comments (`comments.rs`) are pinned with the Comment tool to elements found in a picture's
+//!   element map, with no page opened; they go to the agent with the user's next message.
 //! - Present shows pictures, not live pages: it draws over the whole window, and pages sit
 //!   beneath GPUI's overlay plane.
 //! - A picture shown is the newest the store has, which may be a revision behind while the next
@@ -24,6 +26,7 @@
 //!   canvases signal (`refresh`), never read from disk while drawing a frame.
 
 pub mod board;
+mod comments;
 mod tweaks;
 
 use std::{
@@ -43,7 +46,7 @@ use wack_canvas::{Canvas, Canvases};
 
 use self::board::{Board, Camera, FAR_ZOOM, Rect};
 use crate::{
-    actions::{CanvasActualSize, CanvasEscape, CanvasFit, CanvasMove, CanvasPlay, CanvasPresent, CanvasZoomIn, CanvasZoomOut, CanvasZoomSelection, WriteInComposer},
+    actions::{CanvasActualSize, CanvasComment, CanvasEscape, CanvasFit, CanvasMove, CanvasPlay, CanvasPresent, CanvasZoomIn, CanvasZoomOut, CanvasZoomSelection, WriteInComposer},
     icon::Icon,
     tags::Tag,
     theme::Theme,
@@ -58,8 +61,8 @@ const PILL_HEIGHT: f32 = 32.;
 const PLAY_RADIUS: f32 = 6.;
 /// Room kept under a played artboard for its pill.
 const PLAY_BAND: f32 = 56.;
-/// About how wide the zoom pill draws (− 100% + Fit, Present).
-const ZOOM_PILL: f32 = 206.;
+/// About how wide the zoom pill draws (− 100% + Fit, Comment, Present).
+const ZOOM_PILL: f32 = 234.;
 /// The room a presented artboard keeps from the window's edges.
 const PRESENT_MARGIN: f32 = 64.;
 /// Below this pane width the pills say less.
@@ -86,6 +89,8 @@ struct Shown {
     problems: Vec<String>,
     /// The badge's words: "2 errors", "Overflows", "Stuck".
     badge: Option<String>,
+    /// The picture's element map, which the Comment tool points into.
+    map: Option<Rc<Vec<wack_canvas::Element>>>,
 }
 
 struct Glide {
@@ -161,6 +166,16 @@ pub struct CanvasPane {
     /// The revision the last tweak made, so a played page that already has it is not reopened.
     tweak_rev: Option<(String, String, u64)>,
     tweak_error: Option<String>,
+    /// The Comment tool is on.
+    commenting: bool,
+    /// The element under the pointer while it is: (artboard, element).
+    hover: Option<(String, wack_canvas::Element)>,
+    region: Option<comments::Region>,
+    editing: Option<comments::Editing>,
+    /// Every canvas's comments, read when the canvases signal.
+    comment_list: HashMap<String, Vec<wack_canvas::comments::Comment>>,
+    /// Pins resolved while on screen, fading: (canvas, comment) and since when.
+    fading: HashMap<(String, String), Instant>,
 }
 
 impl CanvasPane {
@@ -195,6 +210,12 @@ impl CanvasPane {
             tweak_tracks: Default::default(),
             tweak_rev: None,
             tweak_error: None,
+            commenting: false,
+            hover: None,
+            region: None,
+            editing: None,
+            comment_list: HashMap::new(),
+            fading: HashMap::new(),
         };
         pane.reload(false, cx);
         pane
@@ -272,6 +293,7 @@ impl CanvasPane {
                     height: report.as_ref().map(|r| r.height as f32),
                     problems: report.as_ref().map(problems_of).unwrap_or_default(),
                     badge: report.as_ref().and_then(badge_of),
+                    map: report.as_ref().filter(|r| !r.elements.is_empty()).map(|r| Rc::new(r.elements.clone())),
                 };
                 self.shown.insert(key, shown);
             }
@@ -324,6 +346,7 @@ impl CanvasPane {
                 }
             }
         }
+        self.refresh_comments();
         self.ask_for_pictures(cx);
     }
 
@@ -432,6 +455,9 @@ impl CanvasPane {
         }
         self.play_turns += 1;
         let turn = self.play_turns;
+        self.commenting = false;
+        self.editing = None;
+        self.hover = None;
         self.selected = Some(id.to_string());
         self.following = false;
         self.drag = None;
@@ -509,6 +535,8 @@ impl CanvasPane {
         let start = self.selected.as_ref().and_then(|id| board.frames.iter().position(|f| &f.id == id)).unwrap_or(0);
         self.presenting = Some(start);
         self.export_menu = false;
+        self.commenting = false;
+        self.editing = None;
         self.selected = Some(board.frames[start].id.clone());
         cx.notify();
     }
@@ -623,6 +651,9 @@ impl CanvasPane {
             return;
         }
         let (x, y) = self.local(event.position);
+        if self.comment_down(x, y, cx) {
+            return;
+        }
         let (wx, wy) = self.camera().to_world(x, y);
         let on = self.board().at(wx, wy).map(|frame| frame.id.clone());
         self.drag = Some(Drag { start: (x, y), camera: self.camera(), moved: false, on });
@@ -635,6 +666,10 @@ impl CanvasPane {
             return;
         }
         let (x, y) = self.local(event.position);
+        if self.region.is_some() || (self.commenting && self.drag.is_none()) {
+            self.comment_move(x, y, cx);
+            return;
+        }
         let Some(drag) = self.drag.as_mut() else { return };
         if event.pressed_button != Some(MouseButton::Left) {
             self.drag = None;
@@ -651,8 +686,8 @@ impl CanvasPane {
         cx.notify();
     }
 
-    fn on_up(&mut self, event: &MouseUpEvent, _: &mut Window, cx: &mut Context<Self>) {
-        if self.drag_tweak(event.position.x, true, cx) {
+    fn on_up(&mut self, event: &MouseUpEvent, window: &mut Window, cx: &mut Context<Self>) {
+        if self.drag_tweak(event.position.x, true, cx) || self.comment_up(window, cx) {
             return;
         }
         let Some(drag) = self.drag.take() else { return };
@@ -729,6 +764,10 @@ impl CanvasPane {
     }
 
     fn escape(&mut self, cx: &mut Context<Self>) {
+        if self.editing.is_some() {
+            self.close_editor(cx);
+            return;
+        }
         if self.presenting.take().is_some() {
             // Back on the board at the artboard last shown.
             if let Some(id) = self.selected.clone() {
@@ -744,6 +783,10 @@ impl CanvasPane {
         }
         if self.tweak_target().is_some() {
             self.toggle_tweaks(cx);
+            return;
+        }
+        if self.commenting {
+            self.toggle_commenting(cx);
             return;
         }
         if self.playing.is_some() {
@@ -845,6 +888,10 @@ impl Render for CanvasPane {
         }
         self.arrivals.retain(|_, (since, _)| since.elapsed() < ARRIVAL);
         if !self.arrivals.is_empty() && !still {
+            animating = true;
+        }
+        self.fading.retain(|_, since| since.elapsed() < comments::FADE);
+        if !self.fading.is_empty() && !still {
             animating = true;
         }
         if animating {
@@ -979,6 +1026,15 @@ impl Render for CanvasPane {
                     });
                 layer = layer.child(label);
             }
+        }
+
+        // Comments: their pins, the element under the pointer, the area being dragged.
+        if let Some(canvas) = &canvas
+            && self.presenting.is_none()
+        {
+            let mut marks = Vec::new();
+            self.comment_marks(canvas, &board, camera, &theme, still, &cx.entity(), &mut marks);
+            layer = layer.children(marks);
         }
 
         // Play: the board dims, and the played artboard's live page sits exactly on its picture
@@ -1122,19 +1178,23 @@ impl Render for CanvasPane {
             .on_mouse_down(MouseButton::Left, cx.listener(Self::on_down))
             .on_mouse_move(cx.listener(Self::on_move))
             .on_mouse_up(MouseButton::Left, cx.listener(Self::on_up))
-            .on_action(cx.listener(|pane, _: &CanvasFit, _, cx| pane.fit_all(cx)))
-            .on_action(cx.listener(|pane, _: &CanvasZoomIn, _, cx| pane.zoom_by(true, cx)))
-            .on_action(cx.listener(|pane, _: &CanvasZoomOut, _, cx| pane.zoom_by(false, cx)))
-            .on_action(cx.listener(|pane, _: &CanvasZoomSelection, _, cx| pane.zoom_to_selection(cx)))
-            .on_action(cx.listener(|pane, _: &CanvasActualSize, _, cx| pane.actual_size(cx)))
+            .on_action(cx.listener(|pane, _: &CanvasFit, _, cx| if pane.typing() { cx.propagate() } else { pane.fit_all(cx) }))
+            .on_action(cx.listener(|pane, _: &CanvasZoomIn, _, cx| if pane.typing() { cx.propagate() } else { pane.zoom_by(true, cx) }))
+            .on_action(cx.listener(|pane, _: &CanvasZoomOut, _, cx| if pane.typing() { cx.propagate() } else { pane.zoom_by(false, cx) }))
+            .on_action(cx.listener(|pane, _: &CanvasZoomSelection, _, cx| if pane.typing() { cx.propagate() } else { pane.zoom_to_selection(cx) }))
+            .on_action(cx.listener(|pane, _: &CanvasActualSize, _, cx| if pane.typing() { cx.propagate() } else { pane.actual_size(cx) }))
             .on_action(cx.listener(|pane, _: &CanvasEscape, _, cx| pane.escape(cx)))
-            .on_action(cx.listener(|pane, _: &CanvasPresent, _, cx| pane.present(cx)))
+            .on_action(cx.listener(|pane, _: &CanvasPresent, _, cx| if pane.typing() { cx.propagate() } else { pane.present(cx) }))
             .on_action(cx.listener(|pane, _: &CanvasPlay, _, cx| {
-                if let Some(id) = pane.selected.clone() {
+                if pane.typing() {
+                    cx.propagate();
+                } else if let Some(id) = pane.selected.clone() {
                     pane.play(&id, cx);
                 }
             }))
-            .on_action(cx.listener(|pane, action: &CanvasMove, _, cx| pane.step_selection(action.dx, action.dy, cx)))
+            .on_action(cx.listener(|pane, action: &CanvasMove, _, cx| if pane.typing() { cx.propagate() } else { pane.step_selection(action.dx, action.dy, cx) }))
+            .on_action(cx.listener(|pane, _: &CanvasComment, _, cx| if pane.typing() { cx.propagate() } else { pane.toggle_commenting(cx) }))
+            .when(self.commenting, |root| root.cursor(gpui::CursorStyle::Crosshair))
             .child(layer);
 
         let Some(canvas) = canvas else {
@@ -1277,6 +1337,15 @@ impl Render for CanvasPane {
                         move |_, _, cx| pane.update(cx, |pane, cx| pane.fit_all(cx))
                     })
                     .child("Fit"),
+            )
+            .child(
+                circle("canvas-comment-tool", Icon::Comment, "Comment  C", &theme)
+                    .when(self.commenting, |circle| circle.bg(theme.accent_wash))
+                    .on_click({
+                        let pane = pane.clone();
+                        move |_, _, cx| pane.update(cx, |pane, cx| pane.toggle_commenting(cx))
+                    })
+                    .tag("canvas-comment-tool"),
             )
             .child(circle("canvas-present", Icon::Eye, "Present  ⌘↩", &theme).on_click({
                 let pane = pane.clone();
@@ -1559,12 +1628,17 @@ impl Render for CanvasPane {
         });
 
         let tweaks_panel = self.tweak_target().map(|artboard| self.tweaks_panel(&canvas, artboard, height, &theme, pane.clone()));
+        let editor = self.comment_editor(&canvas, &board, camera, (width, height), &theme, &pane);
+        let comment_hint = self.comment_hint(&theme, &canvas.id);
         let playing = self.playing.is_some();
+        let commenting = self.commenting;
         root.child(title)
             .children(switcher)
             .child(zoom_pill)
             .children(arrivals.filter(|_| !playing))
-            .children(hint.filter(|_| !playing))
+            .children(hint.filter(|_| !playing && !commenting))
+            .children(comment_hint)
+            .children(editor)
             .children(play_pill)
             .children(tweaks_panel)
             .children(presented)

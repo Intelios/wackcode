@@ -1939,6 +1939,7 @@ fn live_view(app: &AppState, cx: &App) -> (SidebarData, Screen, StripData) {
                         agents: 0,
                         attachments: app.draft_attachments.clone(),
                         pictures_refused: app.pictures_refused_for(&choice, app.draft_attachments.len()).map(Into::into),
+                        comments: None,
                     },
                     notice: app.notice.clone(),
                 }
@@ -1998,6 +1999,10 @@ fn live_view(app: &AppState, cx: &App) -> (SidebarData, Screen, StripData) {
                     agents: state.agents.active().len(),
                     attachments: state.attachments.clone(),
                     pictures_refused: app.pictures_refused_for(&chat.choice, state.attachments.len()).map(Into::into),
+                    comments: {
+                        let count: usize = state.comment_drafts.iter().map(|(_, n)| n).sum();
+                        state.comment_drafts.first().map(|(canvas, _)| (count, canvas.clone()))
+                    },
                 },
             }
         }

@@ -171,6 +171,25 @@ impl Renderer {
         printed
     }
 
+    /// The markup of the element at `path` (a child-index path from `<body>`) in a page of the
+    /// artboard, read from a page opened for it and closed again.
+    pub async fn markup(&self, job: &Job, height: u32, path: &str) -> Result<String, String> {
+        let _turn = self.turn.lock().await;
+        let tab = Tab::for_site(job.site.clone());
+        self.backend.create(tab.clone(), job.address.clone()).await?;
+        let page = Page { backend: self.backend.clone(), tab: tab.clone() };
+        let read = async {
+            page.lay_out(job.width, height, 1., 1.).await?;
+            page.settle().await?;
+            let path = serde_json::to_string(path).map_err(|_| "That element can't be found.".to_string())?;
+            let found = page.evaluate(&format!("window.__wack ? window.__wack.markup({path}, {}) : ''", crate::comments::MAX_MARKUP_CHARS + 1)).await?;
+            Ok(found.as_str().unwrap_or_default().to_string())
+        }
+        .await;
+        self.backend.close(tab.id);
+        read
+    }
+
     /// Runs one expression in an open live page, answering its value.
     pub async fn evaluate(&self, tab: &Arc<Tab>, expression: &str) -> Result<Value, String> {
         Page { backend: self.backend.clone(), tab: tab.clone() }.evaluate(expression).await

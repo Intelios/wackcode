@@ -112,6 +112,7 @@ pub fn composer_empty(roomy: bool) -> ComposerData {
         agents: 0,
         attachments: Vec::new(),
         pictures_refused: None,
+        comments: None,
     }
 }
 
@@ -1147,12 +1148,44 @@ pub fn canvases(dir: &Path) -> wack_canvas::Canvases {
         } else {
             Vec::new()
         };
-        let report = wack_canvas::Report { rev: artboard.rev, width, height, content: height, scale: 2., console, ..Default::default() };
+        let elements = canvas_elements(width);
+        let report = wack_canvas::Report { rev: artboard.rev, width, height, content: height, scale: 2., console, elements, ..Default::default() };
         let report = serde_json::to_value(&report).unwrap_or_default();
         let _ = store.save_render("settings", &artboard.id, artboard.rev, &picture, &report);
         let _ = store.save_thumbnail("settings", &artboard.id, artboard.rev, &picture);
     }
+    // Comments: one sent on Dense, two drafts on Calm.
+    let anchor = |artboard: &str, path: &str| {
+        let report = canvases.report("settings", artboard);
+        let rev = report.as_ref().map_or(0, |r| r.rev);
+        let element = canvas_elements(report.map_or(400, |r| r.width)).into_iter().find(|e| e.p == path).unwrap_or_default();
+        (rev, wack_canvas::comments::Anchor::from_element(&element))
+    };
+    let (rev, at) = anchor("dense", "0/3");
+    let _ = canvases.add_comment("settings", "dense", rev, at, "Too many fields at once: group them.");
+    canvases.arm_drafts();
+    let (rev, at) = anchor("calm", "0/1");
+    let _ = canvases.add_comment("settings", "calm", rev, at, "Make the heading warmer, less formal.");
+    let (rev, at) = anchor("calm", "0/4");
+    let _ = canvases.add_comment("settings", "calm", rev, at, "This should be the accent colour.");
     canvases
+}
+
+/// The element map of the fixture pictures (`page_picture`): the header, the title, the lines,
+/// the fields and the button, at a page `width` wide.
+pub fn canvas_elements(width: u32) -> Vec<wack_canvas::Element> {
+    let w = f64::from(width);
+    let element = |p: &str, t: &str, s: &str, rect: [f64; 4]| wack_canvas::Element { p: p.into(), t: t.into(), s: s.into(), x: rect[0], y: rect[1], w: rect[2], h: rect[3], ..Default::default() };
+    // In hundredths of the width, as `page_picture` draws them.
+    let at = |rect: [f64; 4]| [rect[0] * w / 100., rect[1] * w / 100., rect[2] * w / 100., rect[3] * w / 100.];
+    vec![
+        element("0", "main", "", at([0., 0., 100., 82.])),
+        element("0/0", "header", "", at([0., 0., 100., 9.])),
+        element("0/1", "h1", "Settings", at([6., 16., 70., 14.])),
+        element("0/2", "p", "", at([6., 35., 84., 10.])),
+        element("0/3", "form", "", at([6., 52., 60., 17.])),
+        element("0/4", "button", "Save", at([6., 73., 26., 7.])),
+    ]
 }
 
 /// A turn that drew on a canvas: the guide, the drawing, a look, its card and the reply. The

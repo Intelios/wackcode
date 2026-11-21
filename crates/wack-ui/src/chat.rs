@@ -137,6 +137,9 @@ pub struct ChatSession {
     /// What canvas cards show of each artboard (its name, its newest small picture), found once
     /// and kept until the canvases next signal, so rebuilding a live turn never reads the disk.
     canvas_faces: std::collections::HashMap<(String, String), crate::canvas_card::Face>,
+    /// Comments drafted on the canvases and not sent yet, by canvas: the composer's chip. Found
+    /// when the canvases signal.
+    pub comment_drafts: Vec<(String, usize)>,
     _canvases_watch: Task<()>,
     _tasks_watch: Task<()>,
     _agents_watch: Task<()>,
@@ -269,6 +272,7 @@ impl ChatSession {
             wake_paused: false,
             agents,
             tabs,
+            comment_drafts: canvases.drafts(),
             canvases,
             canvas_faces: Default::default(),
             _canvases_watch: canvases_watch,
@@ -1035,6 +1039,7 @@ fn watch_canvases(canvases: &wack_canvas::Canvases, cx: &mut Context<ChatSession
                     cx.emit(ChatEvent::AgentStartedCanvas);
                 }
                 chat.panes.refresh_canvas(cx);
+                chat.comment_drafts = chat.canvases.drafts();
                 chat.canvas_faces.clear();
                 chat.fill_canvas_cards(0);
                 cx.notify();

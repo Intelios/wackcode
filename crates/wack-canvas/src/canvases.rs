@@ -23,6 +23,7 @@ use serde_json::Value;
 use wack_browser::Backend;
 
 use crate::{
+    comments::{self, Comment},
     model::{self, Canvas, Planned},
     render::{Drawn, Job, Renderer, Report},
     store::Store,
@@ -31,7 +32,7 @@ use crate::{
 /// What changed, for the chat's observer.
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub enum Signal {
-    /// A canvas was made or changed (artboards, title, tweaks).
+    /// A canvas was made or changed (artboards, title, tweaks, comments).
     Changed { canvas: String, created: bool },
     /// An artboard's picture is being drawn, or is done.
     Drawing { canvas: String, artboard: String },
@@ -353,6 +354,122 @@ impl Canvases {
     pub fn report(&self, canvas: &str, id: &str) -> Option<Report> {
         let (_, rev) = self.picture(canvas, id)?;
         serde_json::from_value(self.inner.store.render_report(canvas, id, rev)?).ok()
+    }
+
+    /// Every comment on a canvas, resolved ones too. Reads the disk: callers keep what they find
+    /// until the canvases next signal.
+    pub fn comments(&self, canvas: &str) -> Vec<Comment> {
+        comments::load(&self.inner.store, canvas)
+    }
+
+    /// Drafts not sent yet, across the chat's canvases.
+    pub fn draft_count(&self) -> usize {
+        self.drafts().iter().map(|(_, count)| count).sum()
+    }
+
+    /// The chat's canvases that have drafts not sent yet, with how many.
+    pub fn drafts(&self) -> Vec<(String, usize)> {
+        self.list()
+            .into_iter()
+            .map(|c| {
+                let count = self.comments(&c.id).iter().filter(|c| c.state == comments::State::Draft).count();
+                (c.id, count)
+            })
+            .filter(|(_, count)| *count > 0)
+            .collect()
+    }
+
+    /// Pins a draft comment to an element of an artboard, on the element map of revision `rev`.
+    pub fn add_comment(&self, canvas: &str, artboard: &str, rev: u64, anchor: comments::Anchor, body: &str) -> Result<Comment, String> {
+        let comment = comments::add(&self.inner.store, canvas, artboard, rev, anchor, body)?;
+        self.signal(Signal::Changed { canvas: canvas.to_string(), created: false });
+        Ok(comment)
+    }
+
+    /// Changes a comment's words, or deletes it (`None`).
+    pub fn edit_comment(&self, canvas: &str, id: &str, body: Option<&str>) -> Result<(), String> {
+        comments::edit(&self.inner.store, canvas, id, body)?;
+        self.signal(Signal::Changed { canvas: canvas.to_string(), created: false });
+        Ok(())
+    }
+
+    /// Settles the comments the agent named; answers the ids it knew.
+    pub fn resolve_comments(&self, canvas: &str, ids: &[String]) -> Result<Vec<String>, String> {
+        let resolved = comments::resolve(&self.inner.store, canvas, ids)?;
+        if !resolved.is_empty() {
+            self.signal(Signal::Changed { canvas: canvas.to_string(), created: false });
+        }
+        Ok(resolved)
+    }
+
+    /// Reads the markup of a comment's element from a page of its artboard, and keeps it with
+    /// the comment for the note. Left out when the artboard has moved on from the comment's map.
+    pub async fn capture_markup(&self, canvas: &str, id: &str) -> Result<(), String> {
+        let renderer = self.inner.renderer.clone().ok_or(NO_ENGINE)?;
+        let comment = self.comments(canvas).into_iter().find(|c| c.id == id).ok_or("That comment is gone.")?;
+        let job = self.job(canvas, &comment.artboard)?;
+        if job.rev != comment.rev {
+            return Ok(());
+        }
+        let height = self.live_height(canvas, &comment.artboard)?;
+        let markup = renderer.markup(&job, height, &comment.anchor.path).await?;
+        if !markup.is_empty() {
+            comments::set_markup(&self.inner.store, canvas, id, &markup)?;
+        }
+        Ok(())
+    }
+
+    /// Marks every draft on the chat's canvases sent, as a message the user sent starts a run:
+    /// the note before that message carries them (`take_untold_comments`).
+    pub fn arm_drafts(&self) -> Vec<(String, Comment)> {
+        let ids: Vec<String> = self.list().into_iter().map(|c| c.id).collect();
+        let mut armed = Vec::new();
+        for id in ids {
+            if let Ok(list) = comments::arm_drafts(&self.inner.store, &id)
+                && !list.is_empty()
+            {
+                armed.extend(list.into_iter().map(|c| (id.clone(), c)));
+                self.signal(Signal::Changed { canvas: id, created: false });
+            }
+        }
+        armed
+    }
+
+    /// The sent comments whose note is still to be written, by canvas, marked told.
+    pub fn take_untold_comments(&self) -> Vec<(Canvas, Vec<Comment>)> {
+        self.list()
+            .into_iter()
+            .filter_map(|canvas| {
+                let told = comments::take_untold(&self.inner.store, &canvas.id).ok().filter(|told| !told.is_empty())?;
+                Some((canvas, told))
+            })
+            .collect()
+    }
+
+    /// A PNG of a comment's element, cut from the picture its pin was made on, with a margin
+    /// around it: what a model that sees pictures gets beside the comment.
+    pub fn crop(&self, canvas: &str, comment: &Comment) -> Option<Vec<u8>> {
+        const MARGIN: f64 = 24.;
+        const MOST: u32 = 1200;
+        let path = self.inner.store.render_path(canvas, &comment.artboard, comment.rev, "png");
+        let report: Report = serde_json::from_value(self.inner.store.render_report(canvas, &comment.artboard, comment.rev)?).ok()?;
+        let picture = image::open(path).ok()?;
+        let scale = report.scale.max(0.1);
+        let [x, y, w, h] = comment.anchor.rect;
+        let left = ((x - MARGIN) * scale).max(0.) as u32;
+        let top = ((y - MARGIN) * scale).max(0.) as u32;
+        let right = (((x + w + MARGIN) * scale) as u32).min(picture.width());
+        let bottom = (((y + h + MARGIN) * scale) as u32).min(picture.height());
+        if right <= left || bottom <= top {
+            return None;
+        }
+        let mut cut = picture.crop_imm(left, top, right - left, bottom - top);
+        if cut.width().max(cut.height()) > MOST {
+            cut = cut.thumbnail(MOST, MOST);
+        }
+        let mut png = Vec::new();
+        cut.write_to(&mut std::io::Cursor::new(&mut png), image::ImageFormat::Png).ok()?;
+        Some(png)
     }
 
     /// Removes every canvas of the chat, with the chat.

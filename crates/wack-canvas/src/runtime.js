@@ -137,6 +137,14 @@
       };
     },
     setTweak: function (tweak) { applyTweak(tweak); return true; },
+    // The markup of the element at a child-index path from <body> (as `map` writes it), cut
+    // short: what a comment on it is about.
+    markup: function (path, max) {
+      var element = document.body;
+      var steps = typeof path === "string" && path ? path.split("/") : [];
+      for (var i = 0; element && i < steps.length; i++) element = element.children[Number(steps[i])];
+      return element ? element.outerHTML.slice(0, Math.max(0, Math.min(max || 0, 4000))) : "";
+    },
   };
   try {
     Object.defineProperty(window, "__wack", { value: Object.freeze(api), configurable: false, writable: false });

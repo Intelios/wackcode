@@ -104,6 +104,9 @@ pub struct ComposerData {
     pub attachments: Vec<crate::attachments::Attachment>,
     /// Why the message's pictures can't go to this model, when they can't: Send waits on it.
     pub pictures_refused: Option<SharedString>,
+    /// Comments drafted on a canvas, which go with the next message: how many, and the canvas
+    /// the chip opens.
+    pub comments: Option<(usize, String)>,
 }
 
 /// A background command as its list above the composer shows it.
@@ -187,7 +190,8 @@ impl RenderOnce for Composer {
             Input::Drawn { text, .. } => text.is_some(),
         };
         // Pictures alone make a message; pictures this model can't take hold Send back.
-        let has_text = (has_text || !data.attachments.is_empty()) && data.pictures_refused.is_none();
+        // So do comments drafted on a canvas.
+        let has_text = (has_text || !data.attachments.is_empty() || data.comments.is_some()) && data.pictures_refused.is_none();
 
         let send = if data.working && !has_text {
             div()
@@ -308,6 +312,7 @@ impl RenderOnce for Composer {
             .rounded(px(CARD_RADIUS))
             .bg(theme.surface)
             .when(!ultra_plan, |card| card.border_1().border_color(theme.border))
+            .when_some(data.comments.clone(), |card, (count, canvas)| card.child(comments_chip(count, canvas, &theme)))
             .when(!data.attachments.is_empty(), |card| card.child(tray(&data.attachments, &theme)))
             .when_some(data.pictures_refused.clone(), |card, refused| {
                 card.child(
@@ -503,6 +508,54 @@ const STATUS_HEIGHT: f32 = 26.;
 
 /// A thumbnail's side in the tray.
 const THUMB: f32 = 56.;
+
+/// Comments drafted on a canvas, waiting for the next message: a click shows them on the
+/// canvas, and Send now sends them alone.
+fn comments_chip(count: usize, canvas: String, theme: &Theme) -> impl IntoElement {
+    let words = if count == 1 { "1 comment on the canvas".to_string() } else { format!("{count} comments on the canvas") };
+    div()
+        .flex()
+        .items_center()
+        .gap(px(8.))
+        .child(
+            div()
+                .id("composer-comments")
+                .h(px(28.))
+                .pl(px(8.))
+                .pr(px(12.))
+                .rounded_full()
+                .flex()
+                .items_center()
+                .gap(px(6.))
+                .bg(theme.accent_wash)
+                .cursor_pointer()
+                .hover(|chip| chip.bg(theme.hover))
+                .tooltip(tip("They go with your next message. Show them on the canvas"))
+                .on_click(dispatch(crate::actions::ShowCanvas { canvas, artboards: Vec::new() }))
+                .child(Icon::Comment.view(px(12.), theme.accent_text))
+                .child(div().typography(Type::Small).text_color(theme.accent_text).child(words))
+                .tag("composer-comments"),
+        )
+        .child(
+            div()
+                .id("composer-send-comments")
+                .h(px(28.))
+                .px(px(12.))
+                .rounded_full()
+                .flex()
+                .items_center()
+                .cursor_pointer()
+                .border_1()
+                .border_color(theme.border)
+                .hover(|send| send.bg(theme.hover))
+                .typography(Type::Small)
+                .text_color(theme.text_soft)
+                .tooltip(tip("Send the comments with no message"))
+                .on_click(dispatch(crate::actions::Send))
+                .child("Send now")
+                .tag("composer-send-comments"),
+        )
+}
 
 /// The pictures attached to the message, each with its remove button.
 fn tray(attachments: &[crate::attachments::Attachment], theme: &Theme) -> impl IntoElement {

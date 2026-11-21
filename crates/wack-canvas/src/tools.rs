@@ -144,10 +144,17 @@ impl Tool for Draw {
         })
         .await
         .map_err(|_| "The canvas could not be saved.".to_string())??;
-        let resolved = comments::resolve(canvases.store(), &planned.canvas.id, &planned.resolve_comments)?;
+        let resolved = canvases.resolve_comments(&planned.canvas.id, &planned.resolve_comments)?;
         let stale = model::stale(&planned);
         let drawn = canvases.draw(&planned.canvas.id, &stale).await;
-        Ok(summary(&planned, &drawn, &resolved).into())
+        let mut text = summary(&planned, &drawn, &resolved);
+        // The user's comments this call left open, so a model never believes it settled one.
+        let waiting = comments::waiting(canvases.store(), &planned.canvas.id);
+        if !waiting.is_empty() {
+            let ids: Vec<String> = waiting.iter().map(|c| format!("{} (artboard {})", c.id, c.artboard)).collect();
+            text.push_str(&format!("\n\nComments still open: {}. Settle each you have done with resolve_comments on a canvas call.", ids.join(", ")));
+        }
+        Ok(text.into())
     }
 }
 
@@ -323,7 +330,7 @@ impl Tool for Look {
         };
         let (now, later) = wanted.split_at(wanted.len().min(LOOK_AT_ONCE));
         let show_html = input["html"].as_bool().unwrap_or(false);
-        let open = comments::open(canvases.store(), &canvas.id);
+        let open = comments::waiting(canvases.store(), &canvas.id);
 
         let mut text = vec![format!("Canvas “{}” (canvas: \"{}\").", canvas.title, canvas.id)];
         let mut images = Vec::new();

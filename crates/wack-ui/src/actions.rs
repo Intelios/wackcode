@@ -34,6 +34,8 @@ actions!(
         ToggleBrowserPane,
         /// Show the Canvas pane: the chat's canvases.
         ToggleCanvasPane,
+        /// The Canvas pane's Comment tool, on or off.
+        CanvasComment,
         /// The Canvas pane: show the whole board.
         CanvasFit,
         /// The Canvas pane: step the zoom in or out.
@@ -949,6 +951,7 @@ pub fn init(cx: &mut App) {
         KeyBinding::new("escape", CanvasEscape, Some(CANVAS_CONTEXT)),
         KeyBinding::new("enter", CanvasPlay, Some(CANVAS_CONTEXT)),
         KeyBinding::new("cmd-enter", CanvasPresent, Some(CANVAS_CONTEXT)),
+        KeyBinding::new("c", CanvasComment, Some(CANVAS_CONTEXT)),
         KeyBinding::new("space", CanvasMove { dx: 1, dy: 0 }, Some(CANVAS_CONTEXT)),
         KeyBinding::new("left", CanvasMove { dx: -1, dy: 0 }, Some(CANVAS_CONTEXT)),
         KeyBinding::new("right", CanvasMove { dx: 1, dy: 0 }, Some(CANVAS_CONTEXT)),

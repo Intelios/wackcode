@@ -12,7 +12,7 @@ WackCode is a native macOS coding agent: a Rust app drawn with GPUI, with its ow
 - macOS 26+ on Apple Silicon only. Unix-only APIs are deliberate; don't "fix" them for other platforms.
 - Cargo only. No Node, no pnpm, no web UI.
 - No data compatibility with version 2: never read or write its files. The one shared contract is the usage ledger ([docs/wackcode-usage-v1.md](docs/wackcode-usage-v1.md)).
-- Out of scope; don't propose these as fixes: embedded editors, permission prompts (tool-call approval gates), automatic merging, notarization, auto-updates.
+- Out of scope; don't propose these as fixes: embedded editors, permission prompts (tool-call approval gates), automatic merging, notarization, auto-updates. Computer use's per-app access card is not one: it grants an app once per chat, never per action (the owner's call, 2026-11-24).
 - Cut from version 3 on purpose; don't bring these back: arcade games, checkpoints / rewind / fork, per-chat worktrees, the menu bar duck, the goal loop, Pi packages, subscription sign-ins, composer styles, dynamic backdrops, renaming the agent.
 - To port something from version 2, read it from the legacy checkout (`../wackcode-legacy`, or `git show 2.5-Legacy:<path>`). Port the idea and the tested logic; don't port Tauri, Pi or web-view workarounds.
 - `todo.md` (gitignored) is the owner's idea list: ask before starting anything from it.
@@ -25,6 +25,7 @@ WackCode is a native macOS coding agent: a Rust app drawn with GPUI, with its ow
 - **`crates/wack-ui/`**: every view, the pane tree and layout solver, the theme. The only crate that may use GPUI.
 - **`crates/wack-core/`**: the engine: projects, chats, settings, secrets, Git, PTYs, events.
 - **`crates/wack-agent/`**, **`wack-llm/`**, **`wack-tools/`**: the agent loop, the provider wire formats, and the core tools.
+- **`crates/wack-computer/`**: computer use: the agent in the user's other Mac apps, and its access rules.
 - **`crates/wack-cli/`**: `wack`, the agent without the app.
 
 ## Read before changing

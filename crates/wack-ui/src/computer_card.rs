@@ -6,6 +6,7 @@
 //!   one filled button. Nothing has focus when it arrives, so a keystroke meant for the composer
 //!   never answers it; Esc denies (`Shell::back`).
 //! - It waits as long as the user takes. Stop takes it down with the run.
+//! - A clipboard card asks to read, or to write, for this chat: Deny or Allow, nothing saved.
 //! - It says what the agent will be able to do: act in the app in the background, or only look
 //!   (web browsers), and whether the app will be started.
 //! - Answers go through `AppState::answer_computer_card` with the card's id, so a click on a card
@@ -39,6 +40,9 @@ pub struct CardData {
     pub icon: Option<Arc<RenderImage>>,
     /// Why the last Always allow or Never allow couldn't be saved; the card stays up.
     pub error: Option<SharedString>,
+    /// A clipboard card, not an app's: `Some(true)` to write to it, `Some(false)` to read it.
+    /// It offers Deny and Allow for this chat only.
+    pub clipboard: Option<bool>,
 }
 
 #[derive(IntoElement)]
@@ -54,6 +58,11 @@ impl ComputerCard {
 
 /// What the agent may do, in the user's words.
 fn reach(data: &CardData) -> String {
+    match data.clipboard {
+        Some(true) => return "The agent may put text on the clipboard for this chat, replacing what you last copied.".into(),
+        Some(false) => return "The agent may read what you copy, for this chat. Items a password manager marks private are never read.".into(),
+        None => {}
+    }
     let app = &data.app;
     let mut text = if data.look_only {
         format!("The agent may read {app}'s windows, but never click or type in them: browsers are look-only.")
@@ -79,9 +88,10 @@ impl RenderOnce for ComputerCard {
             .items_center()
             .justify_center()
             .bg(theme.accent_wash)
-            .child(match data.icon.clone() {
-                Some(icon) => gpui::img(icon).size(px(28.)).into_any_element(),
-                None => Icon::Cursor.view(px(17.), theme.accent_text).into_any_element(),
+            .child(match (data.icon.clone(), data.clipboard) {
+                (Some(icon), None) => gpui::img(icon).size(px(28.)).into_any_element(),
+                (_, Some(_)) => Icon::Copy.view(px(17.), theme.accent_text).into_any_element(),
+                (None, None) => Icon::Cursor.view(px(17.), theme.accent_text).into_any_element(),
             });
         let heading = div()
             .flex_1()
@@ -90,7 +100,11 @@ impl RenderOnce for ComputerCard {
             .flex_col()
             .gap(px(1.))
             .child(div().typography(Type::Small).text_color(theme.accent_text).child(if data.look_only { "Computer use · Look only" } else { "Computer use" }))
-            .child(div().truncate().typography(Type::UiStrong).text_color(theme.text).child(format!("Let the agent use {}?", data.app)));
+            .child(div().truncate().typography(Type::UiStrong).text_color(theme.text).child(match data.clipboard {
+                Some(true) => "Let the agent copy to your clipboard?".to_string(),
+                Some(false) => "Let the agent read your clipboard?".to_string(),
+                None => format!("Let the agent use {}?", data.app),
+            }));
         let head = div().flex().items_center().gap(px(12.)).child(tile).child(heading);
         let body = div()
             .flex()
@@ -107,14 +121,18 @@ impl RenderOnce for ComputerCard {
             .items_center()
             .gap(px(8.))
             .child(div().child(Button::new("computer-deny", "Deny", Kind::Secondary).action(answer(Answer::Deny))).tag("computer-deny"))
-            .child(div().child(Button::new("computer-always", "Always allow", Kind::Secondary).action(answer(Answer::AlwaysAllow))).tag("computer-always"))
+            .when(data.clipboard.is_none(), |answers| {
+                answers.child(div().child(Button::new("computer-always", "Always allow", Kind::Secondary).action(answer(Answer::AlwaysAllow))).tag("computer-always"))
+            })
             .child(div().child(Button::new("computer-allow", "Allow for this chat", Kind::Primary).action(answer(Answer::Allow))).tag("computer-allow"));
         let actions = div()
             .flex()
             .flex_wrap()
             .items_center()
             .gap(px(8.))
-            .child(div().child(Button::new("computer-never", "Never allow", Kind::Secondary).action(answer(Answer::NeverAllow))).tag("computer-never"))
+            .when(data.clipboard.is_none(), |actions| {
+                actions.child(div().child(Button::new("computer-never", "Never allow", Kind::Secondary).action(answer(Answer::NeverAllow))).tag("computer-never"))
+            })
             .child(answers);
         let card = div()
             .id("computer-card")

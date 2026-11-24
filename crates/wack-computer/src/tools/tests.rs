@@ -229,7 +229,7 @@ fn only_looks_are_parallel_safe_for_plan_mode() {
         assert!(spec.name.starts_with(PREFIX));
         assert!(NAMES.contains(&spec.name.as_str()));
         assert_eq!(spec.loading, wack_agent::Loading::Deferred);
-        let changes_things = ["computer_open", "computer_act", "computer_batch"].contains(&spec.name.as_str());
+        let changes_things = ["computer_open", "computer_act", "computer_batch", "computer_clipboard"].contains(&spec.name.as_str());
         assert_eq!(spec.parallel_safe, !changes_things, "{}", spec.name);
     }
 }
@@ -346,4 +346,20 @@ mod acting {
         let refused = run(&setup.chat, "computer_batch", json!({ "steps": pictures })).await.unwrap_err();
         assert!(refused.contains("at most 5 pictures"), "{refused}");
     }
+}
+
+#[tokio::test]
+async fn the_clipboard_is_read_and_written_behind_its_own_cards() {
+    let setup = setup();
+    let asked = answering(&setup.chat, Answer::Allow);
+    setup.desktop.state.lock().unwrap().clipboard = Some("copied text".into());
+    let read = run(&setup.chat, "computer_clipboard", json!({"action": "read"})).await.unwrap().text;
+    assert!(read.contains("<app-data ") && read.contains("copied text"), "{read}");
+    run(&setup.chat, "computer_clipboard", json!({"action": "write", "text": "new"})).await.unwrap();
+    assert_eq!(setup.desktop.state.lock().unwrap().clipboard.as_deref(), Some("new"));
+    run(&setup.chat, "computer_clipboard", json!({"action": "read"})).await.unwrap();
+    let asked = asked.lock().unwrap();
+    assert_eq!(asked.len(), 2, "one card to read, one to write");
+    assert_eq!(asked[0], Ask::Clipboard { write: false });
+    assert_eq!(asked[1], Ask::Clipboard { write: true });
 }

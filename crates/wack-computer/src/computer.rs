@@ -130,6 +130,8 @@ impl Computer {
 pub enum Ask {
     /// To use an app. `launching` when the app isn't running and would be opened.
     App { app: AppIdentity, tier: Tier, launching: bool, icon: Option<Vec<u8>> },
+    /// To read the clipboard, or (`write`) to replace what is on it. Allow or Deny only.
+    Clipboard { write: bool },
 }
 
 #[derive(Debug, Clone, PartialEq)]
@@ -183,6 +185,10 @@ pub struct AppView {
 #[derive(Default)]
 struct ChatState {
     grants: ChatGrants,
+    /// The clipboard: `Some(true)` allowed for the chat, `Some(false)` denied until the user's
+    /// next message.
+    clipboard_read: Option<bool>,
+    clipboard_write: Option<bool>,
     card: Option<(Card, oneshot::Sender<Answer>)>,
     next_card: u64,
     views: HashMap<i32, AppView>,
@@ -261,7 +267,14 @@ impl ChatComputer {
 
     /// The user wrote to the agent: what they said no to may be asked again.
     pub fn clear_denials(&self) {
-        self.state().grants.clear_denials();
+        let mut guard = self.state();
+        let state = &mut *guard;
+        state.grants.clear_denials();
+        for grant in [&mut state.clipboard_read, &mut state.clipboard_write] {
+            if *grant == Some(false) {
+                *grant = None;
+            }
+        }
     }
 
     /// The apps this chat may use, for the compaction summary.
@@ -299,29 +312,7 @@ impl ChatComputer {
             return Err(format!("Using {} needs the user's go-ahead, and nobody is at the window to give it.", app.name));
         }
         let icon = self.desktop().icon(app).await;
-        let (sender, receiver) = oneshot::channel();
-        let id = {
-            let mut state = self.state();
-            state.next_card += 1;
-            let id = state.next_card;
-            state.card = Some((Card { id, ask: Ask::App { app: app.clone(), tier, launching, icon } }, sender));
-            id
-        };
-        self.signal(Signal::Card);
-        let answer = tokio::select! {
-            answer = receiver => answer.ok(),
-            () = cancel.cancelled() => None,
-        };
-        let Some(answer) = answer else {
-            // Stopped, or the card was dropped: take it down if it's still ours.
-            let mut state = self.state();
-            if state.card.as_ref().is_some_and(|(card, _)| card.id == id) {
-                state.card = None;
-                drop(state);
-                self.signal(Signal::Card);
-            }
-            return Err("The run was stopped before the user answered.".into());
-        };
+        let answer = self.raise(Ask::App { app: app.clone(), tier, launching, icon }, cancel).await?;
         let key = AppKey::of(app);
         match answer {
             Answer::Allow | Answer::AlwaysAllow => {
@@ -340,6 +331,56 @@ impl ChatComputer {
                 Err(format!("The user never allows computer use in {}. Don't ask for it again; do the task another way or tell the user what you'd need.", app.name))
             }
         }
+    }
+
+    /// Shows `ask` on a card and waits for the answer; the run stopping takes it down.
+    async fn raise(&self, ask: Ask, cancel: &CancellationToken) -> Result<Answer, String> {
+        let (sender, receiver) = oneshot::channel();
+        let id = {
+            let mut state = self.state();
+            state.next_card += 1;
+            let id = state.next_card;
+            state.card = Some((Card { id, ask }, sender));
+            id
+        };
+        self.signal(Signal::Card);
+        let answer = tokio::select! {
+            answer = receiver => answer.ok(),
+            () = cancel.cancelled() => None,
+        };
+        answer.ok_or_else(|| {
+            // Stopped, or the card was dropped: take it down if it's still ours.
+            let mut state = self.state();
+            if state.card.as_ref().is_some_and(|(card, _)| card.id == id) {
+                state.card = None;
+                drop(state);
+                self.signal(Signal::Card);
+            }
+            "The run was stopped before the user answered.".to_string()
+        })
+    }
+
+    /// Reading (or, with `write`, replacing) the clipboard, asking the user the first time.
+    pub async fn clipboard_access(&self, write: bool, present: bool, cancel: &CancellationToken) -> Result<(), String> {
+        let current = {
+            let state = self.state();
+            if write { state.clipboard_write } else { state.clipboard_read }
+        };
+        let what = if write { "copy to the clipboard" } else { "read the clipboard" };
+        match current {
+            Some(true) => return Ok(()),
+            Some(false) => return Err(format!("The user said no to letting you {what} for now. Don't ask again in this turn.")),
+            None if !present => return Err(format!("Nobody is at the window to let you {what}.")),
+            None => {}
+        }
+        let answer = self.raise(Ask::Clipboard { write }, cancel).await?;
+        let allowed = matches!(answer, Answer::Allow | Answer::AlwaysAllow);
+        {
+            let mut state = self.state();
+            let grant = if write { &mut state.clipboard_write } else { &mut state.clipboard_read };
+            *grant = Some(allowed);
+        }
+        if allowed { Ok(()) } else { Err(format!("The user said no to letting you {what} for now. Don't ask again in this turn.")) }
     }
 
     /// Records refs the model was shown.
@@ -494,6 +535,31 @@ mod tests {
         chat.state().grants.allow(AppKey::of(&textedit()));
         computer.set_settings(Settings { enabled: true, ..Settings::default() });
         assert_eq!(chat.access_now(&textedit()), Ok(None));
+    }
+
+    #[tokio::test]
+    async fn the_clipboard_asks_once_for_reading_and_once_for_writing() {
+        let (computer, _) = computer();
+        let chat = computer.chat();
+        let cancel = CancellationToken::new();
+        let asked = Arc::new(Mutex::new(Vec::new()));
+        let seen = asked.clone();
+        let answering = chat.clone();
+        chat.set_observer(move |_| {
+            if let Some(card) = answering.card() {
+                let answer = if matches!(card.ask, Ask::Clipboard { write: true }) { Answer::Deny } else { Answer::Allow };
+                seen.lock().unwrap().push(card.ask.clone());
+                answering.answer(card.id, answer);
+            }
+        });
+        assert!(chat.clipboard_access(false, true, &cancel).await.is_ok());
+        assert!(chat.clipboard_access(false, true, &cancel).await.is_ok());
+        assert!(chat.clipboard_access(true, true, &cancel).await.is_err());
+        assert!(chat.clipboard_access(true, true, &cancel).await.is_err(), "denied without a second card");
+        assert_eq!(asked.lock().unwrap().len(), 2);
+        chat.clear_denials();
+        assert!(chat.clipboard_access(true, true, &cancel).await.is_err());
+        assert_eq!(asked.lock().unwrap().len(), 3, "asked again after the user's message");
     }
 
     #[test]

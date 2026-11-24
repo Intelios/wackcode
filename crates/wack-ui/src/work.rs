@@ -313,6 +313,8 @@ pub fn activity(rows: &[WorkRow]) -> Option<String> {
         "Saw" => "Looking at",
         "Watched" => "Watching for",
         "Acted" | "Chained" => "Using",
+        "Copied" => "Copying",
+        "Peeked" => "Reading",
         // The browser's steps (see `browser_words`).
         "Opened" => "Opening",
         "Went" => "Going",
@@ -858,7 +860,7 @@ fn string_list(input: Option<&Value>, key: &str) -> Vec<String> {
 
 /// The verbs `computer_words` gives, none shared with another tool's row, so a row's icon and the
 /// log's tally can tell a computer-use step by its verb alone.
-pub const COMPUTER_VERBS: [&str; 7] = ["Surveyed", "Launched", "Inspected", "Saw", "Watched", "Acted", "Chained"];
+pub const COMPUTER_VERBS: [&str; 9] = ["Surveyed", "Launched", "Inspected", "Saw", "Watched", "Acted", "Chained", "Copied", "Peeked"];
 
 /// A computer tool call in words: its verb, and the app with what was done there.
 fn computer_words(name: &str, input: Option<&Value>) -> (&'static str, String) {
@@ -876,6 +878,8 @@ fn computer_words(name: &str, input: Option<&Value>) -> (&'static str, String) {
         }),
         "screenshot" => ("Saw", if count("region") > 0 { format!("part of {app}") } else { app }),
         "wait" => ("Watched", format!("“{}” in {app}", short(if field("text").is_empty() { field("role") } else { field("text") }, 30))),
+        "clipboard" if field("action") == "write" => ("Copied", "text to the clipboard".into()),
+        "clipboard" => ("Peeked", "at the clipboard".into()),
         "batch" => {
             let first = input
                 .and_then(|input| input.get("steps"))
@@ -1281,7 +1285,8 @@ mod tests {
         assert_eq!(words("computer_snapshot", json!({ "app": "Notes", "menu": [] })), ("Inspected", "Notes menus".into()));
         assert_eq!(words("computer_wait", json!({ "app": "Calculator", "text": "15" })), ("Watched", "“15” in Calculator".into()));
         assert_eq!(words("computer_batch", json!({ "steps": [{ "tool": "computer_act", "input": { "app": "Calculator" } }, {}] })), ("Chained", "Calculator · 2 steps".into()));
-        for tool in ["apps", "open", "snapshot", "screenshot", "wait", "act", "batch"] {
+        assert_eq!(words("computer_clipboard", json!({ "action": "write" })), ("Copied", "text to the clipboard".into()));
+        for tool in ["apps", "open", "snapshot", "screenshot", "wait", "act", "batch", "clipboard"] {
             let verb = words(&format!("computer_{tool}"), json!({})).0;
             assert!(COMPUTER_VERBS.contains(&verb), "{verb} is listed");
             assert!(!BROWSER_VERBS.contains(&verb) && !CANVAS_VERBS.contains(&verb), "{verb} is computer use's own");

@@ -1478,5 +1478,11 @@ pub fn computer_card(look_only: bool, failed: bool) -> crate::computer_card::Car
         launching: look_only,
         icon,
         error: failed.then(|| "The app couldn’t be saved: the settings file is read-only.".into()),
+        clipboard: None,
     }
+}
+
+/// The clipboard card: asking to read it.
+pub fn clipboard_card() -> crate::computer_card::CardData {
+    crate::computer_card::CardData { id: 2, app: "the clipboard".into(), path: None, look_only: false, launching: false, icon: None, error: None, clipboard: Some(false) }
 }

@@ -338,7 +338,7 @@ pub(super) async fn batch(call: &Call<'_>, input: Value) -> Result<ToolOutput, S
     for (index, step) in input.steps.into_iter().enumerate() {
         let number = index + 1;
         let kind = match Kind::from_name(&step.tool) {
-            Some(kind) if !matches!(kind, Kind::Batch | Kind::Open | Kind::Apps) => kind,
+            Some(kind) if !matches!(kind, Kind::Batch | Kind::Open | Kind::Apps | Kind::Clipboard) => kind,
             _ => return Err(format!("{text}Step {number}: a batch runs computer_act, computer_snapshot, computer_screenshot and computer_wait, not “{}”. Nothing after it ran.", step.tool)),
         };
         if kind == Kind::Screenshot && images.len() >= BATCH_PICTURES {
@@ -352,7 +352,7 @@ pub(super) async fn batch(call: &Call<'_>, input: Value) -> Result<ToolOutput, S
             Kind::Snapshot => look::snapshot(call, step.input).await,
             Kind::Screenshot => look::screenshot(call, step.input).await,
             Kind::Wait => look::wait(call, step.input).await,
-            Kind::Apps | Kind::Open | Kind::Batch => unreachable!("refused above"),
+            Kind::Apps | Kind::Open | Kind::Batch | Kind::Clipboard => unreachable!("refused above"),
         };
         match result {
             Ok(output) => {

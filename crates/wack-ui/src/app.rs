@@ -1045,7 +1045,14 @@ impl AppState {
         let Some(session) = self.sessions.get(chat).cloned() else { return };
         let Some(computer) = session.read(cx).computer.clone() else { return };
         let Some(card) = computer.card().filter(|card| card.id == id) else { return };
-        let Ask::App { app, .. } = &card.ask;
+        let app = match &card.ask {
+            Ask::App { app, .. } => app,
+            // A clipboard card is this chat's alone: nothing is saved.
+            Ask::Clipboard { .. } => {
+                computer.answer(id, if matches!(answer, Answer::Allow | Answer::AlwaysAllow) { Answer::Allow } else { Answer::Deny });
+                return;
+            }
+        };
         let saved = match answer {
             Answer::AlwaysAllow => match SavedApp::of(app) {
                 Some(saved) => self.store.always_allow_app(saved),

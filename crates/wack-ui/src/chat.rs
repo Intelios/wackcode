@@ -480,7 +480,10 @@ impl ChatSession {
         let card = self.computer.as_ref().and_then(|computer| computer.card());
         match &card {
             Some(card) if self.computer_icon.as_ref().is_none_or(|(id, _)| *id != card.id) => {
-                let wack_computer::computer::Ask::App { icon, .. } = &card.ask;
+                let icon = match &card.ask {
+                    wack_computer::computer::Ask::App { icon, .. } => icon.clone(),
+                    wack_computer::computer::Ask::Clipboard { .. } => None,
+                };
                 let picture = icon
                     .as_deref()
                     .and_then(|bytes| image::load_from_memory(bytes).ok())
@@ -499,16 +502,29 @@ impl ChatSession {
     /// The computer-use card as the composer draws it.
     pub fn computer_card(&self) -> Option<crate::computer_card::CardData> {
         let card = self.computer.as_ref()?.card()?;
-        let wack_computer::computer::Ask::App { app, tier, launching, .. } = &card.ask;
         let icon = self.computer_icon.as_ref().filter(|(id, _)| *id == card.id).and_then(|(_, icon)| icon.clone());
-        Some(crate::computer_card::CardData {
-            id: card.id,
-            app: app.name.clone().into(),
-            path: app.path.as_ref().map(|path| path.display().to_string().into()),
-            look_only: *tier == wack_computer::policy::Tier::LookOnly,
-            launching: *launching,
-            icon,
-            error: self.computer_error.as_ref().filter(|(id, _)| *id == card.id).map(|(_, error)| error.clone()),
+        let error = self.computer_error.as_ref().filter(|(id, _)| *id == card.id).map(|(_, error)| error.clone());
+        Some(match &card.ask {
+            wack_computer::computer::Ask::App { app, tier, launching, .. } => crate::computer_card::CardData {
+                id: card.id,
+                app: app.name.clone().into(),
+                path: app.path.as_ref().map(|path| path.display().to_string().into()),
+                look_only: *tier == wack_computer::policy::Tier::LookOnly,
+                launching: *launching,
+                icon,
+                error,
+                clipboard: None,
+            },
+            wack_computer::computer::Ask::Clipboard { write } => crate::computer_card::CardData {
+                id: card.id,
+                app: "the clipboard".into(),
+                path: None,
+                look_only: false,
+                launching: false,
+                icon: None,
+                error,
+                clipboard: Some(*write),
+            },
         })
     }
 

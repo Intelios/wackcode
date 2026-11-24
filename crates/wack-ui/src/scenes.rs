@@ -573,6 +573,12 @@ pub fn all() -> Vec<Scene> {
             },
         },
         Scene {
+            name: "computer-card-clipboard",
+            description: "The clipboard card: the agent asks to read what the user copied; Deny or Allow only.",
+            size: WINDOW,
+            build: |_, cx| computer_card_scene_with(fixtures::clipboard_card(), None, cx),
+        },
+        Scene {
             name: "computer-card-small",
             description: "The computer-use card in the smallest window the app allows, with a save that failed.",
             size: size(px(716.), px(492.)),
@@ -1746,7 +1752,10 @@ fn question_scene(ultra: bool, backdrop: Option<crate::backdrop::Picture>, _size
 
 /// A chat whose agent waits on the computer-use card. `failed` shows a save that went wrong.
 fn computer_card_scene(look_only: bool, failed: bool, backdrop: Option<crate::backdrop::Picture>, cx: &mut App) -> AnyView {
-    let access = fixtures::computer_card(look_only, failed);
+    computer_card_scene_with(fixtures::computer_card(look_only, failed), backdrop, cx)
+}
+
+fn computer_card_scene_with(access: crate::computer_card::CardData, backdrop: Option<crate::backdrop::Picture>, cx: &mut App) -> AnyView {
     cx.new(|_| {
         let composer = ComposerData {
             chat_area: false,

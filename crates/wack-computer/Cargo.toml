@@ -1,0 +1,45 @@
+[package]
+name = "wack-computer"
+description = "Computer use: the agent working in the user's other Mac apps through Accessibility, window captures and synthetic input, with the access rules that bound it."
+version.workspace = true
+edition.workspace = true
+publish.workspace = true
+
+[dependencies]
+wack-agent.workspace = true
+wack-llm.workspace = true
+async-trait.workspace = true
+base64 = "0.22"
+image.workspace = true
+libc.workspace = true
+serde.workspace = true
+serde_json.workspace = true
+tokio.workspace = true
+block2 = "0.6"
+objc2 = "0.6"
+objc2-foundation = { version = "0.3", default-features = false, features = [
+    "std", "block2", "NSArray", "NSBundle", "NSData", "NSDictionary", "NSEnumerator", "NSError", "NSGeometry",
+    "NSString", "NSURL", "NSValue", "NSObjCRuntime",
+] }
+objc2-app-kit = { version = "0.3", default-features = false, features = [
+    "std", "block2", "libc", "objc2-core-graphics", "NSApplication", "NSBitmapImageRep", "NSGraphicsContext", "NSImage",
+    "NSImageRep", "NSPasteboard", "NSResponder", "NSRunningApplication", "NSWorkspace",
+] }
+objc2-core-foundation = { version = "0.3", default-features = false, features = [
+    "std", "CFArray", "CFBase", "CFCGTypes", "CFData", "CFDictionary", "CFNumber", "CFString", "CFRunLoop", "CFMachPort",
+] }
+objc2-core-graphics = { version = "0.3", default-features = false, features = [
+    "std", "libc", "CGDirectDisplay", "CGError", "CGEvent", "CGEventSource", "CGEventTypes", "CGGeometry", "CGImage",
+    "CGRemoteOperation", "CGSession", "CGWindow",
+] }
+objc2-application-services = { version = "0.3", default-features = false, features = [
+    "std", "libc", "AXError", "AXUIElement", "AXValue", "AXAttributeConstants", "HIServices",
+] }
+objc2-screen-capture-kit = { version = "0.3", default-features = false, features = [
+    "std", "block2", "libc", "objc2-core-foundation", "objc2-core-graphics", "SCScreenshotManager", "SCShareableContent",
+    "SCStream",
+] }
+
+[dev-dependencies]
+tempfile.workspace = true
+tokio = { workspace = true, features = ["test-util"] }

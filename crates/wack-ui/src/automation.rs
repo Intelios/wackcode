@@ -11,6 +11,7 @@
 //! {"cmd":"screenshot","path":"/abs/file.png"}     writes what the window is showing
 //! {"cmd":"click","tag":"send"}                    also {"x":10,"y":20}; optional "count", "right"
 //! {"cmd":"drag","x":10,"y":20,"to_x":300,"to_y":20}   presses, moves in steps, releases
+//! {"cmd":"scroll","x":400,"y":300,"dy":600}      a wheel turn there; positive dy scrolls toward the top
 //! {"cmd":"type","text":"hello"}                   types into whatever has focus
 //! {"cmd":"key","keys":"cmd-n enter"}              space-separated keystrokes
 //! {"cmd":"compose","text":"hello","send":true}    into the chat's composer, focus or not
@@ -46,7 +47,7 @@ use std::{
 
 use gpui::{
     AnyWindowHandle, App, AppContext, AsyncApp, Keystroke, Modifiers, MouseButton, MouseDownEvent,
-    MouseMoveEvent, MouseUpEvent, Pixels, PlatformInput, Point, Window, point, px, size,
+    MouseMoveEvent, MouseUpEvent, Pixels, PlatformInput, Point, ScrollDelta, ScrollWheelEvent, TouchPhase, Window, point, px, size,
 };
 use serde::Deserialize;
 use serde_json::{Value, json};
@@ -83,6 +84,14 @@ enum Command {
         y: f32,
         to_x: f32,
         to_y: f32,
+    },
+    Scroll {
+        x: f32,
+        y: f32,
+        #[serde(default)]
+        dx: f32,
+        #[serde(default)]
+        dy: f32,
     },
     Type {
         text: String,
@@ -310,6 +319,23 @@ async fn run(command: Command, cx: &mut AsyncApp) -> Result<Value, String> {
             })?;
             settle(window, cx).await;
             Ok(json!({ "ok": true, "x": f32::from(position.x), "y": f32::from(position.y) }))
+        }
+        Command::Scroll { x, y, dx, dy } => {
+            on_window(window, cx, |window, cx| {
+                let position = point(px(x), px(y));
+                window.dispatch_event(PlatformInput::MouseMove(MouseMoveEvent { position, pressed_button: None, modifiers: Modifiers::default() }), cx);
+                window.dispatch_event(
+                    PlatformInput::ScrollWheel(ScrollWheelEvent {
+                        position,
+                        delta: ScrollDelta::Pixels(point(px(dx), px(dy))),
+                        modifiers: Modifiers::default(),
+                        touch_phase: TouchPhase::Moved,
+                    }),
+                    cx,
+                );
+            })?;
+            settle(window, cx).await;
+            Ok(json!({ "ok": true }))
         }
         Command::Drag { x, y, to_x, to_y } => {
             let modifiers = Modifiers::default();

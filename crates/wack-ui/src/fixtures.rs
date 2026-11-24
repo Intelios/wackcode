@@ -452,6 +452,37 @@ fn items(conversation: &Conversation, open: &[&str], now: u64) -> Vec<Item> {
     work::items(conversation, Path::new(CWD), &open, now, &mut ReplyCache::default())
 }
 
+/// A Chat chat's scratchpad, for scenes.
+pub const SCRATCHPAD: &str = "/Users/me/Library/Application Support/WackCode/v3/scratch/chat-1";
+
+/// A Chat chat read as a messenger: yesterday's question and its reply (a thought, three calls
+/// folded, the answer, the note it wrote), then today's, still being answered. `open` holds the
+/// keys of opened thoughts and folds.
+pub fn chat_area_turns(open: &[&str]) -> Vec<Item> {
+    let open: HashSet<String> = open.iter().map(|key| key.to_string()).collect();
+    let earlier = START - 26 * 3_600_000;
+    let mut conversation = Conversation::default();
+    conversation.send("Plan four days in Lisbon for someone who likes food and long walks, not museums.", earlier);
+    conversation.apply(&Event::Thinking("Food and walking: Alfama, Graça, Belém by the river, LX Factory. Keep days loose.".into()), earlier + 2_000);
+    call(&mut conversation, "f1", "web_fetch", json!({ "url": "https://www.visitlisboa.com/en/walks" }), Some("ok"), earlier + 4_000);
+    call(&mut conversation, "f2", "web_fetch", json!({ "url": "https://www.timeout.com/lisbon/restaurants" }), Some("ok"), earlier + 6_000);
+    call(&mut conversation, "w1", "write", json!({ "path": "lisbon/plan.md", "content": "# Lisbon" }), Some("ok"), earlier + 8_000);
+    conversation.apply(
+        &Event::Text("Here's a loose plan, one neighbourhood a day so the walking does the work:\n\n- **Day 1, Alfama and Graça.** Start at the miradouro, wander down, grilled sardines for lunch.\n- **Day 2, Belém by the river.** Pastéis de nata early, then the long riverside walk back.\n- **Day 3, Chiado and Bairro Alto.** Time Out Market for lunch, petiscos at night.\n- **Day 4, LX Factory and Alcântara.** Slow morning, bookshops, a long lunch.\n\nI saved it as a note so you can tweak it.".into()),
+        earlier + 10_000,
+    );
+    conversation.finish(&Ok(wack_core::Outcome::Done), earlier + 12_000);
+    conversation.send("Swap day 3 for something quieter?", START - 20_000);
+    call(&mut conversation, "r1", "read", json!({ "path": "lisbon/plan.md" }), Some("ok"), START - 15_000);
+    conversation.apply(&Event::ToolCall { id: "s1".into(), name: "web_search".into(), input: json!({ "query": "quiet neighbourhoods Lisbon walk" }) }, START - 5_000);
+    let mut items = Vec::new();
+    let mut cache = ReplyCache::default();
+    for index in 0..conversation.entries.len() {
+        crate::chat_transcript::entry_items(&conversation, index, Path::new(SCRATCHPAD), &open, &mut cache, &mut items);
+    }
+    items
+}
+
 /// A finished turn with its work log open on the edit's diff.
 pub fn finished_turn() -> Vec<Item> {
     let mut conversation = Conversation::default();

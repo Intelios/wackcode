@@ -1274,6 +1274,18 @@ impl AppState {
         }
     }
 
+    /// A file chip under a Chat reply. Its path came from the model, so it is shown only when it
+    /// is, on disk with links followed, inside the scratchpad of the chat on screen.
+    pub fn reveal_scratchpad_file(&self, path: &Path) {
+        let Some(folder) = self.current_scratchpad().and_then(|folder| folder.canonicalize().ok()) else { return };
+        if let Ok(real) = path.canonicalize()
+            && real.starts_with(&folder)
+            && real != folder
+        {
+            crate::memory_page::reveal(&real);
+        }
+    }
+
     pub fn copy_scratchpad_path(&self, cx: &mut Context<Self>) {
         if let Some(folder) = self.current_scratchpad() {
             cx.write_to_clipboard(gpui::ClipboardItem::new_string(folder.display().to_string()));
@@ -3014,7 +3026,13 @@ impl AppState {
         } else {
             wack_canvas::Canvases::new(self.store.canvases_folder(chat), Some(self.browser.clone()))
         };
-        let session = cx.new(|cx| ChatSession::load(&chat.id, cwd, &path, layout, runner, commands, tasks_folder, tabs, canvases, cx));
+        let session = cx.new(|cx| {
+            let mut session = ChatSession::load(&chat.id, cwd, &path, layout, runner, commands, tasks_folder, tabs, canvases, cx);
+            if chat.is_chat_area() {
+                session.set_chat_area(cx);
+            }
+            session
+        });
         let id = chat.id.clone();
         // Cards read their dismissals and opened links from the store as it stands now.
         let view = self.suggestion_view(chat);

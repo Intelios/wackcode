@@ -52,6 +52,23 @@ pub enum Item {
     Suggestions(crate::suggestion::Tray),
     /// What a turn drew on a canvas, under its log.
     Canvas(crate::canvas_card::CanvasCard),
+    // The Chat area's transcript (`chat_transcript`): a chat read as a messenger reads.
+    /// A quiet time divider, by when the conversation resumed: its words are made when drawn.
+    ChatDivider(u64),
+    /// The duck and the agent's name over a reply.
+    ChatSpeaker { live: bool },
+    /// Some of a reply's prose; `copy` holds the words of a settled reply's last bubble.
+    ChatBubble { blocks: Rc<Vec<markdown::Block>>, copy: Option<SharedString> },
+    /// "Thought it over", folded.
+    ChatThought { key: SharedString, text: SharedString, open: bool },
+    /// What the agent did, as chips.
+    ChatChips(Vec<crate::chat_transcript::Chip>),
+    /// What the duck is up to while it works.
+    ChatTyping(crate::chat_transcript::Mood),
+    /// The files a settled reply wrote in the scratchpad, which show in the Finder.
+    ChatFiles(Vec<crate::chat_transcript::ScratchFile>),
+    /// The conversation was compacted here.
+    ChatTidied,
 }
 
 /// A slash command as the user typed it.
@@ -190,12 +207,14 @@ pub struct Handlers {
     pub toggle: Handler<SharedString>,
     /// Opens a link from a reply.
     pub open_link: Handler<String>,
+    /// Reduce Motion is on: what would loop holds still.
+    pub still: bool,
 }
 
 impl Handlers {
     /// Clicks that do nothing: for scenes.
     pub fn inert() -> Self {
-        Self { toggle: Rc::new(|_, _, _| {}), open_link: Rc::new(|_, _, _| {}) }
+        Self { toggle: Rc::new(|_, _, _| {}), open_link: Rc::new(|_, _, _| {}), still: false }
     }
 }
 
@@ -274,6 +293,9 @@ const SENT_PROMPT_MAX: f32 = 320.;
 
 /// Space above `item`, given the item before it.
 fn gap_above(item: &Item, previous: Option<&Item>) -> f32 {
+    if let Some(gap) = crate::chat_transcript::gap_above(item, previous) {
+        return gap;
+    }
     match (previous, item) {
         (None, _) => 0.,
         (_, Item::Prompt { steered: true, .. }) => 24.,
@@ -288,6 +310,9 @@ fn gap_above(item: &Item, previous: Option<&Item>) -> f32 {
 
 /// One transcript item, with the space it keeps from the one before.
 pub fn item(item: &Item, previous: Option<&Item>, theme: &Theme, handlers: &Handlers) -> AnyElement {
+    if let Some(body) = crate::chat_transcript::item(item, theme, handlers, handlers.still) {
+        return div().pt(px(gap_above(item, previous))).child(body).into_any_element();
+    }
     let body = match item {
         Item::Prompt { text, steered, command, suggestion, pictures } => {
             let bubble = div()
@@ -356,6 +381,15 @@ pub fn item(item: &Item, previous: Option<&Item>, theme: &Theme, handlers: &Hand
             .child(text.clone())
             .into_any_element(),
         Item::News(row) => div().pl(px(RAIL + ROW_GAP + 1.)).child(log_row(row, theme, handlers)).into_any_element(),
+        // Drawn above by `chat_transcript::item`.
+        Item::ChatDivider(_)
+        | Item::ChatSpeaker { .. }
+        | Item::ChatBubble { .. }
+        | Item::ChatThought { .. }
+        | Item::ChatChips(_)
+        | Item::ChatTyping(_)
+        | Item::ChatFiles(_)
+        | Item::ChatTidied => div().into_any_element(),
         Item::Compacted => div()
             .flex()
             .items_center()
@@ -946,7 +980,7 @@ impl Transcript {
 impl RenderOnce for Transcript {
     fn render(self, _: &mut Window, cx: &mut App) -> impl IntoElement {
         let theme = Theme::get(cx).clone();
-        let handlers = Handlers::inert();
+        let handlers = Handlers { still: cx.reduce_motion(), ..Handlers::inert() };
         let mut column = div().w_full().flex().flex_col();
         for (index, current) in self.items.iter().enumerate() {
             let previous = index.checked_sub(1).map(|index| &self.items[index]);

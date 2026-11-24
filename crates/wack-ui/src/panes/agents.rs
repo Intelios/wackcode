@@ -360,6 +360,7 @@ impl Render for AgentsPane {
                     cx.open_url(&url);
                 }
             }),
+            still: cx.reduce_motion(),
         };
         let mut work = div().px(px(16.)).py(px(14.)).flex().flex_col();
         if items.is_empty() {

@@ -106,6 +106,26 @@ pub fn all() -> Vec<Scene> {
             },
         },
         Scene {
+            name: "chat-area-transcript",
+            description: "A Chat chat as a messenger reads: a time divider, the duck and name over each reply, a folded run of calls, the answer in a bubble with Copy, the note it wrote, and a reply still coming (a live chip, the typing bubble).",
+            size: WINDOW,
+            build: |_, cx| {
+                let screen = Screen::Chat {
+                    title: fixtures::CHAT_AREA_TITLE.into(),
+                    project: crate::shell::ProjectInfo { name: "".into(), path: "".into(), branch: None },
+                    body: crate::shell::Body::Items(fixtures::chat_area_turns(&[])),
+                    composer: ComposerData {
+                        chat_area: true,
+                        input: Input::Drawn { text: None, placeholder: crate::app::CHAT_FOLLOW_UP_PLACEHOLDER.into() },
+                        activity: Some(("Working · 6s".into(), Some("Searching the web".into()))),
+                        waiting: Vec::new(),
+                        ..fixtures::composer_working()
+                    },
+                };
+                cx.new(|_| Shell::showing_tabs(fixtures::chat_sidebar(true, false), screen, fixtures::chat_strip(Some(fixtures::CHAT_AREA_TITLE)))).into()
+            },
+        },
+        Scene {
             name: "chat-area-empty",
             description: "The Chat area with no chats yet: the sidebar says what a chat here is.",
             size: WINDOW,

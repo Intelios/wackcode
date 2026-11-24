@@ -14,6 +14,7 @@ pub mod button;
 pub mod canvas_card;
 pub mod chat;
 pub mod chat_area;
+pub mod chat_transcript;
 pub mod colour;
 pub mod commands_page;
 pub mod subagents_page;

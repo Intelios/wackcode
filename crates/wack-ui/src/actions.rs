@@ -580,6 +580,14 @@ pub struct DeleteChat {
     pub id: String,
 }
 
+/// A file chip under a Chat reply: shows the file in the Finder, if it is in the scratchpad of
+/// the chat on screen.
+#[derive(Clone, Debug, PartialEq, Action)]
+#[action(namespace = wackcode, no_json)]
+pub struct RevealScratchpadFile {
+    pub path: std::path::PathBuf,
+}
+
 /// A sidebar row's Archive: the first click asks ("Archive?"), the second archives.
 #[derive(Clone, Debug, PartialEq, Action)]
 #[action(namespace = wackcode, no_json)]

@@ -3,7 +3,8 @@
 //! switching chats never stops a run or loses a draft.
 //!
 //! Invariants:
-//! - `items` is always what `work::items` would build from `conversation`, and `spans[i]` is how
+//! - `items` is always what `work::items` would build from `conversation` (for a Chat chat,
+//!   `chat_transcript::entry_items`, entry by entry), and `spans[i]` is how
 //!   many of them entry `i` made. Only entries that changed are rebuilt, and `list` is told
 //!   exactly which items changed, so a long chat costs nothing extra while a reply streams.
 //!   Events only ever change the conversation's last entry or add entries after it.
@@ -79,6 +80,9 @@ pub enum ChatEvent {
 pub struct ChatSession {
     pub id: String,
     cwd: PathBuf,
+    /// A Chat area chat: its transcript reads as a messenger's (`chat_transcript`), and `cwd` is
+    /// its scratchpad.
+    chat_area: bool,
     session_path: PathBuf,
     conversation: Conversation,
     /// Keys of the work logs and rows the user opened.
@@ -242,6 +246,7 @@ impl ChatSession {
         let mut chat = Self {
             id: id.to_string(),
             cwd,
+            chat_area: false,
             session_path: session_path.to_path_buf(),
             conversation,
             open: HashSet::new(),
@@ -894,6 +899,33 @@ impl ChatSession {
         }
     }
 
+    /// Makes this a Chat area chat, drawn as a messenger's transcript. Its list tells the chat
+    /// when it stops or starts being scrolled to the end, for the Jump to latest pill.
+    pub fn set_chat_area(&mut self, cx: &mut Context<Self>) {
+        if self.chat_area {
+            return;
+        }
+        self.chat_area = true;
+        self.refresh_from(0);
+        // No scroll handler for the jump pill: GPUI calls one with the list's state borrowed (so it
+        // can't ask `is_scrolled_to_end`), and already redraws the view that draws the list, which
+        // is the one that decides the pill.
+        cx.notify();
+    }
+
+    pub fn is_chat_area(&self) -> bool {
+        self.chat_area
+    }
+
+    /// Entry `index`'s items, appended to `items`.
+    fn build_entry(&mut self, index: usize, now: u64, items: &mut Vec<Item>) {
+        if self.chat_area {
+            crate::chat_transcript::entry_items(&self.conversation, index, &self.cwd, &self.open, &mut self.cache, items);
+        } else {
+            work::entry_items(&self.conversation, index, &self.cwd, &self.open, now, &mut self.cache, items);
+        }
+    }
+
     /// The entry whose items show the work log or row with this key.
     fn entry_holding(&self, key: &str) -> Option<usize> {
         let mut start = 0;
@@ -903,6 +935,8 @@ impl ChatSession {
                 Item::News(row) => row.key.as_ref() == key,
                 Item::Prompt { command: Some(command), .. } => command.key.as_ref() == key,
                 Item::Suggestions(tray) => tray.cards.iter().any(|card| card.holds(key)),
+                Item::ChatThought { key: thought, .. } => thought.as_ref() == key,
+                Item::ChatChips(chips) => chips.iter().any(|chip| matches!(chip, crate::chat_transcript::Chip::Fold { key: fold, .. } if fold.as_ref() == key)),
                 _ => false,
             });
             if holds {
@@ -921,11 +955,13 @@ impl ChatSession {
         let old_end = self.items.len();
         self.items.truncate(start);
         self.spans.truncate(from);
+        let mut items = std::mem::take(&mut self.items);
         for index in from..self.conversation.entries.len() {
-            let before = self.items.len();
-            work::entry_items(&self.conversation, index, &self.cwd, &self.open, now, &mut self.cache, &mut self.items);
-            self.spans.push(self.items.len() - before);
+            let before = items.len();
+            self.build_entry(index, now, &mut items);
+            self.spans.push(items.len() - before);
         }
+        self.items = items;
         self.fill_canvas_cards(start);
         self.tell_list(start, old_end - start, self.items.len() - start);
     }
@@ -959,7 +995,7 @@ impl ChatSession {
         };
         let start: usize = self.spans[..index].iter().sum();
         let mut fresh = Vec::new();
-        work::entry_items(&self.conversation, index, &self.cwd, &self.open, now_millis(), &mut self.cache, &mut fresh);
+        self.build_entry(index, now_millis(), &mut fresh);
         self.fill_faces(&mut fresh);
         let new_count = fresh.len();
         self.items.splice(start..start + old_count, fresh);

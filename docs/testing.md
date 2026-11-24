@@ -42,6 +42,7 @@ ask '{"cmd":"tree"}'                           # window size and every tag's bou
 ask '{"cmd":"screenshot","path":"/abs/out.png"}'
 ask '{"cmd":"click","tag":"send"}'             # or {"x":10,"y":20}; optional "count", "right"
 ask '{"cmd":"drag","x":716,"y":250,"to_x":560,"to_y":250}'   # a dock edge, a divider, a pane tab
+ask '{"cmd":"scroll","x":700,"y":350,"dy":600}'   # a wheel turn; positive dy scrolls toward the top
 ask '{"cmd":"type","text":"hello"}'            # into whatever has focus (the window must be in front)
 ask '{"cmd":"compose","text":"hello","send":true}'   # into the chat's composer, focused or not
 ask '{"cmd":"canvas","name":"canvas_look","input":{},"path":"/abs/a.png"}'   # a canvas tool on the chat in front

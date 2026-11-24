@@ -22,15 +22,33 @@ const DETAIL_LINES: usize = 60;
 /// Unchanged lines kept around an edit's change.
 const CONTEXT_LINES: usize = 2;
 
+/// A reply's text with its parse, so the same text is never parsed twice.
+type Parsed = (String, Rc<Vec<markdown::Block>>);
+
 /// Parsed replies, so a chat is not parsed again every time it is rebuilt. Keyed by entry index
 /// and checked against the whole text: a reply can be moved into the work log and replaced by
 /// one of the same length.
 #[derive(Default)]
 pub struct ReplyCache {
-    parsed: Vec<Option<(String, Rc<Vec<markdown::Block>>)>>,
+    parsed: Vec<Option<Parsed>>,
+    /// A Chat reply's bubbles, by entry and by the bubble's place in it, so one streaming never
+    /// pushes out another.
+    pieces: HashMap<(usize, usize), Parsed>,
 }
 
 impl ReplyCache {
+    /// Bubble `piece` of entry `index`, parsed once for each text it has held.
+    pub fn piece(&mut self, index: usize, piece: usize, text: &str) -> Rc<Vec<markdown::Block>> {
+        match self.pieces.get(&(index, piece)) {
+            Some((parsed, blocks)) if parsed == text => blocks.clone(),
+            _ => {
+                let blocks = Rc::new(markdown::parse(text));
+                self.pieces.insert((index, piece), (text.to_string(), blocks.clone()));
+                blocks
+            }
+        }
+    }
+
     fn get(&mut self, index: usize, text: &str) -> Rc<Vec<markdown::Block>> {
         if self.parsed.len() <= index {
             self.parsed.resize(index + 1, None);

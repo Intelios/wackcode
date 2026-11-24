@@ -48,7 +48,7 @@ use crate::{
         PickCommand, SelectChat, Send, Stop, StopCommand, MoveToBackground, ToggleTasks, ToggleTasksPane, StopTask, ShowTask, ToggleAgentsPane, ToggleBrowserPane, ToggleCanvasPane, ShowCanvas, WriteInComposer, ShowAgent, StopAgent, ToggleChanges, ToggleProject, ToggleSidebar, ToggleTerminal, TriggerProjectCommand, Unqueue,
         ToggleAutoTitles, ToggleTitleModels, ChooseTitleModel, RenameChat, RenameChatAt, CancelRename, ToggleModelReasoning, ToggleModelVision, AttachPictures, AttachFiles, RemoveAttachment, OpenPicture, ClosePicture, StepPicture, ZoomPicture,
         StartSuggestion, DismissSuggestion, CopySuggestion, OpenChat,
-        ArchiveChat, ArchiveCurrentChat, ClearSearch, DeleteAllArchived, DeleteArchivedChat, ToggleArchived, UnarchiveChat,
+        ArchiveChat, ArchiveCurrentChat, ClearSearch, RevealScratchpadFile, DeleteAllArchived, DeleteArchivedChat, ToggleArchived, UnarchiveChat,
         ToggleModelEffort, SwitchSkill, SwitchSkillFolder, RemoveSkillFolder, OpenSkill, CopySkill, ChooseSkillUse, NewSkill, SaveSkill,
         CloseSkill, AskDeleteSkill, ConfirmSkillDelete, CancelSkillDelete, AddSkillFolder, ImportSkills, SwitchSlashCommand, OpenSlashCommand,
         NewSlashCommand, SaveSlashCommand, CloseSlashCommand, AskDeleteSlashCommand, ConfirmSlashCommandDelete, CancelSlashCommandDelete,
@@ -1017,7 +1017,16 @@ impl Render for Shell {
                     strip_ground,
                     &theme,
                 ),
-                chat(body, composer, narrow, transcript_height).into_any_element(),
+                {
+                    // A Chat chat scrolled up from its end offers the way back.
+                    let jump = match &body {
+                        Body::Live(session, list) if session.read(cx).is_chat_area() && list.is_scrolled_to_end() == Some(false) => {
+                            Some((list.clone(), session.read(cx).running()))
+                        }
+                        _ => None,
+                    };
+                    chat(body, composer, narrow, transcript_height, cx.reduce_motion(), jump).into_any_element()
+                },
             ),
             Screen::Settings(data) => {
                 let id = format!("arrive-settings-{}", data.section.name());
@@ -1105,6 +1114,10 @@ impl Render for Shell {
                 .on_action(cx.listener(|shell, _: &RevealScratchpad, _, cx| shell.with_app(cx, |app, _| app.reveal_scratchpad())))
                 .on_action(cx.listener(|shell, _: &CopyScratchpadPath, _, cx| shell.with_app(cx, |app, cx| app.copy_scratchpad_path(cx))))
                 .on_action(cx.listener(|shell, _: &ToggleArchived, _, cx| shell.with_app(cx, |app, cx| app.toggle_archived(cx))))
+                .on_action(cx.listener(|shell, action: &RevealScratchpadFile, _, cx| {
+                    let path = action.path.clone();
+                    shell.with_app(cx, |app, _| app.reveal_scratchpad_file(&path));
+                }))
                 .on_action(cx.listener(|shell, _: &ClearSearch, _, cx| shell.with_app(cx, |app, cx| app.clear_search(cx))))
                 .on_action(cx.listener(|shell, _: &DeleteAllArchived, _, cx| shell.with_app(cx, |app, cx| app.delete_all_archived(cx))))
                 .on_action(cx.listener(|shell, action: &ArchiveChat, _, cx| {
@@ -2512,6 +2525,7 @@ fn new_chat(
 /// sends). Over a picture the picture stays clear: the small words sit on frosted pills and the
 /// greeting has its halo. With no picture the duck floats on a pond of light, its ripples
 /// widening slowly (still under Reduce Motion).
+#[allow(clippy::too_many_arguments)]
 fn chat_hero(
     greeting: SharedString,
     ideas: Vec<usize>,
@@ -2913,7 +2927,9 @@ fn column(child: impl IntoElement, narrow: bool) -> impl IntoElement {
 /// How much of the transcript stays in view however much the composer column holds.
 const TRANSCRIPT_KEPT: f32 = 72.;
 
-fn chat(body: Body, composer: ComposerData, narrow: bool, height: f32) -> impl IntoElement {
+/// `jump`: the transcript is scrolled up from its end (its list, and whether a reply is coming
+/// in), so a pill over the composer takes it back.
+fn chat(body: Body, composer: ComposerData, narrow: bool, height: f32, still: bool, jump: Option<(ListState, bool)>) -> impl IntoElement {
     // An open question may take more of the chat: answering it is what the chat waits on.
     let kept = if composer.question.is_some() { TRANSCRIPT_KEPT / 3. } else { TRANSCRIPT_KEPT };
     let transcript = match body {
@@ -2936,6 +2952,7 @@ fn chat(body: Body, composer: ComposerData, narrow: bool, height: f32) -> impl I
                         cx.open_url(&url);
                     }
                 }),
+                still,
             };
             list(list_state, move |index, _, cx| {
                 let theme = Theme::get(cx);
@@ -2959,7 +2976,14 @@ fn chat(body: Body, composer: ComposerData, narrow: bool, height: f32) -> impl I
         .flex_col()
         // Text fades out as it scrolls under the title strip and the composer, rather than
         // being cut off; the fade is the text's own, so a backdrop shows through untouched.
-        .child(div().flex_1().min_h_0().child(faded(transcript, TOP_FADE, DOCK_FADE)))
+        .child(
+            div()
+                .relative()
+                .flex_1()
+                .min_h_0()
+                .child(faded(transcript, TOP_FADE, DOCK_FADE))
+                .when_some(jump, |area, (list, coming)| area.child(jump_pill(list, coming))),
+        )
         .child(
             div()
                 .flex_none()
@@ -2984,6 +3008,47 @@ fn chat(body: Body, composer: ComposerData, narrow: bool, height: f32) -> impl I
                         .child(Composer::new(composer)),
                 ),
         )
+}
+
+/// "Jump to latest", or "New messages" while a reply comes in below: over the transcript's foot.
+fn jump_pill(list: ListState, coming: bool) -> impl IntoElement {
+    let words = if coming { "New messages" } else { "Jump to latest" };
+    div().absolute().bottom(px(4.)).left_0().right_0().flex().justify_center().child(JumpPill { list, words })
+}
+
+#[derive(IntoElement)]
+struct JumpPill {
+    list: ListState,
+    words: &'static str,
+}
+
+impl RenderOnce for JumpPill {
+    fn render(self, _: &mut Window, cx: &mut App) -> impl IntoElement {
+        let theme = Theme::get(cx);
+        let list = self.list;
+        div()
+            .id("jump-to-latest")
+            .occlude()
+            .h(px(30.))
+            .px(px(14.))
+            .rounded_full()
+            .flex()
+            .items_center()
+            .gap(px(6.))
+            .bg(theme.raised)
+            .border_1()
+            .border_color(theme.border_strong)
+            .shadow_md()
+            .cursor_pointer()
+            .hover(|pill| pill.border_color(theme.accent_line))
+            .on_click(move |_, window, _| {
+                list.scroll_to_end();
+                window.refresh();
+            })
+            .child(Icon::ChevronDown.view(px(12.), theme.accent_text))
+            .child(div().typography(Type::Small).text_color(theme.text).child(self.words))
+            .tag("jump-to-latest")
+    }
 }
 
 fn failed(message: SharedString, theme: &Theme) -> impl IntoElement {

@@ -1034,6 +1034,11 @@ impl Store {
         self.folder.join("scratch").join(&chat.id)
     }
 
+    /// Where a chat keeps the originals of its pictures (beside its sub-agents' sessions).
+    pub fn pictures_folder(&self, chat: &Chat) -> PathBuf {
+        wack_agent::images::Images::for_session(&self.session_path(chat)).folder().map(Path::to_path_buf).unwrap_or_default()
+    }
+
     /// The one empty folder every Chat chat's MCP servers start in, so the chats share their
     /// connections (the hub keys them by folder) and no server is rooted where it could see a
     /// scratchpad.

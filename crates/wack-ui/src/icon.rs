@@ -78,6 +78,10 @@ pub enum Icon {
     Board,
     /// A comment pinned to an artboard.
     Comment,
+    /// The Code area.
+    Code,
+    /// Putting a chat away in the Archived view.
+    Archive,
     /// An artboard's tweaks.
     Sliders,
     /// The canvas's hand tool, which pans.
@@ -87,6 +91,8 @@ pub enum Icon {
 /// Every icon file, by asset path. One list, so a missing file fails the test below.
 const FILES: &[(&str, &[u8])] = &[
     ("icons/alert.svg", include_bytes!("../assets/icons/alert.svg")),
+    ("icons/code.svg", include_bytes!("../assets/icons/code.svg")),
+    ("icons/archive.svg", include_bytes!("../assets/icons/archive.svg")),
     ("icons/arrow-up.svg", include_bytes!("../assets/icons/arrow-up.svg")),
     ("icons/arrow-left.svg", include_bytes!("../assets/icons/arrow-left.svg")),
     ("icons/arrow-right.svg", include_bytes!("../assets/icons/arrow-right.svg")),
@@ -185,6 +191,8 @@ impl Icon {
             Icon::Minus => "icons/minus.svg",
             Icon::Board => "icons/board.svg",
             Icon::Comment => "icons/comment.svg",
+            Icon::Code => "icons/code.svg",
+            Icon::Archive => "icons/archive.svg",
             Icon::Sliders => "icons/sliders.svg",
             Icon::Hand => "icons/hand.svg",
         }
@@ -266,6 +274,9 @@ mod tests {
             Icon::Stop,
             Icon::Terminal,
             Icon::Trash,
+            Icon::Code,
+            Icon::Archive,
+            Icon::Comment,
         ] {
             let bytes = Assets.load(icon.path()).unwrap();
             assert!(bytes.is_some_and(|bytes| bytes.starts_with(b"<svg")), "{icon:?}");

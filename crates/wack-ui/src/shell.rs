@@ -31,7 +31,8 @@
 
 use std::rc::Rc;
 
-use gpui::{
+use wack_core::{AgentMode, ChatKind};
+use gpui::{AnimationExt as _, 
     App, Context, DragMoveEvent, ElementId, Entity, FocusHandle, Focusable, Hsla, ListState, MouseButton, PathPromptOptions, Pixels,
     PromptLevel, SharedString, Size, Subscription, Window, WindowControlArea, div, list,
     point, prelude::*, px, relative,
@@ -52,6 +53,7 @@ use crate::{
         NewSlashCommand, SaveSlashCommand, CloseSlashCommand, AskDeleteSlashCommand, ConfirmSlashCommandDelete, CancelSlashCommandDelete,
         ChooseDelegation, ToggleHelperModels, ChooseHelperModel, SwitchAgent, SwitchAgentFolder, OpenAgent, NewAgent, DuplicateAgent,
         ChooseAgentModel, SaveAgent, CloseAgent, AskDeleteAgent, CancelAgentDelete, ConfirmAgentDelete,
+        EnterCodeArea, EnterChatArea, UseIdea, RevealScratchpad, CopyScratchpadPath,
     },
     app::{AppState, Menu, RenamePlace, Selection, shown_path},
     appearance_page::AppearanceData,
@@ -69,7 +71,7 @@ use crate::{
     run_button::{self, CommandButtonData, CommandEditorData},
     settings::{self, ProvidersData, Section, SettingsData},
     icon::Icon,
-    sidebar::{ChatRow, ChatState, ProjectRow, SIDEBAR_WIDTH, Sidebar, SidebarData, TitleLook, rename_field},
+    sidebar::{AreaSwitch, ChatGroup, ChatRow, ChatState, ProjectRow, SIDEBAR_WIDTH, Sidebar, SidebarData, TitleLook, rename_field},
     tags::{self, Tag},
     theme::Theme,
     transcript::{self, Handlers, Item, Transcript},
@@ -137,6 +139,9 @@ pub enum Screen {
     /// No project yet: the first launch.
     Welcome { notice: Option<SharedString> },
     NewChat { project: ProjectInfo, composer: ComposerData, notice: Option<SharedString> },
+    /// The Chat area's new chat: a greeting for the hour ("Good evening"), a few ideas to start
+    /// from (indexes into `chat_area::IDEAS`), and the composer.
+    ChatHero { greeting: SharedString, ideas: Vec<usize>, composer: ComposerData, notice: Option<SharedString> },
     Chat { title: SharedString, project: ProjectInfo, body: Body, composer: ComposerData },
     /// Boxed: the page's data is far larger than any other screen's.
     Settings(Box<SettingsData>),
@@ -457,6 +462,13 @@ impl Shell {
         }
     }
 
+    /// Whether the screen on view may show a pane of `kind`: the Chat area has no project, so
+    /// only the browser and its canvases.
+    fn pane_allowed(&self, kind: PaneKind, cx: &App) -> bool {
+        let chat_area = self.app().is_some_and(|app| app.read(cx).area() == wack_core::ChatKind::Chat);
+        !chat_area || matches!(kind, PaneKind::Browser | PaneKind::Canvas)
+    }
+
     /// The chat on screen, if any.
     fn current_session(&self, cx: &App) -> Option<Entity<ChatSession>> {
         self.app()?.read(cx).current_chat().cloned()
@@ -467,7 +479,7 @@ impl Shell {
         let app = self.app()?.read(cx);
         match app.selection() {
             Selection::Chat(id) => app.session(id).map(|session| &session.read(cx).panes),
-            Selection::NewChat(_) => app.current_new_chat_panes(),
+            Selection::NewChat(_) | Selection::NewChatArea => app.current_new_chat_panes(),
             Selection::Welcome | Selection::Settings => None,
         }
     }
@@ -480,7 +492,7 @@ impl Shell {
                 let session = app.read(cx).session(&id).cloned()?;
                 Some(session.update(cx, |session, cx| session.change_layout(cx, change)))
             }
-            Selection::NewChat(_) => app.update(cx, |app, cx| app.change_new_chat_layout(cx, change)),
+            Selection::NewChat(_) | Selection::NewChatArea => app.update(cx, |app, cx| app.change_new_chat_layout(cx, change)),
             Selection::Welcome | Selection::Settings => None,
         }
     }
@@ -513,6 +525,9 @@ impl Shell {
     /// ⌃` and ⌘⇧G: a terminal takes focus when it shows, and focus goes back to the composer
     /// when the pane that had it hides.
     fn toggle_pane(&mut self, kind: PaneKind, window: &mut Window, cx: &mut Context<Self>) {
+        if !self.pane_allowed(kind, cx) {
+            return;
+        }
         let had_focus = self.focused_pane(window, cx);
         match self.change_layout(cx, |layout| layout.toggle(kind)) {
             Some(Some(pane)) if kind == PaneKind::Terminal => self.focus_pane(pane, window, cx),
@@ -542,6 +557,9 @@ impl Shell {
 
     /// A new terminal: as a tab beside `with`, or in the bottom dock.
     fn new_terminal(&mut self, with: Option<PaneId>, window: &mut Window, cx: &mut Context<Self>) {
+        if !self.pane_allowed(PaneKind::Terminal, cx) {
+            return;
+        }
         let made = self.change_layout(cx, |layout| {
             let terminal = layout.add(PaneKind::Terminal);
             if let Some(with) = with {
@@ -867,7 +885,10 @@ impl Render for Shell {
                 }),
             };
             let docks = dock::docks(&frame, &theme, cx);
-            let words = matches!(screen, Screen::Chat { .. }).then(|| PaneWords::read(panes, cx));
+            let words = match &screen {
+                Screen::Chat { composer, .. } => Some(PaneWords { chat_area: composer.chat_area, ..PaneWords::read(panes, cx) }),
+                _ => None,
+            };
             (solution, docks, words)
         };
         let left = if solution.sidebar { SIDEBAR_WIDTH } else { px(0.) };
@@ -886,7 +907,7 @@ impl Render for Shell {
             _ => self.scene_backdrop.clone(),
         };
         let over_picture = picture.is_some();
-        let hero_screen = matches!(screen, Screen::Welcome { .. } | Screen::NewChat { .. });
+        let hero_screen = matches!(screen, Screen::Welcome { .. } | Screen::NewChat { .. } | Screen::ChatHero { .. });
         let target = if over_picture && hero_screen { 1. } else { 0. };
         let still = cx.reduce_motion();
         let clear = self.clear.get_or_insert(motion::Ease::at(target));
@@ -942,7 +963,16 @@ impl Render for Shell {
                     .child(drag_strip(
                         "sidebar-strip",
                         TITLE_STRIP_HEIGHT - gutter,
-                        div().size_full().flex().justify_end().pt(px(2.)).pr(px(10.)).child(sidebar_toggle(&theme)),
+                        div()
+                            .size_full()
+                            .flex()
+                            .items_start()
+                            .justify_end()
+                            .gap(px(6.))
+                            .pt(px(2.))
+                            .pr(px(10.))
+                            .child(AreaSwitch { area: sidebar_data.area, other_waiting: sidebar_data.other_waiting })
+                            .child(sidebar_toggle(&theme)),
                     ))
                     .child(match settings_nav {
                         Some((section, connections)) => settings::nav(section, connections, &theme).into_any_element(),
@@ -968,6 +998,11 @@ impl Render for Shell {
                 let ground = (clearness > 0.).then_some(Hsla { a: theme.cover(), ..theme.window });
                 let body = new_chat(project, composer, &strip, viewport, notice, ground, &theme).into_any_element();
                 (tab_strip(&strip, None, compact_commands, viewport, strip_ground, &theme), arrive(id, body))
+            }
+            Screen::ChatHero { greeting, ideas, composer, notice } => {
+                let ground = (clearness > 0.).then_some(Hsla { a: theme.cover(), ..theme.window });
+                let body = chat_hero(greeting, ideas, composer, notice, over_picture, ground, &theme).into_any_element();
+                (tab_strip(&strip, None, compact_commands, viewport, strip_ground, &theme), arrive("arrive-chat-hero".into(), body))
             }
             Screen::Chat { project, body, composer, .. } => (
                 tab_strip(
@@ -1056,6 +1091,15 @@ impl Render for Shell {
                 .key_context(actions::context())
                 .when_some(self.focus.as_ref(), |root, focus| root.track_focus(focus))
                 .on_action(cx.listener(|shell, _: &NewChat, _, cx| shell.with_app(cx, |app, cx| app.new_chat(None, cx))))
+                .on_action(cx.listener(|shell, _: &EnterCodeArea, _, cx| shell.with_app(cx, |app, cx| app.enter_area(ChatKind::Code, cx))))
+                .on_action(cx.listener(|shell, _: &EnterChatArea, _, cx| shell.with_app(cx, |app, cx| app.enter_area(ChatKind::Chat, cx))))
+                .on_action(cx.listener(|shell, action: &UseIdea, window, cx| {
+                    let index = action.index;
+                    shell.with_app(cx, |app, cx| app.use_idea(index, cx));
+                    shell.focus_composer(window, cx);
+                }))
+                .on_action(cx.listener(|shell, _: &RevealScratchpad, _, cx| shell.with_app(cx, |app, _| app.reveal_scratchpad())))
+                .on_action(cx.listener(|shell, _: &CopyScratchpadPath, _, cx| shell.with_app(cx, |app, cx| app.copy_scratchpad_path(cx))))
                 .on_action(cx.listener(|shell, action: &NewChatIn, _, cx| {
                     let project = action.project.clone();
                     shell.with_app(cx, |app, cx| app.new_chat(Some(project), cx));
@@ -1777,6 +1821,8 @@ pub struct PaneWords {
     /// The chat has a canvas, so the Canvas word shows; and whether it is in front.
     pub has_canvas: bool,
     pub canvas: bool,
+    /// A Chat chat: no project, so no Changes or Terminal, and its scratchpad instead.
+    pub chat_area: bool,
 }
 
 impl PaneWords {
@@ -1793,6 +1839,7 @@ impl PaneWords {
             browser: visible.iter().any(|pane| pane.kind == PaneKind::Browser),
             has_canvas: panes.canvases().is_some_and(|canvases| !canvases.is_empty()) || panes.layout.first_of(PaneKind::Canvas).is_some(),
             canvas: visible.iter().any(|pane| pane.kind == PaneKind::Canvas),
+            chat_area: false,
         }
     }
 }
@@ -1816,6 +1863,14 @@ pub struct StripData {
     pub command_editor: Option<CommandEditorData>,
 }
 
+impl StripData {
+    /// The same strip with no chat tabs open, for scenes.
+    pub fn without_tabs(mut self) -> Self {
+        self.tabs.clear();
+        self
+    }
+}
+
 /// The sidebar, screen and title strip for the app's current state.
 fn live_view(app: &AppState, cx: &App) -> (SidebarData, Screen, StripData) {
     let store = app.store();
@@ -1826,27 +1881,36 @@ fn live_view(app: &AppState, cx: &App) -> (SidebarData, Screen, StripData) {
         Some(renaming) if renaming.chat == chat && renaming.place == place => TitleLook::Editing(renaming.field.clone()),
         _ => app.title_swaps.get(chat).and_then(|swap| swap.look(still)).map_or(TitleLook::Plain, TitleLook::Swap),
     };
-    let mut sidebar = SidebarData::default();
-    for project in store.projects() {
-        let chats = store
-            .chats(&project.id)
+    let area = app.area();
+    let mut sidebar = SidebarData {
+        area,
+        other_waiting: app.area_waiting(if area == ChatKind::Chat { ChatKind::Code } else { ChatKind::Chat }, cx),
+        ..SidebarData::default()
+    };
+    let row = |chat: &wack_core::Chat| {
+        let session = app.session(&chat.id).map(|session| session.read(cx));
+        ChatRow {
+            id: chat.id.clone().into(),
+            title: chat.title.clone().into(),
+            look: look(&chat.id, RenamePlace::Sidebar),
+            age: AppState::age(chat.updated).into(),
+            state: match session {
+                Some(session) if session.running() => ChatState::Working,
+                Some(session) if session.unread => ChatState::Unread,
+                _ => ChatState::Idle,
+            },
+            selected: *app.selection() == Selection::Chat(chat.id.clone()),
+        }
+    };
+    if area == ChatKind::Chat {
+        let chats = store.chat_area_chats().into_iter().map(|chat| (chat.updated, row(chat))).collect();
+        sidebar.groups = crate::chat_area::group_by_recency(chats, crate::chat::now_millis())
             .into_iter()
-            .map(|chat| {
-                let session = app.session(&chat.id).map(|session| session.read(cx));
-                ChatRow {
-                    id: chat.id.clone().into(),
-                    title: chat.title.clone().into(),
-                    look: look(&chat.id, RenamePlace::Sidebar),
-                    age: AppState::age(chat.updated).into(),
-                    state: match session {
-                        Some(session) if session.running() => ChatState::Working,
-                        Some(session) if session.unread => ChatState::Unread,
-                        _ => ChatState::Idle,
-                    },
-                    selected: *app.selection() == Selection::Chat(chat.id.clone()),
-                }
-            })
+            .map(|(group, chats)| ChatGroup { label: group.label().into(), chats })
             .collect();
+    }
+    for project in store.projects().iter().filter(|_| area == ChatKind::Code) {
+        let chats = store.chats(&project.id).into_iter().map(&row).collect();
         let row = ProjectRow {
             id: project.id.clone().into(),
             name: project.name.clone().into(),
@@ -1907,6 +1971,45 @@ fn live_view(app: &AppState, cx: &App) -> (SidebarData, Screen, StripData) {
                 browser: app.browser_data(),
             }))
         }
+        Selection::NewChatArea => {
+            let choice = store.defaults_for(ChatKind::Chat).clone();
+            let resolved = store.resolve(&choice);
+            let (model, effort) = model_words(resolved.as_ref());
+            let hour = wack_core::clock::local(crate::chat::now_millis()).hour;
+            Screen::ChatHero {
+                greeting: crate::chat_area::greeting(hour).into(),
+                ideas: crate::chat_area::pick_ideas(app.hero_visit, 3),
+                composer: ComposerData {
+                    chat_area: true,
+                    input: Input::Field(app.draft.clone()),
+                    model,
+                    effort,
+                    ultra_effort: is_ultra(resolved.as_ref()),
+                    mode: AgentMode::Build,
+                    key: "chat-area".into(),
+                    meter: None,
+                    working: false,
+                    waiting: Vec::new(),
+                    roomy: true,
+                    menu: menu_data(app, resolved.as_ref()),
+                    slash: None,
+                    hint: None,
+                    question: None,
+                    todos: None,
+                    activity: None,
+                    todos_open: false,
+                    waiting_open: false,
+                    tasks: Vec::new(),
+                    tasks_open: false,
+                    foreground: false,
+                    agents: 0,
+                    attachments: app.draft_attachments.clone(),
+                    pictures_refused: app.pictures_refused_for(&choice, app.draft_attachments.len()).map(Into::into),
+                    comments: None,
+                },
+                notice: app.notice.clone(),
+            }
+        }
         Selection::NewChat(project) => match info(project) {
             Some(project) => {
                 let choice = store.defaults().clone();
@@ -1915,6 +2018,7 @@ fn live_view(app: &AppState, cx: &App) -> (SidebarData, Screen, StripData) {
                 Screen::NewChat {
                     project,
                     composer: ComposerData {
+                        chat_area: false,
                         input: Input::Field(app.draft.clone()),
                         model,
                         effort,
@@ -1964,6 +2068,7 @@ fn live_view(app: &AppState, cx: &App) -> (SidebarData, Screen, StripData) {
                 project,
                 body: Body::Live(session.clone(), state.list.clone()),
                 composer: ComposerData {
+                    chat_area: chat.is_chat_area(),
                     input: Input::Field(state.composer.clone()),
                     model,
                     effort,
@@ -1975,8 +2080,8 @@ fn live_view(app: &AppState, cx: &App) -> (SidebarData, Screen, StripData) {
                     waiting,
                     roomy: false,
                     menu: menu_data(app, resolved.as_ref()),
-                    slash: app.slash_data(Some(id)),
-                    hint: app.command_hint(Some(id), cx),
+                    slash: (!chat.is_chat_area()).then(|| app.slash_data(Some(id))).flatten(),
+                    hint: (!chat.is_chat_area()).then(|| app.command_hint(Some(id), cx)).flatten(),
                     question: state.asking.as_ref().map(|asking| crate::question::QuestionData {
                         questions: asking.questions.clone(),
                         tab: asking.tab,
@@ -2009,7 +2114,7 @@ fn live_view(app: &AppState, cx: &App) -> (SidebarData, Screen, StripData) {
     };
     let strip = StripData {
         tabs: app
-            .tabs()
+            .area_tabs()
             .iter()
             .filter_map(|id| {
                 let chat = store.chat(id)?;
@@ -2027,7 +2132,7 @@ fn live_view(app: &AppState, cx: &App) -> (SidebarData, Screen, StripData) {
                 })
             })
             .collect(),
-        new_chat: matches!(app.selection(), Selection::NewChat(_)),
+        new_chat: matches!(app.selection(), Selection::NewChat(_) | Selection::NewChatArea),
         commands: app.command_buttons(),
         command_editor: app.command_editor_data(cx),
     };
@@ -2340,6 +2445,133 @@ fn new_chat(
     )
 }
 
+/// The Chat area's new chat, after version 2's hero: a small duck, a greeting for the hour, a
+/// line of welcome, the composer, and three ideas to start from (each fills the composer, never
+/// sends). Over a picture the picture stays clear: the small words sit on frosted pills and the
+/// greeting has its halo. With no picture the duck floats on a pond of light, its ripples
+/// widening slowly (still under Reduce Motion).
+fn chat_hero(
+    greeting: SharedString,
+    ideas: Vec<usize>,
+    composer: ComposerData,
+    notice: Option<SharedString>,
+    over_picture: bool,
+    ground: Option<Hsla>,
+    theme: &Theme,
+) -> impl IntoElement {
+    let hint = |keys: &'static str, what: &'static str| {
+        div()
+            .flex()
+            .gap(px(6.))
+            .child(div().text_color(theme.text_dim).child(keys))
+            .child(div().text_color(theme.text_faint).child(what))
+    };
+    let chip = |index: usize| {
+        let idea = crate::chat_area::IDEAS[index];
+        let pill = div()
+            .id(SharedString::from(format!("idea-{index}")))
+            .h(px(30.))
+            .px(px(14.))
+            .rounded_full()
+            .flex()
+            .items_center()
+            .typography(Type::Ui)
+            .text_color(theme.text_soft)
+            .border_1()
+            .border_color(theme.border)
+            .when(ground.is_none(), |pill| pill.bg(theme.surface))
+            .hover(|pill| pill.border_color(theme.accent_line).text_color(theme.text))
+            .on_click(move |_, window, cx| window.dispatch_action(Box::new(UseIdea { index }), cx))
+            .child(idea.label)
+            .tag("idea");
+        match ground {
+            Some(ground) => glass(15., GLASS_BLUR, ground, theme.border, pill).into_any_element(),
+            None => pill.into_any_element(),
+        }
+    };
+    centred(
+        div()
+            .relative()
+            .w_full()
+            .max_w(px(NEW_CHAT_WIDTH))
+            .flex()
+            .flex_col()
+            .items_center()
+            .child(duck_on_pond(!over_picture, theme))
+            .child(div().pt(px(10.)).child(on_ground(div().typography(Type::Label).text_color(theme.text_dim).child(greeting), ground, theme)))
+            .child(div().pt(px(6.)).child(display_line("What's on your mind?".into(), ground.is_some(), theme)))
+            .child(div().pt(px(8.)).child(on_ground(
+                div().typography(Type::Body).text_color(theme.text_soft).child("WackCode is all ears. Ask, ramble, or think out loud."),
+                ground,
+                theme,
+            )))
+            .child(div().w_full().pt(px(22.)).child(Composer::new(composer)))
+            .child(div().pt(px(14.)).flex().flex_wrap().justify_center().gap(px(8.)).children(ideas.into_iter().map(chip)))
+            .child(
+                div().pt(px(12.)).child(on_ground(
+                    div().flex().gap(px(20.)).typography(Type::Small).child(hint("↩", "send")).child(hint("⇧↩", "new line")),
+                    ground,
+                    theme,
+                )),
+            )
+            .child(notice_line(notice, ground, theme)),
+    )
+}
+
+/// The hero's duck: in a small round of the window's colour, and, with no picture behind it,
+/// on a pond of light whose three ripples widen and fade in turn.
+fn duck_on_pond(pond: bool, theme: &Theme) -> impl IntoElement {
+    const SIZE: f32 = 96.;
+    const RIPPLE: std::time::Duration = std::time::Duration::from_millis(4200);
+    let duck = div()
+        .size(px(44.))
+        .rounded_full()
+        .flex()
+        .items_center()
+        .justify_center()
+        .bg(theme.window)
+        .border_1()
+        .border_color(theme.border)
+        .child(Icon::Duck.view(px(22.), theme.accent_text));
+    let ripples = (0..3).filter(|_| pond).map(|ring| {
+        div()
+            .absolute()
+            .top_0()
+            .left_0()
+            .size(px(SIZE))
+            .flex()
+            .items_center()
+            .justify_center()
+            .child(
+                div()
+                    .rounded_full()
+                    .border_1()
+                    .border_color(theme.accent)
+                    .with_animation(
+                        ElementId::Name(format!("ripple-{ring}").into()),
+                        gpui::Animation::new(RIPPLE).repeat(),
+                        move |ripple, t| {
+                            // Each ripple a third of the way behind the last.
+                            let t = (t + ring as f32 / 3.) % 1.;
+                            let size = 44. + (SIZE - 44.) * t;
+                            ripple.size(px(size)).opacity(0.35 * (1. - t))
+                        },
+                    ),
+            )
+    });
+    div()
+        .relative()
+        .flex_none()
+        .size(px(SIZE))
+        .flex()
+        .items_center()
+        .justify_center()
+        .when(pond, |round| round.rounded_full().bg(Hsla { a: 0.07, ..theme.accent }))
+        .children(ripples)
+        .child(duck)
+        .tag("chat-hero-duck")
+}
+
 fn project_line(project: &ProjectInfo, theme: &Theme) -> gpui::Div {
     div()
         .flex()
@@ -2574,8 +2806,12 @@ fn tab_strip(
                     )
                     .child(div().flex_none().w(px(1.)).h(px(12.)).mx(px(4.)).bg(theme.border))
             })
-            .child(word("toggle-changes", "Changes", words.changed_files, words.changes, Box::new(ToggleChanges)))
-            .child(word("toggle-terminal", "Terminal", None, words.terminal, Box::new(ToggleTerminal)))
+            .when(!words.chat_area, |strip| {
+                strip
+                    .child(word("toggle-changes", "Changes", words.changed_files, words.changes, Box::new(ToggleChanges)))
+                    .child(word("toggle-terminal", "Terminal", None, words.terminal, Box::new(ToggleTerminal)))
+            })
+            .when(words.chat_area, |strip| strip.child(word("reveal-scratchpad", "Scratchpad", None, false, Box::new(RevealScratchpad))))
             .child(word("toggle-browser", "Browser", None, words.browser, Box::new(ToggleBrowserPane)))
             .when(words.has_canvas, |strip| strip.child(word("toggle-canvas", "Canvas", None, words.canvas, Box::new(ToggleCanvasPane))))
     });

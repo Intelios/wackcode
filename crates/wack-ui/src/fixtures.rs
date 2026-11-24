@@ -42,6 +42,9 @@ pub fn sidebar(selected: Selected) -> SidebarData {
         pinned,
     };
     SidebarData {
+        area: wack_core::ChatKind::Code,
+        groups: Vec::new(),
+        other_waiting: false,
         pinned: vec![
             ProjectRow {
                 id: "wackcode".into(),
@@ -88,6 +91,7 @@ fn meter(label: &'static str) -> Option<Meter> {
 
 pub fn composer_empty(roomy: bool) -> ComposerData {
     ComposerData {
+        chat_area: false,
         input: drawn(None, crate::app::NEW_CHAT_PLACEHOLDER),
         model: "GLM-5.3-Flash".into(),
         effort: Some("Medium".into()),
@@ -123,6 +127,7 @@ pub fn composer_after_turn(input: Input) -> ComposerData {
 
 pub fn composer_working() -> ComposerData {
     ComposerData {
+        chat_area: false,
         input: drawn(None, crate::chat::FOLLOW_UP_PLACEHOLDER),
         meter: meter("21%"),
         working: true,
@@ -413,6 +418,7 @@ pub fn suggestions_turn() -> Vec<Item> {
 /// The composer under the tasks chat, with the background commands listed (`open`).
 pub fn composer_tasks(open: bool) -> ComposerData {
     ComposerData {
+        chat_area: false,
         tasks: crate::shell::task_lines(&tasks()),
         tasks_open: open,
         ..composer_after_turn(drawn(None, crate::chat::FOLLOW_UP_PLACEHOLDER))
@@ -422,6 +428,7 @@ pub fn composer_tasks(open: bool) -> ComposerData {
 /// The agent waiting on a slow build, which ⌘B would move to the background.
 pub fn composer_foreground() -> ComposerData {
     ComposerData {
+        chat_area: false,
         working: true,
         foreground: true,
         agents: 0,
@@ -959,6 +966,7 @@ pub fn agent_ends() -> Vec<Item> {
 /// The composer while the chat waits on its agents.
 pub fn composer_agents() -> ComposerData {
     ComposerData {
+        chat_area: false,
         working: true,
         foreground: true,
         agents: 3,
@@ -1230,4 +1238,64 @@ pub fn canvas_turn(canvases: &wack_canvas::Canvases, live: bool) -> Vec<Item> {
         }
     }
     items
+}
+
+/// The Chat area's sidebar: its chats in calendar groups, the second selected when `selected`.
+pub fn chat_sidebar(selected: bool, other_waiting: bool) -> SidebarData {
+    let chat = |title: &'static str, age: &'static str, state, this: bool| ChatRow {
+        id: title.into(),
+        title: title.into(),
+        look: Default::default(),
+        age: age.into(),
+        state,
+        selected: this && selected,
+    };
+    SidebarData {
+        area: wack_core::ChatKind::Chat,
+        other_waiting,
+        groups: vec![
+            crate::sidebar::ChatGroup {
+                label: "Today".into(),
+                chats: vec![
+                    chat("Lisbon in four days", "now", ChatState::Working, false),
+                    chat(CHAT_AREA_TITLE, "2h", ChatState::Idle, true),
+                ],
+            },
+            crate::sidebar::ChatGroup { label: "Yesterday".into(), chats: vec![chat("Sourdough that actually rises", "1d", ChatState::Unread, false)] },
+            crate::sidebar::ChatGroup {
+                label: "Previous 7 days".into(),
+                chats: vec![chat("Names for a pottery studio", "3d", ChatState::Idle, false), chat("Explain index funds simply", "5d", ChatState::Idle, false)],
+            },
+            crate::sidebar::ChatGroup { label: "Earlier".into(), chats: vec![chat("Birthday gift for a climber", "3w", ChatState::Idle, false)] },
+        ],
+        ..SidebarData::default()
+    }
+}
+
+pub const CHAT_AREA_TITLE: &str = "Plan my week around the move";
+
+/// The Chat area's new chat, as on a fresh visit.
+pub fn chat_hero() -> crate::shell::Screen {
+    crate::shell::Screen::ChatHero {
+        greeting: "Good evening".into(),
+        ideas: crate::chat_area::pick_ideas(3, 3),
+        composer: ComposerData {
+            chat_area: true,
+            input: drawn(None, crate::app::CHAT_AREA_PLACEHOLDER),
+            key: "chat-area".into(),
+            ..composer_empty(true)
+        },
+        notice: None,
+    }
+}
+
+/// The Chat area's title strip: its own tabs, no project or commands.
+pub fn chat_strip(active: Option<&'static str>) -> crate::shell::StripData {
+    let tab = |title: &'static str, state| crate::shell::TabData { id: title.into(), title: title.into(), look: Default::default(), active: active == Some(title), state };
+    crate::shell::StripData {
+        tabs: vec![tab(CHAT_AREA_TITLE, ChatState::Idle), tab("Lisbon in four days", ChatState::Working)],
+        new_chat: active.is_none(),
+        commands: None,
+        command_editor: None,
+    }
 }

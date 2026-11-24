@@ -1,6 +1,12 @@
-//! The sidebar: projects and their chats.
+//! The sidebar: projects and their chats, or the Chat area's chats.
 //!
-//! Round, like the rest of the frame (`docs/redesign.md`): New chat is the one accent pill at the
+//! The window has two areas, Code and Chat, and the sidebar shows one at a time: in Code its
+//! projects and their chats, in Chat the area's chats in calendar groups (Today, Yesterday,
+//! Previous 7 days, Earlier; `chat_area::group_by_recency`). [`AreaSwitch`], in the sidebar's
+//! title strip, moves between them, and marks the other area while one of its chats waits for an
+//! answer.
+//!
+//! Round, like the rest of the frame: New chat is the one accent pill at the
 //! top, every row is a pill, and a project wears a round monogram, lit while it is open. An open
 //! project's chats hang from a dotted rail that drops from its monogram. Pinned projects come
 //! first under their own label. The selected chat is the only filled row, in the accent wash, so
@@ -10,10 +16,15 @@
 //! Renders from plain data ([`SidebarData`]) and reports clicks as actions (`crate::actions`); it
 //! holds no state of its own.
 
-use gpui::{App, Entity, FontWeight, Hsla, MouseButton, SharedString, Window, div, prelude::*, px};
+use gpui::{AnimationExt, App, Entity, FontWeight, Hsla, MouseButton, SharedString, Window, div, prelude::*, px};
+use wack_core::ChatKind;
 
 use crate::{
-    actions::{AddFolder, DeleteChat, NewChat, NewChatIn, OpenSettings, PinProject, RemoveProject, RenameChatAt, SelectChat, ToggleProject},
+    actions::{
+        AddFolder, DeleteChat, EnterChatArea, EnterCodeArea, NewChat, NewChatIn, OpenSettings, PinProject, RemoveProject, RenameChatAt, SelectChat,
+        ToggleProject,
+    },
+    tooltip::tip,
     text_field::TextField,
     icon::Icon,
     tags::Tag,
@@ -28,9 +39,25 @@ const ROW_INSET: f32 = 4.;
 
 #[derive(Clone, Debug, Default)]
 pub struct SidebarData {
+    /// The area on screen: Code lists projects, Chat lists `groups`.
+    pub area: ChatKind,
     pub pinned: Vec<ProjectRow>,
     pub projects: Vec<ProjectRow>,
+    /// The Chat area's chats in calendar groups, newest first.
+    pub groups: Vec<ChatGroup>,
+    /// A chat in the other area waits for the user to answer its question.
+    pub other_waiting: bool,
 }
+
+/// One of the Chat area's calendar groups.
+#[derive(Clone, Debug)]
+pub struct ChatGroup {
+    pub label: SharedString,
+    pub chats: Vec<ChatRow>,
+}
+
+/// What the Chat area's empty sidebar says, as version 2 did.
+pub const CHAT_AREA_EMPTY: &str = "Ask anything. A chat here has no project: just a model, a few tools and a scratchpad.";
 
 #[derive(Clone, Debug)]
 pub struct ProjectRow {
@@ -120,19 +147,31 @@ impl RenderOnce for Sidebar {
         let empty = self.data.pinned.is_empty() && self.data.projects.is_empty();
 
         let mut list = div().flex().flex_col().px(px(10.)).pt(px(10.)).pb(px(16.)).gap(px(2.));
-        if !self.data.pinned.is_empty() {
+        if self.data.area == ChatKind::Chat {
+            if self.data.groups.is_empty() {
+                list = list.child(
+                    div().px(px(10.)).pt(px(8.)).typography(Type::Ui).text_color(theme.text_dim).child(CHAT_AREA_EMPTY),
+                );
+            }
+            for group in self.data.groups {
+                list = list.child(label_text(group.label, &theme));
+                list = list.child(
+                    div().flex().flex_col().gap(px(1.)).children(group.chats.into_iter().map(|chat| chat_row(chat, &theme))),
+                );
+            }
+        } else if !self.data.pinned.is_empty() {
             list = list.child(label("Pinned", false, &theme));
             for project in self.data.pinned {
                 list = list.child(project_rows(project, &theme));
             }
         }
-        if !self.data.projects.is_empty() || empty {
+        if self.data.area == ChatKind::Code && (!self.data.projects.is_empty() || empty) {
             list = list.child(label("Projects", true, &theme));
             for project in self.data.projects {
                 list = list.child(project_rows(project, &theme));
             }
         }
-        if empty {
+        if empty && self.data.area == ChatKind::Code {
             list = list.child(
                 div()
                     .px(px(10.))
@@ -236,6 +275,11 @@ fn monogram(name: &str, lit: bool, theme: &Theme) -> impl IntoElement {
         .font_weight(FontWeight::SEMIBOLD)
         .text_color(if lit { theme.window } else { theme.text_soft })
         .child(letter)
+}
+
+/// A Chat area group's name, as a section name.
+fn label_text(name: SharedString, theme: &Theme) -> impl IntoElement {
+    div().pt(px(14.)).pb(px(4.)).px(px(10.)).child(div().typography(Type::Label).text_color(theme.text_dim).child(name))
 }
 
 /// A section name, set in the serif's italic.
@@ -439,4 +483,107 @@ fn chat_row(chat: ChatRow, theme: &Theme) -> impl IntoElement {
                     .on_click(dispatch(DeleteChat { id })),
             ),
         ))
+}
+
+/// The switch between the window's two areas, in the sidebar's title strip: a round track with
+/// a pill that glides to the area on screen. A dot on the other area says one of its chats is
+/// waiting for an answer.
+#[derive(IntoElement)]
+pub struct AreaSwitch {
+    pub area: ChatKind,
+    pub other_waiting: bool,
+}
+
+/// Each segment's width and height, and the track's padding.
+const SEGMENT: (f32, f32) = (34., 22.);
+const SWITCH_PAD: f32 = 2.;
+const GLIDE: std::time::Duration = std::time::Duration::from_millis(240);
+
+/// Which area the switch last showed and how many times it has moved, so a move glides and a
+/// redraw does not.
+struct Shown {
+    area: ChatKind,
+    from: ChatKind,
+    moves: usize,
+}
+
+fn segment_left(area: ChatKind) -> f32 {
+    match area {
+        ChatKind::Code => SWITCH_PAD,
+        ChatKind::Chat => SWITCH_PAD + SEGMENT.0,
+    }
+}
+
+impl RenderOnce for AreaSwitch {
+    fn render(self, window: &mut Window, cx: &mut App) -> impl IntoElement {
+        let theme = Theme::get(cx).clone();
+        let area = self.area;
+        let shown = window.use_keyed_state("area-switch", cx, |_, _| Shown { area, from: area, moves: 0 });
+        let (from, moves) = shown.update(cx, |shown, _| {
+            if shown.area != area {
+                shown.from = shown.area;
+                shown.area = area;
+                shown.moves += 1;
+            }
+            (shown.from, shown.moves)
+        });
+        let (to_left, from_left) = (segment_left(area), segment_left(from));
+        let pill = div()
+            .absolute()
+            .top(px(SWITCH_PAD))
+            .w(px(SEGMENT.0))
+            .h(px(SEGMENT.1))
+            .rounded_full()
+            .bg(theme.window)
+            .border_1()
+            .border_color(theme.border_strong);
+        let pill = if moves == 0 {
+            pill.left(px(to_left)).into_any_element()
+        } else {
+            pill.with_animation(("area-pill", moves), gpui::Animation::new(GLIDE).with_easing(crate::motion::spring), move |pill, t| {
+                pill.left(px(from_left + (to_left - from_left) * t))
+            })
+            .into_any_element()
+        };
+        let segment = |id: &'static str, icon: Icon, target: ChatKind, tooltip: &'static str, action: Box<dyn gpui::Action>| {
+            let on = target == area;
+            let waiting = self.other_waiting && !on;
+            div()
+                .id(id)
+                .relative()
+                .flex_none()
+                .w(px(SEGMENT.0))
+                .h(px(SEGMENT.1))
+                .rounded_full()
+                .flex()
+                .items_center()
+                .justify_center()
+                .when(!on, |segment| segment.hover(|segment| segment.bg(theme.hover)))
+                .tooltip(tip(if waiting { format!("{tooltip} · a chat is waiting for your answer") } else { tooltip.to_string() }))
+                .on_click(move |_, window, cx| {
+                    cx.stop_propagation();
+                    window.dispatch_action(action.boxed_clone(), cx);
+                })
+                .child(icon.view(px(14.), if on { theme.text } else { theme.text_dim }))
+                .when(waiting, |segment| {
+                    segment.child(div().absolute().top(px(3.)).right(px(6.)).size(px(6.)).rounded_full().bg(theme.accent_text))
+                })
+                .tag(id)
+        };
+        div()
+            .id("area-switch")
+            .occlude()
+            .flex_none()
+            .relative()
+            .h(px(SEGMENT.1 + 2. * SWITCH_PAD))
+            .px(px(SWITCH_PAD))
+            .flex()
+            .items_center()
+            .rounded_full()
+            .bg(theme.hover)
+            .child(pill)
+            .child(segment("area-code", Icon::Code, ChatKind::Code, "Code  ⌥⌘1", Box::new(EnterCodeArea)))
+            .child(segment("area-chat", Icon::Comment, ChatKind::Chat, "Chat  ⌥⌘2", Box::new(EnterChatArea)))
+            .tag("area-switch")
+    }
 }

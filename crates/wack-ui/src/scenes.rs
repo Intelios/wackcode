@@ -65,6 +65,31 @@ pub fn all() -> Vec<Scene> {
             },
         },
         Scene {
+            name: "chat-area-hero",
+            description: "The Chat area's new chat: the duck on its pond, the greeting, the composer with no mode track, three ideas.",
+            size: WINDOW,
+            build: |_, cx| cx.new(|_| Shell::showing_tabs(fixtures::chat_sidebar(false, false), fixtures::chat_hero(), fixtures::chat_strip(None))).into(),
+        },
+        Scene {
+            name: "chat-area-hero-backdrop",
+            description: "The Chat area's new chat over a backdrop: the picture clear, the small words and ideas on frosted pills, no pond.",
+            size: WINDOW,
+            build: |_, cx| {
+                let picture = over(fixtures::backdrop(wack_core::Texture::None), cx);
+                cx.new(|_| Shell::showing_tabs(fixtures::chat_sidebar(false, true), fixtures::chat_hero(), fixtures::chat_strip(None)).with_backdrop(picture))
+                    .into()
+            },
+        },
+        Scene {
+            name: "chat-area-empty",
+            description: "The Chat area with no chats yet: the sidebar says what a chat here is.",
+            size: WINDOW,
+            build: |_, cx| {
+                let sidebar = crate::sidebar::SidebarData { area: wack_core::ChatKind::Chat, ..Default::default() };
+                cx.new(|_| Shell::showing_tabs(sidebar, fixtures::chat_hero(), fixtures::chat_strip(None).without_tabs())).into()
+            },
+        },
+        Scene {
             name: "new-chat-no-connection",
             description: "Sending a first message before any connection is set up.",
             size: WINDOW,
@@ -214,6 +239,7 @@ pub fn all() -> Vec<Scene> {
             build: |_, cx| {
                 cx.new(|_| {
                     let composer = ComposerData {
+                        chat_area: false,
                         model: "claude-opus-5-5".into(),
                         menu: Some(fixtures::model_menu()),
                         ..fixtures::composer_after_turn(Input::Drawn { text: None, placeholder: crate::chat::FOLLOW_UP_PLACEHOLDER.into() })
@@ -321,6 +347,7 @@ pub fn all() -> Vec<Scene> {
                     (
                         "A model without Vision",
                         ComposerData {
+                            chat_area: false,
                             pictures_refused: Some("GLM-5.3-Flash doesn't accept pictures. Turn on Vision for it in Settings › Providers, or remove the pictures.".into()),
                             ..composer(Some("What's wrong here?"), 1)
                         },
@@ -336,6 +363,7 @@ pub fn all() -> Vec<Scene> {
             build: |_, cx| {
                 cx.new(|_| {
                     let composer = ComposerData {
+                        chat_area: false,
                         effort: Some("High".into()),
                         menu: Some(crate::composer::MenuData {
                             kind: crate::app::Menu::Effort,
@@ -363,6 +391,7 @@ pub fn all() -> Vec<Scene> {
             build: |_, cx| {
                 cx.new(|_| {
                     let composer = ComposerData {
+                        chat_area: false,
                         effort: Some("Default effort".into()),
                         menu: Some(crate::composer::MenuData {
                             kind: crate::app::Menu::Effort,
@@ -392,6 +421,7 @@ pub fn all() -> Vec<Scene> {
                     let mode = wack_core::AgentMode::UltraPlan;
                     let drawn = Input::Drawn { text: None, placeholder: crate::app::placeholder(mode, false).into() };
                     let composer = ComposerData {
+                        chat_area: false,
                         mode,
                         effort: Some("Ultra".into()),
                         ultra_effort: true,
@@ -427,6 +457,7 @@ pub fn all() -> Vec<Scene> {
                         Screen::NewChat {
                             project: fixtures::project(),
                             composer: ComposerData {
+                                chat_area: false,
                                 mode,
                                 input: Input::Drawn { text: None, placeholder: crate::app::placeholder(mode, true).into() },
                                 ..fixtures::composer_empty(true)
@@ -489,6 +520,7 @@ pub fn all() -> Vec<Scene> {
             build: |_, cx| {
                 cx.new(|_| {
                     let composer = ComposerData {
+                        chat_area: false,
                         working: true,
                         todos: Some(fixtures::todos()),
                         todos_open: true,
@@ -513,6 +545,7 @@ pub fn all() -> Vec<Scene> {
                         .map(|n| crate::composer::Waiting { text: format!("Queued message number {n}, waiting for the run.").into(), steering: n == 1 })
                         .collect();
                     let composer = ComposerData {
+                        chat_area: false,
                         working: true,
                         todos: Some(fixtures::todos()),
                         waiting,
@@ -538,6 +571,7 @@ pub fn all() -> Vec<Scene> {
                     let mode = wack_core::AgentMode::Plan;
                     let todos = fixtures::todos();
                     let composer = ComposerData {
+                        chat_area: false,
                         mode,
                         working: true,
                         question: Some(fixtures::question(false)),
@@ -1548,6 +1582,7 @@ fn plan_scene(ultra: bool, confirming: bool, backdrop: Option<crate::backdrop::P
     let mode = if ultra { wack_core::AgentMode::UltraPlan } else { wack_core::AgentMode::Plan };
     cx.new(|_| {
         let composer = ComposerData {
+            chat_area: false,
             mode,
             ..fixtures::composer_after_turn(Input::Drawn { text: None, placeholder: crate::app::placeholder(mode, false).into() })
         };
@@ -1574,6 +1609,7 @@ fn question_scene(ultra: bool, backdrop: Option<crate::backdrop::Picture>, _size
     let mode = if ultra { wack_core::AgentMode::UltraPlan } else { wack_core::AgentMode::Plan };
     cx.new(|_| {
         let composer = ComposerData {
+            chat_area: false,
             mode,
             working: true,
             question: Some(fixtures::question(ultra)),
@@ -1784,6 +1820,7 @@ fn canvas_scene(scene: CanvasScene, backdrop: Option<crate::backdrop::Picture>, 
                 project: fixtures::project(),
                 body: Body::Items(items),
                 composer: ComposerData {
+                    chat_area: false,
                     comments: (scene == CanvasScene::Comments).then(|| (2, "settings".to_string())),
                     ..fixtures::composer_after_turn(Input::Drawn { text: None, placeholder: crate::chat::FOLLOW_UP_PLACEHOLDER.into() })
                 },
@@ -2235,6 +2272,7 @@ fn title_scene(state: TitleScene, cx: &mut App) -> AnyView {
 fn slash_scene(rows: Option<Vec<crate::slash_menu::SlashRow>>, text: &'static str, hint: Option<&'static str>, cx: &mut App) -> AnyView {
     cx.new(|_| {
         let composer = ComposerData {
+            chat_area: false,
             slash: rows.map(|rows| crate::slash_menu::SlashData { rows, selected: 0, scroll: gpui::ScrollHandle::new() }),
             hint: hint.map(Into::into),
             ..fixtures::composer_after_turn(Input::Drawn { text: Some(text.into()), placeholder: crate::chat::FOLLOW_UP_PLACEHOLDER.into() })

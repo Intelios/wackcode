@@ -61,6 +61,8 @@ pub enum Input {
 
 #[derive(Clone)]
 pub struct ComposerData {
+    /// A Chat area composer: no mode track, since a Chat chat is always in Build.
+    pub chat_area: bool,
     pub input: Input,
     pub model: SharedString,
     pub effort: Option<SharedString>,
@@ -261,7 +263,7 @@ impl RenderOnce for Composer {
                     .child(Icon::Plus.view(px(16.), theme.text_dim))
                     .tag("attach"),
             )
-            .child(ModeToggle { mode: data.mode, locked: data.working, key: data.key.clone() })
+            .when(!data.chat_area, |controls| controls.child(ModeToggle { mode: data.mode, locked: data.working, key: data.key.clone() }))
             // In a narrow composer the model's name gives way first; the send button never does.
             .child(picker(
                 "model",

@@ -12,8 +12,16 @@ use crate::panes::{Dock, PaneId, Target, canvas::CANVAS_CONTEXT, dock::PANE_CONT
 actions!(
     wackcode,
     [
-        /// A new chat in the current project.
+        /// A new chat in the current project, or in the Chat area while it is on screen.
         NewChat,
+        /// Show the Code area: projects and their coding chats (⌥⌘1).
+        EnterCodeArea,
+        /// Show the Chat area: chats with no project (⌥⌘2).
+        EnterChatArea,
+        /// Show the Chat chat on screen's scratchpad in the Finder.
+        RevealScratchpad,
+        /// Copy the Chat chat on screen's scratchpad path.
+        CopyScratchpadPath,
         /// Pick a folder to add as a project.
         AddFolder,
         OpenSettings,
@@ -527,6 +535,13 @@ pub struct NewChatIn {
     pub project: String,
 }
 
+/// One of the Chat area's idea chips: fills the new chat's composer (`chat_area::IDEAS`).
+#[derive(Clone, Debug, PartialEq, Action)]
+#[action(namespace = wackcode, no_json)]
+pub struct UseIdea {
+    pub index: usize,
+}
+
 /// Lists or hides a project's chats in the sidebar.
 #[derive(Clone, Debug, PartialEq, Action)]
 #[action(namespace = wackcode, no_json)]
@@ -928,6 +943,8 @@ pub const FORM_CONTEXT: &str = "Form";
 pub fn init(cx: &mut App) {
     cx.bind_keys([
         KeyBinding::new("cmd-n", NewChat, Some(CONTEXT)),
+        KeyBinding::new("alt-cmd-1", EnterCodeArea, Some(CONTEXT)),
+        KeyBinding::new("alt-cmd-2", EnterChatArea, Some(CONTEXT)),
         KeyBinding::new("cmd-o", AddFolder, Some(CONTEXT)),
         KeyBinding::new("cmd-,", OpenSettings, Some(CONTEXT)),
         KeyBinding::new("escape", Back, Some(CONTEXT)),

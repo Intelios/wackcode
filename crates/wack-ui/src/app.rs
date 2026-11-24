@@ -23,7 +23,7 @@ use futures::{StreamExt, channel::mpsc};
 use gpui::{App, AppContext, Context, Entity, FocusHandle, Focusable, SharedString, Subscription, Task, Window};
 use gpui_tokio::Tokio;
 use wack_core::{
-    AgentMode, Appearance, Chat, CommandEvent, CommandKind, CommandStatus, Job, ModelChoice, Outcome,
+    AgentMode, Appearance, Chat, ChatKind, CommandEvent, CommandKind, CommandStatus, Job, ModelChoice, Outcome,
     AutoTitleConfig, Project, Reasoning, Runner, Store, Ui, WireFormat,
     skills::{Command, CommandUse, Outgoing, active_slash, find, matching, parse_line, pick, resolve_message},
     title, title_from,
@@ -49,6 +49,13 @@ use crate::{
 };
 
 pub const NEW_CHAT_PLACEHOLDER: &str = "Describe a task, or ask about the code";
+/// The Chat area's composers: the hero's, and a chat's.
+pub const CHAT_AREA_PLACEHOLDER: &str = "Ask anything…";
+pub const CHAT_FOLLOW_UP_PLACEHOLDER: &str = "Message WackCode…";
+/// The Chat area's key among the new-chat screens' panes (the others are project ids).
+const CHAT_AREA_PANES: &str = "chat-area";
+/// The only slash commands a Chat chat has: the app's own. Anything else goes as written.
+const CHAT_AREA_COMMANDS: [&str; 4] = ["new", "name", "copy", "compact"];
 pub const PLAN_PLACEHOLDER: &str = "Describe the work — in Plan mode WackCode inspects and proposes a plan for your approval…";
 pub const ULTRA_PLAN_PLACEHOLDER: &str = "Describe the work — in Ultra Plan WackCode interviews you one question at a time…";
 
@@ -59,6 +66,19 @@ pub fn placeholder(mode: AgentMode, new_chat: bool) -> &'static str {
         AgentMode::UltraPlan => ULTRA_PLAN_PLACEHOLDER,
         AgentMode::Build if new_chat => NEW_CHAT_PLACEHOLDER,
         AgentMode::Build => crate::chat::FOLLOW_UP_PLACEHOLDER,
+    }
+}
+
+/// What a Chat chat's message sends: one of the app's own commands (`/new`, `/name`, `/copy`,
+/// `/compact`), or the words as written. A Chat chat has no skills or templates, so any other
+/// `/word` is just text.
+pub fn chat_area_outgoing(text: &str) -> Outgoing {
+    match parse_line(text) {
+        Some((name, args)) => match CHAT_AREA_COMMANDS.iter().find(|builtin| **builtin == name) {
+            Some(&name) => Outgoing::Builtin { name, args: args.to_string() },
+            None => Outgoing::Message(text.to_string()),
+        },
+        None => Outgoing::Message(text.to_string()),
     }
 }
 
@@ -75,6 +95,8 @@ pub enum Selection {
     Welcome,
     /// Writing the first message of a chat in this project.
     NewChat(String),
+    /// Writing the first message of a chat in the Chat area: the hero.
+    NewChatArea,
     Chat(String),
     Settings,
 }
@@ -174,8 +196,14 @@ pub struct AppState {
     handed_tabs: HashMap<String, wack_browser::ChatTabs>,
     /// The open Build/Run command editor popover, if any.
     pub command_editor: Option<CommandEditorState>,
-    /// Chats open as tabs, in order.
+    /// Chats open as tabs, in order. The strip shows the area's own.
     tabs: Vec<String>,
+    /// Where each area was left, so switching areas comes back to it.
+    parked: HashMap<ChatKind, Selection>,
+    /// What each area's new-chat composer held when the other area was entered.
+    parked_drafts: HashMap<ChatKind, String>,
+    /// Counts the Chat area's new-chat screens, so each visit gets its own idea chips.
+    pub hero_visit: u64,
     sidebar_hidden: bool,
     /// Chats whose pane layout changed since it was last saved.
     unsaved_layouts: HashSet<String>,
@@ -268,6 +296,7 @@ impl AppState {
         // A fresh app: no tabs, no chat in front, and a new chat in the project last worked in (as
         // version 2 opened), rather than wherever the last one was left.
         let selection = match store.projects() {
+            _ if ui.area == ChatKind::Chat => Selection::NewChatArea,
             [] => Selection::Welcome,
             projects => {
                 let id = ui
@@ -350,6 +379,9 @@ impl AppState {
             appearance_notice: None,
             importing: false,
             tabs,
+            parked: HashMap::new(),
+            parked_drafts: HashMap::new(),
+            hero_visit: now_millis() / 1000,
             sidebar_hidden: ui.sidebar_hidden,
             unsaved_layouts: HashSet::new(),
             saving_layouts: None,
@@ -1114,6 +1146,107 @@ impl AppState {
         &self.tabs
     }
 
+    /// The open tabs of the area on screen, in order: each area keeps its own.
+    pub fn area_tabs(&self) -> Vec<String> {
+        let area = self.area();
+        self.tabs.iter().filter(|id| self.store.chat(id).is_some_and(|chat| chat.kind == area)).cloned().collect()
+    }
+
+    /// Which area a selection is in; `None` for Settings, which belongs to neither.
+    fn area_of(&self, selection: &Selection) -> Option<ChatKind> {
+        match selection {
+            Selection::Welcome | Selection::NewChat(_) => Some(ChatKind::Code),
+            Selection::NewChatArea => Some(ChatKind::Chat),
+            Selection::Chat(id) => self.store.chat(id).map(|chat| chat.kind),
+            Selection::Settings => None,
+        }
+    }
+
+    /// The area on screen: Settings shows over the one it was opened from.
+    pub fn area(&self) -> ChatKind {
+        self.area_of(&self.selection).or_else(|| self.area_of(&self.before_settings)).unwrap_or(self.store.ui().area)
+    }
+
+    /// Where an area opens when it has nowhere to come back to: a new chat (in the project last
+    /// worked in, for Code), or the welcome while there is no project.
+    fn area_home(&self, area: ChatKind) -> Selection {
+        match area {
+            ChatKind::Chat => Selection::NewChatArea,
+            ChatKind::Code => {
+                let ui = self.store.ui();
+                match ui.last_project.as_deref().and_then(|id| self.store.project(id)).or_else(|| self.store.last_used_project()).or_else(|| self.store.projects().first()) {
+                    Some(project) => Selection::NewChat(project.id.clone()),
+                    None => Selection::Welcome,
+                }
+            }
+        }
+    }
+
+    /// Whether a parked selection can still be shown.
+    fn still_there(&self, selection: &Selection) -> bool {
+        match selection {
+            Selection::Chat(id) => self.store.chat(id).is_some_and(|chat| !chat.is_archived()),
+            Selection::NewChat(project) => self.store.project(project).is_some(),
+            Selection::Welcome => self.store.projects().is_empty(),
+            Selection::NewChatArea | Selection::Settings => true,
+        }
+    }
+
+    /// ⌥⌘1 and ⌥⌘2, and the sidebar's switch: shows `area` where it was left. Settings closes.
+    pub fn enter_area(&mut self, area: ChatKind, cx: &mut Context<Self>) {
+        if self.selection == Selection::Settings {
+            self.form.put_key_away(cx);
+        }
+        if self.area() == area {
+            if self.selection == Selection::Settings {
+                self.close_settings(cx);
+            }
+            return;
+        }
+        let target = self.parked.get(&area).cloned().filter(|parked| self.still_there(parked)).unwrap_or_else(|| self.area_home(area));
+        self.select(target, cx);
+    }
+
+    /// True while a chat of `area` waits for the user to answer its question: the area switch
+    /// marks the other area with a dot.
+    pub fn area_waiting(&self, area: ChatKind, cx: &App) -> bool {
+        self.sessions.iter().any(|(id, session)| {
+            session.read(cx).asking.is_some() && self.store.chat(id).is_some_and(|chat| chat.kind == area && !chat.is_archived())
+        })
+    }
+
+    /// An idea chip on the Chat area's new chat: its words in the composer, not sent.
+    pub fn use_idea(&mut self, index: usize, cx: &mut Context<Self>) {
+        let Some(idea) = crate::chat_area::IDEAS.get(index) else {
+            return;
+        };
+        if self.selection != Selection::NewChatArea {
+            return;
+        }
+        self.draft.update(cx, |draft, cx| draft.set_text(idea.prompt, cx));
+        cx.notify();
+    }
+
+    /// The Chat chat on screen's scratchpad.
+    pub fn current_scratchpad(&self) -> Option<PathBuf> {
+        let Selection::Chat(id) = &self.selection else { return None };
+        let chat = self.store.chat(id).filter(|chat| chat.is_chat_area())?;
+        Some(self.store.scratch_folder(chat))
+    }
+
+    pub fn reveal_scratchpad(&self) {
+        if let Some(folder) = self.current_scratchpad() {
+            let _ = std::fs::create_dir_all(&folder);
+            crate::memory_page::reveal(&folder);
+        }
+    }
+
+    pub fn copy_scratchpad_path(&self, cx: &mut Context<Self>) {
+        if let Some(folder) = self.current_scratchpad() {
+            cx.write_to_clipboard(gpui::ClipboardItem::new_string(folder.display().to_string()));
+        }
+    }
+
     pub fn sidebar_hidden(&self) -> bool {
         self.sidebar_hidden
     }
@@ -1137,19 +1270,26 @@ impl AppState {
         let Some(index) = self.tabs.iter().position(|tab| tab == id) else {
             return;
         };
-        self.tabs.remove(index);
         if self.selection == Selection::Chat(id.to_string()) {
             // The neighbour on the right takes its place, as in a browser; else the one before.
-            match self.tabs.get(index).or_else(|| index.checked_sub(1).and_then(|before| self.tabs.get(before))).cloned() {
+            // Only the area's own tabs are neighbours.
+            let tabs = self.area_tabs();
+            let at = tabs.iter().position(|tab| tab == id).unwrap_or(0);
+            let next = tabs.get(at + 1).or_else(|| at.checked_sub(1).and_then(|before| tabs.get(before))).cloned();
+            self.tabs.remove(index);
+            match next {
                 Some(next) => self.select(Selection::Chat(next), cx),
                 None => {
-                    let project = self.store.chat(id).and_then(|chat| chat.project.clone());
-                    match project {
-                        Some(project) => self.select(Selection::NewChat(project), cx),
-                        None => self.select_somewhere(cx),
+                    let chat = self.store.chat(id).cloned();
+                    match chat {
+                        Some(chat) if chat.is_chat_area() => self.select(Selection::NewChatArea, cx),
+                        Some(Chat { project: Some(project), .. }) => self.select(Selection::NewChat(project), cx),
+                        _ => self.select_somewhere(cx),
                     }
                 }
             }
+        } else {
+            self.tabs.remove(index);
         }
         self.save_ui();
         cx.notify();
@@ -1157,19 +1297,20 @@ impl AppState {
 
     /// Steps through the tabs, wrapping round; from the new-chat screen, to the last tab.
     pub fn step_tab(&mut self, forward: bool, cx: &mut Context<Self>) {
-        if self.tabs.is_empty() {
+        let tabs = self.area_tabs();
+        if tabs.is_empty() {
             return;
         }
-        let count = self.tabs.len();
+        let count = tabs.len();
         let next = match &self.selection {
-            Selection::Chat(id) => match self.tabs.iter().position(|tab| tab == id) {
+            Selection::Chat(id) => match tabs.iter().position(|tab| tab == id) {
                 Some(index) if forward => (index + 1) % count,
                 Some(index) => (index + count - 1) % count,
                 None => 0,
             },
             _ => count - 1,
         };
-        let id = self.tabs[next].clone();
+        let id = tabs[next].clone();
         self.select(Selection::Chat(id), cx);
     }
 
@@ -1179,7 +1320,7 @@ impl AppState {
             .current_project()
             .map(|project| project.id.clone())
             .or_else(|| self.store.ui().last_project.clone().filter(|id| self.store.project(id).is_some()));
-        let ui = Ui { sidebar_hidden: self.sidebar_hidden, last_project, area: self.store.ui().area };
+        let ui = Ui { sidebar_hidden: self.sidebar_hidden, last_project, area: self.area() };
         if let Err(message) = self.store.set_ui(ui) {
             self.notice = Some(message.into());
         }
@@ -1217,7 +1358,7 @@ impl AppState {
         let id = match &self.selection {
             Selection::NewChat(project) => Some(project.as_str()),
             Selection::Chat(chat) => self.store.chat(chat).and_then(|chat| chat.project.as_deref()),
-            Selection::Welcome | Selection::Settings => None,
+            Selection::Welcome | Selection::NewChatArea | Selection::Settings => None,
         };
         id.and_then(|id| self.store.project(id))
     }
@@ -1228,7 +1369,7 @@ impl AppState {
             return Some(editor.input.clone());
         }
         match &self.selection {
-            Selection::NewChat(_) => Some(self.draft.clone()),
+            Selection::NewChat(_) | Selection::NewChatArea => Some(self.draft.clone()),
             Selection::Chat(chat) => self.sessions.get(chat).map(|session| session.read(cx).composer.clone()),
             Selection::Settings => match self.settings_section {
                 Section::Providers => self.form.open.then(|| self.form.name.clone()),
@@ -1245,6 +1386,20 @@ impl AppState {
     }
 
     pub fn select(&mut self, selection: Selection, cx: &mut Context<Self>) {
+        // Leaving an area parks where it was, and its new chat's draft, so coming back finds
+        // both; Settings shows over an area without leaving it.
+        let leaving = if self.selection == Selection::Settings { self.before_settings.clone() } else { self.selection.clone() };
+        let (from, to) = (self.area_of(&leaving), self.area_of(&selection));
+        if let (Some(from), Some(to)) = (from, to)
+            && from != to
+        {
+            self.parked.insert(from, leaving.clone());
+            let draft = self.draft.read(cx).text().to_string();
+            self.parked_drafts.insert(from, draft);
+            let back = self.parked_drafts.remove(&to).unwrap_or_default();
+            self.draft.update(cx, |field, cx| field.set_text(&back, cx));
+            self.draft_attachments.clear();
+        }
         match &selection {
             Selection::Chat(id) => {
                 let Some(chat) = self.store.chat(id).cloned() else {
@@ -1275,6 +1430,15 @@ impl AppState {
                 }
                 self.open_projects.insert(project.clone());
                 self.look_up_branch(project, cx);
+                let mode = self.new_chat_mode;
+                self.draft.update(cx, |draft, cx| draft.set_placeholder(placeholder(mode, true), cx));
+            }
+            Selection::NewChatArea => {
+                // A fresh visit gets its own idea chips.
+                if self.selection != Selection::NewChatArea {
+                    self.hero_visit += 1;
+                }
+                self.draft.update(cx, |draft, cx| draft.set_placeholder(CHAT_AREA_PLACEHOLDER, cx));
             }
             Selection::Settings => {
                 if self.selection != Selection::Settings {
@@ -1322,8 +1486,13 @@ impl AppState {
         }
     }
 
-    /// A new chat in `project`, or in the current project when `None`.
+    /// A new chat in `project`, or in the current project when `None`; in the Chat area, a new
+    /// chat there.
     pub fn new_chat(&mut self, project: Option<String>, cx: &mut Context<Self>) {
+        if project.is_none() && self.area() == ChatKind::Chat {
+            self.select(Selection::NewChatArea, cx);
+            return;
+        }
         let project = project
             .or_else(|| self.current_project().map(|project| project.id.clone()))
             .or_else(|| self.store.projects().first().map(|project| project.id.clone()));
@@ -1391,6 +1560,7 @@ impl AppState {
 
     pub fn delete_chat(&mut self, id: &str, cx: &mut Context<Self>) {
         let project = self.store.chat(id).and_then(|chat| chat.project.clone());
+        let chat_area = self.store.chat(id).is_some_and(Chat::is_chat_area);
         self.drop_session(id);
         if let Err(message) = self.store.delete_chat(id) {
             self.notice = Some(message.into());
@@ -1408,16 +1578,23 @@ impl AppState {
         }
         if self.selection == Selection::Chat(id.to_string()) {
             match project {
+                _ if chat_area => self.select(Selection::NewChatArea, cx),
                 Some(project) => self.select(Selection::NewChat(project), cx),
                 None => self.select_somewhere(cx),
             }
         }
+        self.parked.retain(|_, parked| *parked != Selection::Chat(id.to_string()));
         self.save_ui();
         cx.notify();
     }
 
-    /// After the selected thing went away: a new chat in the first project, or the welcome.
+    /// After the selected thing went away: the Chat area's new chat, a new chat in the first
+    /// project, or the welcome.
     fn select_somewhere(&mut self, cx: &mut Context<Self>) {
+        if self.area() == ChatKind::Chat {
+            self.select(Selection::NewChatArea, cx);
+            return;
+        }
         match self.store.projects().first().map(|project| project.id.clone()) {
             Some(project) => self.select(Selection::NewChat(project), cx),
             None => self.select(Selection::Welcome, cx),
@@ -1446,16 +1623,22 @@ impl AppState {
     /// Sends the new-chat composer's text as the first message of a new chat. A `/command` that
     /// acts on a chat has none to act on yet; one the model gets starts the chat.
     pub fn start_chat(&mut self, cx: &mut Context<Self>) {
-        let Selection::NewChat(project) = self.selection.clone() else {
-            return;
+        let project = match self.selection.clone() {
+            Selection::NewChat(project) => Some(project),
+            Selection::NewChatArea => None,
+            _ => return,
         };
         let text = self.draft.read(cx).text().trim().to_string();
         let pictures = self.draft_attachments.clone();
         if text.is_empty() && pictures.is_empty() {
             return;
         }
-        let cwd = self.store.project(&project).map(|project| project.path.clone()).unwrap_or_else(|| PathBuf::from("/"));
-        let (job, opening) = match self.outgoing(None, &text, &cwd) {
+        let cwd = project.as_deref().and_then(|id| self.store.project(id)).map(|project| project.path.clone()).unwrap_or_else(|| PathBuf::from("/"));
+        let outgoing = match &project {
+            Some(_) => self.outgoing(None, &text, &cwd),
+            None => Ok(chat_area_outgoing(&text)),
+        };
+        let (job, opening) = match outgoing {
             Err(message) => {
                 self.notice = Some(message.into());
                 cx.notify();
@@ -1476,7 +1659,8 @@ impl AppState {
                 return;
             }
         };
-        let choice: ModelChoice = self.store.defaults().clone();
+        let area = if project.is_some() { ChatKind::Code } else { ChatKind::Chat };
+        let choice: ModelChoice = self.store.defaults_for(area).clone();
         if self.store.resolve(&choice).is_none() {
             self.notice = Some("Add a connection in Settings › Providers to start chatting.".into());
             cx.notify();
@@ -1493,7 +1677,11 @@ impl AppState {
             Job::Command { command, .. } | Job::Attached { command: Some(command), .. } => title_from(&command.line()),
             _ => title_from(&text),
         };
-        let chat = match self.store.create_chat(&project, &title, choice, self.new_chat_mode, None) {
+        let created = match &project {
+            Some(project) => self.store.create_chat(project, &title, choice, self.new_chat_mode, None),
+            None => self.store.create_area_chat(&title, choice),
+        };
+        let chat = match created {
             Ok(chat) => chat,
             Err(message) => {
                 self.notice = Some(message.into());
@@ -1503,7 +1691,7 @@ impl AppState {
         };
         // Preserve any Build/Run output panes opened on NewChat into the new chat's layout so
         // live command output stays visible seamlessly after the first message sends.
-        let draft_panes = self.new_chat_panes.remove(&project);
+        let draft_panes = self.new_chat_panes.remove(project.as_deref().unwrap_or(CHAT_AREA_PANES));
         if let Some(draft_panes) = &draft_panes
             && !draft_panes.layout.panes().is_empty()
             && let Some(value) = serde_json::to_value(&draft_panes.layout).ok()
@@ -1519,11 +1707,10 @@ impl AppState {
             self.handed_tabs.insert(chat.id.clone(), tabs.clone());
         }
         // The next new chat starts in Build again: a chat's mode is its own.
-        self.new_chat_mode = AgentMode::Build;
-        self.draft.update(cx, |draft, cx| {
-            draft.set_text("", cx);
-            draft.set_placeholder(placeholder(AgentMode::Build, true), cx);
-        });
+        if project.is_some() {
+            self.new_chat_mode = AgentMode::Build;
+        }
+        self.draft.update(cx, |draft, cx| draft.set_text("", cx));
         self.draft_attachments.clear();
         self.select(Selection::Chat(chat.id.clone()), cx);
         self.run(&chat.id, job, cx);
@@ -1815,6 +2002,9 @@ impl AppState {
 
     /// The mode of the composer on screen, and whether it is locked by a run.
     pub fn mode_on_screen(&self, cx: &App) -> (AgentMode, bool) {
+        if self.area() == ChatKind::Chat {
+            return (AgentMode::Build, true);
+        }
         match &self.selection {
             Selection::Chat(id) => {
                 let mode = self.store.chat(id).map_or(AgentMode::Build, |chat| chat.mode);
@@ -1827,6 +2017,10 @@ impl AppState {
 
     /// Switches the composer on screen to `mode`. A chat that is working keeps its mode.
     pub fn set_agent_mode(&mut self, mode: AgentMode, cx: &mut Context<Self>) {
+        // The Chat area has no modes.
+        if self.area() == ChatKind::Chat {
+            return;
+        }
         match self.selection.clone() {
             Selection::NewChat(_) => {
                 self.new_chat_mode = mode;
@@ -1850,7 +2044,9 @@ impl AppState {
         {
             self.notice = Some(message.into());
         }
-        if let Some(session) = self.sessions.get(id) {
+        if let Some(session) = self.sessions.get(id)
+            && !self.store.chat(id).is_some_and(Chat::is_chat_area)
+        {
             let composer = session.read(cx).composer.clone();
             composer.update(cx, |composer, cx| composer.set_placeholder(placeholder(mode, false), cx));
         }
@@ -2158,7 +2354,7 @@ impl AppState {
 
     /// ⇧Tab: Build → Plan → Ultra Plan → Build.
     pub fn cycle_agent_mode(&mut self, cx: &mut Context<Self>) {
-        if matches!(self.selection, Selection::Chat(_) | Selection::NewChat(_)) {
+        if self.area() == ChatKind::Code && matches!(self.selection, Selection::Chat(_) | Selection::NewChat(_)) {
             let next = crate::composer::next_mode(self.mode_on_screen(cx).0);
             self.set_agent_mode(next, cx);
         }
@@ -2189,7 +2385,9 @@ impl AppState {
             return;
         }
         let cwd = session.read(cx).cwd().to_path_buf();
-        let outgoing = match self.outgoing(Some(chat), &text, &cwd) {
+        let chat_area = self.store.chat(chat).is_some_and(Chat::is_chat_area);
+        let outgoing = if chat_area { Ok(chat_area_outgoing(&text)) } else { self.outgoing(Some(chat), &text, &cwd) };
+        let outgoing = match outgoing {
             Ok(outgoing) => outgoing,
             Err(message) => {
                 session.update(cx, |session, cx| session.note(message, cx));
@@ -2454,9 +2652,9 @@ impl AppState {
             Ok(mut setup) => {
                 setup.mcp_hub = Some(self.mcp.clone());
                 // browser_preview starts the Run command as the Run button does, and the Run
-                // pane hears of it the same way.
+                // pane hears of it the same way. A Chat chat has no project to run.
                 let tx = self.command_event_tx.clone();
-                setup.commands = Some(wack_core::preview::RunCommands {
+                setup.commands = (!chat.is_chat_area()).then(|| wack_core::preview::RunCommands {
                     runner: self.runs.clone(),
                     events: std::sync::Arc::new(move |event| {
                         let _ = tx.unbounded_send(event);
@@ -2636,7 +2834,14 @@ impl AppState {
             tabs.restore(saved);
             tabs
         });
-        let canvases = wack_canvas::Canvases::new(self.store.canvases_folder(chat), Some(self.browser.clone()));
+        // A Chat chat's canvases take local pictures only from its scratchpad and its own saved
+        // pictures (docs/security.md, "Chat's scratchpad").
+        let canvases = if chat.is_chat_area() {
+            let folders = vec![self.store.scratch_folder(chat), self.store.pictures_folder(chat)];
+            wack_canvas::Canvases::confined(self.store.canvases_folder(chat), Some(self.browser.clone()), folders)
+        } else {
+            wack_canvas::Canvases::new(self.store.canvases_folder(chat), Some(self.browser.clone()))
+        };
         let session = cx.new(|cx| ChatSession::load(&chat.id, cwd, &path, layout, runner, commands, tasks_folder, tabs, canvases, cx));
         let id = chat.id.clone();
         // Cards read their dismissals and opened links from the store as it stands now.
@@ -2645,8 +2850,8 @@ impl AppState {
         self.chat_tasks.insert(id.clone(), session.read(cx).tasks.clone());
         self.chat_agents.insert(id.clone(), session.read(cx).agents.clone());
         let composer = session.read(cx).composer.clone();
-        let mode = chat.mode;
-        composer.update(cx, |composer, cx| composer.set_placeholder(placeholder(mode, false), cx));
+        let words = if chat.is_chat_area() { CHAT_FOLLOW_UP_PLACEHOLDER } else { placeholder(chat.mode, false) };
+        composer.update(cx, |composer, cx| composer.set_placeholder(words, cx));
         let subscriptions = vec![
             cx.observe(&session, |_, _, cx| cx.notify()),
             cx.subscribe(&session, {
@@ -2925,7 +3130,7 @@ impl AppState {
                 Some(chat) => (Some(id.clone()), chat.choice.clone()),
                 None => (None, self.store.defaults().clone()),
             },
-            _ => (None, self.store.defaults().clone()),
+            _ => (None, self.store.defaults_for(self.area()).clone()),
         }
     }
 
@@ -2939,7 +3144,7 @@ impl AppState {
             model: model.or_else(|| resolved.as_ref().map(|resolved| resolved.model.id.clone())),
             effort: effort.unwrap_or(current_effort),
         };
-        if let Err(message) = self.store.set_choice(self.store.ui().area, chat.as_deref(), choice) {
+        if let Err(message) = self.store.set_choice(self.area(), chat.as_deref(), choice) {
             self.notice = Some(message.into());
         }
         self.menu = None;
@@ -2960,10 +3165,16 @@ impl AppState {
 
     /// The draft panes for `NewChat`, if any have been opened for the current project.
     pub fn current_new_chat_panes(&self) -> Option<&ChatPanes> {
-        let Selection::NewChat(project) = &self.selection else {
-            return None;
-        };
-        self.new_chat_panes.get(project)
+        self.new_chat_panes.get(&self.new_chat_key()?)
+    }
+
+    /// Which new-chat screen's panes are on screen: a project's, or the Chat area's.
+    fn new_chat_key(&self) -> Option<String> {
+        match &self.selection {
+            Selection::NewChat(project) => Some(project.clone()),
+            Selection::NewChatArea => Some(CHAT_AREA_PANES.to_string()),
+            _ => None,
+        }
     }
 
     /// Changes the panes on `Screen::NewChat` for the selected project.
@@ -2972,18 +3183,23 @@ impl AppState {
         cx: &mut Context<Self>,
         change: impl FnOnce(&mut Layout) -> R,
     ) -> Option<R> {
-        let Selection::NewChat(project_id) = self.selection.clone() else {
-            return None;
-        };
+        let project_id = self.new_chat_key()?;
         if !self.new_chat_panes.contains_key(&project_id) {
-            let project = self.store.project(&project_id)?;
-            let mut panes = ChatPanes::new(Layout::default(), project.path.clone());
-            panes.set_runner(self.runs.clone());
-            panes.set_commands(
-                project.command(CommandKind::Build).map(str::to_string),
-                project.command(CommandKind::Run).map(str::to_string),
-                cx,
-            );
+            let mut panes = match self.store.project(&project_id) {
+                Some(project) => {
+                    let mut panes = ChatPanes::new(Layout::default(), project.path.clone());
+                    panes.set_runner(self.runs.clone());
+                    panes.set_commands(
+                        project.command(CommandKind::Build).map(str::to_string),
+                        project.command(CommandKind::Run).map(str::to_string),
+                        cx,
+                    );
+                    panes
+                }
+                // The Chat area's new chat has only the browser: no folder, terminal or commands.
+                None if project_id == CHAT_AREA_PANES => ChatPanes::new(Layout::default(), self.store.chat_area_folder().ok()?),
+                None => return None,
+            };
             // Tabs of their own, so the Browser pane works before the first message; that
             // message's chat takes them over (`handed_tabs`).
             let tabs = wack_browser::ChatTabs::new(Some(self.browser.clone()));
@@ -3232,7 +3448,7 @@ impl AppState {
             Selection::NewChat(_) => {
                 self.change_new_chat_layout(cx, |layout| layout.open(pane_kind));
             }
-            Selection::Welcome | Selection::Settings => {}
+            Selection::Welcome | Selection::NewChatArea | Selection::Settings => {}
         }
     }
 

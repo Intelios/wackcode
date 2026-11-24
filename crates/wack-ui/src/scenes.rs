@@ -81,6 +81,12 @@ pub fn all() -> Vec<Scene> {
             },
         },
         Scene {
+            name: "chat-area-mention",
+            description: "The Chat area's composer with `@li` typed: the picker lists the area's other chats under Chats, newest match first.",
+            size: WINDOW,
+            build: |_, cx| cx.new(|_| Shell::showing_tabs(fixtures::chat_sidebar(false, false), fixtures::chat_hero_mentioning(), fixtures::chat_strip(None))).into(),
+        },
+        Scene {
             name: "chat-area-empty",
             description: "The Chat area with no chats yet: the sidebar says what a chat here is.",
             size: WINDOW,
@@ -2273,7 +2279,7 @@ fn slash_scene(rows: Option<Vec<crate::slash_menu::SlashRow>>, text: &'static st
     cx.new(|_| {
         let composer = ComposerData {
             chat_area: false,
-            slash: rows.map(|rows| crate::slash_menu::SlashData { rows, selected: 0, scroll: gpui::ScrollHandle::new() }),
+            slash: rows.map(crate::slash_menu::SlashData::commands),
             hint: hint.map(Into::into),
             ..fixtures::composer_after_turn(Input::Drawn { text: Some(text.into()), placeholder: crate::chat::FOLLOW_UP_PLACEHOLDER.into() })
         };

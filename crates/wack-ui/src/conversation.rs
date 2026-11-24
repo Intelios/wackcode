@@ -522,6 +522,10 @@ impl Conversation {
     }
 
     fn begin(&mut self, text: &str, steered: bool, at: Option<u64>, live: bool, command: Option<CommandUse>, pictures: Vec<Picture>) {
+        // A Chat chat's message ends in the chats it referenced with `@`: the words keep their
+        // `@"Name"`, and the section is the model's, not the transcript's.
+        let (words, _) = wack_core::chat_refs::split(text);
+        let text = words.as_str();
         // A turn left waiting after news, which nothing answered, is not shown.
         if let Some(Entry::Turn(turn)) = self.entries.last()
             && !turn.live

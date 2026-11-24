@@ -116,6 +116,74 @@ fn valid(payload: &Payload) -> bool {
         })
 }
 
+/// The `@word` the caret is in, as a byte range of `text` (the `@` to the end of the word), and
+/// what was typed after the `@` up to the caret. Version 2's `activeMention`: an `@` at the start
+/// or after a space or an opening bracket; a quoted `@"…` stays open until its closing quote, so
+/// a name with spaces can be typed; a finished `@"Name"` before the caret is not a query.
+pub fn active_mention(text: &str, caret: usize) -> Option<(std::ops::Range<usize>, String)> {
+    let caret = caret.min(text.len());
+    if !text.is_char_boundary(caret) {
+        return None;
+    }
+    let before = &text[..caret];
+    let at_token_start = |index: usize| index == 0 || text[..index].chars().next_back().is_some_and(|c| c.is_whitespace() || "([{\"'`".contains(c));
+    if let Some(quote) = before.rfind("@\"")
+        && at_token_start(quote)
+    {
+        let query = &before[quote + 2..];
+        if !query.contains(['"', '\n']) {
+            let end = if text[caret..].starts_with('"') { caret + 1 } else { caret };
+            return Some((quote..end, query.to_string()));
+        }
+    }
+    let start = before.char_indices().rev().find(|(_, c)| c.is_whitespace()).map_or(0, |(at, c)| at + c.len_utf8());
+    let start = if text[start..].starts_with(['(', '[', '{', '"', '\'', '`']) && text[start + 1..].starts_with('@') { start + 1 } else { start };
+    if start >= caret || !text[start..].starts_with('@') || !at_token_start(start) {
+        return None;
+    }
+    let query = &before[start + 1..];
+    if query.contains(['"', '\'', '`', '(', ')', '[', ']', '{', '}']) {
+        return None;
+    }
+    let end = text[caret..].find(char::is_whitespace).map_or(text.len(), |at| caret + at);
+    Some((start..end, query.to_string()))
+}
+
+/// How well a chat's name matches what was typed after `@` (lower case); 0 is not at all.
+fn score(name: &str, query: &str) -> u32 {
+    let name = name.to_lowercase();
+    if name == query {
+        100
+    } else if name.starts_with(query) {
+        80
+    } else if name.contains(query) {
+        60
+    } else {
+        // Letters scattered across a name match almost anything, so this counts for little.
+        let mut letters = name.chars();
+        if query.chars().all(|wanted| letters.any(|c| c == wanted)) { 10 } else { 0 }
+    }
+}
+
+/// The chats an `@` query offers, best first. `chats` come newest first and keep that order
+/// between equal matches; with nothing typed yet, the newest `limit` are offered.
+pub fn rank(chats: &[ChatRef], query: &str, limit: usize) -> Vec<ChatRef> {
+    let query = query.trim().to_lowercase();
+    if query.is_empty() {
+        return chats.iter().take(limit).cloned().collect();
+    }
+    let mut scored: Vec<(u32, usize, &ChatRef)> =
+        chats.iter().enumerate().map(|(at, chat)| (score(&chat.name, &query), at, chat)).filter(|(score, ..)| *score > 0).collect();
+    scored.sort_by_key(|(score, at, _)| (std::cmp::Reverse(*score), *at));
+    scored.into_iter().take(limit).map(|(.., chat)| chat.clone()).collect()
+}
+
+/// The picked references a message still deserves: deleting a `@"Name"` from the text drops
+/// that chat from the section.
+pub fn surviving(text: &str, refs: &[ChatRef]) -> Vec<ChatRef> {
+    refs.iter().filter(|chat| text.contains(&mention(&chat.name))).cloned().collect()
+}
+
 /// A chat a run may read: its name and where its session is.
 #[derive(Clone, Debug, PartialEq)]
 pub struct Readable {
@@ -289,6 +357,42 @@ mod tests {
     use wack_llm::Message;
 
     use super::*;
+
+    #[test]
+    fn the_caret_finds_the_mention_it_is_in() {
+        assert_eq!(active_mention("@", 1), Some((0..1, String::new())));
+        assert_eq!(active_mention("ask @tri about", 8), Some((4..8, "tri".into())));
+        assert_eq!(active_mention("ask @trip about", 7), Some((4..9, "tr".into())), "the word runs on past the caret");
+        assert_eq!(active_mention("(@tr", 4), Some((1..4, "tr".into())));
+        assert_eq!(active_mention("see @\"Trip id", 13), Some((4..13, "Trip id".into())), "a quoted name may have spaces");
+        assert_eq!(active_mention("see @\"Trip\" now", 10), Some((4..11, "Trip".into())), "the closing quote is part of it");
+        assert_eq!(active_mention("see @\"Trip\" now", 15), None, "a finished mention is not a query");
+        assert_eq!(active_mention("me@example.com", 14), None, "an @ inside a word is not a mention");
+        assert_eq!(active_mention("plain words", 5), None);
+        assert_eq!(active_mention("caf\u{e9} @x", 8), Some((6..8, "x".into())));
+    }
+
+    #[test]
+    fn chats_rank_by_match_then_recency() {
+        let chats: Vec<ChatRef> = ["Lisbon trip", "Trip ideas", "Strip lights", "Tea", "trip"]
+            .iter()
+            .enumerate()
+            .map(|(at, name)| ChatRef { id: format!("c{at}"), name: name.to_string() })
+            .collect();
+        let names = |query: &str| rank(&chats, query, 3).into_iter().map(|chat| chat.name).collect::<Vec<_>>();
+        assert_eq!(names("trip"), ["trip", "Trip ideas", "Lisbon trip"]);
+        assert_eq!(names(""), ["Lisbon trip", "Trip ideas", "Strip lights"], "nothing typed offers the newest");
+        assert_eq!(names("TEA")[0], "Tea", "a name beats letters scattered across another");
+        assert!(names("zzz").is_empty());
+    }
+
+    #[test]
+    fn deleting_a_mention_drops_its_reference() {
+        let refs = vec![ChatRef { id: "a".into(), name: "Trip".into() }, ChatRef { id: "b".into(), name: "Tea \"time\"".into() }];
+        assert_eq!(surviving("about @\"Trip\"", &refs), refs[..1]);
+        assert_eq!(surviving("@\"Tea time\" and @\"Trip\"", &refs), refs);
+        assert!(surviving("nothing", &refs).is_empty());
+    }
 
     fn refs(names: &[(&str, &str)]) -> Vec<ChatRef> {
         names.iter().map(|(id, name)| ChatRef { id: id.to_string(), name: name.to_string() }).collect()

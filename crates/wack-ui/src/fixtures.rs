@@ -520,7 +520,7 @@ pub fn slash_rows() -> Vec<crate::slash_menu::SlashRow> {
         hint: hint.map(|hint| hint.to_string().into()),
         description: description.to_string().into(),
         source: source.to_string().into(),
-        kind,
+        icon: crate::slash_menu::icon(kind),
     };
     vec![
         row("/review", Some("<file>"), "Review a file the way the team does, before changing anything", "Your commands", Kind::Template),
@@ -1286,6 +1286,30 @@ pub fn chat_hero() -> crate::shell::Screen {
             ..composer_empty(true)
         },
         notice: None,
+    }
+}
+
+/// The Chat area's new chat with `@li` typed: the picker lists the area's chats that match.
+pub fn chat_hero_mentioning() -> crate::shell::Screen {
+    use crate::slash_menu::{Matches, Slash};
+    use wack_core::chat_refs::ChatRef;
+    let chat = |id: &str, name: &str, age: &str| (ChatRef { id: id.into(), name: name.into() }, age.to_string());
+    let slash = Slash {
+        owner: None,
+        range: 19..22,
+        query: "li".into(),
+        matches: Matches::Chats(vec![chat("a", "Lisbon in four days", "now"), chat("b", "Birthday gift for a climber", "3w")]),
+        selected: 0,
+        scroll: gpui::ScrollHandle::new(),
+    };
+    match chat_hero() {
+        crate::shell::Screen::ChatHero { greeting, ideas, composer, notice } => crate::shell::Screen::ChatHero {
+            greeting,
+            ideas,
+            composer: ComposerData { input: drawn(Some("Pick up where we left @li"), crate::app::CHAT_AREA_PLACEHOLDER), slash: Some(slash.data()), ..composer },
+            notice,
+        },
+        other => other,
     }
 }
 

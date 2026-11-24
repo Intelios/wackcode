@@ -9,11 +9,17 @@
 //!   message, the rest becoming its arguments, as version 2 did.
 //! - The catalogue is read from disk each time the menu opens, so a skill saved in another app
 //!   shows at once; the state lives on `AppState::slash`, never in the view.
+//! - In a Chat chat the same card is the `@` picker: an `@word` lists the Chat area's other chats
+//!   (`wack_core::chat_refs::active_mention` and `rank`), and picking one writes `@"Name"` in its
+//!   place and keeps the chat's id for the message's referenced-chats section.
 
 use std::ops::Range;
 
 use gpui::{ElementId, ScrollHandle, SharedString, div, prelude::*, px};
-use wack_core::skills::{Command, Kind};
+use wack_core::{
+    chat_refs::ChatRef,
+    skills::{Command, Kind},
+};
 
 use crate::{
     actions::PickCommand,
@@ -29,19 +35,58 @@ pub struct Slash {
     pub owner: Option<String>,
     /// The `/word` in the composer's text.
     pub range: Range<usize>,
-    /// What follows the `/`, up to the caret.
+    /// What follows the `/` or `@`, up to the caret.
     pub query: String,
-    pub matches: Vec<Command>,
+    pub matches: Matches,
     pub selected: usize,
     pub scroll: ScrollHandle,
 }
 
+/// What the menu offers: commands for a `/word`, chats (each with its age) for an `@word`.
+pub enum Matches {
+    Commands(Vec<Command>),
+    Chats(Vec<(ChatRef, String)>),
+}
+
+impl Matches {
+    pub fn len(&self) -> usize {
+        match self {
+            Matches::Commands(commands) => commands.len(),
+            Matches::Chats(chats) => chats.len(),
+        }
+    }
+
+    pub fn is_empty(&self) -> bool {
+        self.len() == 0
+    }
+}
+
 impl Slash {
     pub fn data(&self) -> SlashData {
-        SlashData {
-            rows: self.matches.iter().map(SlashRow::from).collect(),
-            selected: self.selected,
-            scroll: self.scroll.clone(),
+        match &self.matches {
+            Matches::Commands(commands) => SlashData {
+                rows: commands.iter().map(SlashRow::from).collect(),
+                selected: self.selected,
+                scroll: self.scroll.clone(),
+                heading: None,
+                empty: "No matching commands",
+            },
+            Matches::Chats(chats) => SlashData {
+                rows: chats
+                    .iter()
+                    .map(|(chat, age)| SlashRow {
+                        name: chat.name.clone().into(),
+                        hint: None,
+                        description: SharedString::default(),
+                        source: age.clone().into(),
+                        icon: Icon::Comment,
+                    })
+                    .collect(),
+                selected: self.selected,
+                scroll: self.scroll.clone(),
+                heading: Some("Chats"),
+                empty: if self.query.is_empty() { "No other chats to reference" } else { "No matching chats" },
+            },
         }
     }
 }
@@ -52,6 +97,17 @@ pub struct SlashData {
     pub rows: Vec<SlashRow>,
     pub selected: usize,
     pub scroll: ScrollHandle,
+    /// A small heading over the rows ("Chats" for the `@` picker).
+    pub heading: Option<&'static str>,
+    /// What shows when nothing matches.
+    pub empty: &'static str,
+}
+
+impl SlashData {
+    /// The `/` menu over `rows`.
+    pub fn commands(rows: Vec<SlashRow>) -> Self {
+        Self { rows, selected: 0, scroll: ScrollHandle::new(), heading: None, empty: "No matching commands" }
+    }
 }
 
 #[derive(Clone, Debug)]
@@ -60,7 +116,7 @@ pub struct SlashRow {
     pub hint: Option<SharedString>,
     pub description: SharedString,
     pub source: SharedString,
-    pub kind: Kind,
+    pub icon: Icon,
 }
 
 impl From<&Command> for SlashRow {
@@ -71,7 +127,7 @@ impl From<&Command> for SlashRow {
             // A long description reads as one line here; Settings shows it whole.
             description: command.description.split_whitespace().collect::<Vec<_>>().join(" ").into(),
             source: command.source.clone().into(),
-            kind: command.kind,
+            icon: icon(command.kind),
         }
     }
 }
@@ -113,8 +169,11 @@ pub fn menu(data: SlashData, theme: &Theme) -> impl IntoElement {
         .flex_col()
         .px(px(6.))
         .py(px(6.));
+    if let Some(heading) = data.heading {
+        list = list.child(div().flex_none().px(px(10.)).pt(px(4.)).pb(px(2.)).typography(Type::Label).text_color(theme.text_faint).child(heading));
+    }
     if data.rows.is_empty() {
-        list = list.child(div().px(px(10.)).h(px(ROW_HEIGHT)).flex().items_center().typography(Type::Ui).text_color(theme.text_dim).child("No matching commands"));
+        list = list.child(div().px(px(10.)).h(px(ROW_HEIGHT)).flex().items_center().typography(Type::Ui).text_color(theme.text_dim).child(data.empty));
     }
     for (index, row) in data.rows.into_iter().enumerate() {
         let selected = index == data.selected;
@@ -131,7 +190,7 @@ pub fn menu(data: SlashData, theme: &Theme) -> impl IntoElement {
                 .when(selected, |row| row.bg(theme.hover))
                 .when(!selected, |row| row.hover(|row| row.bg(theme.hover)))
                 .on_click(move |_, window, cx| window.dispatch_action(Box::new(PickCommand { index }), cx))
-                .child(icon(row.kind).view(px(14.), if selected { theme.accent_text } else { theme.text_dim }))
+                .child(row.icon.view(px(14.), if selected { theme.accent_text } else { theme.text_dim }))
                 .child(
                     div()
                         .flex_none()

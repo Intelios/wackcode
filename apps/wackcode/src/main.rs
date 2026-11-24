@@ -7,7 +7,10 @@ use gpui::{
     WindowOptions, actions, point, prelude::*, px, size,
 };
 use wack_ui::{
-    actions::{AddFolder, CloseTab, NewChat, NewTerminal, NextTab, OpenSettings, PreviousTab, RenameChat, ToggleChanges, ToggleSidebar, ToggleTerminal},
+    actions::{
+        AddFolder, CloseTab, CopyScratchpadPath, EnterChatArea, EnterCodeArea, NewChat, NewTerminal, NextTab, OpenSettings, PreviousTab, RenameChat,
+        RevealScratchpad, ToggleChanges, ToggleSidebar, ToggleTerminal,
+    },
     panes::solve::{CONTENT_MIN_HEIGHT, WINDOW_MIN_WIDTH},
     shell::{FRAME_GUTTER, Shell, TITLE_STRIP_HEIGHT, TRAFFIC_LIGHTS},
     text_field,
@@ -54,6 +57,10 @@ fn main() {
                 MenuItem::separator(),
                 MenuItem::action("Rename Chat…", RenameChat),
                 MenuItem::separator(),
+                // A Chat chat's own folder; nothing in a Code chat.
+                MenuItem::action("Reveal Scratchpad in Finder", RevealScratchpad),
+                MenuItem::action("Copy Scratchpad Path", CopyScratchpadPath),
+                MenuItem::separator(),
                 MenuItem::action("Close Tab", CloseTab),
             ]),
             Menu::new("Edit").items([
@@ -66,6 +73,9 @@ fn main() {
                 MenuItem::action("Select All", text_field::SelectAll),
             ]),
             Menu::new("View").items([
+                MenuItem::action("Code", EnterCodeArea),
+                MenuItem::action("Chat", EnterChatArea),
+                MenuItem::separator(),
                 MenuItem::action("Sidebar", ToggleSidebar),
                 MenuItem::action("Changes", ToggleChanges),
                 MenuItem::action("Terminal", ToggleTerminal),

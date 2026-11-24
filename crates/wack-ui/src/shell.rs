@@ -1992,7 +1992,7 @@ fn live_view(app: &AppState, cx: &App) -> (SidebarData, Screen, StripData) {
                     waiting: Vec::new(),
                     roomy: true,
                     menu: menu_data(app, resolved.as_ref()),
-                    slash: None,
+                    slash: app.slash_data(None),
                     hint: None,
                     question: None,
                     todos: None,
@@ -2080,7 +2080,7 @@ fn live_view(app: &AppState, cx: &App) -> (SidebarData, Screen, StripData) {
                     waiting,
                     roomy: false,
                     menu: menu_data(app, resolved.as_ref()),
-                    slash: (!chat.is_chat_area()).then(|| app.slash_data(Some(id))).flatten(),
+                    slash: app.slash_data(Some(id)),
                     hint: (!chat.is_chat_area()).then(|| app.command_hint(Some(id), cx)).flatten(),
                     question: state.asking.as_ref().map(|asking| crate::question::QuestionData {
                         questions: asking.questions.clone(),

@@ -25,6 +25,7 @@ use gpui_tokio::Tokio;
 use wack_core::{
     AgentMode, Appearance, Chat, ChatKind, CommandEvent, CommandKind, CommandStatus, Job, ModelChoice, Outcome,
     AutoTitleConfig, Project, Reasoning, Runner, Store, Ui, WireFormat,
+    chat_refs::{self, ChatRef},
     skills::{Command, CommandUse, Outgoing, active_slash, find, matching, parse_line, pick, resolve_message},
     title, title_from,
 };
@@ -42,7 +43,7 @@ use crate::{
     panes::{ChatPanes, Layout, PaneKind},
     run_button::{CommandButtonData, CommandEditorData},
     settings::{ProviderForm, Section},
-    slash_menu::{Slash, SlashData},
+    slash_menu::{Matches, Slash, SlashData},
     text_field::{MenuKey, TextField, TextFieldEvent},
     theme,
     typography::Type,
@@ -54,6 +55,8 @@ pub const CHAT_AREA_PLACEHOLDER: &str = "Ask anything…";
 pub const CHAT_FOLLOW_UP_PLACEHOLDER: &str = "Message WackCode…";
 /// The Chat area's key among the new-chat screens' panes (the others are project ids).
 const CHAT_AREA_PANES: &str = "chat-area";
+/// How many chats the `@` picker offers at once.
+const MENTION_LIMIT: usize = 8;
 /// The only slash commands a Chat chat has: the app's own. Anything else goes as written.
 const CHAT_AREA_COMMANDS: [&str; 4] = ["new", "name", "copy", "compact"];
 pub const PLAN_PLACEHOLDER: &str = "Describe the work — in Plan mode WackCode inspects and proposes a plan for your approval…";
@@ -228,6 +231,10 @@ pub struct AppState {
     pub slash: Option<Slash>,
     /// Where ⎋ closed the menu (whose composer, the word's start): it stays shut for that word.
     slash_dismissed: Option<(Option<String>, usize)>,
+    /// The chats picked with `@` in each Chat-area composer (a chat's id, or `None` for the new
+    /// chat's), sent as the message's referenced-chats section while their `@"Name"` is still in
+    /// the text (`wack_core::chat_refs::surviving`).
+    mention_refs: HashMap<Option<String>, Vec<ChatRef>>,
     /// The commands as last read, for the menu and for lighting a typed `/command`. Read again
     /// each time the menu opens.
     commands: Vec<Command>,
@@ -347,6 +354,7 @@ impl AppState {
             lightbox: None,
             slash: None,
             slash_dismissed: None,
+            mention_refs: HashMap::new(),
             commands: Vec::new(),
             literal: None,
             new_chat_mode: AgentMode::Build,
@@ -1636,7 +1644,7 @@ impl AppState {
         let cwd = project.as_deref().and_then(|id| self.store.project(id)).map(|project| project.path.clone()).unwrap_or_else(|| PathBuf::from("/"));
         let outgoing = match &project {
             Some(_) => self.outgoing(None, &text, &cwd),
-            None => Ok(chat_area_outgoing(&text)),
+            None => Ok(self.with_refs(None, chat_area_outgoing(&text))),
         };
         let (job, opening) = match outgoing {
             Err(message) => {
@@ -1644,7 +1652,7 @@ impl AppState {
                 cx.notify();
                 return;
             }
-            Ok(Outgoing::Message(text)) => (Job::Prompt(text.clone()), text),
+            Ok(Outgoing::Message(message)) => (Job::Prompt(message), text.clone()),
             Ok(Outgoing::Prompt { text, command }) => {
                 let opening = self.command_opening(&command);
                 (Job::Command { text, command }, opening)
@@ -1712,6 +1720,7 @@ impl AppState {
         }
         self.draft.update(cx, |draft, cx| draft.set_text("", cx));
         self.draft_attachments.clear();
+        self.mention_refs.remove(&None);
         self.select(Selection::Chat(chat.id.clone()), cx);
         self.run(&chat.id, job, cx);
         self.start_title(&chat.id, &opening, cx);
@@ -2386,7 +2395,7 @@ impl AppState {
         }
         let cwd = session.read(cx).cwd().to_path_buf();
         let chat_area = self.store.chat(chat).is_some_and(Chat::is_chat_area);
-        let outgoing = if chat_area { Ok(chat_area_outgoing(&text)) } else { self.outgoing(Some(chat), &text, &cwd) };
+        let outgoing = if chat_area { Ok(self.with_refs(Some(chat), chat_area_outgoing(&text))) } else { self.outgoing(Some(chat), &text, &cwd) };
         let outgoing = match outgoing {
             Ok(outgoing) => outgoing,
             Err(message) => {
@@ -2398,7 +2407,13 @@ impl AppState {
             let session = session.read(cx);
             (session.running(), session.compacting())
         };
-        let clear = |cx: &mut Context<Self>| {
+        // What is queued or steered carries its referenced chats too.
+        if let Outgoing::Message(message) = &outgoing {
+            text = message.clone();
+        }
+        let owner = Some(chat.to_string());
+        let clear = |app: &mut Self, cx: &mut Context<Self>| {
+            app.mention_refs.remove(&owner);
             composer.update(cx, |composer, cx| composer.set_text("", cx));
             session.update(cx, |session, cx| {
                 session.attachments.clear();
@@ -2426,16 +2441,16 @@ impl AppState {
                         session.sync_suggestion_queue(cx);
                     }
                 });
-                clear(cx);
+                clear(self, cx);
             }
             Outgoing::Message(text) => {
                 if self.run(chat, with_pictures(Job::Prompt(text), &pictures), cx) {
-                    clear(cx);
+                    clear(self, cx);
                 }
             }
             Outgoing::Prompt { text, command } => {
                 if self.run(chat, with_pictures(Job::Command { text, command }, &pictures), cx) {
-                    clear(cx);
+                    clear(self, cx);
                 }
             }
         }
@@ -2516,7 +2531,8 @@ impl AppState {
             text
         });
         if let Some(text) = text {
-            restore(&session, vec![text], cx);
+            let refs = restore(&session, vec![text], cx);
+            self.keep_refs(chat, refs);
         }
     }
 
@@ -2752,7 +2768,8 @@ impl AppState {
             (after.unsent, after.next)
         });
         if !unsent.is_empty() {
-            restore(&session, unsent, cx);
+            let refs = restore(&session, unsent, cx);
+            self.keep_refs(chat, refs);
         }
         // The user stopped it, or it failed: no waking until they write again.
         if !matches!(result, Ok(Outcome::Done | Outcome::CutOff | Outcome::Refused)) {
@@ -2761,7 +2778,8 @@ impl AppState {
         match next {
             Some(next) => {
                 if !self.send_queued(chat, &next, cx) {
-                    restore(&session, vec![next], cx);
+                    let refs = restore(&session, vec![next], cx);
+                    self.keep_refs(chat, refs);
                 }
             }
             // News that came while it ran, after its last request, wakes it now.
@@ -3650,7 +3668,9 @@ fn with_pictures(job: Job, pictures: &[crate::attachments::Attachment]) -> Job {
 }
 
 /// Messages that were not sent go back to the composer, their pictures back to its tray.
-fn restore(session: &Entity<ChatSession>, messages: Vec<String>, cx: &mut App) {
+/// Puts unsent `messages` back in the composer, with their pictures. Returns the chats they
+/// referenced, their sections split off the words.
+fn restore(session: &Entity<ChatSession>, messages: Vec<String>, cx: &mut App) -> Vec<ChatRef> {
     session.update(cx, |session, cx| {
         for message in &messages {
             let pictures = session.take_queued_pictures(message);
@@ -3659,6 +3679,15 @@ fn restore(session: &Entity<ChatSession>, messages: Vec<String>, cx: &mut App) {
         }
         cx.notify();
     });
+    let mut refs = Vec::new();
+    let messages: Vec<String> = messages
+        .into_iter()
+        .map(|message| {
+            let (words, referenced) = wack_core::chat_refs::split(&message);
+            refs.extend(referenced);
+            words
+        })
+        .collect();
     let composer = session.read(cx).composer.clone();
     composer.update(cx, |composer, cx| {
         let mut parts = messages;
@@ -3668,6 +3697,7 @@ fn restore(session: &Entity<ChatSession>, messages: Vec<String>, cx: &mut App) {
         }
         composer.set_text(&parts.join("\n\n"), cx);
     });
+    refs
 }
 
 /// `~/Documents/x` for a folder in the home folder.
@@ -4196,6 +4226,10 @@ impl AppState {
             let field = field.read(cx);
             (field.text().to_string(), field.caret())
         };
+        if self.is_chat_area_owner(owner.as_deref()) {
+            self.mention_changed(owner, &field, &text, caret, cx);
+            return;
+        }
         let word = active_slash(&text, caret);
         // ⎋ keeps the menu shut for its word only; another word opens it again.
         if self.slash_dismissed.as_ref().is_some_and(|(from, start)| *from != owner || word.as_ref().is_none_or(|word| word.start != *start)) {
@@ -4211,7 +4245,7 @@ impl AppState {
                     self.commands = self.store.command_catalog();
                 }
                 let query = text.get(range.start + 1..caret.max(range.start + 1)).unwrap_or("").to_string();
-                let matches: Vec<Command> = matching(&self.commands, &query).into_iter().cloned().collect();
+                let matches = Matches::Commands(matching(&self.commands, &query).into_iter().cloned().collect());
                 let (selected, scroll) = match previous {
                     Some(slash) if !fresh && slash.query == query => (slash.selected.min(matches.len().saturating_sub(1)), slash.scroll),
                     Some(slash) => (0, slash.scroll),
@@ -4267,12 +4301,38 @@ impl AppState {
     }
 
     /// Puts the menu's `index`th command at the front of its composer's message, the text that
-    /// was around the `/word` becoming its arguments.
+    /// was around the `/word` becoming its arguments; or, in the `@` picker, writes the chat's
+    /// `@"Name"` in place of the `@word` and keeps its id for the message.
     pub fn pick_command(&mut self, index: usize, cx: &mut Context<Self>) {
         let Some(slash) = self.slash.take() else {
             return;
         };
-        let (Some(command), Some(field)) = (slash.matches.get(index), self.composer_of(slash.owner.as_deref(), cx)) else {
+        let Some(field) = self.composer_of(slash.owner.as_deref(), cx) else {
+            return;
+        };
+        let command = match &slash.matches {
+            Matches::Commands(commands) => commands.get(index),
+            Matches::Chats(chats) => {
+                let Some((chat, _)) = chats.get(index) else { return };
+                let text = field.read(cx).text().to_string();
+                let Some(range) = Some(slash.range.clone()).filter(|range| range.end <= text.len()) else { return };
+                let token = format!("{} ", chat_refs::mention(&chat.name));
+                let caret = range.start + token.len();
+                let after = text[range.end..].strip_prefix(' ').unwrap_or(&text[range.end..]);
+                let text = format!("{}{token}{after}", &text[..range.start]);
+                let refs = self.mention_refs.entry(slash.owner.clone()).or_default();
+                if !refs.iter().any(|kept| kept.id == chat.id) {
+                    refs.push(chat.clone());
+                }
+                field.update(cx, |field, cx| {
+                    field.set_completing(false, cx);
+                    field.replace_text(&text, caret, cx);
+                });
+                cx.notify();
+                return;
+            }
+        };
+        let Some(command) = command else {
             return;
         };
         let text = field.read(cx).text().to_string();
@@ -4285,6 +4345,89 @@ impl AppState {
             field.replace_text(&text, caret, cx);
         });
         cx.notify();
+    }
+
+    /// Whether `owner`'s composer is in the Chat area: the new chat's while the Chat area's new chat
+    /// shows, or a Chat chat's.
+    fn is_chat_area_owner(&self, owner: Option<&str>) -> bool {
+        match owner {
+            None => self.selection == Selection::NewChatArea,
+            Some(chat) => self.store.chat(chat).is_some_and(Chat::is_chat_area),
+        }
+    }
+
+    /// The `@` picker's half of [`Self::composer_changed`], for a Chat-area composer: it lists
+    /// the area's other chats for an `@word`, and lights a typed `/new`, `/name`, `/copy` or
+    /// `/compact` (the only commands there).
+    fn mention_changed(&mut self, owner: Option<String>, field: &Entity<TextField>, text: &str, caret: usize, cx: &mut Context<Self>) {
+        let word = chat_refs::active_mention(text, caret);
+        if self.slash_dismissed.as_ref().is_some_and(|(from, start)| *from != owner || word.as_ref().is_none_or(|(range, _)| range.start != *start)) {
+            self.slash_dismissed = None;
+        }
+        let word = word.filter(|(range, _)| self.slash_dismissed.as_ref() != Some(&(owner.clone(), range.start)));
+        let previous = self.slash.take().filter(|slash| slash.owner == owner);
+        let other = previous.is_none() && self.slash.is_some();
+        match word {
+            Some((range, query)) => {
+                let chats: Vec<ChatRef> = self
+                    .store
+                    .chat_area_chats()
+                    .into_iter()
+                    .filter(|chat| Some(&chat.id) != owner.as_ref())
+                    .map(|chat| ChatRef { id: chat.id.clone(), name: chat.title.clone() })
+                    .collect();
+                let ages: HashMap<String, u64> = self.store.chat_area_chats().into_iter().map(|chat| (chat.id.clone(), chat.updated)).collect();
+                let matches: Vec<(ChatRef, String)> = chat_refs::rank(&chats, &query, MENTION_LIMIT)
+                    .into_iter()
+                    .map(|chat| {
+                        let age = ages.get(&chat.id).map(|updated| Self::age(*updated)).unwrap_or_default();
+                        (chat, age)
+                    })
+                    .collect();
+                let fresh = previous.as_ref().is_none_or(|slash| slash.range.start != range.start);
+                let (selected, scroll) = match previous {
+                    Some(slash) if !fresh && slash.query == query => (slash.selected.min(matches.len().saturating_sub(1)), slash.scroll),
+                    Some(slash) => (0, slash.scroll),
+                    None => (0, gpui::ScrollHandle::new()),
+                };
+                if selected == 0 {
+                    scroll.scroll_to_item(0);
+                }
+                let completing = !matches.is_empty();
+                self.slash = Some(Slash { owner: owner.clone(), range, query, matches: Matches::Chats(matches), selected, scroll });
+                field.update(cx, |field, cx| field.set_completing(completing, cx));
+            }
+            None if !other => field.update(cx, |field, cx| field.set_completing(false, cx)),
+            None => {}
+        }
+        let lit = parse_line(text).filter(|(name, _)| CHAT_AREA_COMMANDS.contains(name)).map(|(name, _)| 0..1 + name.len());
+        field.update(cx, |field, cx| field.set_highlight(lit, cx));
+        cx.notify();
+    }
+
+    /// `outgoing` with the chats picked in `owner`'s composer, when it is words: their section
+    /// rides at the end of the message, for the ones whose `@"Name"` is still there.
+    fn with_refs(&self, owner: Option<&str>, outgoing: Outgoing) -> Outgoing {
+        match outgoing {
+            Outgoing::Message(text) => {
+                let refs = self.mention_refs.get(&owner.map(str::to_string)).map(|refs| chat_refs::surviving(&text, refs)).unwrap_or_default();
+                Outgoing::Message(chat_refs::encode(&text, &refs))
+            }
+            other => other,
+        }
+    }
+
+    /// Remembers `refs` for `chat`'s composer again, after its unsent words came back to it.
+    fn keep_refs(&mut self, chat: &str, refs: Vec<ChatRef>) {
+        if refs.is_empty() {
+            return;
+        }
+        let kept = self.mention_refs.entry(Some(chat.to_string())).or_default();
+        for chat in refs {
+            if !kept.iter().any(|seen| seen.id == chat.id) {
+                kept.push(chat);
+            }
+        }
     }
 
     /// The menu for `owner`'s composer, when it is open there.

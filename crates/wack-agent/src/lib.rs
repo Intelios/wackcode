@@ -5,11 +5,12 @@
 //! which is how its behaviour is tested. Features hook in through one small compiled-in trait
 //! rather than a dynamic extension runtime: so far the question tool (`ask`), the todo list
 //! (`todo`), Plan mode (`plan`), memory (`memory`) and skills (`skills`), assembled for a run by
-//! `kit`, and sub-agents (`agents`). Slash commands (`commands`) expand before a run starts.
+//! `kit` (`chat_kit` for the Chat area), and sub-agents (`agents`). Slash commands (`commands`) expand before a run starts.
 
 pub mod agent;
 pub mod agents;
 pub mod ask;
+pub mod chat_kit;
 pub mod commands;
 pub mod compaction;
 pub mod images;
@@ -29,6 +30,7 @@ pub mod usage;
 
 pub use agent::{Agent, Control, Event, EventSink, Feature, Outcome, Profile, Settings, Verdict};
 pub use agents::{AgentDef, Agents, AgentsSetup, ChildModel, Delegation};
+pub use chat_kit::ChatKit;
 pub use kit::Kit;
 pub use memory::Memory;
 pub use commands::CommandUse;

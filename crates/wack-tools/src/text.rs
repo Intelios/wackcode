@@ -4,6 +4,7 @@ use std::path::{Path, PathBuf};
 
 use serde::de::DeserializeOwned;
 use serde_json::Value;
+use wack_agent::ToolContext;
 
 /// A tool result never exceeds these, whichever is reached first.
 pub const MAX_LINES: usize = 2_000;
@@ -13,8 +14,18 @@ pub fn parse<T: DeserializeOwned>(input: Value) -> Result<T, String> {
     serde_json::from_value(input).map_err(|error| format!("The tool's input is wrong: {error}."))
 }
 
-/// Resolves a path the model wrote: `~` is the home folder, anything relative is under `cwd`.
-pub fn resolve(cwd: &Path, raw: &str) -> PathBuf {
+/// The path `tool` should use for one the model wrote. Every file tool takes its paths here, so a
+/// confined run (a Chat chat, `ToolContext::confine`) can never reach a path that was not
+/// checked: it gets back the checked, real location or the reason it was refused.
+pub fn resolve(context: &ToolContext<'_>, tool: &str, raw: &str) -> Result<PathBuf, String> {
+    match &context.confine {
+        Some(root) => crate::confine::confine(tool, raw, root),
+        None => Ok(join(&context.cwd, raw)),
+    }
+}
+
+/// A path the model wrote, unchecked: `~` is the home folder, anything relative is under `cwd`.
+pub fn join(cwd: &Path, raw: &str) -> PathBuf {
     let raw = raw.trim();
     if let Some(rest) = raw.strip_prefix('~').filter(|rest| rest.is_empty() || rest.starts_with('/'))
         && let Some(home) = std::env::var_os("HOME")
@@ -82,11 +93,11 @@ mod tests {
     #[test]
     fn resolves_relative_home_and_absolute_paths() {
         let cwd = Path::new("/work/app");
-        assert_eq!(resolve(cwd, "src/main.rs"), Path::new("/work/app/src/main.rs"));
-        assert_eq!(resolve(cwd, "/etc/hosts"), Path::new("/etc/hosts"));
-        assert_eq!(resolve(cwd, "~name"), Path::new("/work/app/~name"));
+        assert_eq!(join(cwd, "src/main.rs"), Path::new("/work/app/src/main.rs"));
+        assert_eq!(join(cwd, "/etc/hosts"), Path::new("/etc/hosts"));
+        assert_eq!(join(cwd, "~name"), Path::new("/work/app/~name"));
         if let Some(home) = std::env::var_os("HOME") {
-            assert_eq!(resolve(cwd, "~/notes.md"), Path::new(&home).join("notes.md"));
+            assert_eq!(join(cwd, "~/notes.md"), Path::new(&home).join("notes.md"));
         }
     }
 

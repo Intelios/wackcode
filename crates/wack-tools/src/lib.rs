@@ -6,6 +6,7 @@
 //! for approval; that is out of scope for WackCode by design.
 
 mod bash;
+pub mod confine;
 mod edit;
 mod find;
 mod grep;
@@ -29,6 +30,12 @@ pub use grep::Grep;
 pub use ls::Ls;
 pub use read::Read;
 pub use write::Write;
+
+/// A Chat chat's file tools: the six that work on files, which its run confines to the chat's
+/// scratchpad (`confine.rs`). No shell and no background commands.
+pub fn chat_tools() -> Vec<Arc<dyn Tool>> {
+    vec![Arc::new(Read), Arc::new(Write), Arc::new(Edit), Arc::new(Grep), Arc::new(Find), Arc::new(Ls)]
+}
 
 /// The ten core tools, in the order the model is shown them: the seven here, and the three for
 /// commands in the background (`wack_agent::tasks`).

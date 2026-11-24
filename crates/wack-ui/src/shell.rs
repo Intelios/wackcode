@@ -1950,7 +1950,7 @@ fn live_view(app: &AppState, cx: &App) -> (SidebarData, Screen, StripData) {
             let (Some(chat), Some(session)) = (store.chat(id), app.session(id)) else {
                 return (sidebar, Screen::Welcome { notice: None }, StripData::default());
             };
-            let project = info(&chat.project).unwrap_or(ProjectInfo { name: "".into(), path: "".into(), branch: None });
+            let project = info(chat.project.as_deref().unwrap_or_default()).unwrap_or(ProjectInfo { name: "".into(), path: "".into(), branch: None });
             let resolved = store.resolve(&chat.choice);
             let (model, effort) = model_words(resolved.as_ref());
             let state = session.read(cx);

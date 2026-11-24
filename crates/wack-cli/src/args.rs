@@ -21,6 +21,13 @@ impl Args {
         Ok(Some(self.items.remove(index)))
     }
 
+    /// Takes `--name` (a switch, with no value) out of the arguments; true if it was there.
+    pub fn flag(&mut self, name: &str) -> bool {
+        let Some(index) = self.items.iter().position(|item| item == name) else { return false };
+        self.items.remove(index);
+        true
+    }
+
     /// Takes every `--name value` out of the arguments.
     pub fn values(&mut self, name: &str) -> Result<Vec<String>, String> {
         let mut values = Vec::new();

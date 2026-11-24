@@ -27,32 +27,39 @@ pub const MEMORY_FORGET: &str = "memory_forget";
 pub const MEMORY_TOOLS: [&str; 3] = [MEMORY_SAVE, MEMORY_RECALL, MEMORY_FORGET];
 const MAX_RECALL_NAMES: usize = 8;
 
-/// One project's memory folder, for one run.
+/// One memory folder, for one run: a project's, or the Chat area's one store, which every chat
+/// there shares (`chat`, worded for chats as version 2's `WORDING.chat`).
 #[derive(Clone, Debug)]
 pub struct Memory {
     root: PathBuf,
+    chat: bool,
 }
 
 impl Memory {
     pub fn new(root: impl Into<PathBuf>) -> Self {
-        Self { root: root.into() }
+        Self { root: root.into(), chat: false }
+    }
+
+    /// The Chat area's store.
+    pub fn chat(root: impl Into<PathBuf>) -> Self {
+        Self { root: root.into(), chat: true }
     }
 
     /// The index section for the system prompt, as the folder stands now; `None` with no notes.
     pub fn index(&self) -> Option<String> {
-        store::index(&store::scan(&self.root))
+        store::index_for(&store::scan(&self.root), self.chat)
     }
 
     pub fn tools(&self) -> Vec<Arc<dyn Tool>> {
         vec![
-            Arc::new(Save(self.root.clone())),
+            Arc::new(Save(self.root.clone(), self.chat)),
             Arc::new(Recall(self.root.clone())),
             Arc::new(Forget(self.root.clone())),
         ]
     }
 }
 
-struct Save(PathBuf);
+struct Save(PathBuf, bool);
 struct Recall(PathBuf);
 struct Forget(PathBuf);
 
@@ -69,7 +76,11 @@ impl Tool for Save {
     fn spec(&self) -> ToolSpec {
         ToolSpec {
             name: MEMORY_SAVE.into(),
-            description: "Save or update a small note for future conversations in this project. Four kinds: user (the user's role and lasting preferences), feedback (corrections and confirmed approaches), project (ongoing work, decisions, deadlines not derivable from the code or git history), reference (where information lives outside the project).".into(),
+            description: if self.1 {
+                "Save or update a small note for future chats. Four kinds: user (who the user is and their lasting preferences), feedback (corrections and approaches the user confirmed), project (something ongoing the user is working on, with its decisions and dates), reference (where a piece of information lives).".into()
+            } else {
+                "Save or update a small note for future conversations in this project. Four kinds: user (the user's role and lasting preferences), feedback (corrections and confirmed approaches), project (ongoing work, decisions, deadlines not derivable from the code or git history), reference (where information lives outside the project).".into()
+            },
             input_schema: json!({
                 "type": "object",
                 "additionalProperties": false,
@@ -85,11 +96,18 @@ impl Tool for Save {
             loading: Loading::Always,
             parallel_safe: false,
             hint: "keep a small note for future conversations".into(),
-            guidelines: vec![
-                "Memory (memory_save, memory_recall, memory_forget): keep lasting preferences, explained corrections and project facts absent from code. Update existing notes; verify recalled paths and flags.".into(),
-                "Save a memory only when it would help a future conversation, not every session. Never save what the codebase, AGENTS.md files or the transcript already show, or anything true only of the current task.".into(),
-                "Updating beats accumulating: pass the existing note's name to rewrite it, and retire notes that no longer hold with memory_forget.".into(),
-            ],
+            guidelines: if self.1 {
+                vec![
+                    "Save a memory only when it would help a future chat, not every conversation. Never save what this conversation already shows, or anything true only of the current request.".into(),
+                    "Updating beats accumulating: pass the existing note's name to rewrite it, and retire notes that no longer hold with memory_forget.".into(),
+                ]
+            } else {
+                vec![
+                    "Memory (memory_save, memory_recall, memory_forget): keep lasting preferences, explained corrections and project facts absent from code. Update existing notes; verify recalled paths and flags.".into(),
+                    "Save a memory only when it would help a future conversation, not every session. Never save what the codebase, AGENTS.md files or the transcript already show, or anything true only of the current task.".into(),
+                    "Updating beats accumulating: pass the existing note's name to rewrite it, and retire notes that no longer hold with memory_forget.".into(),
+                ]
+            },
             ends_run: false,
             together: false,
         }

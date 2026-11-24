@@ -115,6 +115,12 @@ fn anchor(folder: &Path) -> PathBuf {
         .unwrap_or_else(|| folder.to_path_buf())
 }
 
+/// The key of the Chat area's one memory store, which every Chat chat shares (version 2's).
+pub const CHAT_MEMORY_KEY: &str = "c4a7c4a7c4a7";
+/// How Settings › Memory names the Chat area's store and says whose it is.
+const CHAT_MEMORY_NAME: &str = "Chat";
+const CHAT_MEMORY_ORIGIN: &str = "Every Chat chat";
+
 /// The memory key of a folder.
 pub fn key(folder: &Path) -> String {
     short_hash(&anchor(folder).to_string_lossy())
@@ -171,6 +177,21 @@ impl Store {
             return None;
         }
         self.memory_project_folder(folder).ok()
+    }
+
+    /// The Chat area's memory folder (`memory/chat-<key>/`), or `None` when memory is off for
+    /// it. Its switch is a project's: its key in `disabled_projects`.
+    pub fn chat_area_memory(&self) -> Option<PathBuf> {
+        let config = self.memory_config();
+        if !config.enabled || config.disabled_projects.iter().any(|key| key == CHAT_MEMORY_KEY) {
+            return None;
+        }
+        let root = self.memory_folder().join(format!("chat-{CHAT_MEMORY_KEY}"));
+        if !root.join("origin.json").exists() {
+            fs::create_dir_all(&root).ok()?;
+            let _ = fs::write(root.join("origin.json"), serde_json::json!({ "root": CHAT_MEMORY_ORIGIN }).to_string());
+        }
+        Some(root)
     }
 
     pub fn memory_enabled(&self) -> bool {
@@ -232,6 +253,7 @@ impl Store {
                     .map(|origin| origin.root)
                     .unwrap_or_else(|| name.clone());
                 let fallback = Path::new(&origin).file_name().map(|label| label.to_string_lossy().into_owned()).unwrap_or_else(|| origin.clone());
+                let fallback = if key == CHAT_MEMORY_KEY { CHAT_MEMORY_NAME.to_string() } else { fallback };
                 projects.push(MemoryProject {
                     name: known.iter().find(|(candidate, _)| *candidate == key).map(|(_, name)| name.clone()).unwrap_or(fallback),
                     enabled: config.enabled && !config.disabled_projects.contains(&key),
@@ -315,6 +337,23 @@ mod tests {
         assert_eq!(store.memory_for(project.path()), None);
         store.set_memory_enabled(true).unwrap();
         assert!(store.memory_for(project.path()).is_some());
+    }
+
+    #[test]
+    fn the_chat_area_has_one_store_listed_as_chat_with_its_own_switch() {
+        let data = tempfile::tempdir().unwrap();
+        let mut store = Store::open(data.path()).unwrap();
+        let root = store.chat_area_memory().unwrap();
+        assert_eq!(root, store.chat_area_memory().unwrap(), "every Chat chat shares it");
+        let overview = store.memory_overview();
+        assert_eq!(overview.projects.len(), 1);
+        assert_eq!((overview.projects[0].name.as_str(), overview.projects[0].path.as_str()), ("Chat", "Every Chat chat"));
+        assert_eq!(overview.projects[0].key, CHAT_MEMORY_KEY);
+        store.set_project_memory_enabled(CHAT_MEMORY_KEY, false).unwrap();
+        assert_eq!(store.chat_area_memory(), None);
+        store.set_project_memory_enabled(CHAT_MEMORY_KEY, true).unwrap();
+        store.set_memory_enabled(false).unwrap();
+        assert_eq!(store.chat_area_memory(), None, "the master switch covers it");
     }
 
     #[test]

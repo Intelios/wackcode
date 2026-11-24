@@ -65,7 +65,7 @@ impl Tool for Grep {
 
     async fn run(&self, input: Value, context: &ToolContext<'_>) -> Result<ToolOutput, String> {
         let input: Input = parse(input)?;
-        let root = resolve(&context.cwd, input.path.as_deref().unwrap_or("."));
+        let root = resolve(context, "grep", input.path.as_deref().unwrap_or("."))?;
         let cancel = context.cancel.clone();
         // File reading and matching block, so they run off the async threads.
         tokio::task::spawn_blocking(move || search(&input, &root, &cancel))

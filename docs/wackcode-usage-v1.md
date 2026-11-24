@@ -8,7 +8,10 @@ default and can be disabled in WackCode Settings > Integrations. No older chats 
 Each JSON object contains `v: 1`, UUID `id`, completion timestamp `ts` (epoch milliseconds),
 `duration_ms`, `session_id` (owning WackCode chat), nullable `project` (original project root),
 nullable `workspace` (execution directory), `provider`, `model`, `purpose`, nullable
-`subagent_id`, `outcome`, and nullable `tokens`.
+`subagent_id`, `outcome`, and nullable `tokens`. Two additive fields may follow: nullable
+`provider_name` (the connection's name as the user typed it) and, last, `mode`: `code` (a
+project's chat) or `chat` (the Chat area, whose records have a null `project` and the chat's
+scratchpad as `workspace`). Readers treat an absent `mode` as `code`.
 
 Purposes: `chat`, `subagent`, `title`, `compaction`, `branch_summary`, `goal_verification`,
 `commit_message`. Outcomes: `completed`, `failed`, `cancelled`. Sub-agent identity is

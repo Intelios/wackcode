@@ -47,7 +47,7 @@ impl Tool for Find {
 
     async fn run(&self, input: Value, context: &ToolContext<'_>) -> Result<ToolOutput, String> {
         let input: Input = parse(input)?;
-        let root = resolve(&context.cwd, input.path.as_deref().unwrap_or("."));
+        let root = resolve(context, "find", input.path.as_deref().unwrap_or("."))?;
         if !root.is_dir() {
             return Err(format!("{} is not a folder.", input.path.as_deref().unwrap_or(".")));
         }

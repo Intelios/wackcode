@@ -11,6 +11,13 @@
 //! The chat's mode travels the same way: the store holds it, the run is told it, and the session
 //! records what the model was told (`wack_agent::plan`). The two things done to a plan between
 //! runs, discarding it and saving it as a file, are here too; both need the chat to be idle.
+//!
+//! A Chat chat (the Chat area, `ChatKind::Chat`) is assembled by [`chat_agent`], which the app's
+//! runs and `wack run --chat` both call: the Chat persona, its file tools confined to the chat's
+//! scratchpad, and only the tools on `wack_agent::chat_kit`'s list (no shell, plan, todo,
+//! suggestions, skills or sub-agents). Its MCP servers start in one shared empty folder, never
+//! the scratchpad, so every Chat chat shares their connections and none is rooted where it could
+//! see a scratchpad.
 
 use std::{
     collections::HashSet,
@@ -19,24 +26,31 @@ use std::{
 };
 
 use wack_agent::{
-    Agent, AgentMode, Control, Event, Kit, Outcome, Profile, Registry, Session, Settings, Tasks,
+    Agent, AgentMode, ChatKit, Control, Event, Kit, Outcome, Profile, Registry, Session, Settings, Tasks,
     commands::CommandUse,
     plan::{PLAN_STATE, PlanState},
     skills::{self, Root},
 };
 use wack_llm::Provider;
 
-use crate::store::{Chat, Store};
+use crate::store::{Chat, ChatKind, Store};
 
 /// Reports each model invocation to the usage ledger.
 pub type Usage = std::sync::Arc<dyn wack_agent::Recorder>;
 
 /// Everything a run needs, resolved before it starts.
 pub struct RunSetup {
+    /// Code or the Chat area: which agent the run builds.
+    pub kind: ChatKind,
+    /// For a Chat chat, the other chats `read_chat` may read.
+    pub readable: Vec<crate::chat_refs::Readable>,
     pub provider: Arc<dyn Provider>,
     pub session_path: PathBuf,
-    /// Where the project lives; a new session starts there.
+    /// Where the project lives, or a Chat chat's scratchpad; a new session starts there.
     pub cwd: PathBuf,
+    /// Where the run's MCP servers start, and what their connections are shared by: the project
+    /// folder, or the Chat area's one folder.
+    pub mcp_folder: PathBuf,
     pub settings: Settings,
     /// Build, Plan or Ultra Plan, as the chat has it now.
     pub mode: AgentMode,
@@ -109,8 +123,13 @@ pub enum RunEvent {
 impl Store {
     /// Resolves a chat's project and model into a run, building the provider that holds the key.
     pub fn run_setup(&self, chat: &Chat) -> Result<RunSetup, String> {
-        let project = self
-            .project(&chat.project)
+        if chat.is_chat_area() {
+            return self.chat_area_setup(chat);
+        }
+        let project = chat
+            .project
+            .as_deref()
+            .and_then(|id| self.project(id))
             .ok_or("This chat's project is no longer in WackCode.")?;
         let resolved = self
             .resolve(&chat.choice)
@@ -119,9 +138,12 @@ impl Store {
         let usage = self.usage_recorder(&resolved.connection, &chat.id, &project.path);
         let children = self.child_model(&resolved, &chat.id, &project.path)?;
         Ok(RunSetup {
+            kind: ChatKind::Code,
+            readable: Vec::new(),
             provider: Arc::new(provider),
             session_path: self.session_path(chat),
             cwd: project.path.clone(),
+            mcp_folder: project.path.clone(),
             settings: Settings {
                 model: resolved.model.id.clone(),
                 effort: resolved.model.effort_for(resolved.effort),
@@ -148,6 +170,106 @@ impl Store {
             commands: None,
         })
     }
+
+    /// A Chat chat's run: its scratchpad as the folder (made again if it went missing), the Chat
+    /// area's memory and MCP servers, and none of the coding features.
+    fn chat_area_setup(&self, chat: &Chat) -> Result<RunSetup, String> {
+        let resolved = self
+            .resolve(&chat.choice)
+            .ok_or("Add a connection in Settings › Providers to start chatting.")?;
+        let provider = self.provider(&resolved.connection)?;
+        let scratch = self.scratch_folder(chat);
+        std::fs::create_dir_all(&scratch).map_err(|error| format!("Could not make the chat's scratchpad: {error}"))?;
+        let mcp_folder = self.chat_area_folder()?;
+        Ok(RunSetup {
+            kind: ChatKind::Chat,
+            readable: self.readable_chats(chat),
+            provider: Arc::new(provider),
+            session_path: self.session_path(chat),
+            cwd: scratch,
+            mcp_servers: self.mcp_specs_for(&mcp_folder),
+            mcp_folder,
+            settings: Settings {
+                model: resolved.model.id.clone(),
+                effort: resolved.model.effort_for(resolved.effort),
+                max_output_tokens: None,
+                context_window: resolved.model.context_window,
+                accepts_images: resolved.model.accepts_images,
+                ultra: resolved.effort.is_ultra(),
+                commit_attribution: false,
+            },
+            mode: AgentMode::Build,
+            unrestricted_planning: false,
+            memory: self.chat_area_memory(),
+            skill_roots: Vec::new(),
+            disabled_skills: HashSet::new(),
+            tasks: None,
+            usage: Some(self.chat_usage_recorder(&resolved.connection, chat)),
+            web: self.web_setup(),
+            mcp_hub: None,
+            agents: None,
+            browser: None,
+            canvases: None,
+            run_command: None,
+            commands: None,
+        })
+    }
+}
+
+/// Everything a Chat chat's agent is built from. The app's runs and `wack run --chat` both build
+/// it through [`chat_agent`], so a Chat chat behaves the same in either.
+pub struct ChatParts {
+    pub provider: Arc<dyn Provider>,
+    /// The chat's session, whose folder is its scratchpad.
+    pub session: Session,
+    pub settings: Settings,
+    /// The Chat area's memory folder, or `None` when memory is off for it.
+    pub memory: Option<PathBuf>,
+    pub web: wack_web::WebSetup,
+    /// The chat's browser tabs; `None` offers no browser.
+    pub browser: Option<wack_browser::ChatTabs>,
+    /// The chat's canvases, confined to its own pictures (`Canvases::confined`); `None` offers
+    /// no canvas tools.
+    pub canvases: Option<wack_canvas::Canvases>,
+    /// The MCP servers' tools, already assembled in the Chat area's folder.
+    pub mcp: wack_mcp::Assembly,
+    pub usage: Option<Usage>,
+    /// The other chats `read_chat` may read (`Store::readable_chats`); none offers no tool.
+    pub readable: Vec<crate::chat_refs::Readable>,
+}
+
+/// A Chat chat's agent: the Chat persona and guide, the file tools confined to its scratchpad,
+/// and only the tools `wack_agent::chat_kit` allows. Anything off the list is refused even if it
+/// got here (`ChatGuard`).
+pub fn chat_agent(parts: ChatParts) -> Result<Agent, String> {
+    let kit = ChatKit::new(parts.memory);
+    let mut tools = wack_tools::chat_tools();
+    tools.extend(kit.tools());
+    tools.extend(wack_web::tools(&parts.web)?);
+    if let Some(tabs) = &parts.browser {
+        // No `browser_preview`: there is no project whose Run command it could start.
+        tools.extend(wack_browser::tools::tools(tabs.clone(), None));
+    }
+    tools.extend(parts.mcp.tools);
+    if let Some(canvases) = &parts.canvases {
+        tools.extend(wack_canvas::tools::tools(canvases.clone()));
+    }
+    if !parts.readable.is_empty() {
+        tools.push(Arc::new(crate::chat_refs::ReadChat::new(parts.readable)));
+    }
+    tools.retain(|tool| wack_agent::chat_kit::chat_tool_allowed(&tool.spec().name));
+    let registry = Arc::new(Registry::new(tools)?);
+    let mut agent = Agent::new(parts.provider, registry, parts.session, &Profile::chat(), parts.settings);
+    if let Some(usage) = parts.usage {
+        agent = agent.with_recorder(usage);
+    }
+    if let Some(feature) = parts.mcp.feature {
+        agent = agent.with_feature(Box::new(feature));
+    }
+    if let Some(canvases) = &parts.canvases {
+        agent = agent.with_feature(Box::new(wack_canvas::CanvasFeature::new(canvases.clone())));
+    }
+    Ok(kit.attach(agent))
 }
 
 /// Runs `job` to the end, reporting everything to `events`, the last event always being
@@ -173,6 +295,35 @@ pub async fn run(
         Ok(session) => session,
         Err(message) => return finished(Err(message), None),
     };
+    // MCP servers: their tools, waiting only for a server with no tool list yet. A compaction
+    // calls no tools, so it starts nothing.
+    let mut mcp = wack_mcp::Assembly::default();
+    if let Some(hub) = setup.mcp_hub.as_ref().filter(|_| !matches!(job, Job::Compact(_))) {
+        let starting: wack_mcp::Starting = {
+            let events = events.clone();
+            Arc::new(move |servers| events(RunEvent::McpStarting(servers)))
+        };
+        mcp = wack_mcp::assemble(hub, &setup.mcp_servers, &setup.mcp_folder, &control.stop_token(), starting).await;
+    }
+    if setup.kind == ChatKind::Chat {
+        let parts = ChatParts {
+            provider: setup.provider,
+            session,
+            settings: setup.settings,
+            memory: setup.memory,
+            web: setup.web,
+            browser: setup.browser,
+            canvases: setup.canvases,
+            mcp,
+            usage: setup.usage,
+            readable: setup.readable,
+        };
+        let agent = match chat_agent(parts) {
+            Ok(agent) => agent,
+            Err(message) => return finished(Err(message), None),
+        };
+        return drive(agent, job, control, events).await;
+    }
     let catalog = skills::load(&setup.skill_roots, &setup.disabled_skills);
     let mut kit = Kit::new(&session, Some(setup.mode), setup.unrestricted_planning, setup.memory).with_skills(&catalog);
     if let Some(tasks) = setup.tasks {
@@ -197,16 +348,6 @@ pub async fn run(
             Arc::new(crate::preview::RunPreview { commands, cwd: setup.cwd.clone(), command: setup.run_command.clone() }) as Arc<dyn wack_browser::tools::Preview>
         });
         tools.extend(wack_browser::tools::tools(tabs.clone(), preview));
-    }
-    // MCP servers: their tools, waiting only for a server with no tool list yet. A compaction
-    // calls no tools, so it starts nothing.
-    let mut mcp = wack_mcp::Assembly::default();
-    if let Some(hub) = setup.mcp_hub.as_ref().filter(|_| !matches!(job, Job::Compact(_))) {
-        let starting: wack_mcp::Starting = {
-            let events = events.clone();
-            Arc::new(move |servers| events(RunEvent::McpStarting(servers)))
-        };
-        mcp = wack_mcp::assemble(hub, &setup.mcp_servers, &setup.cwd, &control.stop_token(), starting).await;
     }
     tools.extend(mcp.tools);
     // Sub-agents last: each child gets its role's share of everything above.
@@ -240,7 +381,11 @@ pub async fn run(
         Some(canvases) => agent.with_feature(Box::new(wack_canvas::CanvasFeature::new(canvases.clone()))),
         None => agent,
     };
-    let mut agent = kit.attach(agent);
+    drive(kit.attach(agent), job, control, events).await;
+}
+
+/// Does `job` with `agent` and reports the end.
+async fn drive(mut agent: Agent, job: Job, control: Control, events: Arc<dyn Fn(RunEvent) + Send + Sync>) {
     let sink = |event: Event| events(RunEvent::Agent(event));
     let result = match job {
         Job::Prompt(prompt) => agent.run(&prompt, &control, &sink).await,
@@ -252,7 +397,7 @@ pub async fn run(
             .await
             .map(|()| Outcome::Done),
     };
-    finished(result, Some(agent.session().context_tokens()));
+    events(RunEvent::Finished { result, context_tokens: Some(agent.session().context_tokens()) });
 }
 
 /// Abandons the plan awaiting review and returns the chat's session to Build. Call it only
@@ -287,9 +432,12 @@ mod tests {
 
     fn setup(provider: ScriptedProvider, folder: &std::path::Path) -> RunSetup {
         RunSetup {
+            kind: ChatKind::Code,
+            readable: Vec::new(),
             provider: Arc::new(provider),
             session_path: folder.join("sessions/chat.jsonl"),
             cwd: folder.to_path_buf(),
+            mcp_folder: folder.to_path_buf(),
             settings: Settings {
                 model: "m".into(),
                 effort: None,
@@ -455,6 +603,103 @@ mod tests {
             _ => None,
         });
         assert_eq!(last, Some(PlanState::default()));
+    }
+
+    /// A Chat chat's run in `folder`: a scratchpad beside its session, everything else off.
+    fn chat_setup(provider: ScriptedProvider, folder: &std::path::Path) -> RunSetup {
+        let scratch = folder.join("scratch/chat");
+        std::fs::create_dir_all(&scratch).unwrap();
+        let mut setup = setup(provider, folder);
+        setup.kind = ChatKind::Chat;
+        setup.cwd = scratch;
+        setup
+    }
+
+    #[tokio::test]
+    async fn a_chat_area_run_offers_only_its_allowlist_and_the_chat_prompt() {
+        let folder = tempfile::tempdir().unwrap();
+        // An instruction file above the scratchpad must not reach a Chat chat's prompt.
+        std::fs::write(folder.path().join("AGENTS.md"), "Secret project rules").unwrap();
+        let provider = ScriptedProvider::new([say("hi")]);
+        let mut chat = chat_setup(provider.clone(), folder.path());
+        chat.memory = Some(folder.path().join("memory"));
+        chat.web.fetch = true;
+        // Even if the engine hands a Chat run the coding features, they never reach it.
+        chat.mode = AgentMode::Plan;
+        chat.tasks = Some(Tasks::new(folder.path().join("tasks")));
+        let (_, sink) = collect();
+        run(chat, Job::Prompt("hello".into()), Control::new(), sink).await;
+        let request = &provider.requests()[0];
+        let names: Vec<&str> = request.tools.iter().map(|tool| tool.name.as_str()).collect();
+        assert_eq!(names, ["read", "write", "edit", "grep", "find", "ls", "ask_user_question", "memory_save", "memory_recall", "memory_forget", "tool_search"]);
+        let system: String = request.system.iter().map(|part| part.text.as_str()).collect::<Vec<_>>().join("\n");
+        assert!(system.starts_with(wack_agent::prompt::CHAT_PROMPT));
+        assert!(system.contains("private scratchpad folder"));
+        assert!(!system.contains("Secret project rules"), "no instruction files in Chat");
+        assert!(!system.contains("Git repository"));
+        assert!(!system.contains("coding agent"));
+        assert!(!request.messages.iter().any(|message| message.text().contains("Plan mode")), "no mode contract");
+    }
+
+    #[tokio::test]
+    async fn a_chat_area_runs_file_tools_stay_in_its_scratchpad() {
+        use wack_llm::testing::call;
+
+        let folder = tempfile::tempdir().unwrap();
+        std::fs::write(folder.path().join("outside.txt"), "secret").unwrap();
+        let provider = ScriptedProvider::new([
+            call(&[
+                ("a", "write", serde_json::json!({ "path": "notes.md", "content": "inside" })),
+                ("b", "read", serde_json::json!({ "path": "../../outside.txt" })),
+                ("c", "bash", serde_json::json!({ "command": "cat ../../outside.txt" })),
+            ]),
+            say("done"),
+        ]);
+        let chat = chat_setup(provider.clone(), folder.path());
+        let scratch = chat.cwd.clone();
+        let (_, sink) = collect();
+        run(chat, Job::Prompt("go".into()), Control::new(), sink).await;
+        assert_eq!(std::fs::read_to_string(scratch.join("notes.md")).unwrap(), "inside");
+        let results: Vec<(String, bool)> = provider.requests()[1]
+            .messages
+            .iter()
+            .flat_map(|message| message.content.iter())
+            .filter_map(|block| match block {
+                wack_llm::Block::ToolResult { content, is_error, .. } => Some((content.clone(), *is_error)),
+                _ => None,
+            })
+            .collect();
+        assert_eq!(results.len(), 3, "{results:?}");
+        assert!(!results[0].1);
+        assert!(results[1].1 && results[1].0.contains("outside it"), "{:?}", results[1]);
+        assert!(results[2].1 && !results[2].0.contains("secret"), "{:?}", results[2]);
+    }
+
+    #[test]
+    fn a_chat_chats_setup_has_its_scratchpad_and_none_of_the_coding_features() {
+        let folder = tempfile::tempdir().unwrap();
+        let mut store = Store::open(folder.path()).unwrap();
+        store
+            .add_connection(
+                crate::NewConnection {
+                    name: "Testing".into(),
+                    format: wack_llm::WireFormat::OpenaiChat,
+                    base_url: "https://example.invalid/v1".into(),
+                    models: vec![crate::Model::new("m", None)],
+                },
+                "k",
+            )
+            .unwrap();
+        let chat = store.create_area_chat("Hello", crate::ModelChoice::default()).unwrap();
+        let setup = store.run_setup(&chat).unwrap();
+        assert_eq!(setup.kind, ChatKind::Chat);
+        assert_eq!(setup.cwd, store.scratch_folder(&chat));
+        assert!(setup.cwd.is_dir());
+        assert_ne!(setup.mcp_folder, setup.cwd, "MCP servers never start in a scratchpad");
+        assert_eq!(setup.mode, AgentMode::Build);
+        assert!(!setup.settings.commit_attribution);
+        assert!(setup.agents.is_none() && setup.skill_roots.is_empty() && setup.run_command.is_none());
+        assert_eq!(setup.memory, store.chat_area_memory());
     }
 
     #[test]

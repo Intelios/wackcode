@@ -63,9 +63,19 @@ impl Canvases {
     /// `root` is the chat's canvas folder, `v3/canvases/<chat>`; `backend` is `None` where there
     /// is no browser.
     pub fn new(root: impl Into<PathBuf>, backend: Option<Arc<dyn Backend>>) -> Self {
+        Self::with_store(Store::new(root), backend)
+    }
+
+    /// A Chat chat's canvases: local images come only from `folders` (its scratchpad and its
+    /// saved pictures), never from elsewhere on the Mac.
+    pub fn confined(root: impl Into<PathBuf>, backend: Option<Arc<dyn Backend>>, folders: Vec<PathBuf>) -> Self {
+        Self::with_store(Store::new(root).confine_images(folders), backend)
+    }
+
+    fn with_store(store: Store, backend: Option<Arc<dyn Backend>>) -> Self {
         Self {
             inner: Arc::new(Inner {
-                store: Store::new(root),
+                store,
                 renderer: backend.map(|backend| Arc::new(Renderer::new(backend))),
                 canvases: Mutex::new(None),
                 observer: Mutex::new(None),

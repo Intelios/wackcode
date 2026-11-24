@@ -38,7 +38,7 @@ impl Tool for Write {
 
     async fn run(&self, input: Value, context: &ToolContext<'_>) -> Result<ToolOutput, String> {
         let input: Input = parse(input)?;
-        let path = resolve(&context.cwd, &input.path);
+        let path = resolve(context, "write", &input.path)?;
         if let Some(folder) = path.parent() {
             tokio::fs::create_dir_all(folder).await.map_err(|error| format!("Could not create the folder for {}: {error}.", input.path))?;
         }

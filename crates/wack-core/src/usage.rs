@@ -29,7 +29,7 @@ use serde::{Deserialize, Serialize};
 use uuid::Uuid;
 use wack_agent::{ModelCall, Recorder};
 
-use crate::store::Connection;
+use crate::store::{ChatKind, Connection};
 
 /// The most records the queue holds; the oldest is dropped beyond that, and counted.
 const MAX_QUEUE: usize = 1024;
@@ -42,6 +42,7 @@ const MAX_COUNT: u64 = 9_007_199_254_740_991;
 const PURPOSES: [&str; 7] =
     ["chat", "subagent", "title", "compaction", "branch_summary", "goal_verification", "commit_message"];
 const OUTCOMES: [&str; 3] = ["completed", "failed", "cancelled"];
+const MODES: [&str; 2] = ["code", "chat"];
 
 /// Token counts as the contract defines them: the four categories are additive, `input` excludes
 /// both cache categories, and `output` includes reasoning.
@@ -84,6 +85,11 @@ pub struct Record {
     /// The folder the run worked in.
     #[serde(default)]
     pub workspace: Option<String>,
+    /// The area that made the call: `code` or `chat` (the Chat area), as version 2 stamped it
+    /// from the chat's kind. Additive and last: records written before it carry none, and
+    /// readers treat an absent `mode` as `code`.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub mode: Option<String>,
 }
 
 impl Record {
@@ -101,6 +107,7 @@ impl Record {
             && self.subagent_id.as_ref().is_none_or(|id| id.len() <= 256)
             && PURPOSES.contains(&self.purpose.as_str())
             && OUTCOMES.contains(&self.outcome.as_str())
+            && self.mode.as_deref().is_none_or(|mode| MODES.contains(&mode))
             && self.tokens.as_ref().is_none_or(|tokens| {
                 [tokens.input, tokens.output, tokens.cache_read, tokens.cache_write]
                     .iter()
@@ -298,23 +305,27 @@ pub struct RunRecorder {
     provider_name: Option<String>,
     project: Option<String>,
     workspace: Option<String>,
+    mode: ChatKind,
 }
 
 impl RunRecorder {
+    /// `project` is `None` for a Chat chat, which has none; its `workspace` is its scratchpad.
     pub fn new(
         writer: &Arc<UsageWriter>,
         connection: &Connection,
         session: &str,
-        project: &Path,
+        project: Option<&Path>,
         workspace: &Path,
+        mode: ChatKind,
     ) -> Self {
         Self {
             writer: writer.clone(),
             session: session.to_string(),
             provider: connection.id.clone(),
             provider_name: Some(connection.name.clone()),
-            project: Some(project.display().to_string()),
+            project: project.map(|project| project.display().to_string()),
             workspace: Some(workspace.display().to_string()),
+            mode,
         }
     }
 }
@@ -345,6 +356,7 @@ impl Recorder for RunRecorder {
             session_id: self.session.clone(),
             project: self.project.clone(),
             workspace: self.workspace.clone(),
+            mode: Some(self.mode.ledger_mode().to_string()),
         });
     }
 }
@@ -493,6 +505,9 @@ mod tests {
         record.outcome = "interrupted".into();
         writer.record(record);
         let mut record = fresh();
+        record.mode = Some("plan".into());
+        writer.record(record);
+        let mut record = fresh();
         record.tokens = Some(Tokens { input: MAX_COUNT + 1, output: 0, cache_read: 0, cache_write: 0 });
         writer.record(record);
 
@@ -535,7 +550,51 @@ mod tests {
             models: Vec::new(),
             enabled: true,
         };
-        RunRecorder::new(&Arc::new(UsageWriter::new(&temp.join("usage/v1"), true)), &connection, "chat-9", Path::new("/repo/root"), Path::new("/repo/root/worktree"))
+        RunRecorder::new(&Arc::new(UsageWriter::new(&temp.join("usage/v1"), true)), &connection, "chat-9", Some(Path::new("/repo/root")), Path::new("/repo/root/worktree"), ChatKind::Code)
+    }
+
+    #[test]
+    fn validates_mode_and_chat_kind_spells_the_ledger_values() {
+        assert_eq!(ChatKind::Code.ledger_mode(), "code");
+        assert_eq!(ChatKind::Chat.ledger_mode(), "chat");
+        let mut record = records()[0].clone();
+        for (mode, valid) in [(None, true), (Some("code"), true), (Some("chat"), true), (Some("plan"), false), (Some(""), false)] {
+            record.mode = mode.map(str::to_string);
+            assert_eq!(record.valid(), valid, "{mode:?}");
+        }
+        // Absent, it is not written at all: the contract's older records stay byte for byte.
+        record.mode = None;
+        assert!(!serde_json::to_string(&record).unwrap().contains("\"mode\""));
+        record.mode = Some("chat".into());
+        assert!(serde_json::to_string(&record).unwrap().ends_with(r#","mode":"chat"}"#), "the last field, as version 2 wrote it");
+    }
+
+    #[test]
+    fn a_chat_area_run_has_no_project_and_says_chat() {
+        let temp = tempfile::tempdir().unwrap();
+        let connection = Connection {
+            id: "conn-1".into(),
+            name: "Testing".into(),
+            format: wack_llm::WireFormat::OpenaiChat,
+            base_url: "https://example.test/v1".into(),
+            models: Vec::new(),
+            enabled: true,
+        };
+        let writer = Arc::new(UsageWriter::new(&temp.path().join("usage/v1"), true));
+        RunRecorder::new(&writer, &connection, "chat-7", None, Path::new("/data/v3/scratch/chat-7"), ChatKind::Chat).record(ModelCall {
+            purpose: Purpose::Chat,
+            model: "m".into(),
+            duration_ms: 1,
+            outcome: CallOutcome::Completed,
+            usage: None,
+            subagent_id: None,
+        });
+        let month = fs::read_dir(temp.path().join("usage/v1")).unwrap().next().unwrap().unwrap().path();
+        let file = fs::read_dir(&month).unwrap().next().unwrap().unwrap().path();
+        let record: serde_json::Value = serde_json::from_str(fs::read_to_string(&file).unwrap().trim()).unwrap();
+        assert_eq!(record["project"], serde_json::Value::Null);
+        assert_eq!(record["workspace"], "/data/v3/scratch/chat-7");
+        assert_eq!(record["mode"], "chat");
     }
 
     #[test]
@@ -566,6 +625,7 @@ mod tests {
         assert_eq!(record["session_id"], "chat-9");
         assert_eq!(record["project"], "/repo/root");
         assert_eq!(record["workspace"], "/repo/root/worktree");
+        assert_eq!(record["mode"], "code");
         assert!(record["ts"].as_i64().unwrap() > 0);
         assert_eq!(record["duration_ms"], 1234);
     }

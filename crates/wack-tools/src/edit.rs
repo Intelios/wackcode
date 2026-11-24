@@ -55,7 +55,7 @@ impl Tool for Edit {
 
     async fn run(&self, input: Value, context: &ToolContext<'_>) -> Result<ToolOutput, String> {
         let input: Input = parse(input)?;
-        let path = resolve(&context.cwd, &input.path);
+        let path = resolve(context, "edit", &input.path)?;
         let bytes = tokio::fs::read(&path).await.map_err(|error| format!("Could not read {}: {error}.", input.path))?;
         let original = String::from_utf8(bytes).map_err(|_| format!("{} is not a text file.", input.path))?;
         let changed = apply(&original, &input.edits)?;

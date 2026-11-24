@@ -1143,7 +1143,7 @@ impl AppState {
             match self.tabs.get(index).or_else(|| index.checked_sub(1).and_then(|before| self.tabs.get(before))).cloned() {
                 Some(next) => self.select(Selection::Chat(next), cx),
                 None => {
-                    let project = self.store.chat(id).map(|chat| chat.project.clone());
+                    let project = self.store.chat(id).and_then(|chat| chat.project.clone());
                     match project {
                         Some(project) => self.select(Selection::NewChat(project), cx),
                         None => self.select_somewhere(cx),
@@ -1179,7 +1179,7 @@ impl AppState {
             .current_project()
             .map(|project| project.id.clone())
             .or_else(|| self.store.ui().last_project.clone().filter(|id| self.store.project(id).is_some()));
-        let ui = Ui { sidebar_hidden: self.sidebar_hidden, last_project };
+        let ui = Ui { sidebar_hidden: self.sidebar_hidden, last_project, area: self.store.ui().area };
         if let Err(message) = self.store.set_ui(ui) {
             self.notice = Some(message.into());
         }
@@ -1216,7 +1216,7 @@ impl AppState {
     pub fn current_project(&self) -> Option<&Project> {
         let id = match &self.selection {
             Selection::NewChat(project) => Some(project.as_str()),
-            Selection::Chat(chat) => self.store.chat(chat).map(|chat| chat.project.as_str()),
+            Selection::Chat(chat) => self.store.chat(chat).and_then(|chat| chat.project.as_deref()),
             Selection::Welcome | Selection::Settings => None,
         };
         id.and_then(|id| self.store.project(id))
@@ -1261,8 +1261,10 @@ impl AppState {
                         session.focus_request = Some(asking.focus.clone());
                     }
                 });
-                self.open_projects.insert(chat.project.clone());
-                self.look_up_branch(&chat.project, cx);
+                if let Some(project) = &chat.project {
+                    self.open_projects.insert(project.clone());
+                    self.look_up_branch(project, cx);
+                }
                 if !self.tabs.contains(id) {
                     self.tabs.push(id.clone());
                 }
@@ -1388,7 +1390,7 @@ impl AppState {
     }
 
     pub fn delete_chat(&mut self, id: &str, cx: &mut Context<Self>) {
-        let project = self.store.chat(id).map(|chat| chat.project.clone());
+        let project = self.store.chat(id).and_then(|chat| chat.project.clone());
         self.drop_session(id);
         if let Err(message) = self.store.delete_chat(id) {
             self.notice = Some(message.into());
@@ -1397,7 +1399,7 @@ impl AppState {
         if let Some(project) = &project {
             let project = project.clone();
             for (chat_id, session) in self.sessions.clone() {
-                if self.store.chat(&chat_id).is_some_and(|chat| chat.project == project) {
+                if self.store.chat(&chat_id).is_some_and(|chat| chat.project.as_ref() == Some(&project)) {
                     let chat = self.store.chat(&chat_id).unwrap().clone();
                     let view = self.suggestion_view(&chat);
                     session.update(cx, |session, cx| session.sync_suggestion_view(view, cx));
@@ -1563,12 +1565,9 @@ impl AppState {
             }
         };
         let request = title::request(&model, opening);
-        // The ledger records the request against the chat's project, as a run's calls are.
-        let recorder = self
-            .store
-            .chat(chat)
-            .and_then(|listed| self.store.project(&listed.project))
-            .map(|project| self.store.usage_recorder(&connection, chat, &project.path));
+        // The ledger records the request as a run's calls are: against the chat's project, or as
+        // the Chat area's.
+        let recorder = self.store.chat(chat).and_then(|listed| self.store.chat_recorder(&connection, listed));
         self.title_attempts += 1;
         let attempt = self.title_attempts;
         let id = chat.to_string();
@@ -1883,7 +1882,7 @@ impl AppState {
         let (Some(session), Some(chat)) = (self.sessions.get(&id).cloned(), self.store.chat(&id)) else {
             return;
         };
-        let Some(project) = self.store.project(&chat.project).map(|project| project.path.clone()) else {
+        let Some(project) = chat.project.as_deref().and_then(|id| self.store.project(id)).map(|project| project.path.clone()) else {
             return;
         };
         let Some(plan) = session.read(cx).awaiting_plan() else {
@@ -2256,7 +2255,7 @@ impl AppState {
         };
         match name {
             "new" => {
-                let project = self.store.chat(chat).map(|chat| chat.project.clone());
+                let project = self.store.chat(chat).and_then(|chat| chat.project.clone());
                 self.new_chat(project, cx);
                 true
             }
@@ -2326,7 +2325,7 @@ impl AppState {
     /// What the cards of `chat`'s settled turns read their state from: dismissals and opened
     /// chats from the store; the chat itself fills in started and queued ids.
     fn suggestion_view(&self, chat: &Chat) -> crate::suggestions::View {
-        let chats = self.store.chats(&chat.project);
+        let chats = chat.project.as_deref().map(|project| self.store.chats(project)).unwrap_or_default();
         crate::suggestions::View {
             dismissed: chat.dismissed_suggestions.iter().cloned().collect(),
             queued: Default::default(),
@@ -2377,9 +2376,12 @@ impl AppState {
     /// it. It opens in a background tab: the user stays in the chat they were reading.
     fn start_suggestion_chat(&mut self, origin: &Chat, card: &crate::suggestions::Card, mode: AgentMode, cx: &mut Context<Self>) {
         let origin_of = wack_core::SuggestionOrigin { chat: origin.id.clone(), suggestion: card.id.to_string() };
+        let Some(project) = origin.project.clone() else {
+            return;
+        };
         let chat = match self
             .store
-            .create_chat(&origin.project, &card.title, origin.choice.clone(), mode, Some(origin_of))
+            .create_chat(&project, &card.title, origin.choice.clone(), mode, Some(origin_of))
         {
             Ok(chat) => chat,
             Err(message) => {
@@ -2387,7 +2389,7 @@ impl AppState {
                 return;
             }
         };
-        self.open_projects.insert(origin.project.clone());
+        self.open_projects.insert(project);
         if !self.tabs.contains(&chat.id) {
             self.tabs.push(chat.id.clone());
         }
@@ -2534,7 +2536,7 @@ impl AppState {
             return;
         };
         let _ = self.store.touch_chat(chat);
-        if let Some(project) = self.store.chat(chat).map(|chat| chat.project.clone()) {
+        if let Some(project) = self.store.chat(chat).and_then(|chat| chat.project.clone()) {
             // The agent may have switched branches.
             self.look_up_branch(&project, cx);
         }
@@ -2615,8 +2617,9 @@ impl AppState {
         if let Some(session) = self.sessions.get(&chat.id) {
             return session.clone();
         }
-        let project = self.store.project(&chat.project);
-        let cwd = project.map(|project| project.path.clone()).unwrap_or_else(|| PathBuf::from("/"));
+        let project = chat.project.as_deref().and_then(|id| self.store.project(id));
+        // A Chat chat works in its scratchpad.
+        let cwd = self.store.chat_folder(chat).unwrap_or_else(|| PathBuf::from("/"));
         let commands = (
             project.and_then(|project| project.command(CommandKind::Build)).map(str::to_string),
             project.and_then(|project| project.command(CommandKind::Run)).map(str::to_string),
@@ -2936,7 +2939,7 @@ impl AppState {
             model: model.or_else(|| resolved.as_ref().map(|resolved| resolved.model.id.clone())),
             effort: effort.unwrap_or(current_effort),
         };
-        if let Err(message) = self.store.set_choice(chat.as_deref(), choice) {
+        if let Err(message) = self.store.set_choice(self.store.ui().area, chat.as_deref(), choice) {
             self.notice = Some(message.into());
         }
         self.menu = None;

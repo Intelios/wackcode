@@ -331,7 +331,9 @@ mod tests {
         let chats = vec![
             Chat {
                 id: "a".into(),
-                project: "p".into(),
+                project: Some("p".into()),
+                kind: Default::default(),
+                archived: None,
                 title: "Started one".into(),
                 session: "a.jsonl".into(),
                 created: 0,
@@ -345,7 +347,9 @@ mod tests {
             },
             Chat {
                 id: "b".into(),
-                project: "p".into(),
+                project: Some("p".into()),
+                kind: Default::default(),
+                archived: None,
                 title: "Someone else's".into(),
                 session: "b.jsonl".into(),
                 created: 0,

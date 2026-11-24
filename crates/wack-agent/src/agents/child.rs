@@ -118,7 +118,7 @@ async fn run(child: &Arc<Child>, launch: Launch, control: &Control) -> Result<(S
         limited: limited.clone(),
     };
     let tasks = Tasks::scratch();
-    let profile = Profile { name: def.name.clone(), prompt: format!("{CHILD_PROMPT}\n\n# Your role\n\n{}", def.prompt) };
+    let profile = Profile { name: def.name.clone(), prompt: format!("{CHILD_PROMPT}\n\n# Your role\n\n{}", def.prompt), chat: false };
     // Ultra and commit attribution are the main chat's own settings: a fresh child role never runs
     // with either, except a conversation copy, which sends exactly what its parent does.
     let settings = Settings { ultra: false, commit_attribution: false, ..model.settings.clone() };

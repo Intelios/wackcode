@@ -38,6 +38,8 @@ const HELP: &str = "wack: the WackCode agent without the app
       --mode build|plan|ultraplan   Plan and Ultra Plan only read, ask, and end with a plan.
                                A resumed run keeps its mode unless you give one.
       --cwd <folder>           Work in another folder.
+      --chat                   Run the Chat area's assistant instead: no project, a fresh
+                               scratchpad of its own, and the Chat area's tools and memory.
       --resume <session file>  Continue an earlier run.
                                A prompt starting with /name runs that skill or command, as in the app.
   wack skills                  List the skills a run loads, and any that could not load.
@@ -291,6 +293,108 @@ impl Drop for Servers {
     }
 }
 
+/// `wack run --chat`: the Chat area's agent, built exactly as the app builds it
+/// (`wack_core::chat_agent`), in a scratchpad of its own beside the data folder's others.
+async fn chat_run(store: &Store, connection: Connection, model: Model, effort: Option<Reasoning>, resume: Option<String>, prompt: String, piped: bool) -> Result<ExitCode, String> {
+    if let Some(wanted) = effort
+        && !model.choices().contains(&wanted)
+    {
+        let offered: Vec<&str> = model.choices().iter().map(|level| level.label()).collect();
+        return Err(format!("{} does not list {} reasoning. It offers: {}.", model.id, wanted.label(), offered.join(", ")));
+    }
+    let session = match resume {
+        Some(path) => Session::open(Path::new(&path))?,
+        None => {
+            let stamp = SystemTime::now().duration_since(UNIX_EPOCH).map(|time| time.as_millis()).unwrap_or(0);
+            let scratch = store.sessions_folder().parent().map(|data| data.join("scratch").join(format!("cli-{stamp:x}"))).ok_or("The data folder has no parent.")?;
+            std::fs::create_dir_all(&scratch).map_err(|error| format!("Could not make the scratchpad: {error}"))?;
+            use std::os::unix::fs::PermissionsExt;
+            let _ = std::fs::set_permissions(&scratch, std::fs::Permissions::from_mode(0o700));
+            Session::create(&store.sessions_folder().join(format!("{stamp:x}.jsonl")), &scratch)?
+        }
+    };
+    let stem = session.path().file_stem().map(|stem| stem.to_string_lossy().into_owned()).unwrap_or_default();
+    let usage: Arc<dyn wack_agent::Recorder> =
+        Arc::new(wack_core::RunRecorder::new(store.usage(), &connection, &stem, None, session.cwd(), wack_core::ChatKind::Chat));
+    let listening = !piped && terminal::interactive();
+    let control = if listening { Control::with_user() } else { Control::new() };
+    let asking = Arc::new(asking::Asking::default());
+    let stopper = control.clone();
+    tokio::spawn(async move {
+        if tokio::signal::ctrl_c().await.is_ok() {
+            eprintln!("\nStopping. Press Ctrl-C again to quit at once.");
+            stopper.stop();
+        }
+        if tokio::signal::ctrl_c().await.is_ok() {
+            std::process::exit(130);
+        }
+    });
+    let hub = Arc::new(Servers(wack_mcp::Hub::new(Some(store.mcp_cache_folder()))));
+    let starting: wack_mcp::Starting = Arc::new(|servers: Vec<String>| {
+        if !servers.is_empty() {
+            eprintln!("{}", print::dim(&format!("Starting MCP servers: {}…", servers.join(", "))));
+        }
+    });
+    let mcp_folder = store.chat_area_folder()?;
+    let mcp = wack_mcp::assemble(&hub.0, &store.mcp_specs_for(&mcp_folder), &mcp_folder, &control.stop_token(), starting).await;
+    let effort = model.pick(effort);
+    let settings = Settings {
+        model: model.id.clone(),
+        effort: model.effort_for(effort),
+        max_output_tokens: None,
+        context_window: model.context_window,
+        accepts_images: model.accepts_images,
+        ultra: effort.is_ultra(),
+        commit_attribution: false,
+    };
+    let parts = wack_core::ChatParts {
+        provider: Arc::new(store.provider(&connection)?),
+        session,
+        settings,
+        memory: store.chat_area_memory(),
+        web: store.web_setup(),
+        browser: None,
+        canvases: None,
+        mcp,
+        usage: store.usage_recording().then_some(usage),
+        readable: Vec::new(),
+    };
+    let mut agent = wack_core::chat_agent(parts)?;
+    let mut header = format!("{} · {} · Chat · {}", connection.name, model.id, agent.session().cwd().display());
+    if effort.is_ultra() {
+        header.push_str(" · Ultra");
+    }
+    eprintln!("{}", print::dim(&header));
+    if listening {
+        let (steering, asking) = (control.clone(), asking.clone());
+        std::thread::spawn(move || {
+            for line in std::io::stdin().lines().map_while(Result::ok) {
+                if !asking.answer(&line, &steering) && !line.trim().is_empty() {
+                    steering.steer(line);
+                }
+            }
+        });
+    }
+    let printer = print::Printer::new(asking);
+    let outcome = agent.run(&prompt, &control, &|event| printer.event(event)).await;
+    store.usage().flush();
+    hub.0.terminate_all();
+    printer.finish();
+    eprintln!("{}", print::dim(&format!("{}\nsession: {}", printer.usage_line(), agent.session().path().display())));
+    std::process::exit(match outcome {
+        Ok(Outcome::Done) => 0,
+        Ok(Outcome::Stopped) => {
+            eprintln!("Stopped.");
+            130
+        }
+        Ok(Outcome::CutOff | Outcome::Refused) => 1,
+        Err(message) => {
+            eprintln!("{message}");
+            1
+        }
+    })
+}
+
 /// Times background news may wake the agent before `wack run` gives up.
 const MAX_WAKES: u32 = 3;
 
@@ -307,6 +411,10 @@ async fn agent(args: &mut Args, folder: &Path) -> Result<ExitCode, String> {
     };
     let cwd = args.value("--cwd")?;
     let resume = args.value("--resume")?;
+    let chat = args.flag("--chat");
+    if chat && (mode.is_some() || cwd.is_some()) {
+        return Err("--chat has no project, so it takes neither --mode nor --cwd.".into());
+    }
     let mut prompt = args.rest().join(" ");
     let piped = prompt.trim().is_empty() && !terminal::interactive();
     if piped {
@@ -339,6 +447,9 @@ async fn agent(args: &mut Args, folder: &Path) -> Result<ExitCode, String> {
         None => connection.models.first().cloned().ok_or("This connection has no models.")?,
     };
 
+    if chat {
+        return chat_run(&store, connection.clone(), model, effort, resume, prompt, piped).await;
+    }
     let session = match resume {
         Some(path) => Session::open(Path::new(&path))?,
         None => {

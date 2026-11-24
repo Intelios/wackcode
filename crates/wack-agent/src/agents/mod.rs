@@ -496,6 +496,7 @@ impl Agents {
             seen: crate::tool::Seen::default(),
             caller: None,
             images: crate::images::Images::none(),
+            confine: None,
         };
         use crate::tool::Tool as _;
         messenger.run(serde_json::json!({ "agent_id": id, "message": text, "background": true }), &context).await.map(|output| output.text)

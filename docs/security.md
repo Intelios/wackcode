@@ -49,3 +49,15 @@ Never add a network origin silently. Call it out explicitly, and list it here.
 ## Reading project files
 
 Project context files such as `AGENTS.md` load on purpose. Everything else the agent reads (files, tool output, web pages) is data, never instructions; the system prompt says so and no feature may undo that.
+
+## Chat's scratchpad
+
+A chat in the Chat area has no project. Its working folder is its own scratchpad, `v3/scratch/<chat>/` (mode 0700, deleted with the chat), and the agent's reach is cut to fit:
+
+- **Its file tools stay inside the scratchpad.** `read`, `write`, `edit`, `ls`, `grep` and `find` get every path through `wack_tools::text::resolve`, which confines a Chat run (`ToolContext::confine`, set by `Profile::chat`) with `wack-tools/src/confine.rs`, ported from version 2's tested policy. It resolves `~`, absolute and relative paths and `file://` addresses, takes `.` and `..` out by their spelling, then compares *real* paths, so a symlink out (as a folder, a file or dangling), a sibling folder whose name starts with the scratchpad's, and a scratchpad that has gone are all refused; the tool then works on the location that was checked. `grep` and `find` never follow links while walking. It is a rule on the agent's tools, not a sandbox: a hard link something else placed inside is not seen.
+- **No shell.** A Chat run has no `bash`, no background commands, no Build or Run, no sub-agents and no skills or slash-command templates (only the app's own `/new`, `/name`, `/copy`, `/compact`). Its registry is built from an allowlist (`wack-agent/src/chat_kit.rs`), and `ChatGuard` refuses any call to a tool off it.
+- **The other ways to name a file**: `browser_upload` already takes only files inside the working folder, now the scratchpad (real paths). A canvas copies local images in only from the scratchpad or the chat's own saved pictures (`Canvases::confined`, `Store::confine_images` in `wack-canvas`), never from elsewhere on the Mac. The browser never opens `file://` (`policy.rs`); its rules are otherwise a Code chat's, loopback included. `read_chat` takes a chat id, never a path, and reads only the Chat area's other chats (`wack-core/src/chat_refs.rs`), so a project's conversation never reaches the Chat area.
+- **No instruction files.** A Chat chat's prompt is its persona and its guide only (`prompt::chat_system`): `AGENTS.md` and `CLAUDE.md` are not read, since walking up from a scratchpad reaches the user's home folder.
+- **MCP servers** reach a Chat chat only when set to all projects, and start in one shared empty folder (`v3/chat-area/`), never a scratchpad, so no server is rooted where it could read one.
+
+A Chat chat adds no network origin: its web, browser and MCP traffic is a Code chat's, under the same rules above.

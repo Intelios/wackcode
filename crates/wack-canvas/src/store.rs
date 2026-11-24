@@ -52,6 +52,9 @@ pub const CSP: &str = "default-src 'none'; script-src 'self' 'unsafe-inline'; st
 #[derive(Clone)]
 pub struct Store {
     root: PathBuf,
+    /// The only folders local images may be copied in from, for a Chat chat (its scratchpad and
+    /// its saved pictures); `None` lets a Code chat's agent name any file it could read anyway.
+    images_from: Option<Arc<Vec<PathBuf>>>,
     /// What each canvas's site serves, kept in memory so Chromium's IO thread never reads the
     /// index. Shared with the sites; replaced whenever a canvas is saved.
     live: Arc<RwLock<HashMap<String, Arc<Canvas>>>>,
@@ -60,7 +63,21 @@ pub struct Store {
 impl Store {
     /// The chat's folder, `v3/canvases/<chat>`. Nothing is created until a canvas is saved.
     pub fn new(root: impl Into<PathBuf>) -> Self {
-        Self { root: root.into(), live: Arc::default() }
+        Self { root: root.into(), images_from: None, live: Arc::default() }
+    }
+
+    /// Copies local images in only from inside these folders (a Chat chat's scratchpad and its
+    /// saved pictures): the agent of a Chat chat must not reach other files through a canvas.
+    pub fn confine_images(mut self, folders: Vec<PathBuf>) -> Self {
+        self.images_from = Some(Arc::new(folders));
+        self
+    }
+
+    /// Whether `path` is somewhere local images may be copied from, judged on real paths.
+    fn may_copy(&self, path: &Path) -> bool {
+        let Some(folders) = &self.images_from else { return true };
+        let Ok(real) = path.canonicalize() else { return false };
+        folders.iter().filter_map(|folder| folder.canonicalize().ok()).any(|folder| real.starts_with(folder))
     }
 
     pub fn root(&self) -> &Path {
@@ -201,6 +218,10 @@ impl Store {
             }
             let mut copies: HashMap<String, String> = HashMap::new();
             for path in references.iter().map(|r| r.2.clone()).collect::<std::collections::BTreeSet<_>>() {
+                if !self.may_copy(Path::new(&path)) {
+                    failures.push(format!("{path}: is outside this chat's scratchpad"));
+                    continue;
+                }
                 match copy_image(&assets, Path::new(&path)) {
                     Ok(name) => {
                         copies.insert(path, format!("assets/{name}"));
@@ -526,6 +547,27 @@ mod tests {
         let mut bad = Artboard { html: Some(format!("<img src=\"{}\"><img src=\"/no/such.png\">", text_file.display())), ..Artboard::default() };
         let error = store.localize_images("t", &mut bad).unwrap_err();
         assert!(error.contains("notes.png: is not a supported image") && error.contains("/no/such.png: no such file"), "{error}");
+    }
+
+    #[test]
+    fn a_chat_chats_canvas_copies_images_only_from_its_own_folders() {
+        let dir = tempfile::tempdir().unwrap();
+        let scratch = dir.path().join("scratch");
+        std::fs::create_dir_all(&scratch).unwrap();
+        let png = [137, 80, 78, 71, 13, 10, 26, 10, 0, 0];
+        let (inside, outside) = (scratch.join("in.png"), dir.path().join("out.png"));
+        std::fs::write(&inside, png).unwrap();
+        std::fs::write(&outside, png).unwrap();
+        std::os::unix::fs::symlink(&outside, scratch.join("link.png")).unwrap();
+        let store = Store::new(dir.path().join("chat")).confine_images(vec![scratch.clone()]);
+        let mut good = Artboard { html: Some(format!("<img src=\"{}\">", inside.display())), ..Artboard::default() };
+        store.localize_images("t", &mut good).unwrap();
+        assert!(good.html.unwrap().contains("assets/"));
+        for path in [outside.clone(), scratch.join("link.png"), scratch.join("../out.png")] {
+            let mut bad = Artboard { html: Some(format!("<img src=\"{}\">", path.display())), ..Artboard::default() };
+            let error = store.localize_images("t", &mut bad).unwrap_err();
+            assert!(error.contains("outside this chat's scratchpad"), "{}: {error}", path.display());
+        }
     }
 
     #[test]

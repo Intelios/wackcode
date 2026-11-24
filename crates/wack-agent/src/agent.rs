@@ -57,18 +57,25 @@ const COMPACT_AT_PERCENT: u64 = 80;
 const DEFAULT_SUMMARY_BUDGET_CHARS: usize = 300_000;
 const STOPPED: &str = "Stopped by the user before this tool finished.";
 
-/// What kind of agent this is. Code is the only profile so far; a chat-only agent and sub-agent
-/// roles are further profiles, not branches inside the loop.
+/// What kind of agent this is: the coding agent, or the Chat area's assistant. Sub-agent roles
+/// are code profiles with their own core text.
 #[derive(Clone, Debug)]
 pub struct Profile {
     pub name: String,
     /// The core of the system prompt.
     pub prompt: String,
+    /// The Chat area's agent: its guide is the chat one (no folder, Git or instruction files),
+    /// and its file tools are confined to its working directory, the chat's scratchpad.
+    pub chat: bool,
 }
 
 impl Profile {
     pub fn code() -> Self {
-        Self { name: "code".to_string(), prompt: prompt::CODE_PROMPT.to_string() }
+        Self { name: "code".to_string(), prompt: prompt::CODE_PROMPT.to_string(), chat: false }
+    }
+
+    pub fn chat() -> Self {
+        Self { name: "chat".to_string(), prompt: prompt::CHAT_PROMPT.to_string(), chat: true }
     }
 }
 
@@ -294,6 +301,8 @@ pub struct Agent {
     caller: Option<String>,
     /// Where the chat keeps its pictures: beside its session, or its parent's for a sub-agent.
     images: Images,
+    /// The one folder file tools may reach (a Chat chat's scratchpad), from the profile.
+    confine: Option<PathBuf>,
 }
 
 enum Planned {
@@ -312,11 +321,16 @@ impl Agent {
         let cwd = session.cwd().to_path_buf();
         let images = Images::for_session(session.path());
         let specs: Vec<_> = registry.specs().collect();
-        let co_author = settings.commit_attribution.then(|| prompt::co_author_label(&settings.model));
-        let mut system = prompt::system(&profile.prompt, &cwd, &prompt::today(), &specs, co_author.as_deref());
+        let mut system = if profile.chat {
+            prompt::chat_system(&profile.prompt, &prompt::today(), &specs)
+        } else {
+            let co_author = settings.commit_attribution.then(|| prompt::co_author_label(&settings.model));
+            prompt::system(&profile.prompt, &cwd, &prompt::today(), &specs, co_author.as_deref())
+        };
         if settings.ultra {
             system.push(SystemPart { text: prompt::ULTRA_PROMPT.to_string() });
         }
+        let confine = profile.chat.then(|| cwd.clone());
         Self {
             provider,
             registry,
@@ -330,6 +344,7 @@ impl Agent {
             recorder: None,
             caller: None,
             images,
+            confine,
         }
     }
 
@@ -696,6 +711,7 @@ impl Agent {
                 seen,
                 caller: self.caller.clone(),
                 images: pictures.clone(),
+                confine: self.confine.clone(),
             };
             async move {
                 let context = &context;

@@ -70,6 +70,9 @@ pub struct ToolContext<'a> {
     pub caller: Option<String>,
     /// Where the chat keeps its pictures' originals.
     pub images: Images,
+    /// The only folder file tools may reach, for a Chat chat (its scratchpad); `None` for a
+    /// Code chat. Tools take paths through `wack_tools`' `resolve`, which enforces it.
+    pub confine: Option<PathBuf>,
 }
 
 /// What the model sent to make this call: its instructions, its tools and the conversation,
@@ -88,7 +91,7 @@ pub struct Seen<'a> {
 impl ToolContext<'static> {
     /// A context with nobody on the other end, for running a tool outside a run.
     pub fn detached(cwd: impl Into<PathBuf>) -> Self {
-        Self { call_id: String::new(), cwd: cwd.into(), cancel: CancellationToken::new(), user: User::nobody(), tasks: Tasks::scratch(), agents: Agents::new(), seen: Seen::default(), caller: None, images: Images::none() }
+        Self { call_id: String::new(), cwd: cwd.into(), cancel: CancellationToken::new(), user: User::nobody(), tasks: Tasks::scratch(), agents: Agents::new(), seen: Seen::default(), caller: None, images: Images::none(), confine: None }
     }
 }
 

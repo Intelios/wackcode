@@ -250,6 +250,11 @@ pub fn scan(root: &Path) -> Vec<Note> {
 /// The section the system prompt carries: one line per note, grouped by kind then title, which
 /// the model scans to decide what to recall. Bodies never enter it. `None` with no notes.
 pub fn index(notes: &[Note]) -> Option<String> {
+    index_for(notes, false)
+}
+
+/// The index for the Chat area's one shared store (`chat`), or a project's.
+pub fn index_for(notes: &[Note], chat: bool) -> Option<String> {
     if notes.is_empty() {
         return None;
     }
@@ -267,10 +272,11 @@ pub fn index(notes: &[Note]) -> Option<String> {
         lines.pop();
     }
     let hidden = sorted.len() - lines.len();
+    let (heading, saved) = if chat { ("## Memory", "earlier chats") } else { ("## Project memory", "earlier conversations in this project") };
     let mut out = vec![
-        "## Project memory".to_string(),
+        heading.to_string(),
         String::new(),
-        "Notes saved from earlier conversations in this project, one line each. When one is relevant to the current request, read its full text with memory_recall; otherwise leave it alone.".to_string(),
+        format!("Notes saved from {saved}, one line each. When one is relevant to the current request, read its full text with memory_recall; otherwise leave it alone."),
         String::new(),
     ];
     out.extend(lines);

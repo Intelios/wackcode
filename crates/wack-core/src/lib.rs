@@ -9,10 +9,13 @@
 //! a chat (`run`), what changed in a project (`git`), terminals (`terminal`), how the app looks
 //! (`appearance`), where each project's memory lives (`memory`), skills and slash commands
 //! (`skills`), sub-agents' settings (`agents`), automatic chat titles (`title`), the usage ledger TokenTrail reads (`usage`), the
-//! web tools' settings (`web`), and the MCP servers (`mcp`).
+//! web tools' settings (`web`), the MCP servers (`mcp`), and the Chat area's `@` references
+//! (`chat_refs`). A chat is a Code chat (a project's) or a Chat chat (the Chat area's:
+//! `store::ChatKind`), and `run` builds a different agent for each.
 
 pub mod agents;
 pub mod appearance;
+pub mod chat_refs;
 pub mod git;
 pub mod mcp;
 pub mod memory;
@@ -30,12 +33,12 @@ pub mod web_usage;
 
 pub use appearance::{Appearance, Backdrop, Mode, Texture, ThemeName};
 pub use git::GitConfig;
-pub use run::{Job, RunEvent, RunSetup, discard_plan, run, save_plan};
+pub use run::{ChatParts, Job, RunEvent, RunSetup, chat_agent, discard_plan, run, save_plan};
 pub use title::AutoTitleConfig;
 pub use runner::{CommandEvent, CommandInfo, CommandSession, CommandStatus, Runner};
 pub use usage::{RunRecorder, UsageStatus, UsageWriter};
 pub use store::{
-    BrowserConfig, Chat, CommandKind, Connection, Model, ModelChoice, NewConnection, Project, Reasoning, Resolved, Store, SuggestionOrigin, Ui,
+    BrowserConfig, Chat, ChatKind, CommandKind, Connection, Model, ModelChoice, NewConnection, Project, Reasoning, Resolved, Store, SuggestionOrigin, Ui,
     title_from,
 };
 

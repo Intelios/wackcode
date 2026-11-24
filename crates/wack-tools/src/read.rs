@@ -44,7 +44,7 @@ impl Tool for Read {
 
     async fn run(&self, input: Value, context: &ToolContext<'_>) -> Result<ToolOutput, String> {
         let input: Input = parse(input)?;
-        let path = resolve(&context.cwd, &input.path);
+        let path = resolve(context, "read", &input.path)?;
         let size = tokio::fs::metadata(&path).await.map_err(|error| format!("Could not read {}: {error}.", input.path))?;
         if size.is_dir() {
             return Err(format!("{} is a folder. Use ls to list it.", input.path));

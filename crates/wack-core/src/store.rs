@@ -262,11 +262,37 @@ pub struct SuggestionOrigin {
     pub suggestion: String,
 }
 
+/// Which area a chat belongs to, fixed when it is made. A Code chat works in a project's
+/// folder with the coding agent; a Chat chat has no project, only its own scratchpad
+/// (`v3/scratch/<chat>/`), a general persona and a smaller set of tools (`run.rs`). Also the
+/// area the window shows ([`Ui::area`]).
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq, Hash, Serialize, Deserialize)]
+#[serde(rename_all = "lowercase")]
+pub enum ChatKind {
+    #[default]
+    Code,
+    Chat,
+}
+
+impl ChatKind {
+    /// How the usage ledger spells it (`mode`), as version 2 did.
+    pub fn ledger_mode(self) -> &'static str {
+        match self {
+            ChatKind::Code => "code",
+            ChatKind::Chat => "chat",
+        }
+    }
+}
+
 #[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
 pub struct Chat {
     pub id: String,
-    /// The project's id.
-    pub project: String,
+    /// Code or Chat. Chats saved before the Chat area load as Code.
+    #[serde(default, skip_serializing_if = "is_code")]
+    pub kind: ChatKind,
+    /// The project's id. Always set for a Code chat, never for a Chat chat.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub project: Option<String>,
     pub title: String,
     /// The session file's name inside the sessions folder.
     pub session: String,
@@ -293,6 +319,24 @@ pub struct Chat {
     /// The suggested task this chat was started from, if any (`suggestion.rs`).
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub origin: Option<SuggestionOrigin>,
+    /// When the user archived the chat (milliseconds since 1970). An archived chat leaves its
+    /// list for the area's Archived view and takes no new messages until it is unarchived.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub archived: Option<u64>,
+}
+
+fn is_code(kind: &ChatKind) -> bool {
+    *kind == ChatKind::Code
+}
+
+impl Chat {
+    pub fn is_chat_area(&self) -> bool {
+        self.kind == ChatKind::Chat
+    }
+
+    pub fn is_archived(&self) -> bool {
+        self.archived.is_some()
+    }
 }
 
 /// How the window was left. The window itself opens on a fresh new chat, as version 2 did, so
@@ -305,6 +349,9 @@ pub struct Ui {
     /// leaves it as it was; a project that no longer exists falls back to the first one.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub last_project: Option<String>,
+    /// The area the window was left in (Code or Chat); launch opens in it.
+    #[serde(default, skip_serializing_if = "is_code")]
+    pub area: ChatKind,
 }
 
 #[derive(Default, Serialize, Deserialize)]
@@ -318,6 +365,10 @@ struct State {
     /// The last model the user picked; new chats start with it.
     #[serde(default)]
     defaults: ModelChoice,
+    /// The last model the user picked in the Chat area. Until there is one, Chat starts from
+    /// Code's choice, as version 2 did.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    chat_defaults: Option<ModelChoice>,
     #[serde(default)]
     ui: Ui,
     #[serde(default)]
@@ -802,7 +853,7 @@ impl Store {
     /// Takes a project and its chats off the list. Their session files stay on disk.
     pub fn remove_project(&mut self, id: &str) -> Result<(), String> {
         self.state.projects.retain(|project| project.id != id);
-        self.state.chats.retain(|chat| chat.project != id);
+        self.state.chats.retain(|chat| chat.project.as_deref() != Some(id));
         self.save()
     }
 
@@ -851,16 +902,54 @@ impl Store {
         Ok(updated)
     }
 
-    /// A project's chats, most recently used first.
+    /// A project's chats, most recently used first. Archived chats are left out.
     pub fn chats(&self, project: &str) -> Vec<&Chat> {
         let mut chats: Vec<&Chat> = self
             .state
             .chats
             .iter()
-            .filter(|chat| chat.project == project)
+            .filter(|chat| chat.project.as_deref() == Some(project) && !chat.is_archived())
             .collect();
         chats.sort_by_key(|chat| std::cmp::Reverse(chat.updated));
         chats
+    }
+
+    /// The Chat area's chats, most recently active first (`updated` moves only when a run
+    /// starts or ends). Archived chats are left out.
+    pub fn chat_area_chats(&self) -> Vec<&Chat> {
+        let mut chats: Vec<&Chat> =
+            self.state.chats.iter().filter(|chat| chat.is_chat_area() && !chat.is_archived()).collect();
+        chats.sort_by_key(|chat| std::cmp::Reverse(chat.updated));
+        chats
+    }
+
+    /// An area's archived chats, most recently archived first. A Code chat whose project is
+    /// gone is not listed (its project took it off the list).
+    pub fn archived_chats(&self, area: ChatKind) -> Vec<&Chat> {
+        let mut chats: Vec<&Chat> = self
+            .state
+            .chats
+            .iter()
+            .filter(|chat| chat.kind == area && chat.is_archived())
+            .filter(|chat| chat.project.as_deref().is_none_or(|project| self.project(project).is_some()))
+            .collect();
+        chats.sort_by_key(|chat| std::cmp::Reverse(chat.archived));
+        chats
+    }
+
+    /// Archives a chat, or unarchives it. Its files stay as they are.
+    pub fn set_archived(&mut self, id: &str, archived: bool) -> Result<(), String> {
+        let chat = self.state.chats.iter_mut().find(|chat| chat.id == id).ok_or("That chat is gone.")?;
+        if chat.is_archived() == archived {
+            return Ok(());
+        }
+        chat.archived = archived.then(now_millis);
+        self.save()
+    }
+
+    /// Every chat, in either area, archived or not, in the order they were made.
+    pub fn all_chats(&self) -> impl Iterator<Item = &Chat> {
+        self.state.chats.iter()
     }
 
     pub fn chat(&self, id: &str) -> Option<&Chat> {
@@ -873,8 +962,9 @@ impl Store {
         self.state
             .chats
             .iter()
-            .max_by_key(|chat| chat.updated)
-            .and_then(|chat| self.project(&chat.project))
+            .filter_map(|chat| Some((chat.updated, self.project(chat.project.as_deref()?)?)))
+            .max_by_key(|(updated, _)| *updated)
+            .map(|(_, project)| project)
     }
 
     /// Lists a new chat. Its session file is created by its first run. `origin` records the
@@ -890,12 +980,41 @@ impl Store {
         if self.project(project).is_none() {
             return Err("That project is gone.".to_string());
         }
+        let chat = Self::new_chat(ChatKind::Code, Some(project), title, choice, mode, origin);
+        self.state.chats.push(chat.clone());
+        self.save()?;
+        Ok(chat)
+    }
+
+    /// Lists a new chat in the Chat area and makes its scratchpad, before any run can freeze
+    /// the session's folder. A Chat chat is always in Build: it has no plan tools.
+    pub fn create_area_chat(&mut self, title: &str, choice: ModelChoice) -> Result<Chat, String> {
+        let chat = Self::new_chat(ChatKind::Chat, None, title, choice, AgentMode::Build, None);
+        let scratch = self.scratch_folder(&chat);
+        fs::create_dir_all(&scratch).map_err(|error| format!("Could not make the chat's scratchpad: {error}"))?;
+        for folder in [scratch.parent().unwrap_or(&scratch), scratch.as_path()] {
+            let _ = fs::set_permissions(folder, fs::Permissions::from_mode(0o700));
+        }
+        self.state.chats.push(chat.clone());
+        self.save()?;
+        Ok(chat)
+    }
+
+    fn new_chat(
+        kind: ChatKind,
+        project: Option<&str>,
+        title: &str,
+        choice: ModelChoice,
+        mode: AgentMode,
+        origin: Option<SuggestionOrigin>,
+    ) -> Chat {
         let id = new_id("chat");
         let now = now_millis();
-        let chat = Chat {
+        Chat {
             session: format!("{id}.jsonl"),
             id,
-            project: project.to_string(),
+            kind,
+            project: project.map(str::to_string),
             title: title.to_string(),
             created: now,
             updated: now,
@@ -905,10 +1024,33 @@ impl Store {
             browser_tabs: None,
             dismissed_suggestions: Vec::new(),
             origin,
-        };
-        self.state.chats.push(chat.clone());
-        self.save()?;
-        Ok(chat)
+            archived: None,
+        }
+    }
+
+    /// A Chat chat's private folder (`v3/scratch/<chat>/`, 0700): its working directory, and
+    /// the only place its file tools reach. Removed with the chat.
+    pub fn scratch_folder(&self, chat: &Chat) -> PathBuf {
+        self.folder.join("scratch").join(&chat.id)
+    }
+
+    /// The one empty folder every Chat chat's MCP servers start in, so the chats share their
+    /// connections (the hub keys them by folder) and no server is rooted where it could see a
+    /// scratchpad.
+    pub fn chat_area_folder(&self) -> Result<PathBuf, String> {
+        let folder = self.folder.join("chat-area");
+        fs::create_dir_all(&folder).map_err(|error| format!("Could not make the Chat area's folder: {error}"))?;
+        let _ = fs::set_permissions(&folder, fs::Permissions::from_mode(0o700));
+        Ok(folder)
+    }
+
+    /// The folder a chat works in: its project's, or its scratchpad. `None` for a Code chat
+    /// whose project is gone.
+    pub fn chat_folder(&self, chat: &Chat) -> Option<PathBuf> {
+        match chat.kind {
+            ChatKind::Code => self.project(chat.project.as_deref()?).map(|project| project.path.clone()),
+            ChatKind::Chat => Some(self.scratch_folder(chat)),
+        }
     }
 
     /// Dismisses a suggested task in `chat` (or restores it): card state, saved with the chat.
@@ -967,8 +1109,10 @@ impl Store {
     }
 
     /// Switches a chat between Build, Plan and Ultra Plan. It applies from the chat's next run.
+    /// A Chat chat has no plan tools, so it stays in Build whatever it is asked.
     pub fn set_mode(&mut self, id: &str, mode: AgentMode) -> Result<(), String> {
         let chat = self.state.chats.iter_mut().find(|chat| chat.id == id).ok_or("That chat is gone.")?;
+        let mode = if chat.is_chat_area() { AgentMode::Build } else { mode };
         if chat.mode == mode {
             return Ok(());
         }
@@ -1093,7 +1237,25 @@ impl Store {
     /// worktrees of one repository land in the same project.
     pub fn usage_recorder(&self, connection: &Connection, session: &str, workspace: &Path) -> std::sync::Arc<RunRecorder> {
         let project = crate::git::common_root(workspace).unwrap_or_else(|| workspace.to_path_buf());
-        std::sync::Arc::new(RunRecorder::new(&self.usage, connection, session, &project, workspace))
+        std::sync::Arc::new(RunRecorder::new(&self.usage, connection, session, Some(&project), workspace, ChatKind::Code))
+    }
+
+    /// The ledger's recorder for a Chat chat's run: no project, its scratchpad as the workspace,
+    /// and `mode: "chat"`.
+    pub fn chat_usage_recorder(&self, connection: &Connection, chat: &Chat) -> std::sync::Arc<RunRecorder> {
+        std::sync::Arc::new(RunRecorder::new(&self.usage, connection, &chat.id, None, &self.scratch_folder(chat), ChatKind::Chat))
+    }
+
+    /// The recorder for any chat's model calls outside a run (its title), by its kind. `None`
+    /// for a Code chat whose project is gone.
+    pub fn chat_recorder(&self, connection: &Connection, chat: &Chat) -> Option<std::sync::Arc<RunRecorder>> {
+        match chat.kind {
+            ChatKind::Chat => Some(self.chat_usage_recorder(connection, chat)),
+            ChatKind::Code => {
+                let project = self.project(chat.project.as_deref()?)?;
+                Some(self.usage_recorder(connection, &chat.id, &project.path))
+            }
+        }
     }
 
     pub fn set_layout(&mut self, id: &str, layout: Option<serde_json::Value>) -> Result<(), String> {
@@ -1176,6 +1338,9 @@ impl Store {
         let _ = fs::remove_dir_all(self.tasks_folder(&chat));
         let _ = fs::remove_dir_all(self.canvases_folder(&chat));
         let _ = fs::remove_dir_all(wack_agent::agents::children_folder(&self.session_path(&chat)));
+        if chat.is_chat_area() {
+            let _ = fs::remove_dir_all(self.scratch_folder(&chat));
+        }
         match fs::remove_file(self.session_path(&chat)) {
             Err(error) if error.kind() != std::io::ErrorKind::NotFound => {
                 Err(format!("Could not delete the chat's file: {error}"))
@@ -1184,20 +1349,36 @@ impl Store {
         }
     }
 
-    /// Sets a chat's model, or the default for new chats when `chat` is `None`. Picking a model
-    /// for a chat also makes it the default, since it is the user's latest choice.
-    pub fn set_choice(&mut self, chat: Option<&str>, choice: ModelChoice) -> Result<(), String> {
+    /// Sets a chat's model, or the default for `area`'s new chats when `chat` is `None`. Picking
+    /// a model for a chat also makes it its area's default, since it is the user's latest choice
+    /// there.
+    pub fn set_choice(&mut self, area: ChatKind, chat: Option<&str>, choice: ModelChoice) -> Result<(), String> {
+        let mut area = area;
         if let Some(id) = chat
             && let Some(listed) = self.state.chats.iter_mut().find(|listed| listed.id == id)
         {
             listed.choice = choice.clone();
+            area = listed.kind;
         }
-        self.state.defaults = choice;
+        match area {
+            ChatKind::Code => self.state.defaults = choice,
+            ChatKind::Chat => self.state.chat_defaults = Some(choice),
+        }
         self.save()
     }
 
+    /// The Code area's default model, which `resolve` falls back to.
     pub fn defaults(&self) -> &ModelChoice {
         &self.state.defaults
+    }
+
+    /// What an area's new chats start with: the Chat area's own last pick, or Code's until it
+    /// has one.
+    pub fn defaults_for(&self, area: ChatKind) -> &ModelChoice {
+        match area {
+            ChatKind::Chat => self.state.chat_defaults.as_ref().unwrap_or(&self.state.defaults),
+            ChatKind::Code => &self.state.defaults,
+        }
     }
 
     /// The connection and model a choice means today. A missing, removed or switched-off
@@ -1338,6 +1519,77 @@ mod tests {
     }
 
     #[test]
+    fn a_chat_area_chat_has_no_project_and_its_own_scratchpad() {
+        let folder = tempfile::tempdir().unwrap();
+        let work = tempfile::tempdir().unwrap();
+        let mut store = Store::open(folder.path()).unwrap();
+        let project = store.add_project(work.path()).unwrap();
+        let code = store.create_chat(&project.id, "Code", ModelChoice::default(), AgentMode::Build, None).unwrap();
+        let chat = store.create_area_chat("Hello", ModelChoice::default()).unwrap();
+        assert_eq!((chat.kind, chat.project.as_deref(), chat.mode), (ChatKind::Chat, None, AgentMode::Build));
+        let scratch = store.scratch_folder(&chat);
+        assert!(scratch.is_dir(), "made before any run can freeze the session's folder");
+        assert_eq!(fs::metadata(&scratch).unwrap().permissions().mode() & 0o777, 0o700);
+        assert_eq!(store.chat_folder(&chat), Some(scratch.clone()));
+        assert_eq!(store.chat_folder(&code), Some(project.path.clone()));
+
+        // Each area lists its own; a Chat chat is never a project's.
+        assert_eq!(store.chat_area_chats().iter().map(|listed| listed.id.as_str()).collect::<Vec<_>>(), [chat.id.as_str()]);
+        assert_eq!(store.chats(&project.id).len(), 1);
+        store.set_mode(&chat.id, AgentMode::Plan).unwrap();
+        assert_eq!(store.chat(&chat.id).unwrap().mode, AgentMode::Build, "a Chat chat stays in Build");
+
+        // Chats saved before the Chat area load as Code chats of their project.
+        let old: Chat = serde_json::from_str(r#"{"id":"c","project":"p","title":"t","session":"c.jsonl","created":1,"updated":1}"#).unwrap();
+        assert_eq!((old.kind, old.project.as_deref()), (ChatKind::Code, Some("p")));
+        let saved = serde_json::to_value(&old).unwrap();
+        assert!(saved.get("kind").is_none() && saved.get("archived").is_none(), "a Code chat is written as before");
+
+        let reopened = Store::open(folder.path()).unwrap();
+        assert_eq!(reopened.chat(&chat.id).unwrap().kind, ChatKind::Chat);
+        store.delete_chat(&chat.id).unwrap();
+        assert!(!scratch.exists(), "the scratchpad goes with the chat");
+    }
+
+    #[test]
+    fn archiving_moves_a_chat_to_its_areas_archive_and_back() {
+        let folder = tempfile::tempdir().unwrap();
+        let mut store = Store::open(folder.path()).unwrap();
+        let first = store.create_area_chat("First", ModelChoice::default()).unwrap();
+        let second = store.create_area_chat("Second", ModelChoice::default()).unwrap();
+        store.set_archived(&first.id, true).unwrap();
+        assert_eq!(store.chat_area_chats().len(), 1);
+        assert_eq!(store.archived_chats(ChatKind::Chat)[0].id, first.id);
+        assert!(store.archived_chats(ChatKind::Code).is_empty());
+        // A millisecond apart, so the order is the archiving's.
+        std::thread::sleep(std::time::Duration::from_millis(3));
+        store.set_archived(&second.id, true).unwrap();
+        let order: Vec<&str> = store.archived_chats(ChatKind::Chat).iter().map(|chat| chat.title.as_str()).collect();
+        assert_eq!(order, ["Second", "First"], "the latest archived first");
+        let reopened = Store::open(folder.path()).unwrap();
+        assert!(reopened.chat(&first.id).unwrap().is_archived());
+        store.set_archived(&first.id, false).unwrap();
+        assert!(!store.chat(&first.id).unwrap().is_archived());
+        assert_eq!(store.chat_area_chats().len(), 1);
+    }
+
+    #[test]
+    fn each_area_remembers_its_own_last_model() {
+        let folder = tempfile::tempdir().unwrap();
+        let mut store = Store::open(folder.path()).unwrap();
+        let code = ModelChoice { model: Some("code-model".into()), ..ModelChoice::default() };
+        store.set_choice(ChatKind::Code, None, code.clone()).unwrap();
+        assert_eq!(store.defaults_for(ChatKind::Chat), &code, "Chat starts from Code's until it has its own");
+        let chat_pick = ModelChoice { model: Some("chat-model".into()), ..ModelChoice::default() };
+        let chat = store.create_area_chat("Hi", ModelChoice::default()).unwrap();
+        // Picking for a Chat chat sets the Chat area's default, whatever area is named.
+        store.set_choice(ChatKind::Code, Some(&chat.id), chat_pick.clone()).unwrap();
+        assert_eq!(store.defaults_for(ChatKind::Chat), &chat_pick);
+        assert_eq!(store.defaults_for(ChatKind::Code), &code);
+        assert_eq!(Store::open(folder.path()).unwrap().defaults_for(ChatKind::Chat), &chat_pick);
+    }
+
+    #[test]
     fn deleting_a_chat_deletes_its_file() {
         let folder = tempfile::tempdir().unwrap();
         let work = tempfile::tempdir().unwrap();
@@ -1414,7 +1666,7 @@ mod tests {
             model: Some("b".into()),
             effort: Some(Reasoning::High),
         };
-        store.set_choice(None, picked).unwrap();
+        store.set_choice(ChatKind::Code, None, picked).unwrap();
         let resolved = store.resolve(&ModelChoice::default()).unwrap();
         assert_eq!(
             (

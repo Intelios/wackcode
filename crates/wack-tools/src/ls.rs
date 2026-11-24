@@ -40,7 +40,7 @@ impl Tool for Ls {
     async fn run(&self, input: Value, context: &ToolContext<'_>) -> Result<ToolOutput, String> {
         let input: Input = parse(input)?;
         let shown = input.path.as_deref().unwrap_or(".");
-        let path = resolve(&context.cwd, shown);
+        let path = resolve(context, "ls", shown)?;
         let mut reader = tokio::fs::read_dir(&path).await.map_err(|error| format!("Could not list {shown}: {error}."))?;
         let mut names = Vec::new();
         while let Ok(Some(entry)) = reader.next_entry().await {

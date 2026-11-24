@@ -866,8 +866,16 @@ impl Render for Shell {
             let from = if sidebar_data.area == ChatKind::Chat { motion::HOP } else { -motion::HOP };
             (self.hops, from)
         });
+        // The wrapper keeps the sizing its child expects: the sidebar is a flex child of its
+        // pane's column (its foot stays at the bottom), the stage's body fills a sized box.
         let hop_in = |name: &'static str, element: gpui::AnyElement| match hop {
-            Some((hops, from)) => motion::slide_in(ElementId::NamedInteger(name.into(), hops as u64), div().size_full().child(element), from, 0.).into_any_element(),
+            Some((hops, from)) => {
+                let wrapper = match name {
+                    "hop-sidebar" => div().w_full().flex_1().min_h_0().flex().flex_col(),
+                    _ => div().size_full(),
+                };
+                motion::slide_in(ElementId::NamedInteger(name.into(), hops as u64), wrapper.child(element), from, 0.).into_any_element()
+            }
             None => element,
         };
         if let Source::Live(app) = &self.source

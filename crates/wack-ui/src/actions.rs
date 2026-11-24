@@ -22,6 +22,14 @@ actions!(
         RevealScratchpad,
         /// Copy the Chat chat on screen's scratchpad path.
         CopyScratchpadPath,
+        /// The sidebar's Archived view, for the area on screen: opens or closes it.
+        ToggleArchived,
+        /// Empties the sidebar's search (its ✕, or Esc in the field).
+        ClearSearch,
+        /// The Archived view's Delete all: the first click asks, the second deletes.
+        DeleteAllArchived,
+        /// Archives the chat on screen (File › Archive Chat).
+        ArchiveCurrentChat,
         /// Pick a folder to add as a project.
         AddFolder,
         OpenSettings,
@@ -284,6 +292,8 @@ pub struct RenameChatAt {
 
 /// The key context of a rename field, where Esc cancels instead of stepping back.
 pub const RENAME_CONTEXT: &str = "RenameField";
+/// The key context of the sidebar's search field, where Esc empties it.
+pub const SEARCH_CONTEXT: &str = "SidebarSearch";
 
 /// Starts, stops, or asks to configure a project Build/Run command.
 #[derive(Clone, Debug, PartialEq, Action)]
@@ -567,6 +577,29 @@ pub struct RemoveProject {
 #[derive(Clone, Debug, PartialEq, Action)]
 #[action(namespace = wackcode, no_json)]
 pub struct DeleteChat {
+    pub id: String,
+}
+
+/// A sidebar row's Archive: the first click asks ("Archive?"), the second archives.
+#[derive(Clone, Debug, PartialEq, Action)]
+#[action(namespace = wackcode, no_json)]
+pub struct ArchiveChat {
+    pub id: String,
+}
+
+/// Back to the list. From an Archived row it asks first; from an archived chat's own footer it
+/// does it at once (`ask: false`).
+#[derive(Clone, Debug, PartialEq, Action)]
+#[action(namespace = wackcode, no_json)]
+pub struct UnarchiveChat {
+    pub id: String,
+    pub ask: bool,
+}
+
+/// An Archived row's Delete: the first click asks ("Delete?"), the second deletes for good.
+#[derive(Clone, Debug, PartialEq, Action)]
+#[action(namespace = wackcode, no_json)]
+pub struct DeleteArchivedChat {
     pub id: String,
 }
 
@@ -949,6 +982,7 @@ pub fn init(cx: &mut App) {
         KeyBinding::new("cmd-,", OpenSettings, Some(CONTEXT)),
         KeyBinding::new("escape", Back, Some(CONTEXT)),
         KeyBinding::new("escape", CancelRename, Some(RENAME_CONTEXT)),
+        KeyBinding::new("escape", ClearSearch, Some(SEARCH_CONTEXT)),
         KeyBinding::new("tab", FocusNext, Some(FORM_CONTEXT)),
         KeyBinding::new("shift-tab", FocusPrevious, Some(FORM_CONTEXT)),
         KeyBinding::new("ctrl-cmd-s", ToggleSidebar, Some(CONTEXT)),

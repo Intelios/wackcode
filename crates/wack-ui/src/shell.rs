@@ -48,6 +48,7 @@ use crate::{
         PickCommand, SelectChat, Send, Stop, StopCommand, MoveToBackground, ToggleTasks, ToggleTasksPane, StopTask, ShowTask, ToggleAgentsPane, ToggleBrowserPane, ToggleCanvasPane, ShowCanvas, WriteInComposer, ShowAgent, StopAgent, ToggleChanges, ToggleProject, ToggleSidebar, ToggleTerminal, TriggerProjectCommand, Unqueue,
         ToggleAutoTitles, ToggleTitleModels, ChooseTitleModel, RenameChat, RenameChatAt, CancelRename, ToggleModelReasoning, ToggleModelVision, AttachPictures, AttachFiles, RemoveAttachment, OpenPicture, ClosePicture, StepPicture, ZoomPicture,
         StartSuggestion, DismissSuggestion, CopySuggestion, OpenChat,
+        ArchiveChat, ArchiveCurrentChat, ClearSearch, DeleteAllArchived, DeleteArchivedChat, ToggleArchived, UnarchiveChat,
         ToggleModelEffort, SwitchSkill, SwitchSkillFolder, RemoveSkillFolder, OpenSkill, CopySkill, ChooseSkillUse, NewSkill, SaveSkill,
         CloseSkill, AskDeleteSkill, ConfirmSkillDelete, CancelSkillDelete, AddSkillFolder, ImportSkills, SwitchSlashCommand, OpenSlashCommand,
         NewSlashCommand, SaveSlashCommand, CloseSlashCommand, AskDeleteSlashCommand, ConfirmSlashCommandDelete, CancelSlashCommandDelete,
@@ -71,7 +72,9 @@ use crate::{
     run_button::{self, CommandButtonData, CommandEditorData},
     settings::{self, ProvidersData, Section, SettingsData},
     icon::Icon,
-    sidebar::{AreaSwitch, ChatGroup, ChatRow, ChatState, ProjectRow, SIDEBAR_WIDTH, Sidebar, SidebarData, TitleLook, rename_field},
+    sidebar::{
+        ArchivedData, ArchivedRow, AreaSwitch, ChatGroup, ChatRow, ChatState, ProjectRow, RowConfirm, SIDEBAR_WIDTH, Sidebar, SidebarData, TitleLook, rename_field,
+    },
     tags::{self, Tag},
     theme::Theme,
     transcript::{self, Handlers, Item, Transcript},
@@ -1100,6 +1103,28 @@ impl Render for Shell {
                 }))
                 .on_action(cx.listener(|shell, _: &RevealScratchpad, _, cx| shell.with_app(cx, |app, _| app.reveal_scratchpad())))
                 .on_action(cx.listener(|shell, _: &CopyScratchpadPath, _, cx| shell.with_app(cx, |app, cx| app.copy_scratchpad_path(cx))))
+                .on_action(cx.listener(|shell, _: &ToggleArchived, _, cx| shell.with_app(cx, |app, cx| app.toggle_archived(cx))))
+                .on_action(cx.listener(|shell, _: &ClearSearch, _, cx| shell.with_app(cx, |app, cx| app.clear_search(cx))))
+                .on_action(cx.listener(|shell, _: &DeleteAllArchived, _, cx| shell.with_app(cx, |app, cx| app.delete_all_archived(cx))))
+                .on_action(cx.listener(|shell, action: &ArchiveChat, _, cx| {
+                    let id = action.id.clone();
+                    shell.with_app(cx, |app, cx| app.archive_chat(&id, true, cx));
+                }))
+                .on_action(cx.listener(|shell, _: &ArchiveCurrentChat, _, cx| {
+                    shell.with_app(cx, |app, cx| {
+                        if let Selection::Chat(id) = app.selection().clone() {
+                            app.archive_chat(&id, false, cx);
+                        }
+                    });
+                }))
+                .on_action(cx.listener(|shell, action: &UnarchiveChat, _, cx| {
+                    let (id, ask) = (action.id.clone(), action.ask);
+                    shell.with_app(cx, |app, cx| app.unarchive_chat(&id, ask, cx));
+                }))
+                .on_action(cx.listener(|shell, action: &DeleteArchivedChat, _, cx| {
+                    let id = action.id.clone();
+                    shell.with_app(cx, |app, cx| app.delete_archived_chat(&id, cx));
+                }))
                 .on_action(cx.listener(|shell, action: &NewChatIn, _, cx| {
                     let project = action.project.clone();
                     shell.with_app(cx, |app, cx| app.new_chat(Some(project), cx));
@@ -1882,11 +1907,39 @@ fn live_view(app: &AppState, cx: &App) -> (SidebarData, Screen, StripData) {
         _ => app.title_swaps.get(chat).and_then(|swap| swap.look(still)).map_or(TitleLook::Plain, TitleLook::Swap),
     };
     let area = app.area();
+    let terms = app.search_terms(cx);
+    let searching = !terms.is_empty();
+    let archived = store.archived_chats(area);
     let mut sidebar = SidebarData {
         area,
         other_waiting: app.area_waiting(if area == ChatKind::Chat { ChatKind::Code } else { ChatKind::Chat }, cx),
+        search: Some(app.search.clone()),
+        searching,
+        has_archived: !archived.is_empty(),
         ..SidebarData::default()
     };
+    let asking = |chat: &str, which: RowConfirm| app.confirming.as_ref().is_some_and(|(asking, what)| asking == chat && *what == which);
+    let project_name = |chat: &wack_core::Chat| chat.project.as_deref().and_then(|id| store.project(id)).map(|project| project.name.clone());
+    // What a search looks in: the title, and in Code the project's name.
+    let found = |chat: &wack_core::Chat| !searching || crate::sidebar::matches_search(&format!("{} {}", chat.title, project_name(chat).unwrap_or_default()), &terms);
+    if app.archived_open {
+        sidebar.archived = Some(ArchivedData {
+            total: archived.len(),
+            confirming_all: app.confirming_all,
+            rows: archived
+                .iter()
+                .filter(|chat| found(chat))
+                .map(|chat| ArchivedRow {
+                    id: chat.id.clone().into(),
+                    title: chat.title.clone().into(),
+                    age: AppState::age(chat.archived.unwrap_or(chat.updated)).into(),
+                    place: project_name(chat).unwrap_or_else(|| "Chat".into()).into(),
+                    selected: *app.selection() == Selection::Chat(chat.id.clone()),
+                    confirming: [RowConfirm::Unarchive, RowConfirm::Delete].into_iter().find(|which| asking(&chat.id, *which)),
+                })
+                .collect(),
+        });
+    }
     let row = |chat: &wack_core::Chat| {
         let session = app.session(&chat.id).map(|session| session.read(cx));
         ChatRow {
@@ -1900,22 +1953,27 @@ fn live_view(app: &AppState, cx: &App) -> (SidebarData, Screen, StripData) {
                 _ => ChatState::Idle,
             },
             selected: *app.selection() == Selection::Chat(chat.id.clone()),
+            confirming_archive: asking(&chat.id, RowConfirm::Archive),
         }
     };
     if area == ChatKind::Chat {
-        let chats = store.chat_area_chats().into_iter().map(|chat| (chat.updated, row(chat))).collect();
+        let chats = store.chat_area_chats().into_iter().filter(|chat| found(chat)).map(|chat| (chat.updated, row(chat))).collect();
         sidebar.groups = crate::chat_area::group_by_recency(chats, crate::chat::now_millis())
             .into_iter()
             .map(|(group, chats)| ChatGroup { label: group.label().into(), chats })
             .collect();
     }
     for project in store.projects().iter().filter(|_| area == ChatKind::Code) {
-        let chats = store.chats(&project.id).into_iter().map(&row).collect();
+        let chats: Vec<ChatRow> = store.chats(&project.id).into_iter().filter(|chat| found(chat)).map(&row).collect();
+        // A search shows only the projects it found chats in, open.
+        if searching && chats.is_empty() {
+            continue;
+        }
         let row = ProjectRow {
             id: project.id.clone().into(),
             name: project.name.clone().into(),
             chats,
-            open: app.is_open(&project.id),
+            open: searching || app.is_open(&project.id),
             pinned: project.pinned,
         };
         if project.pinned {
@@ -1981,6 +2039,7 @@ fn live_view(app: &AppState, cx: &App) -> (SidebarData, Screen, StripData) {
                 ideas: crate::chat_area::pick_ideas(app.hero_visit, 3),
                 composer: ComposerData {
                     chat_area: true,
+                    archived: None,
                     input: Input::Field(app.draft.clone()),
                     model,
                     effort,
@@ -2019,6 +2078,7 @@ fn live_view(app: &AppState, cx: &App) -> (SidebarData, Screen, StripData) {
                     project,
                     composer: ComposerData {
                         chat_area: false,
+                        archived: None,
                         input: Input::Field(app.draft.clone()),
                         model,
                         effort,
@@ -2069,6 +2129,7 @@ fn live_view(app: &AppState, cx: &App) -> (SidebarData, Screen, StripData) {
                 body: Body::Live(session.clone(), state.list.clone()),
                 composer: ComposerData {
                     chat_area: chat.is_chat_area(),
+                    archived: (chat.is_archived()).then(|| chat.id.clone().into()),
                     input: Input::Field(state.composer.clone()),
                     model,
                     effort,

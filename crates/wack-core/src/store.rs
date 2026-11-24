@@ -939,11 +939,14 @@ impl Store {
 
     /// Archives a chat, or unarchives it. Its files stay as they are.
     pub fn set_archived(&mut self, id: &str, archived: bool) -> Result<(), String> {
+        // Each archive is stamped after the last, so the Archived view's order is the order they
+        // were archived in, even two in the same millisecond.
+        let latest = self.state.chats.iter().filter_map(|chat| chat.archived).max().unwrap_or(0);
         let chat = self.state.chats.iter_mut().find(|chat| chat.id == id).ok_or("That chat is gone.")?;
         if chat.is_archived() == archived {
             return Ok(());
         }
-        chat.archived = archived.then(now_millis);
+        chat.archived = archived.then(|| now_millis().max(latest + 1));
         self.save()
     }
 
@@ -1566,8 +1569,7 @@ mod tests {
         assert_eq!(store.chat_area_chats().len(), 1);
         assert_eq!(store.archived_chats(ChatKind::Chat)[0].id, first.id);
         assert!(store.archived_chats(ChatKind::Code).is_empty());
-        // A millisecond apart, so the order is the archiving's.
-        std::thread::sleep(std::time::Duration::from_millis(3));
+        // In the same millisecond or not, the order is the archiving's.
         store.set_archived(&second.id, true).unwrap();
         let order: Vec<&str> = store.archived_chats(ChatKind::Chat).iter().map(|chat| chat.title.as_str()).collect();
         assert_eq!(order, ["Second", "First"], "the latest archived first");

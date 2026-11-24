@@ -43,6 +43,7 @@ use crate::{
     panes::{ChatPanes, Layout, PaneKind},
     run_button::{CommandButtonData, CommandEditorData},
     settings::{ProviderForm, Section},
+    sidebar::RowConfirm,
     slash_menu::{Matches, Slash, SlashData},
     text_field::{MenuKey, TextField, TextFieldEvent},
     theme,
@@ -55,6 +56,8 @@ pub const CHAT_AREA_PLACEHOLDER: &str = "Ask anything…";
 pub const CHAT_FOLLOW_UP_PLACEHOLDER: &str = "Message WackCode…";
 /// The Chat area's key among the new-chat screens' panes (the others are project ids).
 const CHAT_AREA_PANES: &str = "chat-area";
+/// How long a control clicked once keeps asking.
+const CONFIRM_FOR: Duration = Duration::from_secs(4);
 /// How many chats the `@` picker offers at once.
 const MENTION_LIMIT: usize = 8;
 /// The only slash commands a Chat chat has: the app's own. Anything else goes as written.
@@ -235,6 +238,16 @@ pub struct AppState {
     /// chat's), sent as the message's referenced-chats section while their `@"Name"` is still in
     /// the text (`wack_core::chat_refs::surviving`).
     mention_refs: HashMap<Option<String>, Vec<ChatRef>>,
+    /// The sidebar's search field: what is typed filters the area on screen. Emptied when the
+    /// area changes.
+    pub search: Entity<TextField>,
+    /// The sidebar shows the area's Archived view instead of its list.
+    pub archived_open: bool,
+    /// A sidebar control clicked once that now asks (the chat, and which): a second click does
+    /// it, and it stops asking after a few seconds or when anything else is clicked.
+    pub confirming: Option<(String, RowConfirm)>,
+    /// The Archived view's Delete all, clicked once.
+    pub confirming_all: bool,
     /// The commands as last read, for the menu and for lighting a typed `/command`. Read again
     /// each time the menu opens.
     commands: Vec<Command>,
@@ -298,7 +311,15 @@ impl AppState {
         });
         let form = ProviderForm::new(cx);
         let mcp = wack_core::mcp_client::Hub::new(Some(store.mcp_cache_folder()));
-        let subscriptions = vec![draft_subscription];
+        let search = cx.new(|cx| TextField::new(Type::Ui, "Search chats…", cx));
+        let search_subscription = cx.subscribe(&search, |app, _, event, cx| {
+            if matches!(event, TextFieldEvent::Changed) {
+                app.confirming = None;
+                app.confirming_all = false;
+                cx.notify();
+            }
+        });
+        let subscriptions = vec![draft_subscription, search_subscription];
         let ui = store.ui().clone();
         // A fresh app: no tabs, no chat in front, and a new chat in the project last worked in (as
         // version 2 opened), rather than wherever the last one was left.
@@ -355,6 +376,10 @@ impl AppState {
             slash: None,
             slash_dismissed: None,
             mention_refs: HashMap::new(),
+            search,
+            archived_open: false,
+            confirming: None,
+            confirming_all: false,
             commands: Vec::new(),
             literal: None,
             new_chat_mode: AgentMode::Build,
@@ -1402,6 +1427,11 @@ impl AppState {
             && from != to
         {
             self.parked.insert(from, leaving.clone());
+            // Each area is searched and archived on its own.
+            self.search.update(cx, |search, cx| search.set_text("", cx));
+            self.archived_open = false;
+            self.confirming = None;
+            self.confirming_all = false;
             let draft = self.draft.read(cx).text().to_string();
             self.parked_drafts.insert(from, draft);
             let back = self.parked_drafts.remove(&to).unwrap_or_default();
@@ -1593,6 +1623,125 @@ impl AppState {
         }
         self.parked.retain(|_, parked| *parked != Selection::Chat(id.to_string()));
         self.save_ui();
+        cx.notify();
+    }
+
+    /// The sidebar's search, as words to match; none while it is empty.
+    pub fn search_terms(&self, cx: &App) -> Vec<String> {
+        crate::sidebar::search_terms(self.search.read(cx).text())
+    }
+
+    pub fn clear_search(&mut self, cx: &mut Context<Self>) {
+        self.search.update(cx, |search, cx| search.set_text("", cx));
+        cx.notify();
+    }
+
+    pub fn toggle_archived(&mut self, cx: &mut Context<Self>) {
+        self.archived_open = !self.archived_open;
+        self.confirming = None;
+        self.confirming_all = false;
+        if self.selection == Selection::Settings {
+            self.close_settings(cx);
+        }
+        cx.notify();
+    }
+
+    /// Whether `chat`'s `which` control was already clicked once; if not, it asks now, for a
+    /// few seconds.
+    fn confirmed(&mut self, chat: &str, which: RowConfirm, cx: &mut Context<Self>) -> bool {
+        if self.confirming.as_ref().is_some_and(|(asking, what)| asking == chat && *what == which) {
+            self.confirming = None;
+            return true;
+        }
+        self.confirming = Some((chat.to_string(), which));
+        self.confirming_all = false;
+        let asked = (chat.to_string(), which);
+        cx.spawn(async move |app, cx| {
+            cx.background_executor().timer(CONFIRM_FOR).await;
+            let _ = app.update(cx, |app, cx| {
+                if app.confirming.as_ref() == Some(&asked) {
+                    app.confirming = None;
+                    cx.notify();
+                }
+            });
+        })
+        .detach();
+        cx.notify();
+        false
+    }
+
+    /// A row's Archive: asks once, then puts the chat in its area's Archived view. A run in it
+    /// stops, and it leaves the tabs; on screen, its area's new chat takes its place.
+    pub fn archive_chat(&mut self, id: &str, ask: bool, cx: &mut Context<Self>) {
+        if ask && !self.confirmed(id, RowConfirm::Archive, cx) {
+            return;
+        }
+        let Some(chat) = self.store.chat(id).cloned() else { return };
+        self.stop(id, cx);
+        if let Err(message) = self.store.set_archived(id, true) {
+            self.notice = Some(message.into());
+            cx.notify();
+            return;
+        }
+        self.tabs.retain(|tab| tab != id);
+        if self.selection == Selection::Chat(id.to_string()) {
+            match &chat.project {
+                Some(project) => self.select(Selection::NewChat(project.clone()), cx),
+                None => self.select(Selection::NewChatArea, cx),
+            }
+        }
+        self.parked.retain(|_, parked| *parked != Selection::Chat(id.to_string()));
+        self.save_ui();
+        cx.notify();
+    }
+
+    /// Back to the list, from an Archived row (asking once) or the chat's own footer.
+    pub fn unarchive_chat(&mut self, id: &str, ask: bool, cx: &mut Context<Self>) {
+        if ask && !self.confirmed(id, RowConfirm::Unarchive, cx) {
+            return;
+        }
+        if let Err(message) = self.store.set_archived(id, false) {
+            self.notice = Some(message.into());
+        }
+        if self.store.archived_chats(self.area()).is_empty() {
+            self.archived_open = false;
+        }
+        cx.notify();
+    }
+
+    /// An Archived row's Delete: asks once, then deletes the chat and its files for good.
+    pub fn delete_archived_chat(&mut self, id: &str, cx: &mut Context<Self>) {
+        if !self.confirmed(id, RowConfirm::Delete, cx) {
+            return;
+        }
+        self.delete_chat(id, cx);
+        if self.store.archived_chats(self.area()).is_empty() {
+            self.archived_open = false;
+        }
+    }
+
+    /// The Archived view's Delete all: asks once, then deletes every archived chat of the area.
+    pub fn delete_all_archived(&mut self, cx: &mut Context<Self>) {
+        if !self.confirming_all {
+            self.confirming_all = true;
+            self.confirming = None;
+            cx.spawn(async move |app, cx| {
+                cx.background_executor().timer(CONFIRM_FOR).await;
+                let _ = app.update(cx, |app, cx| {
+                    app.confirming_all = false;
+                    cx.notify();
+                });
+            })
+            .detach();
+            cx.notify();
+            return;
+        }
+        self.confirming_all = false;
+        let ids: Vec<String> = self.store.archived_chats(self.area()).iter().map(|chat| chat.id.clone()).collect();
+        for id in ids {
+            self.delete_chat(&id, cx);
+        }
+        self.archived_open = false;
         cx.notify();
     }
 

@@ -63,6 +63,8 @@ pub enum Input {
 pub struct ComposerData {
     /// A Chat area composer: no mode track, since a Chat chat is always in Build.
     pub chat_area: bool,
+    /// The chat is archived (its id): in the composer's place, a line saying so and Unarchive.
+    pub archived: Option<SharedString>,
     pub input: Input,
     pub model: SharedString,
     pub effort: Option<SharedString>,
@@ -176,6 +178,41 @@ impl Composer {
     }
 }
 
+/// An archived chat's foot, in the composer's place: it can be read, not written to, until it
+/// comes back to the list.
+fn archived_footer(chat: String, theme: &Theme) -> impl IntoElement {
+    div()
+        .w_full()
+        .h(px(56.))
+        .px(px(18.))
+        .rounded(px(28.))
+        .bg(theme.surface)
+        .border_1()
+        .border_color(theme.border)
+        .flex()
+        .items_center()
+        .gap(px(12.))
+        .child(Icon::Archive.view(px(15.), theme.text_dim))
+        .child(div().flex_1().typography(Type::Ui).text_color(theme.text_soft).child("This chat is archived."))
+        .child(
+            div()
+                .id("unarchive-footer")
+                .h(px(30.))
+                .px(px(14.))
+                .rounded_full()
+                .flex()
+                .items_center()
+                .bg(theme.accent_fill())
+                .hover(|button| button.bg(theme.accent_fill_hover()))
+                .typography(Type::UiStrong)
+                .text_color(theme.on_accent)
+                .on_click(dispatch(crate::actions::UnarchiveChat { id: chat, ask: false }))
+                .child("Unarchive")
+                .tag("unarchive-footer"),
+        )
+        .tag("archived-footer")
+}
+
 fn dispatch(action: impl gpui::Action) -> impl Fn(&gpui::ClickEvent, &mut Window, &mut App) + 'static {
     let action = action.boxed_clone();
     move |_, window, cx| window.dispatch_action(action.boxed_clone(), cx)
@@ -185,6 +222,9 @@ impl RenderOnce for Composer {
     fn render(self, window: &mut Window, cx: &mut App) -> impl IntoElement {
         let theme = Theme::get(cx).clone();
         let data = self.data;
+        if let Some(chat) = data.archived {
+            return archived_footer(chat.to_string(), &theme).into_any_element();
+        }
         let viewport = window.viewport_size();
         let menu_for = |kind: Menu| data.menu.clone().filter(|menu| menu.kind == kind);
         let has_text = match &data.input {
@@ -493,7 +533,7 @@ impl RenderOnce for Composer {
                     .children(waiting_pill),
             );
         }
-        column.child(div().flex_none().child(card))
+        column.child(div().flex_none().child(card)).into_any_element()
     }
 }
 

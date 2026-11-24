@@ -82,6 +82,8 @@ pub enum Icon {
     Code,
     /// Putting a chat away in the Archived view.
     Archive,
+    /// Bringing an archived chat back to the list.
+    Unarchive,
     /// An artboard's tweaks.
     Sliders,
     /// The canvas's hand tool, which pans.
@@ -93,6 +95,7 @@ const FILES: &[(&str, &[u8])] = &[
     ("icons/alert.svg", include_bytes!("../assets/icons/alert.svg")),
     ("icons/code.svg", include_bytes!("../assets/icons/code.svg")),
     ("icons/archive.svg", include_bytes!("../assets/icons/archive.svg")),
+    ("icons/unarchive.svg", include_bytes!("../assets/icons/unarchive.svg")),
     ("icons/arrow-up.svg", include_bytes!("../assets/icons/arrow-up.svg")),
     ("icons/arrow-left.svg", include_bytes!("../assets/icons/arrow-left.svg")),
     ("icons/arrow-right.svg", include_bytes!("../assets/icons/arrow-right.svg")),
@@ -193,6 +196,7 @@ impl Icon {
             Icon::Comment => "icons/comment.svg",
             Icon::Code => "icons/code.svg",
             Icon::Archive => "icons/archive.svg",
+            Icon::Unarchive => "icons/unarchive.svg",
             Icon::Sliders => "icons/sliders.svg",
             Icon::Hand => "icons/hand.svg",
         }
@@ -276,6 +280,7 @@ mod tests {
             Icon::Trash,
             Icon::Code,
             Icon::Archive,
+            Icon::Unarchive,
             Icon::Comment,
         ] {
             let bytes = Assets.load(icon.path()).unwrap();

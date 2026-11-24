@@ -13,6 +13,12 @@
 //! the eye finds it at once. A row's own controls (new chat, pin, remove) appear only while the
 //! pointer is over it.
 //!
+//! Under New chat, a search field filters the area on screen: every typed word must appear in a
+//! chat's title (or, in Code, its project's name), as version 2 searched ([`search_terms`],
+//! [`matches_search`]). A row's control is Archive, which asks once in place ("Archive?"); chats
+//! are deleted only from the Archived view, which the foot opens while the area has any. There
+//! each row offers Unarchive and Delete, each asking once, and the header Delete all.
+//!
 //! Renders from plain data ([`SidebarData`]) and reports clicks as actions (`crate::actions`); it
 //! holds no state of its own.
 
@@ -21,8 +27,8 @@ use wack_core::ChatKind;
 
 use crate::{
     actions::{
-        AddFolder, DeleteChat, EnterChatArea, EnterCodeArea, NewChat, NewChatIn, OpenSettings, PinProject, RemoveProject, RenameChatAt, SelectChat,
-        ToggleProject,
+        AddFolder, ArchiveChat, ClearSearch, DeleteAllArchived, DeleteArchivedChat, EnterChatArea, EnterCodeArea, NewChat, NewChatIn, OpenSettings,
+        PinProject, RemoveProject, RenameChatAt, SelectChat, ToggleArchived, ToggleProject, UnarchiveChat,
     },
     tooltip::tip,
     text_field::TextField,
@@ -47,6 +53,59 @@ pub struct SidebarData {
     pub groups: Vec<ChatGroup>,
     /// A chat in the other area waits for the user to answer its question.
     pub other_waiting: bool,
+    /// The search field (none in scenes that leave it out), and whether anything is typed in it:
+    /// then the rows are only the matches.
+    pub search: Option<Entity<TextField>>,
+    pub searching: bool,
+    /// The area has archived chats, so the foot offers the Archived view.
+    pub has_archived: bool,
+    /// The Archived view, in place of the list, while it is open.
+    pub archived: Option<ArchivedData>,
+}
+
+/// The Archived view: the area's archived chats, latest archived first.
+#[derive(Clone, Debug, Default)]
+pub struct ArchivedData {
+    /// The ones the search leaves, or all of them.
+    pub rows: Vec<ArchivedRow>,
+    /// How many there are, searched or not.
+    pub total: usize,
+    /// Delete all was clicked once and asks.
+    pub confirming_all: bool,
+}
+
+#[derive(Clone, Debug)]
+pub struct ArchivedRow {
+    pub id: SharedString,
+    pub title: SharedString,
+    /// How long ago it was archived: "now", "2h", "3d".
+    pub age: SharedString,
+    /// Its project's name, or "Chat".
+    pub place: SharedString,
+    pub selected: bool,
+    pub confirming: Option<RowConfirm>,
+}
+
+/// Which of a row's controls was clicked once and now asks.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum RowConfirm {
+    Archive,
+    Unarchive,
+    Delete,
+}
+
+/// What the sidebar says when the search finds nothing.
+pub const NO_MATCHES: &str = "No chats match your search.";
+
+/// The words of a search, lower-cased; none when nothing but space is typed.
+pub fn search_terms(query: &str) -> Vec<String> {
+    query.split_whitespace().map(str::to_lowercase).collect()
+}
+
+/// Whether `text` (a chat's title, with its project's name in Code) has every term in it.
+pub fn matches_search(text: &str, terms: &[String]) -> bool {
+    let text = text.to_lowercase();
+    terms.iter().all(|term| text.contains(term.as_str()))
 }
 
 /// One of the Chat area's calendar groups.
@@ -111,6 +170,8 @@ pub struct ChatRow {
     pub age: SharedString,
     pub state: ChatState,
     pub selected: bool,
+    /// Its Archive was clicked once and asks.
+    pub confirming_archive: bool,
 }
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
@@ -145,9 +206,25 @@ impl RenderOnce for Sidebar {
     fn render(self, _window: &mut Window, cx: &mut App) -> impl IntoElement {
         let theme = Theme::get(cx).clone();
         let empty = self.data.pinned.is_empty() && self.data.projects.is_empty();
+        let searching = self.data.searching;
+        let has_archived = self.data.has_archived;
+        let search = self.data.search.clone().map(|field| search_field(field, searching, &theme));
+        let archive_open = self.data.archived.is_some();
+        let top = match &self.data.archived {
+            Some(archived) => archived_header(archived.total, archived.confirming_all, &theme).into_any_element(),
+            None => new_chat_pill(&theme).into_any_element(),
+        };
 
         let mut list = div().flex().flex_col().px(px(10.)).pt(px(10.)).pb(px(16.)).gap(px(2.));
-        if self.data.area == ChatKind::Chat {
+        if let Some(archived) = self.data.archived {
+            if archived.rows.is_empty() {
+                let words = if searching { "No archived chats match your search." } else { "No archived chats." };
+                list = list.child(div().px(px(10.)).pt(px(8.)).typography(Type::Ui).text_color(theme.text_dim).child(words));
+            }
+            list = list.children(archived.rows.into_iter().map(|row| archived_row(row, &theme)));
+        } else if searching && self.data.groups.is_empty() && self.data.pinned.is_empty() && self.data.projects.is_empty() {
+            list = list.child(div().px(px(10.)).pt(px(8.)).typography(Type::Ui).text_color(theme.text_dim).child(NO_MATCHES));
+        } else if self.data.area == ChatKind::Chat {
             if self.data.groups.is_empty() {
                 list = list.child(
                     div().px(px(10.)).pt(px(8.)).typography(Type::Ui).text_color(theme.text_dim).child(CHAT_AREA_EMPTY),
@@ -165,13 +242,13 @@ impl RenderOnce for Sidebar {
                 list = list.child(project_rows(project, &theme));
             }
         }
-        if self.data.area == ChatKind::Code && (!self.data.projects.is_empty() || empty) {
-            list = list.child(label("Projects", true, &theme));
+        if !archive_open && self.data.area == ChatKind::Code && (!self.data.projects.is_empty() || (empty && !searching)) {
+            list = list.child(label("Projects", !searching, &theme));
             for project in self.data.projects {
                 list = list.child(project_rows(project, &theme));
             }
         }
-        if empty && self.data.area == ChatKind::Code {
+        if !archive_open && !searching && empty && self.data.area == ChatKind::Code {
             list = list.child(
                 div()
                     .px(px(10.))
@@ -197,7 +274,8 @@ impl RenderOnce for Sidebar {
                     .px(px(10.))
                     .gap(px(1.))
                     .pt(px(4.))
-                    .child(new_chat_pill(&theme)),
+                    .child(top)
+                    .when_some(search, |top, search| top.child(div().pt(px(8.)).child(search))),
             )
             .child(div().id("sidebar-list").flex_1().min_h_0().overflow_y_scroll().child(list))
             .child(
@@ -205,7 +283,11 @@ impl RenderOnce for Sidebar {
                     .flex_none()
                     .px(px(10.))
                     .pb(px(12.))
-                    .child(settings_row(&theme)),
+                    .flex()
+                    .items_center()
+                    .gap(px(4.))
+                    .child(div().flex_1().child(settings_row(&theme)))
+                    .when(has_archived || archive_open, |foot| foot.child(archived_button(archive_open, &theme))),
             )
     }
 }
@@ -458,7 +540,17 @@ fn chat_row(chat: ChatRow, theme: &Theme) -> impl IntoElement {
                 }
             }
         })
-        .when(!editing, |row| row.child(
+        // Asking, the pill takes the age's place in the row, so the title ends before it.
+        .when(!editing && chat.confirming_archive, |row| row.child(row_control(
+            SharedString::from(format!("{id}-archive")),
+            "archive-chat",
+            Icon::Archive,
+            "Archive chat",
+            Some(("Archive?", false)),
+            Box::new(ArchiveChat { id: id.clone() }),
+            theme,
+        )))
+        .when(!editing && !chat.confirming_archive, |row| row.child(
             div()
                 .flex_none()
                 .pr(px(6.))
@@ -467,7 +559,7 @@ fn chat_row(chat: ChatRow, theme: &Theme) -> impl IntoElement {
                 .text_color(if chat.state == ChatState::Working { theme.accent_text } else { theme.text_faint })
                 .child(chat.age),
         ))
-        .when(!editing, |row| row.child(
+        .when(!editing && !chat.confirming_archive, |row| row.child(
             // Over the age, in its place, while the row is hovered.
             div()
                 .absolute()
@@ -478,11 +570,171 @@ fn chat_row(chat: ChatRow, theme: &Theme) -> impl IntoElement {
                 .items_center()
                 .invisible()
                 .group_hover(group, |controls| controls.visible())
-                .child(
-                small_button(SharedString::from(format!("{id}-delete")), Icon::Close, theme.text_dim, theme)
-                    .on_click(dispatch(DeleteChat { id })),
-            ),
+                .child(row_control(
+                    SharedString::from(format!("{id}-archive")),
+                    "archive-chat",
+                    Icon::Archive,
+                    "Archive chat",
+                    None,
+                    Box::new(ArchiveChat { id }),
+                    theme,
+                )),
         ))
+}
+
+/// A row's control: an icon button with a tooltip, or, once clicked, the pill that asks
+/// (`asking`: its words, and whether what it does cannot be undone).
+fn row_control(
+    id: SharedString,
+    tag: &'static str,
+    icon: Icon,
+    tooltip: &'static str,
+    asking: Option<(&'static str, bool)>,
+    action: Box<dyn gpui::Action>,
+    theme: &Theme,
+) -> impl IntoElement {
+    let click = move |_: &gpui::ClickEvent, window: &mut Window, cx: &mut App| {
+        cx.stop_propagation();
+        window.dispatch_action(action.boxed_clone(), cx);
+    };
+    match asking {
+        Some((words, danger)) => div()
+            .id(id)
+            .flex_none()
+            .h(px(20.))
+            .px(px(8.))
+            .rounded_full()
+            .flex()
+            .items_center()
+            // As `button::Kind::Danger`: the danger colour on a neutral pill, never filled.
+            .map(|pill| if danger { pill.bg(theme.hover).border_1().border_color(theme.border_strong) } else { pill.bg(theme.accent_fill()) })
+            .typography(Type::Small)
+            .font_weight(FontWeight::MEDIUM)
+            .text_color(if danger { theme.danger } else { theme.on_accent })
+            .on_click(click)
+            .child(words)
+            .tag(tag)
+            .into_any_element(),
+        None => small_button(id, icon, theme.text_dim, theme).tooltip(tip(tooltip)).on_click(click).tag(tag).into_any_element(),
+    }
+}
+
+/// The search field under New chat: a round well with a magnifier, and an ✕ once something is
+/// typed. Esc in it empties it.
+fn search_field(field: Entity<TextField>, searching: bool, theme: &Theme) -> impl IntoElement {
+    div()
+        .key_context(crate::actions::SEARCH_CONTEXT)
+        .h(px(30.))
+        .pl(px(10.))
+        .pr(px(5.))
+        .rounded_full()
+        .bg(theme.hover)
+        .flex()
+        .items_center()
+        .gap(px(8.))
+        .child(Icon::Search.view(px(13.), theme.text_faint))
+        .child(div().flex_1().min_w_0().overflow_hidden().child(field))
+        .when(searching, |well| {
+            well.child(small_button("clear-search", Icon::Close, theme.text_dim, theme).tooltip(tip("Clear search")).on_click(dispatch(ClearSearch)).tag("clear-search"))
+        })
+        .tag("sidebar-search")
+}
+
+/// The foot's way into the Archived view, lit while it is open.
+fn archived_button(open: bool, theme: &Theme) -> impl IntoElement {
+    div()
+        .id("show-archived")
+        .flex_none()
+        .size(px(30.))
+        .rounded_full()
+        .flex()
+        .items_center()
+        .justify_center()
+        .when(open, |button| button.bg(theme.accent_wash))
+        .when(!open, |button| button.hover(|button| button.bg(theme.hover)))
+        .tooltip(tip(if open { "Back to chats" } else { "Archived chats" }))
+        .on_click(dispatch(ToggleArchived))
+        .child(Icon::Archive.view(px(15.), if open { theme.accent_text } else { theme.text_dim }))
+        .tag("show-archived")
+}
+
+/// The Archived view's head, in New chat's place: its name, how many, Delete all, and the way back.
+fn archived_header(total: usize, confirming_all: bool, theme: &Theme) -> impl IntoElement {
+    div()
+        .h(px(34.))
+        .pl(px(10.))
+        .pr(px(4.))
+        .flex()
+        .items_center()
+        .gap(px(8.))
+        .child(div().typography(Type::UiStrong).text_color(theme.text).child("Archived"))
+        .when(total > 0, |head| head.child(div().typography(Type::Small).text_color(theme.text_faint).child(total.to_string())))
+        .child(div().flex_1())
+        .when(total > 0, |head| {
+            head.child(row_control(
+                "delete-all-archived".into(),
+                "delete-all-archived",
+                Icon::Trash,
+                "Delete all archived",
+                confirming_all.then_some(("Delete all?", true)),
+                Box::new(DeleteAllArchived),
+                theme,
+            ))
+        })
+        .child(small_button("close-archived", Icon::Close, theme.text_dim, theme).tooltip(tip("Back to chats")).on_click(dispatch(ToggleArchived)).tag("close-archived"))
+        .tag("archived-header")
+}
+
+/// An archived chat: its title and how long ago it was archived, then where it was (its project,
+/// or Chat) with Unarchive and Delete, always shown, since this list is for managing them.
+fn archived_row(row: ArchivedRow, theme: &Theme) -> impl IntoElement {
+    let id = row.id.to_string();
+    let asking = |which: RowConfirm, words: &'static str, danger: bool| (row.confirming == Some(which)).then_some((words, danger));
+    let unarchive_asking = asking(RowConfirm::Unarchive, "Unarchive?", false);
+    let delete_asking = asking(RowConfirm::Delete, "Delete?", true);
+    div()
+        .id(SharedString::from(format!("{id}-archived")))
+        .px(px(10.))
+        .py(px(6.))
+        .rounded(px(14.))
+        .flex()
+        .flex_col()
+        .gap(px(2.))
+        .map(|row_box| if row.selected { row_box.bg(theme.accent_wash) } else { row_box.hover(|row_box| row_box.bg(theme.hover)) })
+        .on_click(dispatch(SelectChat { id: id.clone() }))
+        .child(
+            div()
+                .flex()
+                .items_center()
+                .gap(px(8.))
+                .child(div().flex_1().min_w_0().truncate().typography(Type::Ui).text_color(if row.selected { theme.text } else { theme.text_soft }).child(row.title))
+                .child(div().flex_none().typography(Type::Small).text_color(theme.text_faint).child(row.age)),
+        )
+        .child(
+            div()
+                .flex()
+                .items_center()
+                .gap(px(4.))
+                .child(div().flex_1().min_w_0().truncate().typography(Type::Small).text_color(theme.text_faint).child(row.place))
+                .child(row_control(
+                    SharedString::from(format!("{id}-unarchive")),
+                    "unarchive-chat",
+                    Icon::Unarchive,
+                    "Unarchive chat",
+                    unarchive_asking,
+                    Box::new(UnarchiveChat { id: id.clone(), ask: true }),
+                    theme,
+                ))
+                .child(row_control(
+                    SharedString::from(format!("{id}-delete")),
+                    "delete-archived-chat",
+                    Icon::Trash,
+                    "Delete chat",
+                    delete_asking,
+                    Box::new(DeleteArchivedChat { id }),
+                    theme,
+                )),
+        )
 }
 
 /// The switch between the window's two areas, in the sidebar's title strip: a round track with
@@ -585,5 +837,21 @@ impl RenderOnce for AreaSwitch {
             .child(segment("area-code", Icon::Code, ChatKind::Code, "Code  ⌥⌘1", Box::new(EnterCodeArea)))
             .child(segment("area-chat", Icon::Comment, ChatKind::Chat, "Chat  ⌥⌘2", Box::new(EnterChatArea)))
             .tag("area-switch")
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn every_word_of_a_search_must_be_found() {
+        let terms = search_terms("  Lisbon   TRIP ");
+        assert_eq!(terms, ["lisbon", "trip"]);
+        assert!(matches_search("Trip to Lisbon", &terms), "in any order, any case");
+        assert!(!matches_search("Lisbon in four days", &terms), "every word");
+        assert!(matches_search("Fix the decoder wackcode", &search_terms("deco wack")), "a project's name counts in Code");
+        assert!(search_terms(" \t ").is_empty());
+        assert!(matches_search("anything", &[]), "nothing typed hides nothing");
     }
 }

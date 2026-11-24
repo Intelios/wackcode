@@ -8,7 +8,7 @@ use gpui::{
 };
 use wack_ui::{
     actions::{
-        AddFolder, CloseTab, CopyScratchpadPath, EnterChatArea, EnterCodeArea, NewChat, NewTerminal, NextTab, OpenSettings, PreviousTab, RenameChat,
+        AddFolder, ArchiveCurrentChat, CloseTab, CopyScratchpadPath, EnterChatArea, EnterCodeArea, NewChat, NewTerminal, NextTab, OpenSettings, PreviousTab, RenameChat,
         RevealScratchpad, ToggleChanges, ToggleSidebar, ToggleTerminal,
     },
     panes::solve::{CONTENT_MIN_HEIGHT, WINDOW_MIN_WIDTH},
@@ -56,6 +56,7 @@ fn main() {
                 MenuItem::action("Add Folder…", AddFolder),
                 MenuItem::separator(),
                 MenuItem::action("Rename Chat…", RenameChat),
+                MenuItem::action("Archive Chat", ArchiveCurrentChat),
                 MenuItem::separator(),
                 // A Chat chat's own folder; nothing in a Code chat.
                 MenuItem::action("Reveal Scratchpad in Finder", RevealScratchpad),

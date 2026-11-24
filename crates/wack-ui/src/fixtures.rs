@@ -31,6 +31,7 @@ pub fn sidebar(selected: Selected) -> SidebarData {
         age: age.into(),
         state,
         selected: selected == this && this != Selected::None,
+        confirming_archive: false,
     };
     let closed = |name: &'static str, chats: usize, pinned: bool| ProjectRow {
         id: name.into(),
@@ -45,6 +46,10 @@ pub fn sidebar(selected: Selected) -> SidebarData {
         area: wack_core::ChatKind::Code,
         groups: Vec::new(),
         other_waiting: false,
+        search: None,
+        searching: false,
+        has_archived: false,
+        archived: None,
         pinned: vec![
             ProjectRow {
                 id: "wackcode".into(),
@@ -92,6 +97,7 @@ fn meter(label: &'static str) -> Option<Meter> {
 pub fn composer_empty(roomy: bool) -> ComposerData {
     ComposerData {
         chat_area: false,
+        archived: None,
         input: drawn(None, crate::app::NEW_CHAT_PLACEHOLDER),
         model: "GLM-5.3-Flash".into(),
         effort: Some("Medium".into()),
@@ -128,6 +134,7 @@ pub fn composer_after_turn(input: Input) -> ComposerData {
 pub fn composer_working() -> ComposerData {
     ComposerData {
         chat_area: false,
+        archived: None,
         input: drawn(None, crate::chat::FOLLOW_UP_PLACEHOLDER),
         meter: meter("21%"),
         working: true,
@@ -419,6 +426,7 @@ pub fn suggestions_turn() -> Vec<Item> {
 pub fn composer_tasks(open: bool) -> ComposerData {
     ComposerData {
         chat_area: false,
+        archived: None,
         tasks: crate::shell::task_lines(&tasks()),
         tasks_open: open,
         ..composer_after_turn(drawn(None, crate::chat::FOLLOW_UP_PLACEHOLDER))
@@ -429,6 +437,7 @@ pub fn composer_tasks(open: bool) -> ComposerData {
 pub fn composer_foreground() -> ComposerData {
     ComposerData {
         chat_area: false,
+        archived: None,
         working: true,
         foreground: true,
         agents: 0,
@@ -967,6 +976,7 @@ pub fn agent_ends() -> Vec<Item> {
 pub fn composer_agents() -> ComposerData {
     ComposerData {
         chat_area: false,
+        archived: None,
         working: true,
         foreground: true,
         agents: 3,
@@ -1249,6 +1259,7 @@ pub fn chat_sidebar(selected: bool, other_waiting: bool) -> SidebarData {
         age: age.into(),
         state,
         selected: this && selected,
+        confirming_archive: false,
     };
     SidebarData {
         area: wack_core::ChatKind::Chat,
@@ -1281,11 +1292,80 @@ pub fn chat_hero() -> crate::shell::Screen {
         ideas: crate::chat_area::pick_ideas(3, 3),
         composer: ComposerData {
             chat_area: true,
+            archived: None,
             input: drawn(None, crate::app::CHAT_AREA_PLACEHOLDER),
             key: "chat-area".into(),
             ..composer_empty(true)
         },
         notice: None,
+    }
+}
+
+/// The sidebar's search field holding `text`.
+pub fn search_field(text: &str, cx: &mut gpui::App) -> gpui::Entity<crate::text_field::TextField> {
+    let text = text.to_string();
+    gpui::AppContext::new(cx, |cx| {
+        let mut field = crate::text_field::TextField::new(crate::typography::Type::Ui, "Search chats…", cx);
+        field.set_text(&text, cx);
+        field
+    })
+}
+
+/// The Code sidebar searched for "the": only the projects with matching chats, open, and one
+/// row's Archive asking.
+pub fn sidebar_searching(cx: &mut gpui::App) -> SidebarData {
+    let terms = crate::sidebar::search_terms("the");
+    let mut data = sidebar(Selected::Finished);
+    let keep = |project: &mut crate::sidebar::ProjectRow| {
+        let name = project.name.to_string();
+        project.chats.retain(|chat| !chat.title.is_empty() && crate::sidebar::matches_search(&format!("{} {name}", chat.title), &terms));
+        project.open = true;
+        !project.chats.is_empty()
+    };
+    data.pinned.retain_mut(keep);
+    data.projects.retain_mut(keep);
+    if let Some(chat) = data.pinned.first_mut().and_then(|project| project.chats.get_mut(1)) {
+        chat.confirming_archive = true;
+    }
+    SidebarData { search: Some(search_field("the", cx)), searching: true, has_archived: true, ..data }
+}
+
+/// The Chat area's Archived view: three archived chats, the second asking before it is deleted.
+pub fn chat_archived_sidebar(cx: &mut gpui::App) -> SidebarData {
+    use crate::sidebar::{ArchivedData, ArchivedRow, RowConfirm};
+    let row = |title: &'static str, age: &'static str, selected: bool, confirming: Option<RowConfirm>| ArchivedRow {
+        id: title.into(),
+        title: title.into(),
+        age: age.into(),
+        place: "Chat".into(),
+        selected,
+        confirming,
+    };
+    SidebarData {
+        area: wack_core::ChatKind::Chat,
+        search: Some(search_field("", cx)),
+        has_archived: true,
+        archived: Some(ArchivedData {
+            total: 3,
+            confirming_all: false,
+            rows: vec![
+                row("Sourdough that actually rises", "now", true, None),
+                row("Names for a pottery studio", "2d", false, Some(RowConfirm::Delete)),
+                row("Birthday gift for a climber", "3w", false, None),
+            ],
+        }),
+        ..SidebarData::default()
+    }
+}
+
+/// An archived Chat chat on screen: its transcript, and in the composer's place the line that
+/// says so with Unarchive.
+pub fn archived_chat() -> crate::shell::Screen {
+    crate::shell::Screen::Chat {
+        title: "Sourdough that actually rises".into(),
+        project: crate::shell::ProjectInfo { name: "".into(), path: "".into(), branch: None },
+        body: crate::shell::Body::Items(finished_turn()),
+        composer: ComposerData { chat_area: true, archived: Some("Sourdough that actually rises".into()), ..composer_after_turn(drawn(None, crate::app::CHAT_FOLLOW_UP_PLACEHOLDER)) },
     }
 }
 

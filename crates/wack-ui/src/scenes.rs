@@ -87,6 +87,25 @@ pub fn all() -> Vec<Scene> {
             build: |_, cx| cx.new(|_| Shell::showing_tabs(fixtures::chat_sidebar(false, false), fixtures::chat_hero_mentioning(), fixtures::chat_strip(None))).into(),
         },
         Scene {
+            name: "sidebar-search",
+            description: "The Code sidebar searched for \"the\": only projects with matching chats, open; one row's Archive asking; the foot's Archived button.",
+            size: WINDOW,
+            build: |_, cx| {
+                let sidebar = fixtures::sidebar_searching(cx);
+                let screen = Screen::NewChat { project: fixtures::project(), composer: fixtures::composer_empty(true), notice: None };
+                cx.new(|_| Shell::showing_tabs(sidebar, screen, fixtures::strip(None))).into()
+            },
+        },
+        Scene {
+            name: "chat-area-archived",
+            description: "The Chat area's Archived view, one row asking before it deletes, and an archived chat open with Unarchive in the composer's place.",
+            size: WINDOW,
+            build: |_, cx| {
+                let sidebar = fixtures::chat_archived_sidebar(cx);
+                cx.new(|_| Shell::showing_tabs(sidebar, fixtures::archived_chat(), fixtures::chat_strip(None).without_tabs())).into()
+            },
+        },
+        Scene {
             name: "chat-area-empty",
             description: "The Chat area with no chats yet: the sidebar says what a chat here is.",
             size: WINDOW,
@@ -246,6 +265,7 @@ pub fn all() -> Vec<Scene> {
                 cx.new(|_| {
                     let composer = ComposerData {
                         chat_area: false,
+                        archived: None,
                         model: "claude-opus-5-5".into(),
                         menu: Some(fixtures::model_menu()),
                         ..fixtures::composer_after_turn(Input::Drawn { text: None, placeholder: crate::chat::FOLLOW_UP_PLACEHOLDER.into() })
@@ -354,6 +374,7 @@ pub fn all() -> Vec<Scene> {
                         "A model without Vision",
                         ComposerData {
                             chat_area: false,
+                            archived: None,
                             pictures_refused: Some("GLM-5.3-Flash doesn't accept pictures. Turn on Vision for it in Settings › Providers, or remove the pictures.".into()),
                             ..composer(Some("What's wrong here?"), 1)
                         },
@@ -370,6 +391,7 @@ pub fn all() -> Vec<Scene> {
                 cx.new(|_| {
                     let composer = ComposerData {
                         chat_area: false,
+                        archived: None,
                         effort: Some("High".into()),
                         menu: Some(crate::composer::MenuData {
                             kind: crate::app::Menu::Effort,
@@ -398,6 +420,7 @@ pub fn all() -> Vec<Scene> {
                 cx.new(|_| {
                     let composer = ComposerData {
                         chat_area: false,
+                        archived: None,
                         effort: Some("Default effort".into()),
                         menu: Some(crate::composer::MenuData {
                             kind: crate::app::Menu::Effort,
@@ -428,6 +451,7 @@ pub fn all() -> Vec<Scene> {
                     let drawn = Input::Drawn { text: None, placeholder: crate::app::placeholder(mode, false).into() };
                     let composer = ComposerData {
                         chat_area: false,
+                        archived: None,
                         mode,
                         effort: Some("Ultra".into()),
                         ultra_effort: true,
@@ -464,6 +488,7 @@ pub fn all() -> Vec<Scene> {
                             project: fixtures::project(),
                             composer: ComposerData {
                                 chat_area: false,
+                                archived: None,
                                 mode,
                                 input: Input::Drawn { text: None, placeholder: crate::app::placeholder(mode, true).into() },
                                 ..fixtures::composer_empty(true)
@@ -527,6 +552,7 @@ pub fn all() -> Vec<Scene> {
                 cx.new(|_| {
                     let composer = ComposerData {
                         chat_area: false,
+                        archived: None,
                         working: true,
                         todos: Some(fixtures::todos()),
                         todos_open: true,
@@ -552,6 +578,7 @@ pub fn all() -> Vec<Scene> {
                         .collect();
                     let composer = ComposerData {
                         chat_area: false,
+                        archived: None,
                         working: true,
                         todos: Some(fixtures::todos()),
                         waiting,
@@ -578,6 +605,7 @@ pub fn all() -> Vec<Scene> {
                     let todos = fixtures::todos();
                     let composer = ComposerData {
                         chat_area: false,
+                        archived: None,
                         mode,
                         working: true,
                         question: Some(fixtures::question(false)),
@@ -1589,6 +1617,7 @@ fn plan_scene(ultra: bool, confirming: bool, backdrop: Option<crate::backdrop::P
     cx.new(|_| {
         let composer = ComposerData {
             chat_area: false,
+            archived: None,
             mode,
             ..fixtures::composer_after_turn(Input::Drawn { text: None, placeholder: crate::app::placeholder(mode, false).into() })
         };
@@ -1616,6 +1645,7 @@ fn question_scene(ultra: bool, backdrop: Option<crate::backdrop::Picture>, _size
     cx.new(|_| {
         let composer = ComposerData {
             chat_area: false,
+            archived: None,
             mode,
             working: true,
             question: Some(fixtures::question(ultra)),
@@ -1827,6 +1857,7 @@ fn canvas_scene(scene: CanvasScene, backdrop: Option<crate::backdrop::Picture>, 
                 body: Body::Items(items),
                 composer: ComposerData {
                     chat_area: false,
+                    archived: None,
                     comments: (scene == CanvasScene::Comments).then(|| (2, "settings".to_string())),
                     ..fixtures::composer_after_turn(Input::Drawn { text: None, placeholder: crate::chat::FOLLOW_UP_PLACEHOLDER.into() })
                 },
@@ -2279,6 +2310,7 @@ fn slash_scene(rows: Option<Vec<crate::slash_menu::SlashRow>>, text: &'static st
     cx.new(|_| {
         let composer = ComposerData {
             chat_area: false,
+            archived: None,
             slash: rows.map(crate::slash_menu::SlashData::commands),
             hint: hint.map(Into::into),
             ..fixtures::composer_after_turn(Input::Drawn { text: Some(text.into()), placeholder: crate::chat::FOLLOW_UP_PLACEHOLDER.into() })

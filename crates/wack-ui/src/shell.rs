@@ -1004,7 +1004,8 @@ impl Render for Shell {
             }
             Screen::ChatHero { greeting, ideas, composer, notice } => {
                 let ground = (clearness > 0.).then_some(Hsla { a: theme.cover(), ..theme.window });
-                let body = chat_hero(greeting, ideas, composer, notice, over_picture, ground, &theme).into_any_element();
+                let still = cx.reduce_motion();
+                let body = chat_hero(greeting, ideas, composer, notice, over_picture, ground, still, &theme).into_any_element();
                 (tab_strip(&strip, None, compact_commands, viewport, strip_ground, &theme), arrive("arrive-chat-hero".into(), body))
             }
             Screen::Chat { project, body, composer, .. } => (
@@ -2518,6 +2519,7 @@ fn chat_hero(
     notice: Option<SharedString>,
     over_picture: bool,
     ground: Option<Hsla>,
+    still: bool,
     theme: &Theme,
 ) -> impl IntoElement {
     let hint = |keys: &'static str, what: &'static str| {
@@ -2558,7 +2560,7 @@ fn chat_hero(
             .flex()
             .flex_col()
             .items_center()
-            .child(duck_on_pond(!over_picture, theme))
+            .child(duck_on_pond(!over_picture, still, theme))
             .child(div().pt(px(10.)).child(on_ground(div().typography(Type::Label).text_color(theme.text_dim).child(greeting), ground, theme)))
             .child(div().pt(px(6.)).child(display_line("What's on your mind?".into(), ground.is_some(), theme)))
             .child(div().pt(px(8.)).child(on_ground(
@@ -2581,7 +2583,10 @@ fn chat_hero(
 
 /// The hero's duck: in a small round of the window's colour, and, with no picture behind it,
 /// on a pond of light whose three ripples widen and fade in turn.
-fn duck_on_pond(pond: bool, theme: &Theme) -> impl IntoElement {
+/// The hero's duck, on a pond of light when no picture is set: three rings spread from it and
+/// fade, each a third behind the last. With Reduce Motion the rings hold still where they are a
+/// third and two thirds out.
+fn duck_on_pond(pond: bool, still: bool, theme: &Theme) -> impl IntoElement {
     const SIZE: f32 = 96.;
     const RIPPLE: std::time::Duration = std::time::Duration::from_millis(4200);
     let duck = div()
@@ -2603,22 +2608,23 @@ fn duck_on_pond(pond: bool, theme: &Theme) -> impl IntoElement {
             .flex()
             .items_center()
             .justify_center()
-            .child(
-                div()
-                    .rounded_full()
-                    .border_1()
-                    .border_color(theme.accent)
-                    .with_animation(
-                        ElementId::Name(format!("ripple-{ring}").into()),
-                        gpui::Animation::new(RIPPLE).repeat(),
-                        move |ripple, t| {
+            .child({
+                let ring_at = move |ripple: gpui::Div, t: f32| {
+                    let size = 44. + (SIZE - 44.) * t;
+                    ripple.size(px(size)).opacity(0.35 * (1. - t))
+                };
+                let ripple = div().rounded_full().border_1().border_color(theme.accent);
+                if still {
+                    ring_at(ripple, ring as f32 / 3.).into_any_element()
+                } else {
+                    ripple
+                        .with_animation(ElementId::Name(format!("ripple-{ring}").into()), gpui::Animation::new(RIPPLE).repeat(), move |ripple, t| {
                             // Each ripple a third of the way behind the last.
-                            let t = (t + ring as f32 / 3.) % 1.;
-                            let size = 44. + (SIZE - 44.) * t;
-                            ripple.size(px(size)).opacity(0.35 * (1. - t))
-                        },
-                    ),
-            )
+                            ring_at(ripple, (t + ring as f32 / 3.) % 1.)
+                        })
+                        .into_any_element()
+                }
+            })
     });
     div()
         .relative()

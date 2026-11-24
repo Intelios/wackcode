@@ -2805,6 +2805,11 @@ impl AppState {
         let Some(chat) = self.store.chat(chat_id).cloned() else {
             return false;
         };
+        // An archived chat is read, not run: not by a message, a queued one, or a task's news
+        // waking it. Unarchiving it brings that back.
+        if chat.is_archived() {
+            return false;
+        }
         let session = self.ensure_session(&chat, cx);
         // A message from the user lets task news wake the chat again.
         if matches!(job, Job::Prompt(_) | Job::Command { .. } | Job::Attached { .. }) {

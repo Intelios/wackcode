@@ -789,7 +789,8 @@ impl RenderOnce for AreaSwitch {
             .bg(theme.window)
             .border_1()
             .border_color(theme.border_strong);
-        let pill = if moves == 0 {
+        // With Reduce Motion the pill is simply where it belongs.
+        let pill = if moves == 0 || cx.reduce_motion() {
             pill.left(px(to_left)).into_any_element()
         } else {
             pill.with_animation(("area-pill", moves), gpui::Animation::new(GLIDE).with_easing(crate::motion::spring), move |pill, t| {

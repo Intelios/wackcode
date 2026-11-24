@@ -7,9 +7,53 @@
 //!   version 2 told it to look after every action, which doubled the round trips.
 //! - Values are clipped to one line; the tool wraps the report as app data.
 
-use crate::{backend::Fingerprint, outline::clip};
+use std::collections::HashMap;
+
+use crate::{
+    backend::Fingerprint,
+    outline::{self, Node, clip},
+};
 
 const MAX_VALUE: usize = 200;
+/// Roles that, appearing, are worth saying: something opened over the window.
+const OPENED: [&str; 4] = ["AXSheet", "AXPopover", "AXMenu", "AXDialog"];
+
+/// What changed inside a window, from its tree before and after an action: elements whose value
+/// changed (the display of a calculator, a status line) and sheets, popovers and menus that
+/// opened. `skip` is the acted-on element, whose value the fingerprint already reports. At most
+/// `max` lines, then a count; the refs mentioned are returned to be marked as shown.
+pub fn tree_report(before: &Node, after: &Node, skip: Option<u32>, max: usize) -> (Vec<String>, Vec<u32>) {
+    let mut old: HashMap<usize, Option<String>> = HashMap::new();
+    before.each(&mut |node| {
+        old.insert(node.handle, node.value.clone());
+    });
+    let mut lines = Vec::new();
+    let mut refs = Vec::new();
+    let mut extra = 0;
+    after.each(&mut |node| {
+        if skip == Some(node.handle as u32) || node.is_secure() {
+            return;
+        }
+        let line = match old.get(&node.handle) {
+            Some(value) if *value != node.value && node.value.as_deref().is_some_and(|value| !value.trim().is_empty()) => {
+                let was = value.as_deref().filter(|value| !value.trim().is_empty()).map(|value| format!(" (was \"{}\")", clip(value, 60))).unwrap_or_default();
+                format!("[e{}] {}{was}", node.handle, outline::describe(node))
+            }
+            None if OPENED.contains(&node.role.as_str()) || node.subrole.as_deref() == Some("AXDialog") => format!("opened: [e{}] {}", node.handle, outline::describe(node)),
+            _ => return,
+        };
+        if lines.len() < max {
+            lines.push(line);
+            refs.push(node.handle as u32);
+        } else {
+            extra += 1;
+        }
+    });
+    if extra > 0 {
+        lines.push(format!("… {extra} more changes (computer_snapshot shows them)"));
+    }
+    (lines, refs)
+}
 
 pub fn report(before: &Fingerprint, after: &Fingerprint, pid: i32, app: &str) -> Vec<String> {
     let mut changes = Vec::new();
@@ -77,6 +121,24 @@ mod tests {
                 "TextEdit came to the front",
             ]
         );
+    }
+
+    #[test]
+    fn a_tree_report_names_changed_values_and_what_opened() {
+        let node = |handle: usize, role: &str, value: Option<&str>| Node { handle, role: role.into(), description: Some(format!("n{handle}")), value: value.map(str::to_string), ..Node::default() };
+        let before = Node { handle: 1, role: "AXWindow".into(), children: vec![node(2, "AXStaticText", Some("7")), node(3, "AXButton", None), node(4, "AXTextField", Some("draft"))], ..Node::default() };
+        let after = Node {
+            handle: 1,
+            role: "AXWindow".into(),
+            children: vec![node(2, "AXStaticText", Some("15")), node(3, "AXButton", None), node(4, "AXTextField", Some("draft!")), node(9, "AXSheet", None)],
+            ..Node::default()
+        };
+        let (lines, refs) = tree_report(&before, &after, Some(4), 5);
+        assert_eq!(lines, vec!["[e2] staticText \"n2\" value=\"15\" (was \"7\")", "opened: [e9] sheet \"n9\""]);
+        assert_eq!(refs, vec![2, 9]);
+        let (lines, _) = tree_report(&before, &after, None, 1);
+        assert_eq!(lines.len(), 2, "one line, then the count");
+        assert!(lines[1].starts_with("… 2 more"));
     }
 
     #[test]

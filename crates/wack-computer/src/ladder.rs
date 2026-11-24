@@ -84,10 +84,14 @@ pub fn next(step: Step, reason: &Reason, kind: AppKind) -> Next {
     }
 }
 
+/// What to do about something that can't be done in the background. Full-screen control isn't
+/// built yet, so this points at the other ways in; it is the one place to change once it is.
+pub const ESCALATE: &str = "Try another way in: a menu command (`menu`), a keyboard shortcut (`key`), typing into a field by ref, or opening a file with computer_open. If none works, tell the user what you couldn't do in the background.";
+
 /// The sentence for an action that stopped, saying what to do instead.
 pub fn advice(step: Step, reason: &Reason, app: &str) -> String {
     use Reason::*;
-    let screen = "It can be done with full-screen control: repeat the action with `screen: true` and a `reason`, which asks the user to lend you the screen.";
+    let screen = ESCALATE;
     match reason {
         NoElement | NotPressable | NoScrollBar | NoAxDrag => format!("unsupported in the background: {app} doesn't take that {} without being in front. {screen}", step_word(step)),
         WriteUnsupported | WriteIgnored => format!("unsupported in the background: {app} didn't take the text. {screen}"),
@@ -96,7 +100,7 @@ pub fn advice(step: Step, reason: &Reason, app: &str) -> String {
         Resized => "refused: the window changed size since your picture. Take a new computer_screenshot.".into(),
         Unreachable => format!("refused: {app}'s window is closed, minimized or in another Space."),
         Covered => format!("refused: a sheet or another app's panel covers {app}'s window. Look again with computer_screenshot."),
-        OpensMenu => format!("refused: that control opens a menu, which would take the keyboard. Use `menu` for the menu bar instead, or {}", screen.to_lowercase()),
+        OpensMenu => "refused: that control opens a menu, which would take the keyboard from the user's app. Use `menu` for the menu bar, or keys, instead.".into(),
         WouldReplace => "refused: typing there would replace the text already in the field. Pass `replace: true` if that is what you want.".into(),
         Other(text) => text.clone(),
     }
@@ -151,7 +155,7 @@ mod tests {
 
     #[test]
     fn advice_points_at_the_way_forward() {
-        assert!(advice(Step::Click, &Reason::NoElement, "Freeform").contains("screen: true"));
+        assert!(advice(Step::Click, &Reason::NoElement, "Freeform").contains("another way"));
         assert!(advice(Step::Type, &Reason::WouldReplace, "Notes").contains("replace: true"));
         assert!(advice(Step::Click, &Reason::Resized, "Notes").contains("computer_screenshot"));
         assert!(advice(Step::Type, &Reason::Secure, "Notes").contains("Ask the user"));

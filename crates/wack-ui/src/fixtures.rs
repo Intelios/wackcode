@@ -534,6 +534,33 @@ pub fn browser_turn() -> Vec<Item> {
     items(&conversation, &[], now)
 }
 
+/// The agent working in Calculator: each step as the app and its summary, the last still running.
+pub fn computer_turn() -> Vec<Item> {
+    let mut conversation = Conversation::default();
+    let now = START + 60_000;
+    conversation.send("Use Calculator to work out 7 + 8 × 3, and tell me what it shows.", now - 20_000);
+    let outline = "<app-data 1f2e>\n[e1] window \"Calculator\"\n  [e15] button \"7\"\n  [e26] button \"Add\"\n</app-data 1f2e>";
+    call(&mut conversation, "c-1", "tool_search", json!({ "query": "computer" }), Some("Loaded 7 tools."), now);
+    call(&mut conversation, "c-2", "computer_open", json!({ "app": "Calculator" }), Some("Calculator started in the background."), now);
+    call(&mut conversation, "c-3", "computer_snapshot", json!({ "app": "Calculator" }), Some(outline), now);
+    call(
+        &mut conversation,
+        "c-4",
+        "computer_batch",
+        json!({ "steps": [
+            { "tool": "computer_act", "input": { "app": "Calculator", "action": "click", "ref": "e15", "summary": "Press 7" } },
+            { "tool": "computer_act", "input": { "app": "Calculator", "action": "click", "ref": "e26", "summary": "Press +" } },
+            { "tool": "computer_act", "input": { "app": "Calculator", "action": "key", "keys": "8", "summary": "Type 8" } },
+        ] }),
+        Some("Step 1 (computer_act): pressed button \"7\" in Calculator."),
+        now,
+    );
+    call(&mut conversation, "c-5", "computer_act", json!({ "app": "Calculator", "action": "click", "ref": "e30", "summary": "Press =" }), Some("pressed button \"Equals\" in Calculator. Then its value is now \"31\"."), now);
+    call(&mut conversation, "c-6", "computer_wait", json!({ "app": "Calculator", "text": "31" }), Some("“31” showed in Calculator after 40 ms."), now);
+    call(&mut conversation, "c-7", "computer_screenshot", json!({ "app": "Calculator" }), None, now);
+    items(&conversation, &[], now)
+}
+
 /// A chat opened with a skill: the `/pdf` bubble, the skill loaded, the reply. `open` shows the
 /// prompt the agent got beneath the bubble.
 pub fn skill_turn(open: bool) -> Vec<Item> {

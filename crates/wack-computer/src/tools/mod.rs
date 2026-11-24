@@ -21,6 +21,7 @@
 //!   changed size since.
 //! - Windows of apps the chat may not use are never listed (their titles are the user's).
 
+mod act;
 mod look;
 mod spec;
 #[cfg(test)]
@@ -41,7 +42,7 @@ use crate::{
 pub use spec::{Kind, UNTRUSTED};
 
 /// Every computer tool's name.
-pub const NAMES: [&str; 5] = ["computer_apps", "computer_open", "computer_snapshot", "computer_screenshot", "computer_wait"];
+pub const NAMES: [&str; 7] = ["computer_apps", "computer_open", "computer_snapshot", "computer_screenshot", "computer_wait", "computer_act", "computer_batch"];
 
 /// The prefix every computer tool's name starts with (copy children deny it).
 pub const PREFIX: &str = "computer_";
@@ -90,6 +91,7 @@ impl Tool for ComputerTool {
             return Err("Computer use is off. The user can turn it on in Settings › Computer use.".into());
         }
         let permissions = self.chat.desktop().permissions();
+        // A batch may take pictures; it is refused at the step if the permission is missing.
         let needs_screen = self.kind == Kind::Screenshot;
         if self.kind != Kind::Apps && !permissions.accessibility {
             return Err("WackCode doesn't have the Accessibility permission computer use needs. The user can allow it in Settings › Computer use.".into());
@@ -105,6 +107,8 @@ impl Tool for ComputerTool {
             Kind::Snapshot => look::snapshot(&call, input).await,
             Kind::Screenshot => look::screenshot(&call, input).await,
             Kind::Wait => look::wait(&call, input).await,
+            Kind::Act => act::act(&call, input).await,
+            Kind::Batch => act::batch(&call, input).await,
         }
     }
 }

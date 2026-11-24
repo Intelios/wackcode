@@ -579,13 +579,14 @@ pub fn select_range(element: &AXUIElement, range: objc2_core_foundation::CFRange
 
 /// What an element is, without its value: `button "Save"`.
 pub fn describe(element: &AXUIElement) -> String {
-    let role = string(element, "AXRole").unwrap_or_else(|| "AXUnknown".into());
-    let subrole = string(element, "AXSubrole");
-    let mut text = crate::outline::display_role(&role, subrole.as_deref());
-    if let Some(label) = string(element, "AXTitle").or_else(|| string(element, "AXDescription")).filter(|label| !label.trim().is_empty()) {
-        text.push_str(&format!(" \"{}\"", crate::outline::clip(&label, 80)));
+    let label = string(element, "AXTitle").or_else(|| string(element, "AXDescription")).filter(|label| !label.trim().is_empty()).map(|label| format!("\"{}\"", crate::outline::clip(&label, 80)));
+    match (string(element, "AXRole"), label) {
+        (Some(role), Some(label)) => format!("{} {label}", crate::outline::display_role(&role, string(element, "AXSubrole").as_deref())),
+        (Some(role), None) => crate::outline::display_role(&role, string(element, "AXSubrole").as_deref()),
+        // Some apps' elements report no role: their label alone says more than "unknown".
+        (None, Some(label)) => label,
+        (None, None) => "the focused element".into(),
     }
-    text
 }
 
 /// The menu item at `path` from the menu bar down.

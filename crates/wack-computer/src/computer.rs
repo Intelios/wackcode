@@ -166,6 +166,9 @@ pub struct LastShot {
     pub frame: (u32, u32),
     /// What the picture covered, in global points.
     pub bounds: Rect,
+    /// The window's frame then, as Accessibility reports it: a window that has moved since keeps
+    /// its picture's coordinates, shifted by the move.
+    pub window: Option<Rect>,
 }
 
 /// What this chat's agent has seen of one app.

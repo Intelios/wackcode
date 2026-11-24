@@ -178,6 +178,26 @@ pub fn all() -> Vec<Scene> {
             },
         },
         Scene {
+            name: "chat-computer",
+            description: "The agent working in Calculator: each step as the app and its summary, the last still running.",
+            size: WINDOW,
+            build: |_, cx| {
+                cx.new(|_| {
+                    Shell::showing_tabs(
+                        fixtures::sidebar(Selected::Working),
+                        Screen::Chat {
+                            title: fixtures::WORKING_TITLE.into(),
+                            project: fixtures::project(),
+                            body: Body::Items(fixtures::computer_turn()),
+                            composer: fixtures::composer_working(),
+                        },
+                        fixtures::strip(Some(fixtures::WORKING_TITLE)),
+                    )
+                })
+                .into()
+            },
+        },
+        Scene {
             name: "chat-browser",
             description: "The agent driving the browser: each browser step in words, the last still running.",
             size: WINDOW,

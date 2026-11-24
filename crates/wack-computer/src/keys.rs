@@ -43,6 +43,8 @@ const PERIOD_ANSI: u16 = 47;
 #[derive(Debug, Clone, Default, PartialEq, Eq)]
 pub struct Layout {
     keys: HashMap<char, u16>,
+    /// Characters typed with shift held, and their keys.
+    shifted: HashMap<char, u16>,
 }
 
 impl Layout {
@@ -53,7 +55,15 @@ impl Layout {
         for (ch, code) in pairs {
             keys.entry(ch.to_lowercase().next().unwrap_or(ch)).or_insert(code);
         }
-        Self { keys }
+        Self { keys, shifted: HashMap::new() }
+    }
+
+    /// Adds the characters the layout types with shift held (`!` on the 1 key, say).
+    pub fn with_shifted(mut self, pairs: impl IntoIterator<Item = (char, u16)>) -> Self {
+        for (ch, code) in pairs {
+            self.shifted.entry(ch).or_insert(code);
+        }
+        self
     }
 
     /// The ANSI US layout.
@@ -65,6 +75,30 @@ impl Layout {
             ('u', 32), ('[', 33), ('i', 34), ('p', 35), ('l', 37), ('j', 38), ('\'', 39), ('k', 40), (';', 41), ('\\', 42),
             (',', 43), ('/', 44), ('n', 45), ('m', 46), ('.', PERIOD_ANSI), ('`', 50), (' ', 49),
         ])
+        .with_shifted([
+            ('!', 18), ('@', 19), ('#', 20), ('$', 21), ('%', 23), ('^', 22), ('&', 26), ('*', 28), ('(', 25), (')', 29),
+            ('_', 27), ('+', 24), ('{', 33), ('}', 30), ('|', 42), (':', 41), ('"', 39), ('<', 43), ('>', PERIOD_ANSI), ('?', 44),
+            ('~', 50),
+        ])
+    }
+
+    /// The key that types `ch` on this layout, and whether shift is held for it: how a person
+    /// would type it. `None` for a character no key types (it is sent as text alone).
+    pub fn stroke(&self, ch: char) -> Option<(u16, bool)> {
+        match ch {
+            '\n' | '\r' => return Some((36, false)),
+            '\t' => return Some((48, false)),
+            _ => {}
+        }
+        if let Some(code) = self.keys.get(&ch) {
+            return Some((*code, false));
+        }
+        if let Some(code) = self.shifted.get(&ch) {
+            return Some((*code, true));
+        }
+        // An upper-case letter: its lower-case key, shifted.
+        let lower = ch.to_lowercase().next().filter(|lower| *lower != ch)?;
+        self.keys.get(&lower).map(|code| (*code, true))
     }
 
     pub fn code(&self, ch: char) -> Option<u16> {
@@ -256,6 +290,21 @@ mod tests {
         assert!(ansi("cmd+").is_err());
         assert!(ansi("hyper+a").is_err());
         assert!(ansi("launchpad").is_err());
+    }
+
+    #[test]
+    fn characters_are_typed_on_their_own_keys() {
+        let layout = Layout::ansi();
+        assert_eq!(layout.stroke('7'), Some((26, false)));
+        assert_eq!(layout.stroke('*'), Some((28, true)));
+        assert_eq!(layout.stroke('A'), Some((0, true)));
+        assert_eq!(layout.stroke('\n'), Some((36, false)));
+        assert_eq!(layout.stroke('é'), None, "sent as text alone");
+        // A German layout: z and y swap, and its own shifted keys win.
+        let german = Layout::from_pairs([('z', 16), ('y', 6)]).with_shifted([('*', 30)]);
+        assert_eq!(german.stroke('z'), Some((16, false)));
+        assert_eq!(german.stroke('Y'), Some((6, true)));
+        assert_eq!(german.stroke('*'), Some((30, true)));
     }
 
     #[test]

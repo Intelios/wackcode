@@ -37,11 +37,14 @@ unsafe extern "C" {
 
 const KEY_ACTION_DOWN: u16 = 0;
 const NO_DEAD_KEYS: u32 = 1;
+/// `shiftKey >> 8`, as `UCKeyTranslate` takes modifiers.
+const SHIFT: u32 = 0x0200 >> 8;
 
 /// The current layout's printable characters and the keys that type them, or ANSI when it can't
 /// be read. Main thread only.
 pub fn current() -> Layout {
     let mut pairs = Vec::new();
+    let mut shifted = Vec::new();
     unsafe {
         let source = TISCopyCurrentKeyboardLayoutInputSource();
         if source.is_null() {
@@ -51,21 +54,23 @@ pub fn current() -> Layout {
         if !data.is_null() {
             let layout = CFDataGetBytePtr(data) as *const c_void;
             let keyboard = LMGetKbdType() as u32;
-            for code in 0u16..128 {
-                let mut dead = 0u32;
-                let mut length = 0usize;
-                let mut chars = [0u16; 4];
-                let status = UCKeyTranslate(layout, code, KEY_ACTION_DOWN, 0, keyboard, NO_DEAD_KEYS, &mut dead, chars.len(), &mut length, chars.as_mut_ptr());
-                if status != 0 || length != 1 {
-                    continue;
-                }
-                if let Some(ch) = char::from_u32(chars[0] as u32).filter(|ch| !ch.is_control()) {
-                    pairs.push((ch, code));
+            for (modifiers, found) in [(0, &mut pairs), (SHIFT, &mut shifted)] {
+                for code in 0u16..128 {
+                    let mut dead = 0u32;
+                    let mut length = 0usize;
+                    let mut chars = [0u16; 4];
+                    let status = UCKeyTranslate(layout, code, KEY_ACTION_DOWN, modifiers, keyboard, NO_DEAD_KEYS, &mut dead, chars.len(), &mut length, chars.as_mut_ptr());
+                    if status != 0 || length != 1 {
+                        continue;
+                    }
+                    if let Some(ch) = char::from_u32(chars[0] as u32).filter(|ch| !ch.is_control()) {
+                        found.push((ch, code));
+                    }
                 }
             }
         }
         CFRelease(source);
     }
-    let layout = Layout::from_pairs(pairs);
+    let layout = Layout::from_pairs(pairs).with_shifted(shifted);
     if layout.is_empty() { Layout::ansi() } else { layout }
 }

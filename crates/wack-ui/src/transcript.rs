@@ -494,6 +494,7 @@ fn row_icon(verb: &str, theme: &Theme) -> impl IntoElement {
         "Reported" => Some(Icon::Duck),
         verb if crate::work::CANVAS_VERBS.contains(&verb) => Some(Icon::Board),
         verb if crate::work::BROWSER_VERBS.contains(&verb) => Some(Icon::Globe),
+        verb if crate::work::COMPUTER_VERBS.contains(&verb) => Some(Icon::Cursor),
         "" => None,
         _ => Some(Icon::Hammer),
     };

@@ -229,6 +229,121 @@ fn only_looks_are_parallel_safe_for_plan_mode() {
         assert!(spec.name.starts_with(PREFIX));
         assert!(NAMES.contains(&spec.name.as_str()));
         assert_eq!(spec.loading, wack_agent::Loading::Deferred);
-        assert_eq!(spec.parallel_safe, spec.name != "computer_open", "{}", spec.name);
+        let changes_things = ["computer_open", "computer_act", "computer_batch"].contains(&spec.name.as_str());
+        assert_eq!(spec.parallel_safe, !changes_things, "{}", spec.name);
+    }
+}
+
+mod acting {
+    use super::*;
+    use crate::{
+        backend::{Act, Target},
+        ladder::Reason,
+    };
+
+    fn allowed() -> Setup {
+        let setup = setup();
+        answering(&setup.chat, Answer::Allow);
+        setup
+    }
+
+    #[tokio::test]
+    async fn acting_by_ref_needs_the_ref_shown_and_reports_changes() {
+        let setup = allowed();
+        let refused = run(&setup.chat, "computer_act", json!({"app": "TextEdit", "action": "click", "ref": "e3", "summary": "Save"})).await.unwrap_err();
+        assert!(refused.contains("hasn't been shown"), "{refused}");
+        run(&setup.chat, "computer_snapshot", json!({"app": "TextEdit"})).await.unwrap();
+        let done = run(&setup.chat, "computer_act", json!({"app": "TextEdit", "action": "click", "ref": "e3", "summary": "Save"})).await.unwrap().text;
+        assert!(done.contains("pressed e3 in TextEdit") && done.contains("Nothing visible changed"), "{done}");
+        let typed = run(&setup.chat, "computer_act", json!({"app": "TextEdit", "action": "type", "ref": "e2", "text": " world", "summary": "Type"})).await.unwrap().text;
+        assert!(typed.contains("its value is now \"Hello world\""), "{typed}");
+        let acts = setup.desktop.acts();
+        assert!(matches!(&acts[0].2, Act::Click { target: Target::Ref(3), count: 1, .. }));
+    }
+
+    #[tokio::test]
+    async fn coordinates_come_from_the_last_picture_and_follow_a_moved_window() {
+        let setup = allowed();
+        let refused = run(&setup.chat, "computer_act", json!({"app": "TextEdit", "action": "click", "x": 740, "y": 565, "summary": "Save"})).await.unwrap_err();
+        assert!(refused.contains("computer_screenshot"), "{refused}");
+        run(&setup.chat, "computer_screenshot", json!({"app": "TextEdit"})).await.unwrap();
+        // The window moves 50 points right: the same picture point still lands on Save.
+        setup.desktop.state.lock().unwrap().windows[0].1.frame = Some(Rect::new(150.0, 100.0, 800.0, 600.0));
+        for (_, tree) in setup.desktop.state.lock().unwrap().trees.iter_mut() {
+            fn shift(node: &mut Node) {
+                if let Some(frame) = &mut node.frame {
+                    frame.x += 50.0;
+                }
+                node.children.iter_mut().for_each(shift);
+            }
+            shift(tree);
+        }
+        run(&setup.chat, "computer_act", json!({"app": "TextEdit", "action": "click", "x": 740, "y": 565, "summary": "Save"})).await.unwrap();
+        let acts = setup.desktop.acts();
+        match &acts.last().unwrap().2 {
+            Act::Click { target: Target::At { point, element }, .. } => {
+                assert_eq!(*point, (890.0, 665.0));
+                assert_eq!(*element, Some(3));
+            }
+            other => panic!("{other:?}"),
+        }
+        let outside = run(&setup.chat, "computer_act", json!({"app": "TextEdit", "action": "click", "x": 5000, "y": 5, "summary": "x"})).await.unwrap_err();
+        assert!(outside.contains("outside the picture"), "{outside}");
+        setup.desktop.state.lock().unwrap().windows[0].1.frame = Some(Rect::new(150.0, 100.0, 1000.0, 600.0));
+        let resized = run(&setup.chat, "computer_act", json!({"app": "TextEdit", "action": "click", "x": 740, "y": 565, "summary": "x"})).await.unwrap_err();
+        assert!(resized.contains("changed size"), "{resized}");
+    }
+
+    #[tokio::test]
+    async fn browsers_system_chords_and_stops_are_refused() {
+        let setup = allowed();
+        let refused = run(&setup.chat, "computer_act", json!({"app": "Safari", "action": "key", "keys": "enter", "summary": "x"})).await.unwrap_err();
+        assert!(refused.contains("look-only"), "{refused}");
+        let refused = run(&setup.chat, "computer_act", json!({"app": "TextEdit", "action": "key", "keys": "cmd+q", "summary": "Quit"})).await.unwrap_err();
+        assert!(!refused.is_empty());
+        assert!(setup.desktop.acts().is_empty(), "nothing reached the app");
+        setup.desktop.state.lock().unwrap().outcomes.push(Err(Reason::Secure));
+        let refused = run(&setup.chat, "computer_act", json!({"app": "TextEdit", "action": "type", "text": "hunter2", "summary": "x"})).await.unwrap_err();
+        assert!(refused.contains("password"), "{refused}");
+        setup.desktop.state.lock().unwrap().outcomes.push(Err(Reason::NoElement));
+        run(&setup.chat, "computer_screenshot", json!({"app": "TextEdit"})).await.unwrap();
+        let refused = run(&setup.chat, "computer_act", json!({"app": "TextEdit", "action": "click", "x": 10, "y": 10, "summary": "x"})).await.unwrap_err();
+        assert!(refused.contains("background"), "{refused}");
+    }
+
+    #[tokio::test]
+    async fn a_batch_runs_in_order_and_stops_at_the_first_failure() {
+        let setup = allowed();
+        let done = run(
+            &setup.chat,
+            "computer_batch",
+            json!({"steps": [
+                {"tool": "computer_snapshot", "input": {"app": "TextEdit", "query": "save"}},
+                {"tool": "computer_act", "input": {"app": "TextEdit", "action": "click", "ref": "e3", "summary": "Save"}},
+                {"tool": "computer_wait", "input": {"app": "TextEdit", "text": "save"}},
+            ]}),
+        )
+        .await
+        .unwrap()
+        .text;
+        assert!(done.contains("Step 1 (computer_snapshot)") && done.contains("Step 3 (computer_wait)"), "{done}");
+        let failed = run(
+            &setup.chat,
+            "computer_batch",
+            json!({"steps": [
+                {"tool": "computer_act", "input": {"app": "TextEdit", "action": "click", "ref": "e3", "summary": "Save"}},
+                {"tool": "computer_act", "input": {"app": "TextEdit", "action": "click", "ref": "e77", "summary": "x"}},
+                {"tool": "computer_act", "input": {"app": "TextEdit", "action": "click", "ref": "e3", "summary": "Save"}},
+            ]}),
+        )
+        .await
+        .unwrap_err();
+        assert!(failed.contains("Step 1 (computer_act): ") && failed.contains("Step 2 (computer_act) failed") && failed.contains("Nothing after it ran"), "{failed}");
+        assert_eq!(setup.desktop.acts().len(), 2, "the third step never ran");
+        let refused = run(&setup.chat, "computer_batch", json!({"steps": [{"tool": "computer_open", "input": {"app": "TextEdit"}}]})).await.unwrap_err();
+        assert!(refused.contains("not “computer_open”"), "{refused}");
+        let pictures: Vec<_> = (0..6).map(|_| json!({"tool": "computer_screenshot", "input": {"app": "TextEdit"}})).collect();
+        let refused = run(&setup.chat, "computer_batch", json!({ "steps": pictures })).await.unwrap_err();
+        assert!(refused.contains("at most 5 pictures"), "{refused}");
     }
 }

@@ -271,7 +271,7 @@ pub(super) async fn screenshot(call: &Call<'_>, input: Value) -> Result<ToolOutp
     let label = format!("{name} window \"{}\"", outline::clip(&window.title, 60));
     let Some(region) = input.region else {
         let shot = desktop.picture(window.id, scale, None).await?;
-        call.chat.remember_shot(app.pid, window.id, LastShot { frame: shot.frame, bounds: shot.bounds });
+        call.chat.remember_shot(app.pid, window.id, LastShot { frame: shot.frame, bounds: shot.bounds, window: window.frame });
         let mut text = format!(
             "{name} · {} · picture {}×{}; x and y refer to a {}×{} frame.",
             window_words(&window),

@@ -150,6 +150,11 @@ pub trait Desktop: Send + Sync {
     async fn windows(&self, pid: i32) -> Result<Vec<WindowInfo>, String>;
     /// Walks `window`, or only the element `from` and what is inside it.
     async fn tree(&self, pid: i32, window: u32, from: Option<u32>) -> Result<Tree, String>;
+    /// A quick walk of `window` for the change report: cheaper limits than `tree`, and `None`
+    /// rather than an error. The fake's is its tree.
+    async fn glance(&self, pid: i32, window: u32) -> Option<Node> {
+        self.tree(pid, window, None).await.ok().map(|tree| tree.root)
+    }
     /// Titles under the menu bar (`path` empty) or the menu at `path`.
     async fn menus(&self, pid: i32, path: Vec<String>) -> Result<Vec<String>, String>;
     /// A picture of `window`; `region` zooms (see `capture::WindowShot`).

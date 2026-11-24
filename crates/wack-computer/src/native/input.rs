@@ -26,7 +26,6 @@ use crate::{
 
 /// Tags WackCode's synthetic events (`kCGEventSourceUserData`): "WACK".
 pub const EVENT_MARKER: i64 = 0x5741_434B;
-const TEXT_CHUNK: usize = 20;
 
 #[link(name = "Carbon", kind = "framework")]
 unsafe extern "C" {
@@ -73,19 +72,28 @@ pub fn key_to_pid(pid: i32, chord: &Chord) -> Result<(), String> {
     Ok(())
 }
 
-/// Types `text` into process `pid` as Unicode key events, in small chunks.
-pub fn text_to_pid(pid: i32, text: &str, stopped: &dyn Fn() -> bool) -> Result<(), String> {
+/// Types `text` into process `pid` one character at a time, each on the key `layout` types it
+/// with (shift held where it needs it) and carrying the character itself, as a person typing
+/// would: apps that read key codes (Calculator) and apps that read characters both get it right.
+/// A character no key types goes as the character alone.
+pub fn text_to_pid(pid: i32, text: &str, layout: &keys::Layout, stopped: &dyn Fn() -> bool) -> Result<(), String> {
     let source = source()?;
-    for chunk in keys::utf16_chunks(text, TEXT_CHUNK) {
+    let mut units = [0u16; 2];
+    for ch in text.chars() {
         if stopped() {
             return Err("Typing was stopped.".into());
         }
+        let (code, shift) = layout.stroke(ch).unwrap_or((0, false));
+        let encoded = ch.encode_utf16(&mut units);
         for down in [true, false] {
-            let event = CGEvent::new_keyboard_event(Some(&source), 0, down).ok_or("macOS refused to create a key event.")?;
-            unsafe { CGEvent::keyboard_set_unicode_string(Some(&event), chunk.len() as _, chunk.as_ptr()) };
+            let event = CGEvent::new_keyboard_event(Some(&source), code, down).ok_or("macOS refused to create a key event.")?;
+            CGEvent::set_flags(Some(&event), if shift { CGEventFlags::MaskShift } else { CGEventFlags::empty() });
+            if !matches!(ch, '\n' | '\r' | '\t') {
+                unsafe { CGEvent::keyboard_set_unicode_string(Some(&event), encoded.len() as _, encoded.as_ptr()) };
+            }
             CGEvent::post_to_pid(pid, Some(&event));
         }
-        sleep(Duration::from_millis(10));
+        sleep(Duration::from_millis(3));
     }
     Ok(())
 }

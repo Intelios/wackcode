@@ -247,10 +247,11 @@ pub fn summary(turn: &Turn, now: u64) -> String {
 /// What a log did, counted: "2 reads · 1 search · 1 edit · 1 command". Thoughts, notes and
 /// smaller tools are left out; empty when nothing counted.
 pub fn tally(rows: &[WorkRow]) -> String {
-    const KINDS: [(&[&str], &str, &str); 12] = [
+    const KINDS: [(&[&str], &str, &str); 13] = [
         (&[AGENT_VERB], "agent", "agents"),
         (&["Drew"], "drawing", "drawings"),
         (&BROWSER_VERBS, "browser step", "browser steps"),
+        (&COMPUTER_VERBS, "Mac step", "Mac steps"),
         (&["Used skill"], "skill", "skills"),
         (&["Read"], "read", "reads"),
         (&["Fetched"], "page", "pages"),
@@ -305,6 +306,13 @@ pub fn activity(rows: &[WorkRow]) -> Option<String> {
         "Browsed" => "Browsing",
         AGENT_VERB => "Waiting on",
         "Stopped" => "Stopping",
+        // Computer use's steps (see `computer_words`): acting reads "Using Calculator · Press 7".
+        "Surveyed" => "Surveying",
+        "Launched" => "Launching",
+        "Inspected" => "Inspecting",
+        "Saw" => "Looking at",
+        "Watched" => "Watching for",
+        "Acted" | "Chained" => "Using",
         // The browser's steps (see `browser_words`).
         "Opened" => "Opening",
         "Went" => "Going",
@@ -756,6 +764,11 @@ pub fn tool_row(tool: &ToolStep, cwd: &Path, live: bool) -> WorkRow {
             let (server, tool) = mcp_parts(name).unwrap_or_default();
             ("Used", Target::Words(format!("{server} · {tool}").into()), None, ok.map(|text| Detail::Output(tail(text, DETAIL_LINES).into())))
         }
+        // "Acted Calculator · Press 7": computer use reads as the app and the step's summary.
+        name if name.starts_with("computer_") => {
+            let (verb, target) = computer_words(name, input.as_ref());
+            (verb, Target::Words(target.into()), None, ok.map(|text| Detail::Output(tail(text, DETAIL_LINES).into())))
+        }
         // "Clicked ref_7", "Opened localhost:5173": the browser's steps read as what was done.
         name if name.starts_with("browser_") => {
             let (verb, target) = browser_words(name, input.as_ref());
@@ -841,6 +854,43 @@ fn string_list(input: Option<&Value>, key: &str) -> Vec<String> {
         .and_then(Value::as_array)
         .map(|list| list.iter().filter_map(Value::as_str).map(str::to_string).collect())
         .unwrap_or_default()
+}
+
+/// The verbs `computer_words` gives, none shared with another tool's row, so a row's icon and the
+/// log's tally can tell a computer-use step by its verb alone.
+pub const COMPUTER_VERBS: [&str; 7] = ["Surveyed", "Launched", "Inspected", "Saw", "Watched", "Acted", "Chained"];
+
+/// A computer tool call in words: its verb, and the app with what was done there.
+fn computer_words(name: &str, input: Option<&Value>) -> (&'static str, String) {
+    let field = |key: &str| input.and_then(|input| input.get(key)).and_then(Value::as_str).map(str::trim).unwrap_or("").to_string();
+    let short = |text: String, limit: usize| if text.chars().count() > limit { format!("{}…", text.chars().take(limit).collect::<String>()) } else { text };
+    let app = short(field("app"), 40);
+    let count = |key: &str| input.and_then(|input| input.get(key)).and_then(Value::as_array).map_or(0, Vec::len);
+    match name.trim_start_matches("computer_") {
+        "apps" => ("Surveyed", if field("query").is_empty() { "the Mac's apps".into() } else { format!("apps matching “{}”", short(field("query"), 30)) }),
+        "open" => ("Launched", if field("file").is_empty() { app } else { format!("{app} with {}", short(field("file").rsplit('/').next().unwrap_or_default().to_string(), 40)) }),
+        "snapshot" => ("Inspected", match (field("query"), input.and_then(|input| input.get("menu"))) {
+            (_, Some(_)) => format!("{app} menus"),
+            (query, _) if !query.is_empty() => format!("{app} for “{}”", short(query, 30)),
+            _ => app,
+        }),
+        "screenshot" => ("Saw", if count("region") > 0 { format!("part of {app}") } else { app }),
+        "wait" => ("Watched", format!("“{}” in {app}", short(if field("text").is_empty() { field("role") } else { field("text") }, 30))),
+        "batch" => {
+            let first = input
+                .and_then(|input| input.get("steps"))
+                .and_then(Value::as_array)
+                .and_then(|steps| steps.iter().find_map(|step| step.get("input").and_then(|input| input.get("app")).and_then(Value::as_str)))
+                .unwrap_or("the Mac")
+                .to_string();
+            ("Chained", format!("{} · {}", short(first, 40), plural(count("steps"), "step", "steps")))
+        }
+        _ => {
+            let summary = field("summary");
+            let what = if summary.is_empty() { field("action") } else { short(summary, 60) };
+            ("Acted", if what.is_empty() { app } else { format!("{app} · {what}") })
+        }
+    }
 }
 
 /// The verbs `browser_words` gives, none shared with another tool's row, so a row's icon and
@@ -1149,6 +1199,7 @@ fn doing(tool: &str, target: &str) -> String {
         wack_core::WEB_FETCH => format!("Reading {}", target.split('/').nth(2).unwrap_or(target)),
         wack_core::WEB_SEARCH => format!("Searching the web for {target}"),
         name if name.starts_with("browser_") => "Using the browser".into(),
+        name if name.starts_with("computer_") => "Using the Mac".into(),
         wack_canvas::tools::CANVAS => "Drawing on the canvas".into(),
         wack_canvas::tools::CANVAS_LOOK => "Looking at the canvas".into(),
         wack_canvas::tools::CANVAS_GUIDE => "Reading the canvas guide".into(),
@@ -1219,6 +1270,23 @@ mod tests {
         }
         let long = format!("https://example.com/{}", "a".repeat(80));
         assert_eq!(words("browser_navigate", json!({ "url": long })).1.chars().count(), 49);
+    }
+
+    #[test]
+    fn computer_steps_read_as_the_app_and_what_was_done() {
+        let words = |name: &str, input: Value| computer_words(name, Some(&input));
+        assert_eq!(words("computer_act", json!({ "app": "Calculator", "action": "click", "ref": "e15", "summary": "Press 7" })), ("Acted", "Calculator · Press 7".into()));
+        assert_eq!(words("computer_act", json!({ "app": "TextEdit", "action": "type" })), ("Acted", "TextEdit · type".into()));
+        assert_eq!(words("computer_open", json!({ "app": "Freeform", "file": "/tmp/x/board.txt" })), ("Launched", "Freeform with board.txt".into()));
+        assert_eq!(words("computer_snapshot", json!({ "app": "Notes", "menu": [] })), ("Inspected", "Notes menus".into()));
+        assert_eq!(words("computer_wait", json!({ "app": "Calculator", "text": "15" })), ("Watched", "“15” in Calculator".into()));
+        assert_eq!(words("computer_batch", json!({ "steps": [{ "tool": "computer_act", "input": { "app": "Calculator" } }, {}] })), ("Chained", "Calculator · 2 steps".into()));
+        for tool in ["apps", "open", "snapshot", "screenshot", "wait", "act", "batch"] {
+            let verb = words(&format!("computer_{tool}"), json!({})).0;
+            assert!(COMPUTER_VERBS.contains(&verb), "{verb} is listed");
+            assert!(!BROWSER_VERBS.contains(&verb) && !CANVAS_VERBS.contains(&verb), "{verb} is computer use's own");
+        }
+        assert_eq!(doing("computer_act", ""), "Using the Mac");
     }
 
     #[test]

@@ -182,7 +182,7 @@ fn click(thread: &AppThread, window: u32, target: Target, button: Button, count:
     raw(Reason::NotPressable)
 }
 
-fn type_text(thread: &AppThread, target: Target, text: &str, replace: bool, kind: AppKind, app: &str) -> Result<Done, Reason> {
+fn type_text(thread: &AppThread, target: Target, text: &str, replace: bool, kind: AppKind, app: &str, layout: &Layout) -> Result<Done, Reason> {
     if input::secure_input_on() {
         return Err(Reason::Secure);
     }
@@ -234,7 +234,7 @@ fn type_text(thread: &AppThread, target: Target, text: &str, replace: bool, kind
     if focused.as_ref().is_some_and(|focused| ax::is_secure(focused)) {
         return Err(Reason::Secure);
     }
-    input::text_to_pid(thread.pid, text, &|| false).map_err(Reason::Other)?;
+    input::text_to_pid(thread.pid, text, layout, &|| false).map_err(Reason::Other)?;
     Ok(Done { what: format!("typed into {described}"), via: Via::Raw, note: Some("typed as key events: check the result".into()), replaced: None })
 }
 
@@ -264,7 +264,7 @@ fn menu(thread: &AppThread, path: &[String], app: &str) -> Result<Done, Reason> 
             format!("{joined} is disabled.")
         } else {
             format!(
-                "{joined} reads disabled while {app} is in the background: macOS holds commands on the front document until the app is in front. It can be done with full-screen control: repeat it with `screen: true` and a `reason`."
+                "{joined} reads disabled while {app} is in the background: macOS holds commands on the front document, and their shortcuts, until the app is in front. Do it another way (typing into a field by ref, or computer_open with a file), or tell the user what is left for them to do."
             )
         }));
     }
@@ -272,10 +272,10 @@ fn menu(thread: &AppThread, path: &[String], app: &str) -> Result<Done, Reason> 
     Ok(Done { what: format!("chose {joined}"), via: Via::Ax, note: None, replaced: None })
 }
 
-fn perform(thread: &mut AppThread, window: u32, act: Act, kind: AppKind, app: &str) -> Result<Done, Reason> {
+fn perform(thread: &mut AppThread, window: u32, act: Act, kind: AppKind, app: &str, layout: &Layout) -> Result<Done, Reason> {
     match act {
         Act::Click { target, button, count, modifiers } => click(thread, window, target, button, count, modifiers, kind),
-        Act::Type { target, text, replace } => type_text(thread, target, &text, replace, kind, app),
+        Act::Type { target, text, replace } => type_text(thread, target, &text, replace, kind, app, layout),
         Act::Key { chord, times } => {
             if ax::focused_is_secure(&thread.app) || input::secure_input_on() {
                 return Err(Reason::Secure);
@@ -398,6 +398,19 @@ impl Desktop for Mac {
             .await?
     }
 
+    async fn glance(&self, pid: i32, window: u32) -> Option<Node> {
+        self.engine
+            .run(pid, move |thread| {
+                let found = find_window(thread, window).ok()?;
+                let (mut node, elements, _) = ax::walk(&found.element, &ax::SEARCH_LIMITS);
+                to_refs(&mut node, &elements, &mut thread.registry);
+                Some(node)
+            })
+            .await
+            .ok()
+            .flatten()
+    }
+
     async fn menus(&self, pid: i32, path: Vec<String>) -> Result<Vec<String>, String> {
         self.engine.run(pid, move |thread| ax::menu_list(&thread.app, &path)).await?
     }
@@ -414,7 +427,8 @@ impl Desktop for Mac {
             .and_then(|running| running.bundle_path)
             .map(|path| if ax::wants_manual(&path) { AppKind::Chromium } else { AppKind::Native })
             .unwrap_or(AppKind::Native);
-        self.engine.run(pid, move |thread| perform(thread, window, act, kind, &app)).await.map_err(Reason::Other)?
+        let layout = self.layout();
+        self.engine.run(pid, move |thread| perform(thread, window, act, kind, &app, &layout)).await.map_err(Reason::Other)?
     }
 
     async fn fingerprint(&self, pid: i32, target: Option<u32>) -> Fingerprint {

@@ -191,6 +191,10 @@ pub struct AppState {
     pub git_error: Option<SharedString>,
     /// Settings › Browser.
     pub browser_error: Option<SharedString>,
+    /// The app's one link to the Mac for computer use; each Code chat gets its own part of it.
+    pub computer: wack_computer::computer::Computer,
+    /// Settings › Computer use's last failure, if any.
+    pub computer_error: Option<SharedString>,
     pub browser_clearing: crate::browser_page::Clearing,
     /// Long-lived Build and Run PTY commands keyed by `(canonical_cwd, kind)`.
     runs: Runner,
@@ -359,6 +363,8 @@ impl AppState {
         wack_browser::cef::finish_clearing(&store.browser_folder());
         wack_browser::set_default_viewport(store.browser_config().default_viewport);
         let browser = crate::browser::engine(&store);
+        // On the main thread: it reads the keyboard layout.
+        let computer = wack_computer::computer::Computer::native(store.computer_config().settings());
         let mut app = Self {
             store,
             before_settings: selection.clone(),
@@ -403,6 +409,8 @@ impl AppState {
             subagent_subscriptions: Vec::new(),
             git_error: None,
             browser_error: None,
+            computer,
+            computer_error: None,
             browser_clearing: Default::default(),
             runs,
             command_event_tx,
@@ -1029,6 +1037,73 @@ impl AppState {
         cx.notify();
     }
 
+    /// The user answered chat `chat`'s computer-use card `id`. An Always allow or Never allow is
+    /// saved first, and only while the card is still up; if saving fails the card stays, saying
+    /// why, so the user can answer again.
+    pub fn answer_computer_card(&mut self, chat: &str, id: u64, answer: wack_computer::computer::Answer, cx: &mut Context<Self>) {
+        use wack_computer::computer::{Answer, Ask, SavedApp};
+        let Some(session) = self.sessions.get(chat).cloned() else { return };
+        let Some(computer) = session.read(cx).computer.clone() else { return };
+        let Some(card) = computer.card().filter(|card| card.id == id) else { return };
+        let Ask::App { app, .. } = &card.ask;
+        let saved = match answer {
+            Answer::AlwaysAllow => match SavedApp::of(app) {
+                Some(saved) => self.store.always_allow_app(saved),
+                None => Err(format!("{} has no fixed place on disk, so it can only be allowed for this chat.", app.name)),
+            },
+            Answer::NeverAllow => match &app.bundle_id {
+                Some(bundle_id) => self.store.never_allow_app(bundle_id),
+                None => Err(format!("{} has no bundle id to remember it by: deny it instead.", app.name)),
+            },
+            Answer::Allow | Answer::Deny => Ok(()),
+        };
+        if let Err(error) = saved {
+            session.update(cx, |session, cx| {
+                session.computer_error = Some((id, error.into()));
+                cx.notify();
+            });
+            return;
+        }
+        self.computer.set_settings(self.store.computer_config().settings());
+        computer.answer(id, answer);
+    }
+
+    /// Settings › Computer use: on or off.
+    pub fn toggle_computer_use(&mut self, cx: &mut Context<Self>) {
+        let enabled = !self.store.computer_config().enabled;
+        self.computer_error = self.store.set_computer_enabled(enabled).err().map(Into::into);
+        self.computer.set_settings(self.store.computer_config().settings());
+        cx.notify();
+    }
+
+    /// Settings › Computer use: an always-allowed app asks again next time.
+    pub fn forget_always_allowed(&mut self, path: &str, cx: &mut Context<Self>) {
+        self.computer_error = self.store.forget_always_allowed(path).err().map(Into::into);
+        self.computer.set_settings(self.store.computer_config().settings());
+        cx.notify();
+    }
+
+    /// Settings › Computer use: a never-allowed app may be asked about again.
+    pub fn forget_never_allowed(&mut self, bundle_id: &str, cx: &mut Context<Self>) {
+        self.computer_error = self.store.forget_never_allowed(bundle_id).err().map(Into::into);
+        self.computer.set_settings(self.store.computer_config().settings());
+        cx.notify();
+    }
+
+    /// Settings › Computer use: asks macOS for a permission (resetting a grant that went stale
+    /// when the app was rebuilt) and opens its pane in System Settings.
+    pub fn request_computer_permission(&mut self, screen: bool, cx: &mut Context<Self>) {
+        use wack_computer::native::permissions::{self, Pane};
+        let (pane, granted) = if screen {
+            (Pane::ScreenRecording, permissions::screen_recording_preflight())
+        } else {
+            (Pane::Accessibility, permissions::accessibility())
+        };
+        let identifier = wack_computer::native::apps::own_bundle_id();
+        self.computer_error = permissions::request(pane, identifier.as_deref(), granted).err().map(Into::into);
+        cx.notify();
+    }
+
     /// Settings › Browser: whether the Browser pane opens when the agent opens a tab.
     pub fn toggle_agent_opens_pane(&mut self, cx: &mut Context<Self>) {
         let mut config = self.store.browser_config().clone();
@@ -1061,6 +1136,19 @@ impl AppState {
             Err(message) => Clearing::Failed(message.into()),
         };
         cx.notify();
+    }
+
+    pub fn computer_data(&self) -> crate::computer_page::ComputerData {
+        let config = self.store.computer_config();
+        let permissions = self.computer.desktop().permissions();
+        crate::computer_page::ComputerData {
+            enabled: config.enabled,
+            accessibility: permissions.accessibility,
+            screen_recording: permissions.screen_recording,
+            always: config.always.iter().map(|app| (app.name.clone().into(), app.path.clone().into())).collect(),
+            never: config.never.iter().map(|id| id.clone().into()).collect(),
+            error: self.computer_error.clone(),
+        }
     }
 
     pub fn browser_data(&self) -> crate::browser_page::BrowserData {
@@ -2312,6 +2400,9 @@ impl AppState {
         if section == Section::Git {
             self.git_error = None;
         }
+        if section == Section::Computer {
+            self.computer_error = None;
+        }
         if section == Section::Browser {
             self.browser_error = None;
             if !matches!(self.browser_clearing, crate::browser_page::Clearing::Pending) {
@@ -3026,10 +3117,14 @@ impl AppState {
         } else {
             wack_canvas::Canvases::new(self.store.canvases_folder(chat), Some(self.browser.clone()))
         };
+        let computer = (!chat.is_chat_area()).then(|| self.computer.chat());
         let session = cx.new(|cx| {
             let mut session = ChatSession::load(&chat.id, cwd, &path, layout, runner, commands, tasks_folder, tabs, canvases, cx);
             if chat.is_chat_area() {
                 session.set_chat_area(cx);
+            }
+            if let Some(computer) = computer {
+                session.set_computer(computer, cx);
             }
             session
         });

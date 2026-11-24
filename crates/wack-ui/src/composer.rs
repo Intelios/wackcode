@@ -90,6 +90,8 @@ pub struct ComposerData {
     pub hint: Option<SharedString>,
     /// The question the agent is waiting on, drawn above the waiting messages.
     pub question: Option<crate::question::QuestionData>,
+    /// The computer-use card: the agent waits for the user to let it use an app.
+    pub access: Option<crate::computer_card::CardData>,
     /// The agent's todo list, at the top of the column.
     pub todos: Option<crate::todo_panel::TodoData>,
     /// While a run is going: how long, and what it is doing now (`ChatSession::activity`).
@@ -416,7 +418,7 @@ impl RenderOnce for Composer {
 
         // Inside a capped column the card stays whole and the question gives way first.
         let mut column = div().w_full().min_h_0().flex().flex_col().gap(px(6.));
-        let asking = data.question.is_some();
+        let asking = data.question.is_some() || data.access.is_some();
         // While a question is open the pills only report: the question has the room.
         let todos_open = data.todos_open && !asking;
         let todo_pill = data.todos.as_ref().map(|todos| {
@@ -433,6 +435,9 @@ impl RenderOnce for Composer {
             && todos_open
         {
             column = column.child(div().flex_shrink(1.).min_h(px(40.)).flex().flex_col().child(crate::todo_panel::todo_panel(todos, &theme)));
+        }
+        if let Some(access) = data.access {
+            column = column.child(div().flex_none().pb(px(4.)).child(crate::computer_card::ComputerCard::new(access)));
         }
         if let Some(question) = data.question {
             column = column.child(

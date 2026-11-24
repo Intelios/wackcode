@@ -113,6 +113,8 @@ actions!(
         SubmitAnswers,
         /// Dismisses the question; the agent carries on without an answer.
         CancelQuestion,
+        /// Settings › Computer use: the switch.
+        ToggleComputerUse,
         /// Ultra Plan's "Write the plan now".
         WrapUpQuestion,
         /// The plan awaiting review: switch to Build and implement it.
@@ -886,6 +888,35 @@ pub struct ToggleMcpProject {
 #[action(namespace = wackcode, no_json)]
 pub struct OpenSettingsSection {
     pub section: crate::settings::Section,
+}
+
+/// Settings › Computer use: an always-allowed app (by its saved path) asks again next time.
+#[derive(Clone, Debug, PartialEq, Action)]
+#[action(namespace = wackcode, no_json)]
+pub struct AskComputerAgain {
+    pub path: String,
+}
+
+/// Settings › Computer use: a never-allowed app may be asked about again.
+#[derive(Clone, Debug, PartialEq, Action)]
+#[action(namespace = wackcode, no_json)]
+pub struct ForgetNeverAllowed {
+    pub bundle_id: String,
+}
+
+/// Settings › Computer use › Allow…: Screen Recording, or Accessibility.
+#[derive(Clone, Debug, PartialEq, Action)]
+#[action(namespace = wackcode, no_json)]
+pub struct RequestComputerPermission {
+    pub screen: bool,
+}
+
+/// Answers the computer-use card `id` (the one shown) in the chat on screen.
+#[derive(Clone, Debug, PartialEq, Action)]
+#[action(namespace = wackcode, no_json)]
+pub struct AnswerComputerCard {
+    pub id: u64,
+    pub answer: wack_computer::computer::Answer,
 }
 
 /// Picks the question card's option at `index` (0-based; keys 1–4).

@@ -112,6 +112,12 @@ impl Row {
         self
     }
 
+    /// Words under the label that aren't fixed text (a path, a name).
+    pub fn about(mut self, about: impl Into<SharedString>) -> Self {
+        self.about = Some(about.into());
+        self
+    }
+
     /// The control beneath the words, for one too wide to sit beside them.
     pub fn stacked(mut self) -> Self {
         self.stacked = true;

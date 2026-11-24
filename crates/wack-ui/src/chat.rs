@@ -148,6 +148,14 @@ pub struct ChatSession {
     _tasks_watch: Task<()>,
     _agents_watch: Task<()>,
     _browser_watch: Task<()>,
+    /// The chat's computer use, which outlives its runs: a Code chat's only
+    /// (`AppState::ensure_session`).
+    pub computer: Option<wack_computer::computer::ChatComputer>,
+    /// The access card's app icon, decoded once per card: (card id, picture).
+    computer_icon: Option<(u64, Option<std::sync::Arc<gpui::RenderImage>>)>,
+    /// Why the card's last Always allow or Never allow couldn't be saved.
+    pub computer_error: Option<(u64, SharedString)>,
+    _computer_watch: Option<Task<()>>,
 }
 
 /// A question the agent is waiting on, and the answers so far.
@@ -284,6 +292,10 @@ impl ChatSession {
             _tasks_watch: tasks_watch,
             _agents_watch: agents_watch,
             _browser_watch: browser_watch,
+            computer: None,
+            computer_icon: None,
+            computer_error: None,
+            _computer_watch: None,
         };
         chat.conversation.agents = chat.agent_rows();
         chat.refresh_from(0);
@@ -402,6 +414,10 @@ impl ChatSession {
         setup.tasks = Some(self.tasks.clone());
         setup.browser = Some(self.tabs.clone());
         setup.canvases = Some(self.canvases.clone());
+        // The Chat area never uses the computer, whatever it is handed.
+        if !self.chat_area {
+            setup.computer = self.computer.clone();
+        }
         if let Some(agents) = setup.agents.as_mut() {
             agents.agents = self.agents.clone();
         }
@@ -440,6 +456,60 @@ impl ChatSession {
         self.run = Some(Running { number, control, compacting, events, _tick: tick });
         self.refresh_from(from.saturating_sub(1));
         cx.notify();
+    }
+
+    /// Gives a Code chat its computer use, and redraws when its card comes or goes.
+    pub fn set_computer(&mut self, computer: wack_computer::computer::ChatComputer, cx: &mut Context<Self>) {
+        let (sender, mut receiver) = mpsc::unbounded::<wack_computer::computer::Signal>();
+        computer.set_observer(move |signal| {
+            let _ = sender.unbounded_send(signal);
+        });
+        self._computer_watch = Some(cx.spawn(async move |this, cx| {
+            while receiver.next().await.is_some() {
+                while receiver.try_recv().is_ok() {}
+                if this.update(cx, |chat, cx| chat.computer_changed(cx)).is_err() {
+                    return;
+                }
+            }
+        }));
+        self.computer = Some(computer);
+        self.computer_changed(cx);
+    }
+
+    fn computer_changed(&mut self, cx: &mut Context<Self>) {
+        let card = self.computer.as_ref().and_then(|computer| computer.card());
+        match &card {
+            Some(card) if self.computer_icon.as_ref().is_none_or(|(id, _)| *id != card.id) => {
+                let wack_computer::computer::Ask::App { icon, .. } = &card.ask;
+                let picture = icon
+                    .as_deref()
+                    .and_then(|bytes| image::load_from_memory(bytes).ok())
+                    .map(|picture| std::sync::Arc::new(crate::attachments::render_image(&picture, 64)));
+                self.computer_icon = Some((card.id, picture));
+            }
+            Some(_) => {}
+            None => {
+                self.computer_icon = None;
+                self.computer_error = None;
+            }
+        }
+        cx.notify();
+    }
+
+    /// The computer-use card as the composer draws it.
+    pub fn computer_card(&self) -> Option<crate::computer_card::CardData> {
+        let card = self.computer.as_ref()?.card()?;
+        let wack_computer::computer::Ask::App { app, tier, launching, .. } = &card.ask;
+        let icon = self.computer_icon.as_ref().filter(|(id, _)| *id == card.id).and_then(|(_, icon)| icon.clone());
+        Some(crate::computer_card::CardData {
+            id: card.id,
+            app: app.name.clone().into(),
+            path: app.path.as_ref().map(|path| path.display().to_string().into()),
+            look_only: *tier == wack_computer::policy::Tier::LookOnly,
+            launching: *launching,
+            icon,
+            error: self.computer_error.as_ref().filter(|(id, _)| *id == card.id).map(|(_, error)| error.clone()),
+        })
     }
 
     /// Stops the run and every sub-agent, in the foreground or the background.

@@ -19,6 +19,8 @@ pub mod colour;
 pub mod commands_page;
 pub mod subagents_page;
 pub mod composer;
+pub mod computer_card;
+pub mod computer_page;
 pub mod conversation;
 pub mod edge_fade;
 pub mod fixtures;

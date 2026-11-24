@@ -538,6 +538,27 @@ pub fn all() -> Vec<Scene> {
             },
         },
         Scene {
+            name: "computer-card",
+            description: "The computer-use card: the agent asks to use TextEdit, with its icon.",
+            size: WINDOW,
+            build: |_, cx| computer_card_scene(false, false, None, cx),
+        },
+        Scene {
+            name: "computer-card-look-only",
+            description: "The card for a browser that isn't running yet: look-only, and started in the background, over a backdrop.",
+            size: WINDOW,
+            build: |_, cx| {
+                let picture = over(fixtures::backdrop(wack_core::Texture::None), cx);
+                computer_card_scene(true, true, Some(picture), cx)
+            },
+        },
+        Scene {
+            name: "computer-card-small",
+            description: "The computer-use card in the smallest window the app allows, with a save that failed.",
+            size: size(px(716.), px(492.)),
+            build: |_, cx| computer_card_scene(false, true, None, cx),
+        },
+        Scene {
             name: "question-small",
             description: "The question card in the smallest window the app allows.",
             size: size(px(716.), px(492.)),
@@ -752,6 +773,7 @@ pub fn all() -> Vec<Scene> {
         web: Default::default(),
         mcp: Default::default(),
         browser: Default::default(),
+        computer: Default::default(),
                 };
                 cx.new(|_| Shell::showing(fixtures::sidebar(Selected::None), Screen::Settings(Box::new(data)))).into()
             },
@@ -815,6 +837,24 @@ pub fn all() -> Vec<Scene> {
             description: "Settings › Git over a backdrop.",
             size: size(px(1180.), px(1000.)),
             build: |_, cx| git_scene(true, Some(over(fixtures::backdrop(wack_core::Texture::None), cx)), cx),
+        },
+        Scene {
+            name: "settings-computer",
+            description: "Settings › Computer use, off, with neither macOS permission and nothing saved.",
+            size: size(px(1180.), px(1000.)),
+            build: |_, cx| computer_settings_scene(false, None, cx),
+        },
+        Scene {
+            name: "settings-computer-on",
+            description: "Settings › Computer use, on, both permissions allowed, an app always allowed and one never allowed.",
+            size: size(px(1180.), px(1000.)),
+            build: |_, cx| computer_settings_scene(true, None, cx),
+        },
+        Scene {
+            name: "settings-computer-backdrop",
+            description: "Settings › Computer use, on, over a backdrop.",
+            size: size(px(1180.), px(1000.)),
+            build: |_, cx| computer_settings_scene(true, Some(over(fixtures::backdrop(wack_core::Texture::None), cx)), cx),
         },
         Scene {
             name: "settings-browser",
@@ -1684,6 +1724,70 @@ fn question_scene(ultra: bool, backdrop: Option<crate::backdrop::Picture>, _size
     .into()
 }
 
+/// A chat whose agent waits on the computer-use card. `failed` shows a save that went wrong.
+fn computer_card_scene(look_only: bool, failed: bool, backdrop: Option<crate::backdrop::Picture>, cx: &mut App) -> AnyView {
+    let access = fixtures::computer_card(look_only, failed);
+    cx.new(|_| {
+        let composer = ComposerData {
+            chat_area: false,
+            archived: None,
+            working: true,
+            access: Some(access),
+            ..fixtures::composer_after_turn(Input::Drawn { text: None, placeholder: crate::app::placeholder(wack_core::AgentMode::Build, false).into() })
+        };
+        let shell = Shell::showing_tabs(
+            fixtures::sidebar(Selected::Working),
+            Screen::Chat { title: fixtures::WORKING_TITLE.into(), project: fixtures::project(), body: Body::Items(fixtures::working_turn()), composer },
+            fixtures::strip(Some(fixtures::WORKING_TITLE)),
+        );
+        match backdrop {
+            Some(picture) => shell.with_backdrop(picture),
+            None => shell,
+        }
+    })
+    .into()
+}
+
+fn computer_settings_scene(on: bool, backdrop: Option<crate::backdrop::Picture>, cx: &mut App) -> AnyView {
+    let form = ProviderForm::new(cx);
+    let computer = if on {
+        crate::computer_page::ComputerData {
+            enabled: true,
+            accessibility: true,
+            screen_recording: true,
+            always: vec![("TextEdit".into(), "/System/Applications/TextEdit.app".into())],
+            never: vec!["com.apple.mail".into()],
+            error: None,
+        }
+    } else {
+        crate::computer_page::ComputerData::default()
+    };
+    let data = SettingsData {
+        section: Section::Computer,
+        providers: ProvidersData::new(&fixtures::connections(), |_| true, &form, cx),
+        appearance: fixtures::appearance(backdrop.clone(), cx),
+        tools: Default::default(),
+        memory: Default::default(),
+        skills: Default::default(),
+        commands: Default::default(),
+        subagents: Default::default(),
+        git: Default::default(),
+        integrations: Default::default(),
+        web: Default::default(),
+        mcp: Default::default(),
+        browser: Default::default(),
+        computer,
+    };
+    cx.new(|_| {
+        let shell = Shell::showing(fixtures::sidebar(Selected::None), Screen::Settings(Box::new(data)));
+        match backdrop {
+            Some(picture) => shell.with_backdrop(picture),
+            None => shell,
+        }
+    })
+    .into()
+}
+
 /// `picture`, with the theme made ready for text over it, as the app's theme is.
 fn over(picture: crate::backdrop::Picture, cx: &mut App) -> crate::backdrop::Picture {
     let input = crate::theme::ThemeInput { ground: Some(picture.ground()), ..crate::theme::Theme::get(cx).input.clone() };
@@ -1739,6 +1843,7 @@ fn providers_scene(state: Providers, sidebar_hidden: bool, cx: &mut App) -> AnyV
         web: Default::default(),
         mcp: Default::default(),
         browser: Default::default(),
+        computer: Default::default(),
     };
     cx.new(|_| {
         let shell = Shell::showing(fixtures::sidebar(Selected::None), Screen::Settings(Box::new(data)));
@@ -1764,6 +1869,7 @@ fn settings_scene(backdrop: Option<crate::backdrop::Picture>, cx: &mut App) -> A
         web: Default::default(),
         mcp: Default::default(),
         browser: Default::default(),
+        computer: Default::default(),
     };
     cx.new(|_| {
         let shell = Shell::showing(fixtures::sidebar(Selected::None), Screen::Settings(Box::new(data)));
@@ -2098,6 +2204,7 @@ fn subagents_scene(scene: SubagentsScene, backdrop: Option<crate::backdrop::Pict
         web: Default::default(),
         mcp: Default::default(),
         browser: Default::default(),
+        computer: Default::default(),
     };
     cx.new(|_| {
         let shell = Shell::showing(fixtures::sidebar(Selected::None), Screen::Settings(Box::new(data)));
@@ -2256,6 +2363,7 @@ fn memory_scene(scene: MemoryScene, backdrop: Option<crate::backdrop::Picture>, 
         web: Default::default(),
         mcp: Default::default(),
         browser: Default::default(),
+        computer: Default::default(),
     };
     cx.new(|_| {
         let shell = Shell::showing(fixtures::sidebar(Selected::None), Screen::Settings(Box::new(data)));
@@ -2482,6 +2590,7 @@ fn skills_scene(scene: SkillsScene, backdrop: bool, cx: &mut App) -> AnyView {
         web: Default::default(),
         mcp: Default::default(),
         browser: Default::default(),
+        computer: Default::default(),
     };
     cx.new(|_| {
         let shell = Shell::showing(fixtures::sidebar(Selected::None), Screen::Settings(Box::new(data)));
@@ -2538,6 +2647,7 @@ fn commands_scene(editing: bool, cx: &mut App) -> AnyView {
         web: Default::default(),
         mcp: Default::default(),
         browser: Default::default(),
+        computer: Default::default(),
     };
     cx.new(|_| Shell::showing(fixtures::sidebar(Selected::None), Screen::Settings(Box::new(data)))).into()
 }
@@ -2663,6 +2773,7 @@ fn mcp_scene(scene: McpScene, backdrop: Option<crate::backdrop::Picture>, cx: &m
         web: Default::default(),
         mcp,
         browser: Default::default(),
+        computer: Default::default(),
     };
     cx.new(|_| {
         let shell = Shell::showing(fixtures::sidebar(Selected::None), Screen::Settings(Box::new(data)));
@@ -2787,6 +2898,7 @@ fn web_scene(scene: WebScene, backdrop: Option<crate::backdrop::Picture>, cx: &m
         web,
         mcp: Default::default(),
         browser: Default::default(),
+        computer: Default::default(),
     };
     cx.new(|_| {
         let shell = Shell::showing(fixtures::sidebar(Selected::None), Screen::Settings(Box::new(data)));
@@ -2844,6 +2956,7 @@ fn integrations_scene(scene: UsageScene, backdrop: Option<crate::backdrop::Pictu
         web: Default::default(),
         mcp: Default::default(),
         browser: Default::default(),
+        computer: Default::default(),
     };
     cx.new(|_| {
         let shell = Shell::showing(fixtures::sidebar(Selected::None), Screen::Settings(Box::new(data)));
@@ -2872,6 +2985,7 @@ fn git_scene(commit_attribution: bool, backdrop: Option<crate::backdrop::Picture
         web: Default::default(),
         mcp: Default::default(),
         browser: Default::default(),
+        computer: Default::default(),
     };
     cx.new(|_| {
         let shell = Shell::showing(fixtures::sidebar(Selected::None), Screen::Settings(Box::new(data)));
@@ -2905,6 +3019,7 @@ fn browser_settings_scene(clearing: crate::browser_page::Clearing, backdrop: Opt
             version: wack_browser::cef::version().into(),
             error: None,
         },
+        computer: Default::default(),
     };
     cx.new(|_| {
         let shell = Shell::showing(fixtures::sidebar(Selected::None), Screen::Settings(Box::new(data)));

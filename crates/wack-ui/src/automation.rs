@@ -26,6 +26,10 @@
 //! {"cmd":"canvas-export","canvas":"c","artboard":"a","format":"pdf","path":"/abs/a.pdf"}   png, html or pdf
 //! {"cmd":"canvas","name":"canvas","input":{…}}         one of the canvas tools, on the chat in front
 //! {"cmd":"canvas","name":"canvas_look","input":{…},"path":"/abs/a.png"}   its first picture saved there
+//! {"cmd":"computer","name":"computer_snapshot","input":{…}}   a computer tool, on the chat in front
+//!     (Code chats; as if its agent called it). While the access card is up it answers at once with
+//!     "pending" (a number) and the card's id; click the card's tag, then send
+//!     {"cmd":"computer","pending":N} for the result. "path" saves the first picture there.
 //! {"cmd":"quit"}
 //! ```
 //!
@@ -128,6 +132,16 @@ enum Command {
         input: Option<Value>,
         #[serde(default)]
         path: Option<PathBuf>,
+    },
+    Computer {
+        #[serde(default)]
+        name: Option<String>,
+        #[serde(default)]
+        input: Option<Value>,
+        #[serde(default)]
+        path: Option<PathBuf>,
+        #[serde(default)]
+        pending: Option<u64>,
     },
     Quit,
 }
@@ -434,6 +448,7 @@ async fn run(command: Command, cx: &mut AsyncApp) -> Result<Value, String> {
         }
         Command::Browser(args) => browser(window, cx, *args).await,
         Command::Canvas { name, input, path } => canvas_tool(window, cx, name, input, path).await,
+        Command::Computer { name, input, path, pending } => computer_tool(window, cx, name, input, path, pending).await,
         Command::CanvasExport { canvas, artboard, format, path } => {
             use wack_canvas::export::Format;
             let format = match format.as_str() {
@@ -541,6 +556,73 @@ async fn canvas_tool(window: AnyWindowHandle, cx: &mut AsyncApp, name: String, i
             Ok(json!({ "ok": true, "text": output.text, "images": output.images.len(), "ms": ms }))
         }
         Err(error) => Ok(json!({ "ok": true, "error": error, "ms": ms })),
+    }
+}
+
+/// Computer calls still running (their card was up when the command answered), by number, with
+/// their result once they finish.
+static COMPUTER_CALLS: std::sync::Mutex<Option<std::collections::HashMap<u64, Option<Value>>>> = std::sync::Mutex::new(None);
+static COMPUTER_CALL_NUMBER: std::sync::atomic::AtomicU64 = std::sync::atomic::AtomicU64::new(0);
+
+/// Calls one of the computer tools on the chat in front, as its agent would. Commands run one at a
+/// time, so a call waiting on its access card is answered at once with "pending": the card can
+/// then be clicked, and the result fetched with `{"cmd":"computer","pending":N}`.
+async fn computer_tool(window: AnyWindowHandle, cx: &mut AsyncApp, name: Option<String>, input: Option<Value>, path: Option<PathBuf>, pending: Option<u64>) -> Result<Value, String> {
+    use base64::Engine as _;
+    let (computer, cwd) = on_window(window, cx, |window, cx| {
+        window.root::<crate::shell::Shell>().flatten().and_then(|shell| shell.read(cx).current_computer(cx))
+    })?
+    .ok_or("Open a Code chat first: computer use belongs to a Code chat.")?;
+    let number = match (pending, name) {
+        (Some(number), _) => number,
+        (None, Some(name)) => {
+            let number = COMPUTER_CALL_NUMBER.fetch_add(1, std::sync::atomic::Ordering::SeqCst) + 1;
+            COMPUTER_CALLS.lock().unwrap_or_else(|e| e.into_inner()).get_or_insert_default().insert(number, None);
+            let chat = computer.clone();
+            let call = async move {
+                let started = std::time::Instant::now();
+                let result = wack_computer::tools::call(chat, name, input.unwrap_or_else(|| json!({})), cwd).await;
+                let ms = started.elapsed().as_millis() as u64;
+                let answer = match result {
+                    Ok(output) => {
+                        let saved = match (&path, output.images.first()) {
+                            (Some(path), Some(image)) => base64::engine::general_purpose::STANDARD
+                                .decode(&image.data)
+                                .map_err(|e| format!("The image was damaged: {e}"))
+                                .and_then(|bytes| std::fs::write(path, bytes).map_err(|e| format!("Could not write {}: {e}", path.display()))),
+                            _ => Ok(()),
+                        };
+                        match saved {
+                            Ok(()) => json!({ "ok": true, "text": output.text, "images": output.images.len(), "ms": ms }),
+                            Err(error) => json!({ "ok": false, "error": error }),
+                        }
+                    }
+                    Err(error) => json!({ "ok": true, "error": error, "ms": ms }),
+                };
+                COMPUTER_CALLS.lock().unwrap_or_else(|e| e.into_inner()).get_or_insert_default().insert(number, Some(answer));
+            };
+            gpui_tokio::Tokio::spawn(cx, call).detach();
+            number
+        }
+        (None, None) => return Err("\"computer\" needs a tool \"name\", or the \"pending\" call to wait for.".into()),
+    };
+    loop {
+        let finished = {
+            let mut calls = COMPUTER_CALLS.lock().unwrap_or_else(|e| e.into_inner());
+            let calls = calls.get_or_insert_default();
+            match calls.get(&number) {
+                None => return Err(format!("There is no computer call {number}.")),
+                Some(Some(_)) => calls.remove(&number).flatten(),
+                Some(None) => None,
+            }
+        };
+        if let Some(answer) = finished {
+            return Ok(answer);
+        }
+        if let Some(card) = computer.card() {
+            return Ok(json!({ "ok": true, "pending": number, "card": card.id }));
+        }
+        cx.background_executor().timer(Duration::from_millis(40)).await;
     }
 }
 

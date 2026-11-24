@@ -71,8 +71,17 @@ pub fn open_pane(pane: Pane) -> Result<(), String> {
 /// entry. Renew the requested service before prompting, only when its effective check denied
 /// access and the user clicked Allow. Never reset on a status poll or a computer tool call,
 /// and never clear the other permission as part of requesting this one.
-pub fn request(pane: Pane, identifier: &str, granted: bool) -> Result<(), String> {
-    request_if_denied(pane, granted, |pane| reset_pane(identifier, pane), |pane| {
+///
+/// `identifier` is WackCode's own bundle id; without one (a bare binary) nothing is reset, and
+/// anything but a WackCode id is refused, since `tccutil reset` with another id (or none) would
+/// clear other apps' grants.
+pub fn request(pane: Pane, identifier: Option<&str>, granted: bool) -> Result<(), String> {
+    if let Some(id) = identifier
+        && !id.starts_with(crate::policy::WACKCODE_PREFIX)
+    {
+        return Err(format!("{id} isn't WackCode's bundle id, so its permissions aren't reset."));
+    }
+    request_if_denied(pane, granted, |pane| identifier.map_or(Ok(()), |id| reset_pane(id, pane)), |pane| {
         match pane {
             Pane::Accessibility => { request_accessibility(); }
             Pane::ScreenRecording => { request_screen_recording(); }
@@ -104,15 +113,6 @@ fn reset_pane(identifier: &str, pane: Pane) -> Result<(), String> {
     } else {
         Err(format!("The {} permission couldn't be reset.", pane.tcc_service()))
     }
-}
-
-/// Removes WackCode's own entries from both panes (`tccutil reset`, scoped to its bundle id), so
-/// a stale grant from an earlier build can be replaced by a fresh one.
-pub fn reset(identifier: &str) -> Result<(), String> {
-    for pane in [Pane::Accessibility, Pane::ScreenRecording] {
-        reset_pane(identifier, pane)?;
-    }
-    Ok(())
 }
 
 #[cfg(test)]

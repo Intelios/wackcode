@@ -112,6 +112,7 @@ pub fn composer_empty(roomy: bool) -> ComposerData {
         slash: None,
         hint: None,
         question: None,
+        access: None,
         todos: None,
         activity: None,
         todos_open: false,
@@ -1432,5 +1433,23 @@ pub fn chat_strip(active: Option<&'static str>) -> crate::shell::StripData {
         new_chat: active.is_none(),
         commands: None,
         command_editor: None,
+    }
+}
+
+/// The computer-use card: TextEdit, or Safari (look-only, not running yet).
+pub fn computer_card(look_only: bool, failed: bool) -> crate::computer_card::CardData {
+    let (app, path) = if look_only { ("Safari", "/Applications/Safari.app") } else { ("TextEdit", "/System/Applications/TextEdit.app") };
+    // The real icon, as the app reads it.
+    let icon = wack_computer::native::apps::icon_png(std::path::Path::new(path))
+        .and_then(|bytes| image::load_from_memory(&bytes).ok())
+        .map(|picture| std::sync::Arc::new(crate::attachments::render_image(&picture, 64)));
+    crate::computer_card::CardData {
+        id: 1,
+        app: app.into(),
+        path: Some(path.into()),
+        look_only,
+        launching: look_only,
+        icon,
+        error: failed.then(|| "The app couldn’t be saved: the settings file is read-only.".into()),
     }
 }

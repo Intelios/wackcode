@@ -248,6 +248,11 @@ pub fn launch(path: &Path, file: Option<&Path>) -> Result<i32, String> {
     receiver.recv_timeout(LAUNCH_TIMEOUT).map_err(|_| "The app took too long to launch.".to_string())?
 }
 
+/// This process's own bundle id, when it runs from an app bundle.
+pub fn own_bundle_id() -> Option<String> {
+    objc2_foundation::NSBundle::mainBundle().bundleIdentifier().map(|id| id.to_string())
+}
+
 /// The app's icon as a small PNG for the access card, if one can be made cheaply.
 pub fn icon_png(path: &Path) -> Option<Vec<u8>> {
     let image = NSWorkspace::sharedWorkspace().iconForFile(&NSString::from_str(&path.to_string_lossy()));

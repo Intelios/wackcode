@@ -269,11 +269,14 @@ pub mod fake {
 
         async fn launch(&self, app: &AppIdentity, file: Option<PathBuf>) -> Result<i32, String> {
             let mut state = self.state.lock().unwrap();
-            state.launched.push((app.clone(), file));
-            let pid = 900 + state.launched.len() as i32;
+            let pid = 901 + state.launched.len() as i32;
             let mut identity = app.clone();
             identity.pid = Some(pid);
+            let title = file.as_ref().and_then(|file| file.file_name()).map_or_else(|| "Untitled".to_string(), |name| name.to_string_lossy().into_owned());
+            state.launched.push((app.clone(), file));
             state.apps.push(AppInfo { pid, identity, frontmost: false, hidden: false });
+            let frame = Rect::new(200.0, 200.0, 600.0, 400.0);
+            state.windows.push((pid, WindowInfo { id: pid as u32 * 10, title, frame: Some(frame), main: true, minimized: false, on_screen: true, kind: Some("AXStandardWindow".into()) }));
             Ok(pid)
         }
 

@@ -17,6 +17,7 @@ pub mod agents;
 pub mod appearance;
 pub mod chat_refs;
 pub mod clock;
+pub mod computer;
 pub mod git;
 pub mod mcp;
 pub mod memory;

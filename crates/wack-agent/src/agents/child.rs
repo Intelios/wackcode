@@ -31,6 +31,13 @@ use crate::{
 /// Tools only the chat itself has: spawning (so children never nest), talking to the user, the
 /// chat's plan and todo list and task cards, and the project's memory.
 const PARENT_ONLY: [&str; 7] = [super::AGENT, super::AGENT_MESSAGE, ASK_USER_QUESTION, TODO, PLAN_MODE_ENTER, PLAN_MODE_COMPLETE, SUGGEST_TASK];
+/// Families only the chat itself has: computer use (`wack_computer::tools::PREFIX`), whose apps
+/// the user allowed for the conversation they are having, not for work they never see.
+const PARENT_ONLY_PREFIXES: [&str; 1] = ["computer_"];
+
+fn parent_only(name: &str) -> bool {
+    PARENT_ONLY.contains(&name) || MEMORY_TOOLS.contains(&name) || PARENT_ONLY_PREFIXES.iter().any(|prefix| name.starts_with(prefix))
+}
 /// The shell family. A role that makes no edits keeps it: helpers must be able to grep, build and
 /// run tests.
 const SHELL: [&str; 4] = ["bash", WATCH, STOP_TASK, WAIT_FOR_TASKS];
@@ -51,8 +58,7 @@ pub fn child_tools(def: &AgentDef, pool: &[Arc<dyn Tool>]) -> Vec<Arc<dyn Tool>>
         .filter(|tool| {
             let spec = tool.spec();
             let name = spec.name.as_str();
-            !PARENT_ONLY.contains(&name)
-                && !MEMORY_TOOLS.contains(&name)
+            !parent_only(name)
                 && def.allows(name)
                 && (edits || spec.parallel_safe || SHELL.contains(&name))
         })
@@ -316,7 +322,7 @@ impl Feature for Rules {
             ));
         }
         let name = tool.name.as_str();
-        if self.copy && (PARENT_ONLY.contains(&name) || MEMORY_TOOLS.contains(&name)) {
+        if self.copy && parent_only(name) {
             return Verdict::Deny(format!(
                 "As a sub-agent you can't use {name}: it belongs to the agent that started you. Do the work with your other tools, and put anything for the user in your report."
             ));
@@ -364,11 +370,31 @@ mod tests {
             Arc::new(Named("memory_save", false)),
             Arc::new(Named("mcp__gh__list", true)),
             Arc::new(Named("mcp__gh__merge", false)),
+            Arc::new(Named("computer_snapshot", true)),
+            Arc::new(Named("computer_open", false)),
         ];
         let names = |def: &AgentDef| child_tools(def, &pool).iter().map(|tool| tool.spec().name).collect::<Vec<_>>();
         let builtins = builtins();
         assert_eq!(names(&builtins[0]), ["read", "bash", "mcp__gh__list"], "explore: no edits, the shell kept, read-only servers only");
         assert_eq!(names(&builtins[2]), ["read", "write", "bash", "mcp__gh__list", "mcp__gh__merge"], "general: everything but the parent's own");
+    }
+
+    #[test]
+    fn a_copy_never_uses_the_computer() {
+        let rules = Rules {
+            planning: false,
+            copy: true,
+            cwd: PathBuf::from("/tmp"),
+            max_turns: 10,
+            replies: AtomicU32::new(0),
+            control: Control::new(),
+            limited: Arc::new(AtomicBool::new(false)),
+        };
+        for (name, safe) in [("computer_snapshot", true), ("computer_open", false)] {
+            let verdict = rules.on_tool_call(&Named(name, safe).spec(), &Value::Null);
+            assert!(matches!(verdict, Verdict::Deny(reason) if reason.contains("belongs to the agent that started you")), "{name}");
+        }
+        assert!(matches!(rules.on_tool_call(&Named("read", true).spec(), &Value::Null), Verdict::Allow));
     }
 
     struct Named(&'static str, bool);

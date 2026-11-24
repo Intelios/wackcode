@@ -7284,6 +7284,7 @@ dependencies = [
  "serde_json",
  "tempfile",
  "tokio",
+ "tokio-util",
  "wack-agent",
  "wack-llm",
 ]
@@ -7305,6 +7306,7 @@ dependencies = [
  "wack-agent",
  "wack-browser",
  "wack-canvas",
+ "wack-computer",
  "wack-llm",
  "wack-mcp",
  "wack-tools",
@@ -7383,6 +7385,7 @@ dependencies = [
  "unicode-segmentation",
  "wack-browser",
  "wack-canvas",
+ "wack-computer",
  "wack-core",
 ]
 

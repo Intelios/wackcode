@@ -586,10 +586,11 @@ pub enum Section {
     Mcp,
     Web,
     Browser,
+    Computer,
 }
 
 impl Section {
-    pub const ALL: [Section; 12] = [
+    pub const ALL: [Section; 13] = [
         Section::Appearance,
         Section::Providers,
         Section::Tools,
@@ -602,6 +603,7 @@ impl Section {
         Section::Mcp,
         Section::Web,
         Section::Browser,
+        Section::Computer,
     ];
 
     pub fn name(self) -> &'static str {
@@ -618,6 +620,7 @@ impl Section {
             Section::Mcp => "MCP servers",
             Section::Web => "Web",
             Section::Browser => "Browser",
+            Section::Computer => "Computer use",
         }
     }
 
@@ -635,6 +638,7 @@ impl Section {
             Section::Mcp => "section-mcp",
             Section::Web => "section-web",
             Section::Browser => "section-browser",
+            Section::Computer => "section-computer",
         }
     }
 }
@@ -654,7 +658,7 @@ const GROUPS: [(&str, &[Entry]); 4] = [
     ),
     (
         "Reach",
-        &[(Some(Section::Integrations), "Integrations"), (Some(Section::Mcp), "MCP servers"), (Some(Section::Web), "Web"), (Some(Section::Browser), "Browser"), (None, "Computer use")],
+        &[(Some(Section::Integrations), "Integrations"), (Some(Section::Mcp), "MCP servers"), (Some(Section::Web), "Web"), (Some(Section::Browser), "Browser"), (Some(Section::Computer), "Computer use")],
     ),
 ];
 
@@ -674,6 +678,7 @@ pub struct SettingsData {
     pub web: crate::web_page::WebData,
     pub mcp: crate::mcp_page::McpData,
     pub browser: crate::browser_page::BrowserData,
+    pub computer: crate::computer_page::ComputerData,
 }
 
 /// The title strip's words: `Settings › Providers`.
@@ -786,6 +791,7 @@ pub fn page(data: SettingsData, inline_nav: bool, narrow: bool, stack_form: bool
         Section::Mcp => crate::mcp_page::page(data.mcp, theme),
         Section::Web => crate::web_page::page(data.web, theme),
         Section::Browser => crate::browser_page::page(data.browser, theme).into_any_element(),
+        Section::Computer => crate::computer_page::page(data.computer, theme).into_any_element(),
     };
     let footer = if section == Section::Providers {
         editor.as_ref().and_then(|editor| save_bar(editor, narrow, theme))

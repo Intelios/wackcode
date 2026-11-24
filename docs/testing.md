@@ -47,11 +47,16 @@ ask '{"cmd":"type","text":"hello"}'            # into whatever has focus (the wi
 ask '{"cmd":"compose","text":"hello","send":true}'   # into the chat's composer, focused or not
 ask '{"cmd":"canvas","name":"canvas_look","input":{},"path":"/abs/a.png"}'   # a canvas tool on the chat in front
 ask '{"cmd":"canvas-export","canvas":"c","artboard":"a","format":"pdf","path":"/abs/a.pdf"}'
+ask '{"cmd":"computer","name":"computer_snapshot","input":{"app":"Calculator"}}'   # a computer tool on the Code chat in front
+ask '{"cmd":"click","tag":"computer-allow"}'   # its access card: computer-allow, -always, -deny, -never
+ask '{"cmd":"computer","pending":1}'           # the call that was waiting on the card
 ask '{"cmd":"key","keys":"cmd-n enter"}'
 ask '{"cmd":"resize","width":900,"height":600}'
 ask '{"cmd":"appearance","theme":"light"}'
 ask '{"cmd":"quit"}'
 ```
+
+A computer call that raises the access card answers at once with `"pending"` (commands run one at a time, so it can't wait for the click); answer the card, then fetch the result. Drive only apps you started for the check, on scratch documents (Calculator, or TextEdit with a file in the scratchpad), never the user's own documents. macOS credits a `cargo dev` app's Accessibility and Screen Recording to the terminal that ran it.
 
 A failure answers `{"ok":false,"error":"…"}` with a sentence saying what went wrong. Screenshots show what the app drew, at 2x, without the traffic lights (the system draws those). They leave out the browser pane's page, which is a native view, not something GPUI draws: to see it, capture the window with `screencapture -l <window id>`. The full protocol is in `crates/wack-ui/src/automation.rs`.
 

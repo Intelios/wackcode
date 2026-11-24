@@ -7,6 +7,8 @@
 //! - `outline`: an accessibility tree as the outline and element list the model reads.
 //! - `ladder`: what an action may try after Accessibility can't do it.
 //! - `change`: what an action changed, from fingerprints before and after.
+//! - `computer`: the app's `Computer` and each chat's `ChatComputer`: grants and access cards.
+//! - `tools`: the agent's `computer_*` tools; `feature`: what the loop keeps across compactions.
 //! - `backend`: the `Desktop` trait the tools work through, and a fake one for tests.
 //! - `engine`: one thread per app, where its Accessibility calls run.
 //! - `native`: Accessibility, ScreenCaptureKit, synthetic input, apps, permissions and the real
@@ -45,10 +47,13 @@
 
 pub mod backend;
 pub mod change;
+pub mod computer;
 pub mod engine;
+pub mod feature;
 pub mod geometry;
 pub mod keys;
 pub mod ladder;
 pub mod native;
 pub mod outline;
 pub mod policy;
+pub mod tools;

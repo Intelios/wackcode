@@ -404,6 +404,9 @@ struct State {
     /// Settings › Browser.
     #[serde(default)]
     browser: BrowserConfig,
+    /// Settings › Computer use.
+    #[serde(default)]
+    computer: crate::computer::ComputerConfig,
 }
 
 /// Settings › Browser.
@@ -1222,6 +1225,57 @@ impl Store {
             return Ok(());
         }
         self.state.browser = config;
+        self.save()
+    }
+
+    /// Settings › Computer use.
+    pub fn computer_config(&self) -> &crate::computer::ComputerConfig {
+        &self.state.computer
+    }
+
+    /// Turns computer use on or off.
+    pub fn set_computer_enabled(&mut self, enabled: bool) -> Result<(), String> {
+        if self.state.computer.enabled == enabled {
+            return Ok(());
+        }
+        self.state.computer.enabled = enabled;
+        self.save()
+    }
+
+    /// Saves an app as always allowed. Only the answer to a live access card calls this
+    /// (`crate::computer`'s invariant).
+    pub fn always_allow_app(&mut self, app: wack_computer::computer::SavedApp) -> Result<(), String> {
+        let mut config = self.state.computer.clone();
+        config.always_allow(app)?;
+        self.state.computer = config;
+        self.save()
+    }
+
+    /// Takes back an Always allow (Settings › Computer use › Ask again).
+    pub fn forget_always_allowed(&mut self, path: &str) -> Result<(), String> {
+        let before = self.state.computer.always.len();
+        self.state.computer.always.retain(|app| app.path != path);
+        if self.state.computer.always.len() == before {
+            return Ok(());
+        }
+        self.save()
+    }
+
+    /// Never allows the app with `bundle_id` again, and takes back any approval of it.
+    pub fn never_allow_app(&mut self, bundle_id: &str) -> Result<(), String> {
+        let mut config = self.state.computer.clone();
+        config.never_allow(bundle_id)?;
+        self.state.computer = config;
+        self.save()
+    }
+
+    /// Lets an app the user never allowed be asked about again.
+    pub fn forget_never_allowed(&mut self, bundle_id: &str) -> Result<(), String> {
+        let before = self.state.computer.never.len();
+        self.state.computer.never.retain(|id| !id.eq_ignore_ascii_case(bundle_id));
+        if self.state.computer.never.len() == before {
+            return Ok(());
+        }
         self.save()
     }
 

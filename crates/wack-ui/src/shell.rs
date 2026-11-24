@@ -282,6 +282,12 @@ impl Shell {
         Some(self.app()?.read(cx).current_chat()?.read(cx).tabs.clone())
     }
 
+    /// The computer use of the chat on screen, and its folder: Code chats only.
+    pub fn current_computer(&self, cx: &App) -> Option<(wack_computer::computer::ChatComputer, std::path::PathBuf)> {
+        let session = self.app()?.read(cx).current_chat()?.read(cx);
+        Some((session.computer.clone()?, session.cwd().to_path_buf()))
+    }
+
     pub fn current_canvases(&self, cx: &App) -> Option<wack_canvas::Canvases> {
         Some(self.app()?.read(cx).current_chat()?.read(cx).canvases.clone())
     }
@@ -463,7 +469,18 @@ impl Shell {
             session.update(cx, |session, cx| session.cancel_question(cx));
             return;
         }
+        // So is an access card, which Esc denies.
+        if let Some(card) = self.current_session(cx).and_then(|session| session.read(cx).computer_card()) {
+            self.answer_computer_card(card.id, wack_computer::computer::Answer::Deny, cx);
+            return;
+        }
         self.stop(&Stop, window, cx);
+    }
+
+    /// Answers the access card of the chat on screen.
+    fn answer_computer_card(&mut self, id: u64, answer: wack_computer::computer::Answer, cx: &mut Context<Self>) {
+        let Some(chat) = self.current_session(cx).map(|session| session.read(cx).id.clone()) else { return };
+        self.with_app(cx, |app, cx| app.answer_computer_card(&chat, id, answer, cx));
     }
 
     /// Runs `change` on the chat on screen.
@@ -1221,6 +1238,23 @@ impl Render for Shell {
                 }))
                 .on_action(cx.listener(|shell, _: &SubmitAnswers, _, cx| shell.with_session(cx, |session, cx| session.submit_answers(cx))))
                 .on_action(cx.listener(|shell, _: &CancelQuestion, _, cx| shell.with_session(cx, |session, cx| session.cancel_question(cx))))
+                .on_action(cx.listener(|shell, action: &crate::actions::AnswerComputerCard, _, cx| {
+                    let (id, answer) = (action.id, action.answer);
+                    shell.answer_computer_card(id, answer, cx);
+                }))
+                .on_action(cx.listener(|shell, _: &crate::actions::ToggleComputerUse, _, cx| shell.with_app(cx, |app, cx| app.toggle_computer_use(cx))))
+                .on_action(cx.listener(|shell, action: &crate::actions::AskComputerAgain, _, cx| {
+                    let path = action.path.clone();
+                    shell.with_app(cx, |app, cx| app.forget_always_allowed(&path, cx));
+                }))
+                .on_action(cx.listener(|shell, action: &crate::actions::ForgetNeverAllowed, _, cx| {
+                    let bundle_id = action.bundle_id.clone();
+                    shell.with_app(cx, |app, cx| app.forget_never_allowed(&bundle_id, cx));
+                }))
+                .on_action(cx.listener(|shell, action: &crate::actions::RequestComputerPermission, _, cx| {
+                    let screen = action.screen;
+                    shell.with_app(cx, |app, cx| app.request_computer_permission(screen, cx));
+                }))
                 .on_action(cx.listener(|shell, _: &WrapUpQuestion, _, cx| shell.with_session(cx, |session, cx| session.wrap_up(cx))))
                 .on_action(cx.listener(|shell, _: &ToggleUnrestrictedPlanning, _, cx| {
                     shell.with_app(cx, |app, cx| app.toggle_unrestricted_planning(cx))
@@ -2071,6 +2105,7 @@ fn live_view(app: &AppState, cx: &App) -> (SidebarData, Screen, StripData) {
                 web: app.web_data(cx),
                 mcp: app.mcp_data(),
                 browser: app.browser_data(),
+                computer: app.computer_data(),
             }))
         }
         Selection::NewChatArea => {
@@ -2098,6 +2133,7 @@ fn live_view(app: &AppState, cx: &App) -> (SidebarData, Screen, StripData) {
                     slash: app.slash_data(None),
                     hint: None,
                     question: None,
+                    access: None,
                     todos: None,
                     activity: None,
                     todos_open: false,
@@ -2137,6 +2173,7 @@ fn live_view(app: &AppState, cx: &App) -> (SidebarData, Screen, StripData) {
                         slash: app.slash_data(None),
                         hint: app.command_hint(None, cx),
                         question: None,
+                        access: None,
                         todos: None,
                         activity: None,
                         todos_open: false,
@@ -2196,6 +2233,7 @@ fn live_view(app: &AppState, cx: &App) -> (SidebarData, Screen, StripData) {
                         focus: Some(asking.focus.clone()),
                         nods: asking.nods,
                     }),
+                    access: state.computer_card(),
                     todos: {
                         let view = crate::todo_panel::view(state.todos(), &state.todo_faded, state.todo_show_done);
                         (view.total > 0).then(|| crate::todo_panel::TodoData { view, busy: state.running() })

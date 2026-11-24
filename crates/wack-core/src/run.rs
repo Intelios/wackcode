@@ -83,6 +83,10 @@ pub struct RunSetup {
     /// The chat's canvases, which outlive the run. `None` offers no canvas tools; the app hands
     /// the chat's own.
     pub canvases: Option<wack_canvas::Canvases>,
+    /// The chat's computer use (Settings › Computer use), which outlives the run: its grants
+    /// and its access card. `None` offers no computer tools; the app hands a Code chat its own,
+    /// and the Chat area and `wack run` never get one.
+    pub computer: Option<wack_computer::computer::ChatComputer>,
     /// The project's Run command when the run starts, for `browser_preview`.
     pub run_command: Option<String>,
     /// The app's Build and Run commands, so `browser_preview` can start the Run command the
@@ -166,6 +170,7 @@ impl Store {
             agents: self.agents_setup(children, &chat.id, &project.path, wack_agent::Agents::new()),
             browser: None,
             canvases: None,
+            computer: None,
             run_command: project.command(crate::store::CommandKind::Run).map(str::to_string),
             commands: None,
         })
@@ -210,6 +215,7 @@ impl Store {
             agents: None,
             browser: None,
             canvases: None,
+            computer: None,
             run_command: None,
             commands: None,
         })
@@ -358,6 +364,17 @@ pub async fn run(
     if let Some(canvases) = &setup.canvases {
         tools.extend(wack_canvas::tools::tools(canvases.clone()));
     }
+    // Computer use after the children's share too: the user allows apps for the conversation
+    // they are having, so sub-agents never reach them (copy children, which carry this whole
+    // registry, are refused by name in `wack_agent::agents::child`).
+    let computer = setup.computer.filter(|computer| computer.computer().enabled());
+    if let Some(computer) = &computer {
+        // A message from the user lets them be asked again about what they said no to.
+        if matches!(job, Job::Prompt(_) | Job::Command { .. } | Job::Attached { .. }) {
+            computer.clear_denials();
+        }
+        tools.extend(wack_computer::tools::tools(computer.clone()));
+    }
     let registry = match Registry::new(tools) {
         Ok(registry) => Arc::new(registry),
         Err(message) => return finished(Err(message), None),
@@ -379,6 +396,10 @@ pub async fn run(
     };
     let agent = match &setup.canvases {
         Some(canvases) => agent.with_feature(Box::new(wack_canvas::CanvasFeature::new(canvases.clone()))),
+        None => agent,
+    };
+    let agent = match computer {
+        Some(computer) => agent.with_feature(Box::new(wack_computer::feature::ComputerFeature::new(computer))),
         None => agent,
     };
     drive(kit.attach(agent), job, control, events).await;
@@ -460,6 +481,7 @@ mod tests {
             agents: None,
             browser: None,
             canvases: None,
+            computer: None,
             run_command: None,
             commands: None,
         }
@@ -603,6 +625,27 @@ mod tests {
             _ => None,
         });
         assert_eq!(last, Some(PlanState::default()));
+    }
+
+    /// The prompt of a run with `computer` handed over: computer tools are named in it only when
+    /// they are offered.
+    async fn prompt_with_computer(kind: ChatKind, enabled: bool) -> String {
+        let folder = tempfile::tempdir().unwrap();
+        let provider = ScriptedProvider::new([say("ok")]);
+        let mut setup = if kind == ChatKind::Chat { chat_setup(provider.clone(), folder.path()) } else { setup(provider.clone(), folder.path()) };
+        let desktop = Arc::new(wack_computer::backend::fake::FakeDesktop::new());
+        let computer = wack_computer::computer::Computer::new(desktop, wack_computer::computer::Settings { enabled, ..Default::default() });
+        setup.computer = Some(computer.chat());
+        let (_, sink) = collect();
+        run(setup, Job::Prompt("hi".into()), Control::new(), sink).await;
+        provider.requests()[0].system.iter().map(|part| part.text.clone()).collect::<Vec<_>>().join("\n")
+    }
+
+    #[tokio::test]
+    async fn computer_use_reaches_code_chats_only_while_it_is_on() {
+        assert!(prompt_with_computer(ChatKind::Code, true).await.contains("computer_snapshot"));
+        assert!(!prompt_with_computer(ChatKind::Code, false).await.contains("computer_"));
+        assert!(!prompt_with_computer(ChatKind::Chat, true).await.contains("computer_"));
     }
 
     /// A Chat chat's run in `folder`: a scratchpad beside its session, everything else off.

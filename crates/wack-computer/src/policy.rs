@@ -23,7 +23,7 @@ use std::path::{Component, Path, PathBuf};
 pub const MAX_NEVER_ALLOW: usize = 200;
 
 /// Every WackCode build's bundle id starts with this.
-const WACKCODE_PREFIX: &str = "com.wackcode.";
+pub const WACKCODE_PREFIX: &str = "com.wackcode.";
 
 /// Bundle ids refused outright, with what they are. Matched case-insensitively.
 pub const HARD_BLOCKED: &[(&str, &str)] = &[

@@ -3,6 +3,8 @@
 //! - **Presence** ([`enter`]): something new arrives by rising a few points as it fades in. A
 //!   screen, a menu, a settings section.
 //! - **From an edge** ([`slide_in`]): a dock's pane arrives from the side it opens on.
+//! - **Between areas** ([`slide_in`], [`HOP`]): switching between Code and Chat, the sidebar's
+//!   page and the stage arrive from the side of the switch's segment while its pill glides.
 //! - **Between states** ([`Ease`]): the picture clears on a new chat and frosts over once the
 //!   first message is sent.
 //! - **At work** ([`paddling`]): the duck paddles while the agent works.
@@ -34,6 +36,8 @@ use gpui::{Animation, AnimationExt, App, ElementId, HighlightStyle, Hsla, IntoEl
 
 /// How long an arrival takes.
 pub const ARRIVE: Duration = Duration::from_millis(260);
+/// How far, in points, an area's page travels in when the area switch hops to it.
+pub const HOP: f32 = 36.;
 /// How long something laid over the window takes to fade in.
 const FADE: Duration = Duration::from_millis(450);
 /// How far an arriving thing rises, in points.

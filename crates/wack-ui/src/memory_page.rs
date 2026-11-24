@@ -230,7 +230,7 @@ pub fn page(data: MemoryData, theme: &Theme) -> AnyElement {
         .gap(px(18.))
         .child(head(
             "Memory",
-            "Notes the agent keeps for itself, per project. Chats carry an index of their titles and read a note only when it looks relevant. Switches apply from a chat’s next message.",
+            "Notes the agent keeps for itself: one store per project, and one that every Chat chat shares. Chats carry an index of their titles and read a note only when it looks relevant. Switches apply from a chat’s next message.",
             None,
             theme,
         ))

@@ -258,7 +258,7 @@ pub fn page(data: SubagentsData, theme: &Theme) -> AnyElement {
     let new = pill("agent-new", "New agent", Some(Icon::Plus), true, theme).on_click(dispatch(NewAgent)).tag("agent-new");
     let mut page = div().flex().flex_col().gap(px(18.)).child(head(
         "Sub-agents",
-        "Agents the agent can hand work to. Each works in its own context and reports back, so the chat keeps the conclusion, not the search.",
+        "Agents the agent can hand work to. Each works in its own context and reports back, so the chat keeps the conclusion, not the search. Chat mode chats work alone and never hand work off.",
         Some(new.into_any_element()),
         theme,
     ));

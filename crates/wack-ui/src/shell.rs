@@ -184,6 +184,10 @@ pub struct Shell {
     /// Whether a Settings editor was open at the last frame: when one closes, however it closed
     /// (a button, ↩ in a field, a delete), its field is gone and the shell takes the keys again.
     had_settings_editor: bool,
+    /// The area on the last frame, and how many times the area has changed: each change is a
+    /// hop, and the sidebar's page and the stage arrive from the side of the switch's segment.
+    area: Option<ChatKind>,
+    hops: usize,
 }
 
 impl Shell {
@@ -217,6 +221,8 @@ impl Shell {
             clear: None,
             had_command_editor: false,
             had_settings_editor: false,
+            area: None,
+            hops: 0,
         }
     }
 
@@ -239,6 +245,8 @@ impl Shell {
             clear: None,
             had_command_editor: false,
             had_settings_editor: false,
+            area: None,
+            hops: 0,
         }
     }
 
@@ -848,6 +856,20 @@ impl Render for Shell {
             Source::Failed(message) => (SidebarData::default(), Screen::Failed(message.clone()), StripData::default()),
         };
         self.paddle(&sidebar_data, cx);
+        // An area hop: Chat sits to the right of Code on the switch, so its page comes in from the
+        // right and Code's from the left. Nothing moves at launch.
+        if self.area.is_some_and(|last| last != sidebar_data.area) {
+            self.hops += 1;
+        }
+        self.area = Some(sidebar_data.area);
+        let hop = (self.hops > 0).then(|| {
+            let from = if sidebar_data.area == ChatKind::Chat { motion::HOP } else { -motion::HOP };
+            (self.hops, from)
+        });
+        let hop_in = |name: &'static str, element: gpui::AnyElement| match hop {
+            Some((hops, from)) => motion::slide_in(ElementId::NamedInteger(name.into(), hops as u64), div().size_full().child(element), from, 0.).into_any_element(),
+            None => element,
+        };
         if let Source::Live(app) = &self.source
             && app.read(cx).title_swaps.values().any(motion::TitleSwap::live)
         {
@@ -979,7 +1001,7 @@ impl Render for Shell {
                     ))
                     .child(match settings_nav {
                         Some((section, connections)) => settings::nav(section, connections, &theme).into_any_element(),
-                        None => Sidebar::new(sidebar_data).into_any_element(),
+                        None => hop_in("hop-sidebar", Sidebar::new(sidebar_data).into_any_element()),
                     })
                     .into_any_element(),
                 false,
@@ -1068,7 +1090,7 @@ impl Render for Shell {
                     .w(px(transcript.width))
                     .h(px(transcript.height))
                     .overflow_hidden()
-                    .child(body),
+                    .child(hop_in("hop-stage", body)),
             )
             .children(dock_elements);
         let stage = pane(div().flex_1().min_h_0().w_full().child(content).into_any_element(), true);

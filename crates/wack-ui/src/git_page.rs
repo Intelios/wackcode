@@ -26,9 +26,10 @@ impl Default for GitData {
     }
 }
 
-const NOTES: [(Icon, &str, &str); 3] = [
+const NOTES: [(Icon, &str, &str); 4] = [
     (Icon::Commit, "Only the agent’s commits", "Commits you make yourself stay yours alone."),
     (Icon::File, "Projects can opt out", "An AGENTS.md or CLAUDE.md that asks for no co-author line wins for that project."),
+    (Icon::Comment, "Chat mode never commits", "A Chat mode chat has no project and no Git: its files stay in its scratchpad."),
     (Icon::Lock, "No access to your account", "WackCode Agent is a GitHub App with no permissions that never signs in. The line is plain text."),
 ];
 

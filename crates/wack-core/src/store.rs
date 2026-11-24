@@ -1527,6 +1527,17 @@ mod tests {
     }
 
     #[test]
+    fn the_chat_area_needs_no_project() {
+        let folder = tempfile::tempdir().unwrap();
+        let mut store = Store::open(folder.path()).unwrap();
+        assert!(store.projects().is_empty());
+        let chat = store.create_area_chat("Hello", ModelChoice::default()).unwrap();
+        assert_eq!(store.chat_folder(&chat), Some(store.scratch_folder(&chat)));
+        assert_eq!(store.chat_area_chats().len(), 1);
+        assert!(store.projects().is_empty(), "no project is made to hold it");
+    }
+
+    #[test]
     fn a_chat_area_chat_has_no_project_and_its_own_scratchpad() {
         let folder = tempfile::tempdir().unwrap();
         let work = tempfile::tempdir().unwrap();

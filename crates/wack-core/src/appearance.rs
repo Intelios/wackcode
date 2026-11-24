@@ -17,7 +17,7 @@
 //!   import (or on the first launch after, for one imported before), so the theme can keep text
 //!   readable over it without opening the picture.
 //! - Pictures are a library ([`Appearance::pictures`]), at most one of them shown. Each picture
-//!   remembers the theme last used with it (`docs/redesign.md`, phase 7): showing a picture brings
+//!   remembers the theme last used with it: showing a picture brings
 //!   its theme back, and choosing a theme while it shows is remembered on it. Change both only
 //!   through [`Appearance::show`], [`Appearance::choose_theme`], [`Appearance::add`] and
 //!   [`Appearance::remove`], which keep that promise. A theme never shows a picture.
@@ -90,7 +90,7 @@ impl Texture {
     }
 }
 
-/// One of WackCode's themes (`docs/redesign.md`, phase 6): WackCode 2's set, by name. What each
+/// One of WackCode's themes: WackCode 2's set, by name. What each
 /// looks like is the UI's business.
 #[derive(Clone, Copy, Debug, Default, PartialEq, Eq, Hash)]
 pub enum ThemeName {

@@ -2,10 +2,10 @@
 //! (`settings_kit.rs`).
 //!
 //! Everything applies the moment it is chosen, so the page itself is the preview: the Blur and
-//! Dim sliders save as they are dragged. A theme is chosen from WackCode 2's ten, never made
-//! (`docs/redesign.md`): each tile is a small window drawn in that theme's own tokens, in the
+//! Dim sliders save as they are dragged. A theme is chosen from WackCode 2's ten, never made:
+//! each tile is a small window drawn in that theme's own tokens, in the
 //! appearance showing now, so it shows what choosing it gives. Pictures are a library shown as a
-//! strip, each captioned with the theme it remembers (`docs/redesign.md`, phase 7): choosing one
+//! strip, each captioned with the theme it remembers: choosing one
 //! brings that theme back. The page draws from plain data and dispatches actions, like every page.
 
 use gpui::{ObjectFit, SharedString, div, img, prelude::*, px};

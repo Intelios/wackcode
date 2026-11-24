@@ -9,7 +9,7 @@
 //! - **Appearance** picks a lightness ramp. Lightness is fixed per token and appearance, so text
 //!   contrast never depends on the theme.
 //! - **Theme**: one of WackCode 2's ten ([`palette`]), each a background and an accent, four with
-//!   a sweep. The user chooses one; nobody picks colours (`docs/redesign.md`).
+//!   a sweep. The user chooses one; nobody picks colours.
 //!   - The background gives the neutrals their hue, and its chroma sets how strongly they are
 //!     tinted against the ramp: Mono gives true greys, Nebula a clearly violet app. In dark the
 //!     window is the background exactly and the other surfaces keep their steps from it, so dark
@@ -23,7 +23,7 @@
 //!     cursor stay the solid accent. Sweeps are three-stop and linear, never Ultra's five-colour
 //!     prism. GPUI draws two stops, so for now a sweep runs from its first stop to its last,
 //!     blended in OKLab; that misses each middle stop by 0.03 to 0.05 in OKLab, a visible
-//!     difference, and painting all three is open with the owner (`docs/redesign.md`).
+//!     difference, and painting all three is open with the owner.
 //!
 //! Over a picture (the fourth input, [`Ground`]) the picture is dimmed exactly as the user chose
 //! ([`Theme::veil`]), and text sits on glass panes over it: the window's colour at

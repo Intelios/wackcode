@@ -138,11 +138,9 @@ Known gaps in the harness:
 
 - A stopped turn reads "Stopped." only until the app restarts: the session file does not record it.
 - A terminal saved in a layout comes back as a fresh shell after a relaunch; its scrollback is not kept.
-- The terminal has no IME composition, no mouse reporting to programs, and no links yet. Scrolling with the wheel is built but has not been driven by the automation socket, which cannot scroll.
+- The terminal has no IME composition, no mouse reporting to programs, and no links yet. Scrolling with the wheel is built but has not yet been driven with the automation socket's `scroll`.
 
 Known gaps in identity:
-
-- The UI redesign (docs/redesign.md) is under way: the frame, stage, glass, sidebar, transcript, composer and Settings are built; WackCode 2's themes are next.
 
 - The window's own controls follow macOS's light or dark, not the one chosen in Settings.
 

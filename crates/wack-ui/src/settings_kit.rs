@@ -1,4 +1,4 @@
-//! The parts every Settings page is built from (`docs/redesign.md`, phase 5).
+//! The parts every Settings page is built from.
 //!
 //! A page opens with a [`head`]: the section's name in the serif, a line saying what it is for,
 //! and at most one primary action, an accent pill at the right. Below it the page is [`card`]s of

@@ -448,6 +448,62 @@ pub fn all() -> Vec<Scene> {
             },
         },
         Scene {
+            name: "composer-states",
+            description: "The composer's tab and status line between runs, Queue beside Stop while the agent works, and a long paste attached as a file.",
+            size: size(px(760.), px(760.)),
+            build: |_, cx| {
+                let drawn = |text: Option<&str>| Input::Drawn { text: text.map(|text| text.to_string().into()), placeholder: crate::chat::FOLLOW_UP_PLACEHOLDER.into() };
+                let between = ComposerData {
+                    chat_area: false,
+                    archived: None,
+                    tasks: crate::shell::task_lines(&fixtures::tasks()),
+                    changes: Some(crate::chat::ChangeCount { files: 3, added: 42, removed: 7 }),
+                    todos: Some(fixtures::todos()),
+                    ..fixtures::composer_after_turn(drawn(None))
+                };
+                let working = ComposerData {
+                    chat_area: false,
+                    archived: None,
+                    input: drawn(Some("Then add a line to CHANGELOG.md")),
+                    foreground: true,
+                    changes: Some(crate::chat::ChangeCount { files: 1, added: 3, removed: 1 }),
+                    waiting: Vec::new(),
+                    ..fixtures::composer_working()
+                };
+                let pasted = ComposerData {
+                    chat_area: false,
+                    archived: None,
+                    pasted: vec![crate::attachments::PastedText::new(&"error: linking with `cc` failed\n".repeat(1_240), &[])],
+                    ..fixtures::composer_after_turn(drawn(Some("Why does the release build fail to link?")))
+                };
+                let rows = vec![("Between runs", between), ("Working, with words written", working), ("A long paste", pasted)];
+                cx.new(|_| ComposerSheet { rows }).into()
+            },
+        },
+        Scene {
+            name: "context-popover",
+            description: "The ring round Send hovered: WackCode 2's context popover, every part with its share, and Compact.",
+            size: size(px(760.), px(620.)),
+            build: |_, cx| {
+                let drawn = Input::Drawn { text: None, placeholder: crate::chat::FOLLOW_UP_PLACEHOLDER.into() };
+                let tokens = fixtures::CONTEXT_WINDOW * 34 / 100;
+                let composer = ComposerData {
+                    chat_area: false,
+                    archived: None,
+                    meter: Some(crate::composer::Meter {
+                        tokens,
+                        window: Some(fixtures::CONTEXT_WINDOW),
+                        high: false,
+                        can_compact: true,
+                        parts: fixtures::context_parts(tokens),
+                    }),
+                    context_open: true,
+                    ..fixtures::composer_after_turn(drawn)
+                };
+                cx.new(|_| ComposerSheet { rows: vec![("", composer)] }).into()
+            },
+        },
+        Scene {
             name: "effort-slider",
             description: "The effort slider at High, opened from the effort's pill in the smallest window.",
             size: size(px(716.), px(720.)),
@@ -680,7 +736,6 @@ pub fn all() -> Vec<Scene> {
                         todos: Some(fixtures::todos()),
                         waiting,
                         todos_open: true,
-                        waiting_open: true,
                         ..fixtures::composer_working()
                     };
                     Shell::showing_tabs(
@@ -2294,7 +2349,7 @@ impl Render for ComposerSheet {
     fn render(&mut self, _: &mut Window, cx: &mut Context<Self>) -> impl IntoElement {
         use crate::typography::Typography;
         let theme = crate::theme::Theme::get(cx).clone();
-        gpui::div().size_full().bg(theme.window).p(px(32.)).flex().flex_col().gap(px(22.)).children(self.rows.iter().map(|(caption, data)| {
+        gpui::div().size_full().bg(theme.window).p(px(32.)).flex().flex_col().justify_end().gap(px(22.)).children(self.rows.iter().map(|(caption, data)| {
             gpui::div()
                 .flex()
                 .flex_col()

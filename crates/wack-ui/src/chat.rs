@@ -55,6 +55,21 @@ use crate::{
 
 pub const FOLLOW_UP_PLACEHOLDER: &str = "Reply, or ask for the next change";
 
+/// How many files differ from the last commit, and the lines added and removed across them.
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
+pub struct ChangeCount {
+    pub files: usize,
+    pub added: usize,
+    pub removed: usize,
+}
+
+impl ChangeCount {
+    pub fn of(files: &[wack_core::git::ChangedFile]) -> Self {
+        let (added, removed) = files.iter().filter_map(|file| file.lines).fold((0, 0), |sum, (a, r)| (sum.0 + a, sum.1 + r));
+        Self { files: files.len(), added, removed }
+    }
+}
+
 /// What a chat tells the app.
 #[derive(Clone, Debug)]
 pub enum ChatEvent {
@@ -97,6 +112,8 @@ pub struct ChatSession {
     pub queue: Vec<String>,
     /// Pictures attached to the message being written.
     pub attachments: Vec<crate::attachments::Attachment>,
+    /// Long pastes attached to it as text files.
+    pub pasted: Vec<crate::attachments::PastedText>,
     /// Pictures of queued messages, by the message's text: sent with it, or back in the tray
     /// when it comes back to the composer. A message with pictures always queues, never steers.
     pub queued_pictures: Vec<(String, Vec<crate::attachments::Attachment>)>,
@@ -107,6 +124,14 @@ pub struct ChatSession {
     runs_started: u64,
     /// How full the model's context is, in tokens, when known.
     pub context_tokens: Option<u64>,
+    /// The same, part by part, as the last run left it (`wack_core::context`); empty until a
+    /// run in this window has ended.
+    pub context_parts: Vec<wack_core::context::Part>,
+    /// The project's changed files against its last commit, and the lines added and removed:
+    /// what the composer's tab counts. `None` until Git answers, or outside a repository.
+    pub changes: Option<ChangeCount>,
+    counting: Option<Task<()>>,
+    count_again: bool,
     /// Finished while the user was elsewhere.
     pub unread: bool,
     /// The question the agent is waiting on.
@@ -118,10 +143,8 @@ pub struct ChatSession {
     pub todo_faded: HashSet<u64>,
     /// The folded tasks are shown anyway.
     pub todo_show_done: bool,
-    /// The todo list and the waiting messages are open above their status pills; folded, only
-    /// the pills show.
+    /// The todo list is open above the composer; folded, only its count shows.
     pub todos_open: bool,
-    pub waiting_open: bool,
     /// Commands the agent started, which outlive its runs.
     pub tasks: Tasks,
     /// The list of them is open above its status pill.
@@ -237,7 +260,7 @@ impl ChatSession {
         let mut panes = ChatPanes::new(layout, cwd.clone());
         panes.set_runner(runner);
         panes.set_commands(commands.0, commands.1, cx);
-        let composer = cx.new(|cx| TextField::new(Type::Body, FOLLOW_UP_PLACEHOLDER, cx).multiline(12).takes_pictures());
+        let composer = cx.new(|cx| TextField::new(Type::Body, FOLLOW_UP_PLACEHOLDER, cx).multiline(crate::app::COMPOSER_ROWS).takes_pictures());
         let tasks = Tasks::new(tasks_folder);
         let tasks_watch = watch_tasks(&tasks, cx);
         panes.set_tasks(tasks.clone());
@@ -266,18 +289,22 @@ impl ChatSession {
             panes,
             queue: Vec::new(),
             attachments: Vec::new(),
+            pasted: Vec::new(),
             queued_pictures: Vec::new(),
             steering: Vec::new(),
             run: None,
             runs_started: 0,
             context_tokens,
+            context_parts: Vec::new(),
+            changes: None,
+            counting: None,
+            count_again: false,
             unread: false,
             asking: None,
             focus_request: None,
             todo_faded: HashSet::new(),
             todo_show_done: false,
             todos_open: false,
-            waiting_open: false,
             tasks,
             tasks_open: false,
             mcp_starting: Vec::new(),
@@ -300,7 +327,39 @@ impl ChatSession {
         chat.conversation.agents = chat.agent_rows();
         chat.refresh_from(0);
         chat.panes.sync(cx, |_, cx| cx.notify());
+        chat.count_changes(cx);
         chat
+    }
+
+    /// Asks Git for the changed files again, off the UI thread. A request made while one runs
+    /// runs once more after it, so the count never stays behind the files.
+    pub fn count_changes(&mut self, cx: &mut Context<Self>) {
+        if self.chat_area {
+            return;
+        }
+        if self.counting.is_some() {
+            self.count_again = true;
+            return;
+        }
+        let folder = self.cwd.clone();
+        let lookup = cx.background_spawn(async move { wack_core::git::changes(&folder) });
+        self.counting = Some(cx.spawn(async move |chat, cx| {
+            let result = lookup.await;
+            let _ = chat.update(cx, |chat, cx| {
+                chat.counting = None;
+                let count = match result {
+                    Ok(wack_core::git::Changes::Repository { files, .. }) => Some(ChangeCount::of(&files)),
+                    _ => None,
+                };
+                if chat.changes != count {
+                    chat.changes = count;
+                    cx.notify();
+                }
+                if std::mem::take(&mut chat.count_again) {
+                    chat.count_changes(cx);
+                }
+            });
+        }));
     }
 
     /// The chat's agents by the call that started each one's latest round: what their rows read.
@@ -824,7 +883,10 @@ impl ChatSession {
                         // Everything waiting is delivered together.
                         Event::Steered(_) => self.steering.clear(),
                         // A tool may have changed files.
-                        Event::ToolResult { .. } => self.panes.refresh_changes(cx),
+                        Event::ToolResult { .. } => {
+                            self.panes.refresh_changes(cx);
+                            self.count_changes(cx);
+                        }
                         Event::Question { id, questions, wrap_up } => {
                             self.ask(id.clone(), questions.clone(), *wrap_up, cx);
                         }
@@ -833,6 +895,7 @@ impl ChatSession {
                     self.conversation.apply(&event, now);
                 }
                 RunEvent::McpStarting(servers) => self.mcp_starting = servers,
+                RunEvent::Context(parts) => self.context_parts = parts,
                 RunEvent::Finished { result, context_tokens } => {
                     self.mcp_starting.clear();
                     if self.compacting() {
@@ -850,6 +913,7 @@ impl ChatSession {
                     }
                     self.close_question(cx);
                     self.panes.refresh_changes(cx);
+                    self.count_changes(cx);
                     finished = Some(result);
                 }
             }
@@ -938,11 +1002,6 @@ impl ChatSession {
         cx.notify();
     }
 
-    pub fn toggle_waiting(&mut self, cx: &mut Context<Self>) {
-        self.waiting_open = !self.waiting_open;
-        cx.notify();
-    }
-
     /// While a run is going: how long it has run ("Working · 8s", or the retry it is waiting on)
     /// and what it is doing now (`work::activity`), from its live work log; or the MCP servers it
     /// is waiting for.
@@ -1005,6 +1064,7 @@ impl ChatSession {
             return;
         }
         self.chat_area = true;
+        self.changes = None;
         self.refresh_from(0);
         // No scroll handler for the jump pill: GPUI calls one with the list's state borrowed (so it
         // can't ask `is_scrolled_to_end`), and already redraws the view that draws the list, which

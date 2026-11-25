@@ -40,6 +40,7 @@ pub mod pictures;
 pub mod pixel_scroll;
 pub mod plan_card;
 pub mod question;
+pub mod ring;
 pub mod run_button;
 pub mod scenes;
 pub mod settings;

@@ -23,6 +23,96 @@ pub const MAX_ATTACHMENT_BYTES: usize = 20 * 1024 * 1024;
 /// A thumbnail's long edge in pixels: the tray draws it at a third of that, sharp on Retina.
 const THUMB_EDGE: u32 = 192;
 
+/// Pastes this long or longer become a text file attached to the message, as in WackCode 2.
+pub const PASTE_FILE_BYTES: usize = 32 * 1024;
+
+/// Text pasted at length, attached as a file rather than poured into the field. It goes with the
+/// message as a section of its own ([`compose`]), which the transcript shows as a chip.
+#[derive(Clone, Debug, PartialEq)]
+pub struct PastedText {
+    /// "Pasted text 1.txt".
+    pub name: SharedString,
+    pub text: Arc<str>,
+}
+
+impl PastedText {
+    /// The next pasted file's name beside `existing`.
+    pub fn new(text: &str, existing: &[PastedText]) -> Self {
+        let mut number = existing.len() + 1;
+        while existing.iter().any(|file| file.name.as_ref() == format!("Pasted text {number}.txt")) {
+            number += 1;
+        }
+        Self { name: format!("Pasted text {number}.txt").into(), text: text.into() }
+    }
+
+    pub fn lines(&self) -> usize {
+        self.text.lines().count().max(1)
+    }
+}
+
+/// Opens the section of pasted files at the end of a message, and closes it.
+pub const FILES_OPEN: &str = "<pasted-files>";
+pub const FILES_CLOSE: &str = "</pasted-files>";
+
+/// `text` with `files` after it, each whole, in a section the transcript knows to fold.
+pub fn compose(text: &str, files: &[PastedText]) -> String {
+    if files.is_empty() {
+        return text.to_string();
+    }
+    let mut section = vec![FILES_OPEN.to_string()];
+    for file in files {
+        section.push(format!("<file name=\"{}\" lines=\"{}\">", file.name, file.lines()));
+        section.push(file.text.trim_end_matches('\n').to_string());
+        section.push("</file>".into());
+    }
+    section.push(FILES_CLOSE.into());
+    let section = section.join("\n");
+    if text.is_empty() { section } else { format!("{text}\n\n{section}") }
+}
+
+/// A message's own words, and the files pasted with it (their names and line counts), from what
+/// [`compose`] made. Text without a section comes back whole.
+pub fn split(message: &str) -> (&str, Vec<(String, usize)>) {
+    let Some(at) = message.rfind(FILES_OPEN) else {
+        return (message, Vec::new());
+    };
+    if !message.trim_end().ends_with(FILES_CLOSE) {
+        return (message, Vec::new());
+    }
+    let files = message[at..]
+        .lines()
+        .filter_map(|line| {
+            let rest = line.strip_prefix("<file name=\"")?;
+            let (name, rest) = rest.split_once('"')?;
+            let lines = rest.strip_prefix(" lines=\"")?.split_once('"')?.0.parse().ok()?;
+            Some((name.to_string(), lines))
+        })
+        .collect();
+    (message[..at].trim_end(), files)
+}
+
+/// A message's own words and its pasted files whole, for putting a queued message back in the
+/// composer. Text without a section comes back whole.
+pub fn take(message: &str) -> (String, Vec<PastedText>) {
+    let (words, listed) = split(message);
+    if listed.is_empty() {
+        return (message.to_string(), Vec::new());
+    }
+    let section = &message[message.rfind(FILES_OPEN).unwrap_or(0)..];
+    let mut files = Vec::new();
+    let mut rest = section;
+    while let Some(start) = rest.find("<file name=\"") {
+        let after = &rest[start..];
+        let Some(head_end) = after.find(">\n") else { break };
+        let body = &after[head_end + 2..];
+        let Some(close) = body.find("\n</file>") else { break };
+        let name = after["<file name=\"".len()..].split('"').next().unwrap_or_default();
+        files.push(PastedText { name: name.to_string().into(), text: body[..close].into() });
+        rest = &body[close..];
+    }
+    (words.to_string(), files)
+}
+
 #[derive(Clone)]
 pub struct Attachment {
     /// The file's name, or "Pasted picture".
@@ -110,6 +200,19 @@ pub fn add(list: &mut Vec<Attachment>, read: Vec<Result<Attachment, String>>) ->
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn pasted_files_go_with_the_message_and_come_back_out_of_it() {
+        let first = PastedText::new("fn main() {}\n", &[]);
+        let second = PastedText::new("a\nb\nc", std::slice::from_ref(&first));
+        assert_eq!(second.name.as_ref(), "Pasted text 2.txt");
+        let message = compose("Look at these", &[first, second]);
+        assert_eq!(split(&message), ("Look at these", vec![("Pasted text 1.txt".into(), 1), ("Pasted text 2.txt".into(), 3)]));
+        assert_eq!(split("No files here"), ("No files here", Vec::new()));
+        let (words, files) = take(&message);
+        assert_eq!(words, "Look at these");
+        assert_eq!(files.iter().map(|file| file.text.as_ref()).collect::<Vec<_>>(), ["fn main() {}", "a\nb\nc"]);
+    }
 
     fn encoded(format: image::ImageFormat, width: u32, height: u32) -> Vec<u8> {
         let mut out = Vec::new();

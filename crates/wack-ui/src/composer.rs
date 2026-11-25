@@ -1,22 +1,24 @@
-//! The composer: where the user writes to the agent.
+//! The composer: where the user writes to the agent. One composer, the same everywhere.
 //!
-//! One card of round controls: the mode track, the model's pill, the effort's own pill (which
-//! opens WackCode 2's slider, Default through Ultra, staying open as it moves), the context meter
-//! and the send button, the one filled control (the stop button while the agent works). In Ultra
-//! Plan the card wears the prism's edge.
+//! One card. Its controls read as WackCode 2's did: attach, then what you ask with (the model,
+//! with its connection's mark, and the effort's pill, which opens the slider from Default to
+//! Ultra), then how (the Build | Plan track) beside Send. Send is the one filled control; while
+//! the agent works it is Stop, with Queue beside it once something is written. Round Send runs a
+//! ring of how full the model's context is: hovering it opens WackCode 2's context popover. Only
+//! hovering: a click on the ring is Send's or Stop's, so reaching for the popover never stops a
+//! run. In Ultra Plan the card wears the prism's edge.
 //!
-//! Above the card, a row of status pills: what the run is doing and for how long (with ⌘B to move
-//! the command it waits on to the background), the todo list, the commands running in the
-//! background, the waiting messages. The list, the commands and the messages open above their
-//! pills and fold back into them (`ChatSession::todos_open`, `tasks_open`, `waiting_open`). The
-//! commands' pill shows even between runs: a server keeps running after the turn. An open question comes first: it stacks
-//! above the pills, and while it is open the pills only report, with the list and the messages
-//! folded into them.
+//! Inside the card's top, while there is something to say, one status line: the run's time and
+//! what it is doing, the todo list's count (which opens the list above the card) and ⌘B when the
+//! agent waits on something it could leave running. On the card's top edge, a tab of what
+//! outlives a run: commands still running (opening their list) and the project's changed files
+//! (opening Changes). Messages written while the agent works wait above the card as faint
+//! bubbles, at the foot of the chat, with Steer now, Edit and Remove. An open question comes
+//! first: it stacks above the card, and while it is open the status line and the tab only report.
 //!
-//! The mode toggle (Build | Plan) sits first in the controls, a recessed track with a pill that
-//! slides to the mode in force. Clicking Plan again switches to Ultra Plan and back; ⇧Tab cycles
-//! all three. It is locked while the agent works: a run keeps the mode it started with, unless
-//! the agent itself asks to plan.
+//! The mode toggle is a recessed track with a pill that slides to the mode in force. Clicking
+//! Plan again switches to Ultra Plan and back; ⇧Tab cycles all three. It is locked while the
+//! agent works: a run keeps the mode it started with, unless the agent itself asks to plan.
 //!
 //! A `/word` raises the `/` menu above the card (`crate::slash_menu`), as wide as the card; a
 //! bare `/command` that takes something after it says what under the field.
@@ -34,13 +36,14 @@ use gpui::{
     AnchoredPositionMode, AnimationExt, App, Background, Bounds, BoxShadow, ElementId, Entity, Focusable, Hsla, MouseButton, Pixels,
     SharedString, Window, anchored, deferred, div, point, prelude::*, px,
 };
-use wack_core::{AgentMode, Reasoning};
+use wack_core::{AgentMode, Reasoning, context::Kind};
 
 use crate::{
     actions::{
-        AttachFiles, AttachPictures, ChooseEffort, ChooseModel, CloseMenu, RemoveAttachment, Compact, MoveToBackground, OpenEffortMenu, OpenModelMenu, Send, SetAgentMode, ShowTask,
-        SlideEffort, Stop, StopTask, ToggleAgentsPane, ToggleTasks, ToggleTodos, ToggleWaiting, Unqueue,
+        AttachPictures, ChooseEffort, ChooseModel, CloseMenu, RemoveAttachment, Compact, MoveToBackground, OpenEffortMenu, OpenModelMenu, Send, SetAgentMode, ShowTask,
+        SlideEffort, Stop, StopTask, ToggleTasks, ToggleTodos, Unqueue, SteerQueued, RemoveQueued, InsertPasted, RemovePasted,
     },
+    chat::ChangeCount,
     app::Menu,
     icon::Icon,
     tags::Tag,
@@ -67,6 +70,8 @@ pub struct ComposerData {
     pub archived: Option<SharedString>,
     pub input: Input,
     pub model: SharedString,
+    /// The model's connection, whose initial marks the model's pill.
+    pub connection: SharedString,
     pub effort: Option<SharedString>,
     /// The effort is Ultra: its word is drawn in the prism.
     pub ultra_effort: bool,
@@ -75,8 +80,10 @@ pub struct ComposerData {
     /// Whose composer this is (a chat's id, or the new chat's), so switching chats never plays
     /// the toggle's slide.
     pub key: SharedString,
-    /// "14%" of the context, or a token count when the model's window is unknown.
+    /// How full the model's context is, for the ring round Send and its popover.
     pub meter: Option<Meter>,
+    /// The context popover is open whatever the pointer does: for scenes.
+    pub context_open: bool,
     pub working: bool,
     /// Messages waiting for the run, oldest first.
     pub waiting: Vec<Waiting>,
@@ -96,18 +103,19 @@ pub struct ComposerData {
     pub todos: Option<crate::todo_panel::TodoData>,
     /// While a run is going: how long, and what it is doing now (`ChatSession::activity`).
     pub activity: Option<(SharedString, Option<SharedString>)>,
-    /// The todo list and the waiting messages are open above their pills.
+    /// The todo list is open above the card.
     pub todos_open: bool,
-    pub waiting_open: bool,
     /// Commands the agent started in the background: running ones first, then a few that ended.
     pub tasks: Vec<TaskLine>,
     pub tasks_open: bool,
+    /// The project's changed files, for the tab on the card's edge.
+    pub changes: Option<ChangeCount>,
     /// The agent is waiting on a command or sub-agents in the foreground, which ⌘B would move.
     pub foreground: bool,
-    /// Sub-agents queued or working.
-    pub agents: usize,
     /// Pictures attached to the message being written, shown in a tray above the field.
     pub attachments: Vec<crate::attachments::Attachment>,
+    /// Long pastes, attached as text files.
+    pub pasted: Vec<crate::attachments::PastedText>,
     /// Why the message's pictures can't go to this model, when they can't: Send waits on it.
     pub pictures_refused: Option<SharedString>,
     /// Comments drafted on a canvas, which go with the next message: how many, and the canvas
@@ -157,11 +165,23 @@ pub enum Choice {
 
 #[derive(Clone, Debug)]
 pub struct Meter {
-    pub label: SharedString,
-    /// Getting full: drawn in the warning colour.
+    /// Tokens the next request would send.
+    pub tokens: u64,
+    /// The model's context window, when known.
+    pub window: Option<u64>,
+    /// Getting full: the ring is drawn in the warning colour.
     pub high: bool,
-    /// Offers Compact beside it.
+    /// The popover offers Compact.
     pub can_compact: bool,
+    /// Part by part, as the last run left it; empty before one has ended in this window.
+    pub parts: Vec<wack_core::context::Part>,
+}
+
+impl Meter {
+    /// How full, 0 to 1, when the window is known.
+    pub fn share(&self) -> Option<f32> {
+        self.window.filter(|window| *window > 0).map(|window| (self.tokens as f32 / window as f32).min(1.))
+    }
 }
 
 #[derive(Clone, Debug)]
@@ -236,42 +256,9 @@ impl RenderOnce for Composer {
             Input::Drawn { text, .. } => text.is_some(),
         };
         // Pictures alone make a message; pictures this model can't take hold Send back.
-        // So do comments drafted on a canvas.
-        let has_text = (has_text || !data.attachments.is_empty() || data.comments.is_some()) && data.pictures_refused.is_none();
-
-        let send = if data.working && !has_text {
-            div()
-                .id("stop")
-                .flex_none()
-                .size(px(30.))
-                .rounded_full()
-                .flex()
-                .items_center()
-                .justify_center()
-                .bg(theme.raised)
-                .border_1()
-                .border_color(theme.border_strong)
-                .hover(|button| button.bg(theme.hover))
-                .on_click(dispatch(Stop))
-                .child(Icon::Stop.view(px(14.), theme.text))
-                .tag("stop")
-                .into_any_element()
-        } else {
-            div()
-                .id("send")
-                .flex_none()
-                .size(px(30.))
-                .rounded_full()
-                .flex()
-                .items_center()
-                .justify_center()
-                .when(has_text, |button| button.bg(theme.accent_fill()).hover(|button| button.bg(theme.accent_fill_hover())))
-                .when(!has_text, |button| button.bg(theme.hover))
-                .on_click(dispatch(Send))
-                .child(Icon::ArrowUp.view(px(15.), if has_text { theme.on_accent } else { theme.text_faint }))
-                .tag("send")
-                .into_any_element()
-        };
+        // So do comments drafted on a canvas, and pasted text.
+        let has_text = (has_text || !data.attachments.is_empty() || !data.pasted.is_empty() || data.comments.is_some())
+            && data.pictures_refused.is_none();
 
         let field = match data.input.clone() {
             Input::Field(field) => div().child(field),
@@ -287,33 +274,40 @@ impl RenderOnce for Composer {
 
         let ultra_plan = data.mode == AgentMode::UltraPlan;
         let field_height = if data.roomy { 64. } else { 22. };
+        let asking = data.question.is_some() || data.access.is_some();
+
+        // What you ask with first (the model, its effort), then how (Build or Plan) beside Send.
         let mut controls = div()
             .flex()
             .items_center()
-            .gap(px(6.))
+            .gap(px(4.))
             .child(
                 div()
                     .id("attach")
                     .flex_none()
-                    .size(px(26.))
+                    .size(px(28.))
                     .rounded_full()
                     .flex()
                     .items_center()
                     .justify_center()
                     .cursor_pointer()
                     .hover(|button| button.bg(theme.hover))
-                    .tooltip(tip("Attach pictures — or paste or drop them here"))
+                    .tooltip(tip("Attach pictures — or paste or drop them anywhere on the chat"))
                     .on_click(dispatch(AttachPictures))
-                    .child(Icon::Plus.view(px(16.), theme.text_dim))
+                    .child(Icon::Paperclip.view(px(15.), theme.text_dim))
                     .tag("attach"),
             )
-            .when(!data.chat_area, |controls| controls.child(ModeToggle { mode: data.mode, locked: data.working, key: data.key.clone() }))
             // In a narrow composer the model's name gives way first; the send button never does.
             .child(picker(
                 "model",
-                pill("model").min_w(px(MODEL_MIN)).text_color(theme.text_soft).hover(|pill| pill.bg(theme.hover).text_color(theme.text)).child(
-                    div().min_w_0().truncate().typography(Type::Ui).child(data.model.clone()),
-                ).child(Icon::ChevronDown.view(px(12.), theme.text_faint)),
+                pill("model")
+                    .min_w(px(MODEL_MIN))
+                    .gap(px(6.))
+                    .text_color(theme.text_soft)
+                    .hover(|pill| pill.bg(theme.hover).text_color(theme.text))
+                    .when_some(mark_letter(&data.connection), |pill, letter| pill.child(provider_mark(letter, &theme)))
+                    .child(div().min_w_0().truncate().typography(Type::Ui).child(data.model.clone()))
+                    .child(Icon::ChevronDown.view(px(12.), theme.text_faint)),
                 menu_for(Menu::Model).map(|menu| ModelPicker { menu }.into_any_element()),
                 true,
                 viewport,
@@ -340,26 +334,50 @@ impl RenderOnce for Composer {
             });
             controls = controls.child(picker("effort", button, slider, false, viewport));
         }
-        controls = controls.child(div().flex_1());
-        if let Some(meter) = data.meter {
-            controls = controls.child(div().flex_none().pr(px(4.)).child(meter_view(meter, data.working, &theme)));
-        }
-        let controls = controls.child(send);
+        controls = controls
+            .child(div().flex_1())
+            .when(!data.chat_area, |controls| {
+                controls.child(div().flex_none().mr(px(4.)).child(ModeToggle { mode: data.mode, locked: data.working, key: data.key.clone() }))
+            })
+            // While the agent works, what is written waits for it: Queue says so.
+            .when(data.working && has_text, |controls| {
+                controls.child(
+                    div()
+                        .id("queue")
+                        .flex_none()
+                        .h(px(30.))
+                        .px(px(13.))
+                        .rounded_full()
+                        .flex()
+                        .items_center()
+                        .gap(px(6.))
+                        .bg(theme.accent_fill())
+                        .hover(|button| button.bg(theme.accent_fill_hover()))
+                        .tooltip(tip("Send once the agent finishes (↩). ⌘↩ steers it now"))
+                        .on_click(dispatch(Send))
+                        .child(Icon::ArrowUp.view(px(13.), theme.on_accent))
+                        .child(div().typography(Type::UiStrong).text_color(theme.on_accent).child("Queue"))
+                        .tag("queue"),
+                )
+            })
+            .child(send_ring(&data, has_text, viewport, window, cx, &theme));
 
+        let running_tasks = data.tasks.iter().filter(|task| task.status.running()).count();
         let card = div()
             .w_full()
             .flex()
             .flex_col()
             .gap(px(CARD_GAP))
             .pl(px(16.))
-            .pr(px(12.))
+            .pr(px(9.))
             .pt(px(CARD_TOP))
-            .pb(px(10.))
+            .pb(px(8.))
             .rounded(px(CARD_RADIUS))
             .bg(theme.surface)
             .when(!ultra_plan, |card| card.border_1().border_color(theme.border))
+            .children(status_line(&data, asking, &theme))
             .when_some(data.comments.clone(), |card, (count, canvas)| card.child(comments_chip(count, canvas, &theme)))
-            .when(!data.attachments.is_empty(), |card| card.child(tray(&data.attachments, &theme)))
+            .when(!data.attachments.is_empty() || !data.pasted.is_empty(), |card| card.child(tray(&data.attachments, &data.pasted, &theme)))
             .when_some(data.pictures_refused.clone(), |card, refused| {
                 card.child(
                     div()
@@ -389,64 +407,64 @@ impl RenderOnce for Composer {
             )
             .child(controls)
             .tag("composer");
-        // Files dragged over from the Finder: the card lights its edge and takes them.
-        let card = div()
-            .id("composer-drop")
-            .rounded(px(CARD_RADIUS))
-            .drag_over::<gpui::ExternalPaths>(|card, _, _, cx| {
-                let theme = Theme::get(cx);
-                card.border_2().border_color(theme.accent_text).bg(theme.accent_wash)
-            })
-            .on_drop(|paths: &gpui::ExternalPaths, window, cx| {
-                window.dispatch_action(Box::new(AttachFiles { paths: paths.paths().to_vec() }), cx);
-            })
-            .child(card);
+        let card = div().rounded(px(CARD_RADIUS)).child(card);
         let card = if ultra_plan { prism_edge(CARD_RADIUS, card, &theme).into_any_element() } else { card.into_any_element() };
         // A message leaving: the card lifts and settles while a glint crosses it.
         let moment = data.sent_at.and_then(|at| crate::motion::send_moment(at.elapsed(), cx.reduce_motion()));
         if moment.is_some() {
             window.request_animation_frame();
         }
-        // The `/` menu rises from the card's top edge, over whatever is above it.
+        // The tab of what stays running (commands, changed files) sits on the card's top edge,
+        // drawn over the edge so the two read as one piece.
+        let tab = tab(running_tasks, data.tasks_open && !asking, !asking, data.changes, &theme);
         let card = div()
             .relative()
+            .when(tab.is_some(), |card| card.mt(px(TAB_HEIGHT - 1.)))
             .when_some(moment, |card, moment| card.top(px(-moment.lift)))
             .child(card)
             .children(moment.map(|moment| send_glint(moment, &theme)))
+            .children(tab.map(|tab| div().absolute().left(px(TAB_INSET)).top(px(1. - TAB_HEIGHT)).child(tab)))
+            // The `/` menu rises from the card's top edge, over whatever is above it.
             .when_some(data.slash.clone(), |card, slash| {
-            card.child(
-                deferred(
-                    div()
-                        .absolute()
-                        .left_0()
-                        .right_0()
-                        .bottom(gpui::relative(1.))
-                        .pb(px(PICKER_GAP))
-                        .child(crate::motion::enter(ElementId::Name(format!("arrive-slash-{}", data.key).into()), div().child(crate::slash_menu::menu(slash, &theme)))),
+                card.child(
+                    deferred(
+                        div()
+                            .absolute()
+                            .left_0()
+                            .right_0()
+                            .bottom(gpui::relative(1.))
+                            .pb(px(PICKER_GAP))
+                            .child(crate::motion::enter(ElementId::Name(format!("arrive-slash-{}", data.key).into()), div().child(crate::slash_menu::menu(slash, &theme)))),
+                    )
+                    .with_priority(2),
                 )
-                .with_priority(2),
-            )
-        });
+            });
 
         // Inside a capped column the card stays whole and the question gives way first.
         let mut column = div().w_full().min_h_0().flex().flex_col().gap(px(6.));
-        let asking = data.question.is_some() || data.access.is_some();
-        // While a question is open the pills only report: the question has the room.
-        let todos_open = data.todos_open && !asking;
-        let todo_pill = data.todos.as_ref().map(|todos| {
-            let view = &todos.view;
-            let live = todos.busy && view.active;
-            status_pill("todos-pill", todos_open, !asking, &theme)
-                .when(!asking, |pill| pill.on_click(dispatch(ToggleTodos)))
-                .child(div().size(px(6.)).rounded_full().bg(if live { theme.accent_text } else { theme.border_strong }))
-                .child(div().typography(Type::Small).text_color(theme.text_soft).child(format!("{} of {} tasks", view.done, view.total)))
-                .when(!asking, |pill| pill.child(if todos_open { Icon::ChevronDown } else { Icon::ChevronRight }.view(px(11.), theme.text_faint)))
-                .tag("todos-pill")
-        });
-        if let Some(todos) = data.todos
-            && todos_open
+        // What was written while the agent worked waits at the foot of the chat, as faint
+        // bubbles that firm up when the agent takes them.
+        if !data.waiting.is_empty() {
+            let steering = data.waiting.iter().filter(|waiting| waiting.steering).count();
+            let mut bubbles = div().id("waiting").flex_shrink(1.).min_h(px(40.)).max_h(px(WAITING_MAX_HEIGHT)).overflow_y_scroll().flex().flex_col().gap(px(6.)).pb(px(4.));
+            for (index, waiting) in data.waiting.into_iter().enumerate() {
+                let queued = (!waiting.steering).then(|| index - steering);
+                bubbles = bubbles.child(div().flex_none().child(waiting_bubble(index, queued, waiting, data.working, &theme)));
+            }
+            column = column.child(bubbles.tag("waiting"));
+        }
+        if let Some(todos) = data.todos.clone()
+            && data.todos_open
+            && !asking
         {
             column = column.child(div().flex_shrink(1.).min_h(px(40.)).flex().flex_col().child(crate::todo_panel::todo_panel(todos, &theme)));
+        }
+        if data.tasks_open && !asking && running_tasks > 0 {
+            let mut rows = div().id("tasks").flex_shrink(1.).min_h(px(36.)).max_h(px(TASKS_MAX_HEIGHT)).overflow_y_scroll().flex().flex_col().gap(px(6.));
+            for task in data.tasks {
+                rows = rows.child(div().flex_none().child(task_row(task, &theme)));
+            }
+            column = column.child(rows);
         }
         if let Some(access) = data.access {
             column = column.child(div().flex_none().pb(px(4.)).child(crate::computer_card::ComputerCard::new(access)));
@@ -456,102 +474,455 @@ impl RenderOnce for Composer {
                 div().min_h(px(QUESTION_MIN_HEIGHT)).flex_shrink(1.).flex().flex_col().pb(px(4.)).child(crate::question::QuestionCard::new(question)),
             );
         }
-        let waiting_pill = (!data.waiting.is_empty()).then(|| {
-            let steering = data.waiting.iter().filter(|waiting| waiting.steering).count();
-            let queued = data.waiting.len() - steering;
-            let words = match (steering, queued) {
-                (0, queued) => format!("{queued} queued"),
-                (steering, 0) => format!("{steering} steering"),
-                (steering, queued) => format!("{steering} steering · {queued} queued"),
-            };
-            status_pill("waiting-pill", data.waiting_open && !asking, !asking, &theme)
-                .when(!asking, |pill| pill.on_click(dispatch(ToggleWaiting)))
-                .child(div().typography(Type::Small).text_color(theme.text_soft).child(words))
-                .when(!asking, |pill| {
-                    pill.child(if data.waiting_open { Icon::ChevronDown } else { Icon::ChevronRight }.view(px(11.), theme.text_faint))
-                })
-                .tag("waiting-pill")
-        });
-        if data.waiting_open && !asking && !data.waiting.is_empty() {
-            // A long queue scrolls inside itself.
-            let mut rows = div().id("waiting").flex_shrink(1.).min_h(px(36.)).max_h(px(WAITING_MAX_HEIGHT)).overflow_y_scroll().flex().flex_col().gap(px(6.));
-            for (index, waiting) in data.waiting.into_iter().enumerate() {
-                rows = rows.child(div().flex_none().child(waiting_row(index, waiting, &theme)));
-            }
-            column = column.child(rows);
-        }
-        let activity_pill = data.activity.map(|(time, doing)| {
+        column.child(div().flex_none().child(card)).into_any_element()
+    }
+}
+
+/// The first letter of a connection's name, for the mark on the model's pill.
+fn mark_letter(connection: &str) -> Option<SharedString> {
+    connection.trim().chars().find(|c| c.is_alphanumeric()).map(|c| c.to_uppercase().collect::<String>().into())
+}
+
+/// A connection's mark: its initial on a rounded square of the accent's wash.
+fn provider_mark(letter: SharedString, theme: &Theme) -> impl IntoElement {
+    div()
+        .flex_none()
+        .size(px(16.))
+        .rounded(px(5.))
+        .flex()
+        .items_center()
+        .justify_center()
+        .bg(theme.accent_wash)
+        .text_color(theme.accent_text)
+        .typography(Type::Small)
+        .font_weight(gpui::FontWeight::BOLD)
+        .child(letter)
+}
+
+/// Inside the card's top: the run's time and what it is doing, the todo list's count (which
+/// opens the list) and ⌘B when there is something to move to the background. Only while there
+/// is something to say.
+fn status_line(data: &ComposerData, asking: bool, theme: &Theme) -> Option<impl IntoElement + use<>> {
+    if data.activity.is_none() && data.todos.is_none() {
+        return None;
+    }
+    let mut line = div().h(px(STATUS_HEIGHT)).mr(px(4.)).flex().items_center().gap(px(8.));
+    if let Some((time, doing)) = data.activity.clone() {
+        line = line.child(
             div()
+                .flex_1()
                 .min_w_0()
-                .h(px(STATUS_HEIGHT))
-                .px(px(12.))
+                .flex()
+                .items_center()
+                .gap(px(8.))
+                .child(crate::motion::paddling(div().flex_none().child(Icon::Duck.view(px(13.), theme.accent_text))))
+                .child(div().flex_none().typography(Type::Small).text_color(theme.text).child(time))
+                .child(div().flex_1().min_w_0().truncate().typography(Type::Small).text_color(theme.text_dim).children(doing))
+                .tag("activity"),
+        );
+    }
+    if let Some(todos) = &data.todos {
+        let view = &todos.view;
+        let open = data.todos_open && !asking;
+        line = line.child(
+            div()
+                .id("todos-pill")
+                .flex_none()
+                .h(px(22.))
+                .px(px(8.))
                 .rounded_full()
                 .flex()
                 .items_center()
-                .gap(px(7.))
-                .bg(theme.surface)
-                .border_1()
-                .border_color(theme.border)
-                .child(crate::motion::paddling(div().flex_none().child(Icon::Duck.view(px(13.), theme.accent_text))))
-                .child(div().flex_none().typography(Type::Small).text_color(theme.text).child(time))
-                .when_some(doing, |pill, doing| {
-                    pill.child(div().min_w_0().truncate().typography(Type::Small).text_color(theme.text_dim).child(doing))
-                })
-                .tag("activity")
-        });
-        // Moving the command the agent waits on to the background, beside what it is doing.
-        let background_pill = (data.working && data.foreground).then(|| {
-            status_pill("background-pill", false, true, &theme)
+                .gap(px(5.))
+                .when(open, |button| button.bg(theme.hover))
+                .when(!asking, |button| button.cursor_pointer().hover(|button| button.bg(theme.hover)).on_click(dispatch(ToggleTodos)))
+                .tooltip(tip("The agent's todo list"))
+                .child(Icon::Tasks.view(px(12.), if todos.busy && view.active { theme.accent_text } else { theme.text_faint }))
+                .child(div().typography(Type::Small).text_color(theme.text_soft).child(format!("{} of {}", view.done, view.total)))
+                .when(!asking, |button| button.child(if open { Icon::ChevronDown } else { Icon::ChevronRight }.view(px(10.), theme.text_faint)))
+                .tag("todos-pill"),
+        );
+    }
+    // Between runs the count leads the line.
+    if data.activity.is_none() {
+        line = line.child(div().flex_1());
+    }
+    if data.working && data.foreground {
+        line = line.child(
+            div()
+                .id("background-pill")
+                .flex_none()
+                .h(px(22.))
+                .px(px(8.))
+                .rounded_full()
+                .flex()
+                .items_center()
+                .gap(px(5.))
+                .cursor_pointer()
+                .hover(|button| button.bg(theme.hover))
                 .tooltip(tip("Keep it working in the background and let the agent carry on"))
                 .on_click(dispatch(MoveToBackground))
-                .child(div().typography(Type::Small).text_color(theme.text_soft).child("Background"))
                 .child(div().typography(Type::Small).text_color(theme.text_faint).child("⌘B"))
-                .tag("background-pill")
-        });
-        let running_tasks = data.tasks.iter().filter(|task| task.status.running()).count();
-        let tasks_pill = (running_tasks > 0).then(|| {
-            status_pill("tasks-pill", data.tasks_open && !asking, !asking, &theme)
-                .when(!asking, |pill| pill.on_click(dispatch(ToggleTasks)))
-                .child(Icon::Terminal.view(px(11.), theme.accent_text))
-                .child(div().typography(Type::Small).text_color(theme.text_soft).child(format!("{running_tasks} running")))
-                .when(!asking, |pill| pill.child(if data.tasks_open { Icon::ChevronDown } else { Icon::ChevronRight }.view(px(11.), theme.text_faint)))
-                .tag("tasks-pill")
-        });
-        // Sub-agents at work: the pill opens the Agents pane.
-        let agents_pill = (data.agents > 0).then(|| {
-            status_pill("agents-pill", false, true, &theme)
-                .tooltip(tip("Show the agents' work (⌘⇧A)"))
-                .on_click(dispatch(ToggleAgentsPane))
-                .child(crate::motion::paddling(div().flex_none().child(Icon::Duck.view(px(11.), theme.accent_text))))
-                .child(div().typography(Type::Small).text_color(theme.text_soft).child(if data.agents == 1 { "1 agent".to_string() } else { format!("{} agents", data.agents) }))
-                .tag("agents-pill")
-        });
-        if data.tasks_open && !asking && running_tasks > 0 {
-            let mut rows = div().id("tasks").flex_shrink(1.).min_h(px(36.)).max_h(px(WAITING_MAX_HEIGHT)).overflow_y_scroll().flex().flex_col().gap(px(6.));
-            for task in data.tasks {
-                rows = rows.child(div().flex_none().child(task_row(task, &theme)));
-            }
-            column = column.child(rows);
+                .child(div().typography(Type::Small).text_color(theme.text_dim).child("Background"))
+                .tag("background-pill"),
+        );
+    }
+    Some(line)
+}
+
+/// The tab on the card's top edge: commands still running (opening their list) and the
+/// project's changed files (opening Changes). `None` when there is neither.
+fn tab(running: usize, tasks_open: bool, opens: bool, changes: Option<ChangeCount>, theme: &Theme) -> Option<gpui::AnyElement> {
+    let changes = changes.filter(|changes| changes.files > 0);
+    if running == 0 && changes.is_none() {
+        return None;
+    }
+    let segment = |id: &'static str| div().id(id).flex_none().h_full().px(px(8.)).rounded(px(8.)).flex().items_center().gap(px(6.));
+    let tasks = (running > 0).then(|| {
+        segment("tasks-pill")
+            .when(tasks_open, |segment| segment.bg(theme.hover))
+            .when(opens, |segment| segment.cursor_pointer().hover(|segment| segment.bg(theme.hover)).on_click(dispatch(ToggleTasks)))
+            .tooltip(tip("Commands the agent left running"))
+            .child(Icon::Terminal.view(px(12.), theme.accent_text))
+            .child(div().typography(Type::Small).text_color(theme.text_soft).child(format!("{running} running")))
+            .when(opens, |segment| segment.child(if tasks_open { Icon::ChevronDown } else { Icon::ChevronRight }.view(px(10.), theme.text_faint)))
+            .tag("tasks-pill")
+    });
+    let files = changes.map(|changes| {
+        let noun = if changes.files == 1 { "file" } else { "files" };
+        segment("changes-pill")
+            .cursor_pointer()
+            .hover(|segment| segment.bg(theme.hover))
+            .tooltip(tip("Show the changes (⌘⇧C)"))
+            .on_click(dispatch(crate::actions::ToggleChanges))
+            .child(Icon::Branch.view(px(12.), theme.accent_text))
+            .child(div().typography(Type::Small).text_color(theme.text_soft).child(format!("{} {noun}", changes.files)))
+            .when(changes.added > 0, |segment| segment.child(div().typography(Type::Small).text_color(theme.diff_added).child(format!("+{}", changes.added))))
+            .when(changes.removed > 0, |segment| {
+                segment.child(div().typography(Type::Small).text_color(theme.diff_removed).child(format!("−{}", changes.removed)))
+            })
+            .tag("changes-pill")
+    });
+    let both = tasks.is_some() && files.is_some();
+    Some(
+        div()
+            .h(px(TAB_HEIGHT))
+            .px(px(4.))
+            .py(px(3.))
+            .flex()
+            .items_center()
+            .gap(px(2.))
+            .bg(theme.surface)
+            .rounded_tl(px(12.))
+            .rounded_tr(px(12.))
+            .border_t_1()
+            .border_l_1()
+            .border_r_1()
+            .border_color(theme.border)
+            .children(tasks)
+            .when(both, |tab| tab.child(div().flex_none().w(px(1.)).h(px(12.)).bg(theme.border)))
+            .children(files)
+            .tag("composer-tab")
+            .into_any_element(),
+    )
+}
+
+/// What the ring round Send keeps between frames: whether the pointer is over the ring or its
+/// popover, and which of the popover's parts are open.
+#[derive(Default)]
+struct ContextHover {
+    over_ring: bool,
+    over_card: bool,
+    open: Vec<Kind>,
+}
+
+/// Send (or Stop while the agent works), with the context's ring round it. Hovering the ring
+/// opens the context popover; a click is Send's or Stop's alone, so reaching for the popover can
+/// never send or stop anything.
+fn send_ring(data: &ComposerData, has_text: bool, viewport: gpui::Size<Pixels>, window: &mut Window, cx: &mut App, theme: &Theme) -> impl IntoElement + use<> {
+    let button = if data.working {
+        div()
+            .id("stop")
+            .flex_none()
+            .size(px(SEND))
+            .rounded_full()
+            .flex()
+            .items_center()
+            .justify_center()
+            .bg(theme.raised)
+            .border_1()
+            .border_color(theme.border_strong)
+            .hover(|button| button.bg(theme.hover))
+            .tooltip(tip("Stop (⎋)"))
+            .on_click(dispatch(Stop))
+            .child(Icon::Stop.view(px(12.), theme.text))
+            .tag("stop")
+    } else {
+        div()
+            .id("send")
+            .flex_none()
+            .size(px(SEND))
+            .rounded_full()
+            .flex()
+            .items_center()
+            .justify_center()
+            .when(has_text, |button| button.bg(theme.accent_fill()).hover(|button| button.bg(theme.accent_fill_hover())))
+            .when(!has_text, |button| button.bg(theme.hover))
+            .on_click(dispatch(Send))
+            .child(Icon::ArrowUp.view(px(15.), if has_text { theme.on_accent } else { theme.text_faint }))
+            .tag("send")
+    };
+    let Some(meter) = data.meter.clone() else {
+        return div().flex_none().size(px(RING)).flex().items_center().justify_center().child(button).into_any_element();
+    };
+    let hover = window.use_keyed_state(ElementId::Name(format!("context-{}", data.key).into()), cx, |_, _| ContextHover::default());
+    let (open, parts_open) = {
+        let state = hover.read(cx);
+        (state.over_ring || state.over_card || data.context_open, state.open.clone())
+    };
+    let colour = if meter.high { theme.warning } else { theme.accent };
+    let over_ring = hover.clone();
+    let mut cluster = div()
+        .id("send-ring")
+        .relative()
+        .flex_none()
+        .size(px(RING))
+        .flex()
+        .items_center()
+        .justify_center()
+        .on_hover(move |hovered, _, cx| {
+            let hovered = *hovered;
+            over_ring.update(cx, |state, cx| {
+                if state.over_ring != hovered {
+                    state.over_ring = hovered;
+                    cx.notify();
+                }
+            });
+        })
+        .child(div().absolute().top_0().left_0().child(crate::ring::ring(meter.share().unwrap_or(0.), RING, RING_WIDTH, theme.border, colour)))
+        .child(button);
+    if open {
+        let over_card = hover.clone();
+        let card = context_card(&meter, data.working, &parts_open, hover.clone(), theme);
+        // The popover's foot reaches down to the ring, so the pointer never crosses a gap that
+        // would close it on the way up.
+        let popover = div().absolute().top_0().right_0().child(
+            anchored()
+                .anchor(gpui::Anchor::BottomRight)
+                .offset(point(px(10.), px(0.)))
+                .snap_to_window_with_margin(px(8.))
+                .child(
+                    div()
+                        .id("context-popover")
+                        .pb(px(PICKER_GAP + 2.))
+                        .on_hover(move |hovered, _, cx| {
+                            let hovered = *hovered;
+                            over_card.update(cx, |state, cx| {
+                                if state.over_card != hovered {
+                                    state.over_card = hovered;
+                                    cx.notify();
+                                }
+                            });
+                        })
+                        .child(crate::motion::enter(ElementId::Name(format!("arrive-context-{}", data.key).into()), div().child(card))),
+                ),
+        );
+        let _ = viewport;
+        cluster = cluster.child(deferred(popover).with_priority(2));
+    }
+    cluster.tag("context-ring").into_any_element()
+}
+
+/// The context popover, ported from WackCode 2: how full, how long until the agent compacts on
+/// its own, a bar of every part, and each part with its share, opening to its pieces.
+fn context_card(meter: &Meter, working: bool, open: &[Kind], hover: Entity<ContextHover>, theme: &Theme) -> impl IntoElement + use<> {
+    let count = crate::work::count;
+    let window = meter.window.filter(|window| *window > 0);
+    let percent = meter.share().map(|share| share * 100.);
+    let colour = if meter.high { theme.warning } else { theme.accent };
+    let threshold = window.map(|window| window * wack_core::context::COMPACT_AT_PERCENT / 100);
+    let used_words = match window {
+        Some(window) => format!("{} of {} tokens", count(meter.tokens), count(window)),
+        None => format!("{} tokens", count(meter.tokens)),
+    };
+    let left_words: Option<(String, Hsla)> = match threshold {
+        Some(at) if meter.tokens >= at => Some(("Auto-compaction is due".into(), theme.warning)),
+        Some(at) => Some((format!("{} until auto-compact", count(at - meter.tokens)), theme.accent_text)),
+        None => Some(("This model's window isn't known".into(), theme.text_faint)),
+    };
+    let hero = div()
+        .flex()
+        .items_center()
+        .gap(px(14.))
+        .child(
+            div()
+                .relative()
+                .flex_none()
+                .size(px(HERO_RING))
+                .child(crate::ring::ring(meter.share().unwrap_or(0.), HERO_RING, 4., theme.border, colour))
+                .child(
+                    div()
+                        .absolute()
+                        .top_0()
+                        .left_0()
+                        .size_full()
+                        .flex()
+                        .items_center()
+                        .justify_center()
+                        .typography(Type::Small)
+                        .font_weight(gpui::FontWeight::SEMIBOLD)
+                        .text_color(theme.text)
+                        .child(percent.map(|percent| format!("{}%", percent.round())).unwrap_or_else(|| "—".into())),
+                ),
+        )
+        .child(
+            div()
+                .min_w_0()
+                .flex()
+                .flex_col()
+                .gap(px(1.))
+                .child(div().typography(Type::UiStrong).text_color(theme.text).child("Context window"))
+                .child(div().typography(Type::Small).text_color(theme.text_dim).child(used_words))
+                .children(left_words.map(|(words, colour)| div().typography(Type::Small).text_color(colour).child(words))),
+        );
+    let part_colour = |kind: Kind| -> Hsla {
+        match kind {
+            Kind::Instructions => theme.parts[0],
+            Kind::Tools => theme.parts[1],
+            Kind::Project => theme.parts[2],
+            Kind::Skills => theme.parts[3],
+            Kind::Memory => theme.parts[4],
+            Kind::Summary => theme.parts[5],
+            Kind::Messages => theme.accent,
+            Kind::ToolResults => theme.parts[6],
         }
-        if activity_pill.is_some() || todo_pill.is_some() || waiting_pill.is_some() || tasks_pill.is_some() || agents_pill.is_some() {
-            column = column.child(
+    };
+    let whole = window.unwrap_or(meter.tokens.max(1)) as f32;
+    let mut bar = div().mt(px(14.)).h(px(8.)).w_full().rounded_full().overflow_hidden().flex().bg(theme.hover);
+    if meter.parts.is_empty() {
+        bar = bar.child(div().h_full().w(gpui::relative(meter.share().unwrap_or(0.))).bg(colour));
+    } else {
+        for part in &meter.parts {
+            bar = bar.child(div().h_full().w(gpui::relative((part.tokens as f32 / whole).min(1.))).bg(part_colour(part.kind)));
+        }
+    }
+    let share_words = |tokens: u64| -> String {
+        match window {
+            Some(window) => {
+                let percent = tokens as f32 / window as f32 * 100.;
+                if percent > 0. && percent < 0.05 { "<0.1%".into() } else { format!("{percent:.1}%") }
+            }
+            None => String::new(),
+        }
+    };
+    let mut rows = div().mt(px(10.)).flex().flex_col();
+    if meter.parts.is_empty() {
+        rows = rows.child(
+            div().px(px(4.)).py(px(4.)).typography(Type::Small).text_color(theme.text_faint).child("What each part holds arrives after the next reply."),
+        );
+    }
+    for (index, part) in meter.parts.iter().enumerate() {
+        let kind = part.kind;
+        let opens = part.pieces.len() > 1;
+        let is_open = opens && open.contains(&kind);
+        let toggle = hover.clone();
+        rows = rows.child(
+            div()
+                .id(("context-part", index))
+                .h(px(26.))
+                .px(px(6.))
+                .rounded(px(8.))
+                .flex()
+                .items_center()
+                .gap(px(8.))
+                .when(opens, |row| {
+                    row.cursor_pointer().hover(|row| row.bg(theme.hover)).on_click(move |_, _, cx| {
+                        toggle.update(cx, |state, cx| {
+                            match state.open.iter().position(|open| *open == kind) {
+                                Some(at) => {
+                                    state.open.remove(at);
+                                }
+                                None => state.open.push(kind),
+                            }
+                            cx.notify();
+                        });
+                    })
+                })
+                .child(div().flex_none().size(px(8.)).rounded_full().bg(part_colour(kind)))
+                .child(div().flex_1().min_w_0().truncate().typography(Type::Small).text_color(theme.text_soft).child(kind.label()))
+                .child(div().flex_none().typography(Type::Small).text_color(theme.text).child(count(part.tokens)))
+                .child(div().flex_none().w(px(42.)).flex().justify_end().typography(Type::Small).text_color(theme.text_faint).child(share_words(part.tokens)))
+                .child(div().flex_none().w(px(10.)).children(opens.then(|| if is_open { Icon::ChevronDown } else { Icon::ChevronRight }.view(px(10.), theme.text_faint))))
+                .tag("context-part"),
+        );
+        if is_open {
+            let mut pieces = div().pl(px(22.)).pr(px(22.)).pb(px(4.)).flex().flex_col();
+            for (name, tokens) in &part.pieces {
+                pieces = pieces.child(
+                    div()
+                        .h(px(20.))
+                        .flex()
+                        .items_center()
+                        .gap(px(8.))
+                        .child(div().flex_1().min_w_0().truncate().typography(Type::Small).text_color(theme.text_dim).child(name.clone()))
+                        .child(div().flex_none().typography(Type::Small).text_color(theme.text_dim).child(count(*tokens))),
+                );
+            }
+            rows = rows.child(pieces);
+        }
+    }
+    let foot = div()
+        .mt(px(10.))
+        .pt(px(10.))
+        .border_t_1()
+        .border_color(theme.border)
+        .flex()
+        .items_center()
+        .gap(px(10.))
+        .child(
+            div()
+                .flex_1()
+                .min_w_0()
+                .typography(Type::Small)
+                .text_color(theme.text_faint)
+                .child(if working { "Compacting waits for the agent to finish." } else { "Compacting summarises older turns to free room." }),
+        )
+        .when(meter.can_compact && !working, |foot| {
+            foot.child(
                 div()
+                    .id("compact")
                     .flex_none()
-                    .px(px(4.))
+                    .h(px(28.))
+                    .px(px(12.))
+                    .rounded_full()
                     .flex()
                     .items_center()
-                    .gap(px(6.))
-                    .children(activity_pill)
-                    .children(background_pill)
-                    .children(todo_pill)
-                    .child(div().flex_1())
-                    .children(agents_pill)
-                    .children(tasks_pill)
-                    .children(waiting_pill),
-            );
-        }
-        column.child(div().flex_none().child(card)).into_any_element()
-    }
+                    .bg(theme.accent_wash)
+                    .border_1()
+                    .border_color(theme.accent_line)
+                    .cursor_pointer()
+                    .hover(|button| button.bg(theme.hover))
+                    .typography(Type::Small)
+                    .font_weight(gpui::FontWeight::SEMIBOLD)
+                    .text_color(theme.accent_text)
+                    .on_click(dispatch(Compact))
+                    .child("Compact")
+                    .tag("compact"),
+            )
+        });
+    div()
+        .w(px(CONTEXT_WIDTH))
+        .p(px(16.))
+        .rounded(px(18.))
+        .bg(theme.raised)
+        .border_1()
+        .border_color(theme.border)
+        .shadow_lg()
+        .child(hero)
+        .child(bar)
+        .child(rows)
+        .child(foot)
+        .tag("context-popover")
 }
 
 /// The composer card's corners, the space above its field, and between the field and the bar.
@@ -593,8 +964,8 @@ const CARD_GAP: f32 = 10.;
 const MODEL_MIN: f32 = 64.;
 /// How far above its pill a picker's popover opens.
 const PICKER_GAP: f32 = 6.;
-/// A status pill's height.
-const STATUS_HEIGHT: f32 = 26.;
+/// The status line's height inside the card.
+const STATUS_HEIGHT: f32 = 22.;
 
 /// A thumbnail's side in the tray.
 const THUMB: f32 = 56.;
@@ -647,8 +1018,9 @@ fn comments_chip(count: usize, canvas: String, theme: &Theme) -> impl IntoElemen
         )
 }
 
-/// The pictures attached to the message, each with its remove button.
-fn tray(attachments: &[crate::attachments::Attachment], theme: &Theme) -> impl IntoElement {
+/// What is attached to the message: each picture with its remove button, and each long paste as
+/// a file, which can go back into the field as text.
+fn tray(attachments: &[crate::attachments::Attachment], pasted: &[crate::attachments::PastedText], theme: &Theme) -> impl IntoElement {
     let thumbs = attachments.iter().enumerate().map(|(index, attachment)| {
         let (width, height) = attachment.size;
         div()
@@ -665,89 +1037,141 @@ fn tray(attachments: &[crate::attachments::Attachment], theme: &Theme) -> impl I
                     .border_1()
                     .border_color(theme.border),
             )
+            .child(remove_button(("remove-attachment", index), RemoveAttachment { index }, "remove-attachment", theme))
+    });
+    let files = pasted.iter().enumerate().map(|(index, file)| {
+        let lines = file.lines();
+        div()
+            .id(("pasted", index))
+            .group("pasted")
+            .relative()
+            .flex_none()
+            .h(px(THUMB))
+            .pl(px(12.))
+            .pr(px(14.))
+            .rounded(px(12.))
+            .flex()
+            .items_center()
+            .gap(px(10.))
+            .bg(theme.raised)
+            .border_1()
+            .border_color(theme.border)
+            .child(Icon::File.view(px(16.), theme.text_dim))
             .child(
                 div()
-                    .id(("remove-attachment", index))
-                    .absolute()
-                    .top(px(-6.))
-                    .right(px(-6.))
-                    .size(px(20.))
-                    .rounded_full()
+                    .flex()
+                    .flex_col()
+                    .child(div().typography(Type::Mono).text_color(theme.text).child(file.name.clone()))
+                    .child(
+                        div()
+                            .flex()
+                            .gap(px(8.))
+                            .typography(Type::Small)
+                            .child(div().text_color(theme.text_faint).child(if lines == 1 { "1 line".to_string() } else { format!("{lines} lines") }))
+                            .child(
+                                div()
+                                    .id(("insert-pasted", index))
+                                    .text_color(theme.accent_text)
+                                    .cursor_pointer()
+                                    .hover(|button| button.underline())
+                                    .on_click(dispatch(InsertPasted { index }))
+                                    .child("Insert as text")
+                                    .tag("insert-pasted"),
+                            ),
+                    ),
+            )
+            .child(remove_button(("remove-pasted", index), RemovePasted { index }, "remove-pasted", theme))
+    });
+    div().flex().flex_wrap().gap(px(8.)).pt(px(2.)).children(thumbs).children(files).tag("attachments")
+}
+
+/// The small round × on an attachment's corner.
+fn remove_button(id: (&'static str, usize), action: impl gpui::Action, tag: &'static str, theme: &Theme) -> impl IntoElement {
+    div()
+        .id(id)
+        .absolute()
+        .top(px(-6.))
+        .right(px(-6.))
+        .size(px(20.))
+        .rounded_full()
+        .flex()
+        .items_center()
+        .justify_center()
+        .bg(theme.raised)
+        .border_1()
+        .border_color(theme.border_strong)
+        .cursor_pointer()
+        .hover(|button| button.bg(theme.hover))
+        .on_click(dispatch(action))
+        .child(Icon::Close.view(px(10.), theme.text_soft))
+        .tag(tag)
+}
+
+/// A message written while the agent works, waiting at the foot of the chat: faint until the
+/// agent takes it. A queued one (`queued` is its place in the queue) can be sent as steering now,
+/// taken back to edit, or removed; steering is already on its way.
+fn waiting_bubble(index: usize, queued: Option<usize>, waiting: Waiting, working: bool, theme: &Theme) -> impl IntoElement {
+    let words = if waiting.steering { "Steering · reaches the agent at its next step" } else { "Queued · sends when the agent finishes" };
+    let action = |id: &'static str, words: &'static str, action: Box<dyn gpui::Action>| {
+        div()
+            .id((id, index))
+            .flex_none()
+            .typography(Type::Small)
+            .text_color(theme.text_dim)
+            .cursor_pointer()
+            .hover(|button| button.text_color(theme.text))
+            .on_click(move |_, window, cx| window.dispatch_action(action.boxed_clone(), cx))
+            .child(words)
+            .tag(id)
+    };
+    let actions = queued.map(|queue| {
+        div()
+            .flex()
+            .gap(px(12.))
+            .invisible()
+            .group_hover("waiting-bubble", |actions| actions.visible())
+            .when(working, |actions| actions.child(action("steer-queued", "Steer now", Box::new(SteerQueued { index: queue }))))
+            .child(action("unqueue", "Edit", Box::new(Unqueue { index: queue })))
+            .child(action("remove-queued", "Remove", Box::new(RemoveQueued { index: queue })))
+    });
+    div().w_full().flex().justify_end().pl(px(64.)).child(
+        div()
+            .id(("waiting", index))
+            .group("waiting-bubble")
+            .max_w(gpui::relative(0.82))
+            .px(px(14.))
+            .py(px(8.))
+            .rounded(px(16.))
+            .bg(Hsla { a: theme.surface.a * 0.55, ..theme.surface })
+            .border_1()
+            .border_color(theme.border)
+            .flex()
+            .flex_col()
+            .gap(px(3.))
+            .child(
+                div()
                     .flex()
                     .items_center()
-                    .justify_center()
-                    .bg(theme.raised)
-                    .border_1()
-                    .border_color(theme.border_strong)
-                    .cursor_pointer()
-                    .hover(|button| button.bg(theme.hover))
-                    .on_click(dispatch(RemoveAttachment { index }))
-                    .child(Icon::Close.view(px(10.), theme.text_soft))
-                    .tag("remove-attachment"),
+                    .gap(px(12.))
+                    .child(
+                        div()
+                            .flex_1()
+                            .min_w_0()
+                            .truncate()
+                            .typography(Type::Small)
+                            .text_color(if waiting.steering { theme.accent_text } else { theme.text_faint })
+                            .child(words),
+                    )
+                    .children(actions),
             )
-    });
-    div().flex().flex_wrap().gap(px(8.)).pt(px(2.)).children(thumbs).tag("attachments")
+            .child(div().typography(Type::Ui).text_color(theme.text_dim).line_clamp(3).child(waiting.text))
+            .tag("waiting-bubble"),
+    )
 }
 
 /// A round control in the composer's bar.
 fn pill(tag: &'static str) -> gpui::Stateful<gpui::Div> {
     div().id(tag).h(px(28.)).px(px(10.)).rounded_full().flex().items_center().gap(px(4.))
-}
-
-/// A status pill over the card that opens what it stands for (when `opens`); lit while open.
-fn status_pill(tag: &'static str, open: bool, opens: bool, theme: &Theme) -> gpui::Stateful<gpui::Div> {
-    div()
-        .id(tag)
-        .flex_none()
-        .h(px(STATUS_HEIGHT))
-        .px(px(12.))
-        .rounded_full()
-        .flex()
-        .items_center()
-        .gap(px(7.))
-        .bg(theme.surface)
-        .border_1()
-        .border_color(if open { theme.border_strong } else { theme.border })
-        .when(opens, |pill| pill.hover(|pill| pill.border_color(theme.border_strong)))
-}
-
-/// A message waiting above the card. A queued one can be taken back to edit.
-fn waiting_row(index: usize, waiting: Waiting, theme: &Theme) -> impl IntoElement {
-    div()
-        .id(("waiting", index))
-        .group("waiting")
-        .mx(px(4.))
-        .px(px(14.))
-        .py(px(6.))
-        .flex()
-        .items_center()
-        .gap(px(10.))
-        .rounded(px(14.))
-        .bg(theme.surface)
-        .border_1()
-        .border_color(theme.border)
-        .child(
-            div()
-                .flex_none()
-                .typography(Type::Small)
-                .text_color(if waiting.steering { theme.accent_text } else { theme.text_dim })
-                .child(if waiting.steering { "Steering" } else { "Next" }),
-        )
-        .child(div().flex_1().min_w_0().truncate().typography(Type::Ui).text_color(theme.text_soft).child(waiting.text))
-        .when(!waiting.steering && index != usize::MAX, |row| {
-            row.child(
-                div()
-                    .id(("unqueue", index))
-                    .flex_none()
-                    .invisible()
-                    .group_hover("waiting", |button| button.visible())
-                    .typography(Type::Small)
-                    .text_color(theme.text_dim)
-                    .hover(|button| button.text_color(theme.text))
-                    .on_click(dispatch(Unqueue { index }))
-                    .child("Edit"),
-            )
-        })
 }
 
 /// A background command above the card: how it stands, its last line, its output and Stop.
@@ -812,31 +1236,20 @@ fn task_row(task: TaskLine, theme: &Theme) -> impl IntoElement {
         })
 }
 
-/// "14%" of the context, and Compact beside it when there is something to compact.
-fn meter_view(meter: Meter, working: bool, theme: &Theme) -> impl IntoElement {
-    let colour: Hsla = if meter.high { theme.warning } else { theme.text_faint };
-    div()
-        .flex_none()
-        .flex()
-        .items_center()
-        .gap(px(8.))
-        .typography(Type::Small)
-        .child(div().id("meter").text_color(colour).tooltip(tip("How full the model’s context is")).child(meter.label))
-        .when(meter.can_compact && !working, |row| {
-            row.child(div().text_color(theme.text_faint).child("·")).child(
-                div()
-                    .id("compact")
-                    .text_color(if meter.high { theme.text_soft } else { theme.text_dim })
-                    .hover(|word| word.text_color(theme.accent_text))
-                    .on_click(dispatch(Compact))
-                    .child("Compact")
-                    .tag("compact"),
-            )
-        })
-}
-
 /// About three waiting messages; more scroll.
-const WAITING_MAX_HEIGHT: f32 = 118.;
+const WAITING_MAX_HEIGHT: f32 = 176.;
+/// About three running commands; more scroll.
+const TASKS_MAX_HEIGHT: f32 = 118.;
+/// The tab on the card's top edge: its height, and how far in from the card's left it sits.
+const TAB_HEIGHT: f32 = 30.;
+const TAB_INSET: f32 = 16.;
+/// The ring round Send, its stroke, and the button inside it.
+const RING: f32 = 36.;
+const RING_WIDTH: f32 = 2.5;
+const SEND: f32 = 28.;
+/// The context popover's width, and the ring at its head.
+const CONTEXT_WIDTH: f32 = 320.;
+const HERO_RING: f32 = 48.;
 /// The least an open question card keeps: its head, a little of its body, its buttons.
 const QUESTION_MIN_HEIGHT: f32 = 196.;
 

@@ -90,6 +90,8 @@ pub enum Icon {
     Tasks,
     /// The side panel at the window's right: hiding it.
     PanelRight,
+    /// Attaching files to a message.
+    Paperclip,
     /// Settings › Appearance.
     Palette,
     /// A connection to another service: Integrations, MCP servers.
@@ -108,6 +110,7 @@ const FILES: &[(&str, &[u8])] = &[
     ("icons/plug.svg", include_bytes!("../assets/icons/plug.svg")),
     ("icons/window.svg", include_bytes!("../assets/icons/window.svg")),
     ("icons/panel-right.svg", include_bytes!("../assets/icons/panel-right.svg")),
+    ("icons/paperclip.svg", include_bytes!("../assets/icons/paperclip.svg")),
     ("icons/code.svg", include_bytes!("../assets/icons/code.svg")),
     ("icons/archive.svg", include_bytes!("../assets/icons/archive.svg")),
     ("icons/unarchive.svg", include_bytes!("../assets/icons/unarchive.svg")),
@@ -215,6 +218,7 @@ impl Icon {
             Icon::Sliders => "icons/sliders.svg",
             Icon::Tasks => "icons/tasks.svg",
             Icon::PanelRight => "icons/panel-right.svg",
+            Icon::Paperclip => "icons/paperclip.svg",
             Icon::Palette => "icons/palette.svg",
             Icon::Plug => "icons/plug.svg",
             Icon::Window => "icons/window.svg",

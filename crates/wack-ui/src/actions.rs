@@ -141,7 +141,6 @@ actions!(
         /// Opens or folds the todo list from its status pill.
         ToggleTodos,
         /// Opens or folds the waiting messages from their status pill.
-        ToggleWaiting,
         /// Settings › Tools: turns unrestricted planning off, or asks before turning it on.
         ToggleUnrestrictedPlanning,
         ConfirmUnrestrictedPlanning,
@@ -727,6 +726,34 @@ pub struct StopAgent {
 #[derive(Clone, Debug, PartialEq, Action)]
 #[action(namespace = wackcode, no_json)]
 pub struct Unqueue {
+    pub index: usize,
+}
+
+/// Sends a queued message to the agent now, as steering, rather than after the run.
+#[derive(Clone, Debug, PartialEq, Action)]
+#[action(namespace = wackcode, no_json)]
+pub struct SteerQueued {
+    pub index: usize,
+}
+
+/// Drops a queued message unsent.
+#[derive(Clone, Debug, PartialEq, Action)]
+#[action(namespace = wackcode, no_json)]
+pub struct RemoveQueued {
+    pub index: usize,
+}
+
+/// Puts a pasted file's text into the composer's field instead.
+#[derive(Clone, Debug, PartialEq, Action)]
+#[action(namespace = wackcode, no_json)]
+pub struct InsertPasted {
+    pub index: usize,
+}
+
+/// Drops a pasted file from the message.
+#[derive(Clone, Debug, PartialEq, Action)]
+#[action(namespace = wackcode, no_json)]
+pub struct RemovePasted {
     pub index: usize,
 }
 

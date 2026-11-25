@@ -116,6 +116,8 @@ pub enum RunEvent {
     Agent(Event),
     /// The run is waiting for these MCP servers to start; an empty list when it no longer is.
     McpStarting(Vec<String>),
+    /// How full the model's context is now, part by part; sent just before `Finished`.
+    Context(Vec<wack_agent::context::Part>),
     /// The run is over. `context_tokens` is how full the model's context now is, when the
     /// session could be read.
     Finished {
@@ -421,6 +423,7 @@ async fn drive(mut agent: Agent, job: Job, control: Control, events: Arc<dyn Fn(
             .await
             .map(|()| Outcome::Done),
     };
+    events(RunEvent::Context(agent.context()));
     events(RunEvent::Finished { result, context_tokens: Some(agent.session().context_tokens()) });
 }
 

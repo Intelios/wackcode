@@ -465,12 +465,13 @@ pub fn entry_items(conversation: &Conversation, index: usize, scratchpad: &Path,
         items.push(Item::ChatDivider(at));
     }
     match entry {
-        Entry::Prompt { text, steered, pictures, .. } => items.push(Item::Prompt {
+        Entry::Prompt { text, steered, pictures, files, .. } => items.push(Item::Prompt {
             text: text.clone().into(),
             steered: *steered,
             command: None,
             suggestion: None,
             pictures: pictures.clone(),
+            files: files.iter().map(|(name, lines)| (name.clone().into(), *lines)).collect(),
         }),
         Entry::Compacted => items.push(Item::ChatTidied),
         Entry::Notice { text, failed } => items.push(Item::Notice { text: text.clone().into(), failed: *failed }),

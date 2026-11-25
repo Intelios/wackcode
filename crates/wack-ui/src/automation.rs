@@ -10,6 +10,7 @@
 //! {"cmd":"tree"}                                  the window size and every tagged element's bounds
 //! {"cmd":"screenshot","path":"/abs/file.png"}     writes what the window is showing
 //! {"cmd":"click","tag":"send"}                    also {"x":10,"y":20}; optional "count", "right"
+//! {"cmd":"hover","tag":"context-ring"}          the pointer moved there, no button; also x and y
 //! {"cmd":"drag","x":10,"y":20,"to_x":300,"to_y":20}   presses, moves in steps, releases
 //! {"cmd":"scroll","x":400,"y":300,"dy":600}      a wheel turn there; positive dy scrolls toward the top
 //! {"cmd":"type","text":"hello"}                   types into whatever has focus
@@ -82,6 +83,11 @@ enum Command {
         count: usize,
         #[serde(default)]
         right: bool,
+    },
+    Hover {
+        tag: Option<String>,
+        x: Option<f32>,
+        y: Option<f32>,
     },
     Drag {
         x: f32,
@@ -333,6 +339,25 @@ async fn run(command: Command, cx: &mut AsyncApp) -> Result<Value, String> {
             };
             on_window(window, cx, |window, cx| {
                 click(position, button, count, window, cx)
+            })?;
+            settle(window, cx).await;
+            Ok(json!({ "ok": true, "x": f32::from(position.x), "y": f32::from(position.y) }))
+        }
+        Command::Hover { tag, x, y } => {
+            let position = match (tag, x, y) {
+                (Some(name), _, _) => on_window(window, cx, |window, cx| {
+                    tags::tags(window, cx)
+                        .iter()
+                        .rev()
+                        .find(|tag| tag.name == name)
+                        .map(|tag| tag.bounds.center())
+                        .ok_or_else(|| format!("Nothing on screen is tagged \"{name}\"."))
+                })??,
+                (None, Some(x), Some(y)) => point(px(x), px(y)),
+                _ => return Err("A hover needs a tag, or both x and y.".into()),
+            };
+            on_window(window, cx, |window, cx| {
+                window.dispatch_event(PlatformInput::MouseMove(MouseMoveEvent { position, pressed_button: None, modifiers: Modifiers::default() }), cx);
             })?;
             settle(window, cx).await;
             Ok(json!({ "ok": true, "x": f32::from(position.x), "y": f32::from(position.y) }))

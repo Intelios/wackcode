@@ -89,7 +89,7 @@ pub fn entry_items(
     };
     {
         match entry {
-            Entry::Prompt { text, steered, command, suggestion, pictures } => {
+            Entry::Prompt { text, steered, command, suggestion, pictures, files } => {
                 let key = format!("prompt-{index}");
                 items.push(Item::Prompt {
                     text: text.clone().into(),
@@ -102,6 +102,7 @@ pub fn entry_items(
                     }),
                     suggestion: suggestion.as_ref().map(|started| suggestions::sent_label(started.origin.as_ref())),
                     pictures: pictures.clone(),
+                    files: files.iter().map(|(name, lines)| (name.clone().into(), *lines)).collect(),
                 })
             }
             Entry::Compacted => items.push(Item::Compacted),

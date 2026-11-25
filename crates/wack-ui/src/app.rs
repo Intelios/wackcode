@@ -50,6 +50,11 @@ use crate::{
     typography::Type,
 };
 
+/// Why a `/command` can't go with pasted files: the files would become its arguments.
+const PASTED_WITH_COMMAND: &str = "A command can't take pasted files. Remove them, or insert them as text.";
+
+/// Rows a composer grows to before it scrolls.
+pub const COMPOSER_ROWS: usize = 10;
 pub const NEW_CHAT_PLACEHOLDER: &str = "Describe a task, or ask about the code";
 /// The Chat area's composers: the hero's, and a chat's.
 pub const CHAT_AREA_PLACEHOLDER: &str = "Ask anything…";
@@ -64,6 +69,11 @@ const MENTION_LIMIT: usize = 8;
 const CHAT_AREA_COMMANDS: [&str; 4] = ["new", "name", "copy", "compact"];
 pub const PLAN_PLACEHOLDER: &str = "Describe the work — in Plan mode WackCode inspects and proposes a plan for your approval…";
 pub const ULTRA_PLAN_PLACEHOLDER: &str = "Describe the work — in Ultra Plan WackCode interviews you one question at a time…";
+
+/// What a new chat's empty composer says in Build: the project it will work in.
+pub fn new_chat_placeholder(project: &str) -> String {
+    format!("Ask about {project}, or describe a task…")
+}
 
 /// What an empty composer says: the planning modes explain themselves.
 pub fn placeholder(mode: AgentMode, new_chat: bool) -> &'static str {
@@ -103,11 +113,12 @@ pub struct DraftTab {
     pub project: Option<String>,
     text: String,
     attachments: Vec<crate::attachments::Attachment>,
+    pasted: Vec<crate::attachments::PastedText>,
 }
 
 impl DraftTab {
     fn blank(&self) -> bool {
-        self.text.trim().is_empty() && self.attachments.is_empty()
+        self.text.trim().is_empty() && self.attachments.is_empty() && self.pasted.is_empty()
     }
 }
 
@@ -169,6 +180,8 @@ pub struct AppState {
     pub draft: Entity<TextField>,
     /// Pictures attached to the new chat's first message.
     pub draft_attachments: Vec<crate::attachments::Attachment>,
+    /// Long pastes attached to it as text files.
+    pub draft_pasted: Vec<crate::attachments::PastedText>,
     /// The picture open over the window.
     pub lightbox: Option<crate::pictures::Lightbox>,
     /// The mode the new chat starts in.
@@ -324,7 +337,7 @@ impl AppState {
     }
 
     pub fn new(store: Store, cx: &mut Context<Self>) -> Self {
-        let draft = cx.new(|cx| TextField::new(Type::Body, NEW_CHAT_PLACEHOLDER, cx).multiline(14).takes_pictures());
+        let draft = cx.new(|cx| TextField::new(Type::Body, NEW_CHAT_PLACEHOLDER, cx).multiline(COMPOSER_ROWS).takes_pictures());
         let draft_subscription = cx.subscribe(&draft, |app, _, event, cx| match event {
             TextFieldEvent::Enter | TextFieldEvent::SendNow => app.start_chat(cx),
             TextFieldEvent::Changed => {
@@ -403,6 +416,7 @@ impl AppState {
             branches: HashMap::new(),
             draft,
             draft_attachments: Vec::new(),
+            draft_pasted: Vec::new(),
             lightbox: None,
             slash: None,
             slash_dismissed: None,
@@ -1585,6 +1599,7 @@ impl AppState {
             let back = self.parked_drafts.remove(&to).unwrap_or_default();
             self.draft.update(cx, |field, cx| field.set_text(&back, cx));
             self.draft_attachments.clear();
+            self.draft_pasted.clear();
         }
         match &selection {
             Selection::Chat(id) => {
@@ -1616,8 +1631,8 @@ impl AppState {
                 }
                 self.open_projects.insert(project.clone());
                 self.look_up_branch(project, cx);
-                let mode = self.new_chat_mode;
-                self.draft.update(cx, |draft, cx| draft.set_placeholder(placeholder(mode, true), cx));
+                let words = self.new_chat_words(project);
+                self.draft.update(cx, |draft, cx| draft.set_placeholder(words, cx));
             }
             Selection::NewChatArea => {
                 // A fresh visit gets its own idea chips.
@@ -1691,7 +1706,7 @@ impl AppState {
     fn add_draft(&mut self, project: Option<String>) -> u64 {
         let key = self.next_draft;
         self.next_draft += 1;
-        self.drafts.push(DraftTab { key, project, text: String::new(), attachments: Vec::new() });
+        self.drafts.push(DraftTab { key, project, text: String::new(), attachments: Vec::new(), pasted: Vec::new() });
         key
     }
 
@@ -1699,11 +1714,13 @@ impl AppState {
     fn park_draft(&mut self, cx: &App) {
         let text = self.draft.read(cx).text().to_string();
         let attachments = self.draft_attachments.clone();
+        let pasted = self.draft_pasted.clone();
         if let Some(key) = self.active_draft
             && let Some(draft) = self.drafts.iter_mut().find(|draft| draft.key == key)
         {
             draft.text = text;
             draft.attachments = attachments;
+            draft.pasted = pasted;
         }
     }
 
@@ -1712,6 +1729,7 @@ impl AppState {
         let Some(draft) = self.drafts.iter().find(|draft| draft.key == key).cloned() else { return };
         self.draft.update(cx, |field, cx| field.set_text(&draft.text, cx));
         self.draft_attachments = draft.attachments;
+        self.draft_pasted = draft.pasted;
         self.active_draft = Some(key);
     }
 
@@ -1764,6 +1782,7 @@ impl AppState {
         } else if let Some(last) = self.area_tabs().last().cloned() {
             self.draft.update(cx, |field, cx| field.set_text("", cx));
             self.draft_attachments.clear();
+            self.draft_pasted.clear();
             self.select(Selection::Chat(last), cx);
         } else {
             let key = self.add_draft(closed.project.clone());
@@ -2054,9 +2073,16 @@ impl AppState {
         };
         let text = self.draft.read(cx).text().trim().to_string();
         let pictures = self.draft_attachments.clone();
-        if text.is_empty() && pictures.is_empty() {
+        let pasted = self.draft_pasted.clone();
+        if text.is_empty() && pictures.is_empty() && pasted.is_empty() {
             return;
         }
+        if !pasted.is_empty() && text.starts_with('/') {
+            self.notice = Some(PASTED_WITH_COMMAND.into());
+            cx.notify();
+            return;
+        }
+        let text = crate::attachments::compose(&text, &pasted);
         let cwd = project.as_deref().and_then(|id| self.store.project(id)).map(|project| project.path.clone()).unwrap_or_else(|| PathBuf::from("/"));
         let outgoing = match &project {
             Some(_) => self.outgoing(None, &text, &cwd),
@@ -2137,6 +2163,7 @@ impl AppState {
         }
         self.draft.update(cx, |draft, cx| draft.set_text("", cx));
         self.draft_attachments.clear();
+        self.draft_pasted.clear();
         // The draft tab becomes the chat's tab.
         if let Some(key) = self.active_draft.take() {
             self.drafts.retain(|draft| draft.key != key);
@@ -2237,6 +2264,14 @@ impl AppState {
         }
     }
 
+    /// A new chat's placeholder in `project`: its name in Build, the planning modes' own words.
+    fn new_chat_words(&self, project: &str) -> String {
+        match (self.new_chat_mode, self.store.project(project)) {
+            (AgentMode::Build, Some(project)) => new_chat_placeholder(&project.name),
+            (mode, _) => placeholder(mode, true).to_string(),
+        }
+    }
+
     /// The pictures attached to `chat`'s message, or the new chat's.
     pub fn attachments(&self, chat: Option<&str>, cx: &App) -> Vec<crate::attachments::Attachment> {
         match chat {
@@ -2286,7 +2321,66 @@ impl AppState {
         };
         let Some(field) = field else { return };
         let pasted = field.update(cx, |field, _| field.take_pasted());
-        self.attach(chat, pasted, cx);
+        let (texts, pictures): (Vec<_>, Vec<_>) = pasted.into_iter().partition(|pasted| matches!(pasted, crate::text_field::Pasted::Text(_)));
+        if !texts.is_empty() {
+            let mut list = self.pasted(chat.as_deref(), cx);
+            for text in texts {
+                if let crate::text_field::Pasted::Text(text) = text {
+                    let file = crate::attachments::PastedText::new(&text, &list);
+                    list.push(file);
+                }
+            }
+            self.set_pasted(chat.as_deref(), list, cx);
+        }
+        self.attach(chat, pictures, cx);
+    }
+
+    /// The long pastes attached to `chat`'s message, or the new chat's.
+    pub fn pasted(&self, chat: Option<&str>, cx: &App) -> Vec<crate::attachments::PastedText> {
+        match chat {
+            Some(chat) => self.sessions.get(chat).map(|session| session.read(cx).pasted.clone()).unwrap_or_default(),
+            None => self.draft_pasted.clone(),
+        }
+    }
+
+    fn set_pasted(&mut self, chat: Option<&str>, pasted: Vec<crate::attachments::PastedText>, cx: &mut Context<Self>) {
+        match chat {
+            Some(chat) => {
+                if let Some(session) = self.sessions.get(chat) {
+                    session.update(cx, |session, cx| {
+                        session.pasted = pasted;
+                        cx.notify();
+                    });
+                }
+            }
+            None => self.draft_pasted = pasted,
+        }
+        cx.notify();
+    }
+
+    /// A pasted file's text back in the field, at the caret, in place of the file.
+    pub fn insert_pasted(&mut self, chat: Option<String>, index: usize, cx: &mut Context<Self>) {
+        let mut list = self.pasted(chat.as_deref(), cx);
+        if index >= list.len() {
+            return;
+        }
+        let file = list.remove(index);
+        self.set_pasted(chat.as_deref(), list, cx);
+        let field = match chat.as_deref() {
+            Some(chat) => self.sessions.get(chat).map(|session| session.read(cx).composer.clone()),
+            None => Some(self.draft.clone()),
+        };
+        if let Some(field) = field {
+            field.update(cx, |field, cx| field.insert_text(&file.text, cx));
+        }
+    }
+
+    pub fn remove_pasted(&mut self, chat: Option<String>, index: usize, cx: &mut Context<Self>) {
+        let mut list = self.pasted(chat.as_deref(), cx);
+        if index < list.len() {
+            list.remove(index);
+            self.set_pasted(chat.as_deref(), list, cx);
+        }
     }
 
     fn attach(&mut self, chat: Option<String>, sources: Vec<crate::text_field::Pasted>, cx: &mut Context<Self>) {
@@ -2299,6 +2393,7 @@ impl AppState {
                 .map(|source| match source {
                     crate::text_field::Pasted::File(path) => crate::attachments::Attachment::from_path(&path),
                     crate::text_field::Pasted::Picture(bytes) => crate::attachments::Attachment::from_bytes(bytes, "Pasted picture"),
+                    crate::text_field::Pasted::Text(_) => Err("Pasted text is attached as a file, not a picture.".into()),
                 })
                 .collect::<Vec<_>>()
         });
@@ -2452,9 +2547,10 @@ impl AppState {
             return;
         }
         match self.selection.clone() {
-            Selection::NewChat(_) => {
+            Selection::NewChat(project) => {
                 self.new_chat_mode = mode;
-                self.draft.update(cx, |draft, cx| draft.set_placeholder(placeholder(mode, true), cx));
+                let words = self.new_chat_words(&project);
+                self.draft.update(cx, |draft, cx| draft.set_placeholder(words, cx));
             }
             Selection::Chat(id) => {
                 if self.mode_on_screen(cx).1 {
@@ -2802,14 +2898,22 @@ impl AppState {
             return;
         };
         let composer = session.read(cx).composer.clone();
-        let mut text = composer.read(cx).text().trim().to_string();
+        let text = composer.read(cx).text().trim().to_string();
         let pictures = session.read(cx).attachments.clone();
+        let pasted = session.read(cx).pasted.clone();
         // Comments drafted on a canvas go with this message (`run`); alone, they send under a
         // stand-in line, since a message needs words.
         let comments = session.read(cx).canvases.draft_count() > 0;
-        if text.is_empty() && pictures.is_empty() && !comments {
+        if text.is_empty() && pictures.is_empty() && pasted.is_empty() && !comments {
             return;
         }
+        if !pasted.is_empty() && text.starts_with('/') {
+            session.update(cx, |session, cx| session.note(PASTED_WITH_COMMAND.into(), cx));
+            return;
+        }
+        // Long pastes go after the words, ahead of any chats referenced with `@`.
+        let text = crate::attachments::compose(&text, &pasted);
+        let mut text = text;
         if text.is_empty() && comments {
             text = COMMENTS_ONLY.to_string();
         }
@@ -2842,6 +2946,7 @@ impl AppState {
             composer.update(cx, |composer, cx| composer.set_text("", cx));
             session.update(cx, |session, cx| {
                 session.attachments.clear();
+                session.pasted.clear();
                 cx.notify();
             });
         };
@@ -2959,6 +3064,42 @@ impl AppState {
             let refs = restore(&session, vec![text], cx);
             self.keep_refs(chat, refs);
         }
+    }
+
+    /// A queued message sent to the agent now, as steering, rather than after the run. Only
+    /// words steer: a command, or a message with pictures, waits its turn.
+    pub fn steer_queued(&mut self, chat: &str, index: usize, cx: &mut Context<Self>) {
+        let Some(session) = self.sessions.get(chat).cloned() else {
+            return;
+        };
+        session.update(cx, |session, cx| {
+            let Some(text) = session.queue.get(index).cloned() else { return };
+            if !session.running() || session.compacting() {
+                return;
+            }
+            if text.starts_with('/') || session.queued_pictures.iter().any(|(queued, _)| *queued == text) {
+                session.note("Only words can steer: a command or a message with pictures waits for the agent to finish.".into(), cx);
+                return;
+            }
+            session.queue.remove(index);
+            session.sync_suggestion_queue(cx);
+            session.steer(text, cx);
+        });
+    }
+
+    /// A queued message dropped unsent, with any pictures it carried.
+    pub fn remove_queued(&mut self, chat: &str, index: usize, cx: &mut Context<Self>) {
+        let Some(session) = self.sessions.get(chat).cloned() else {
+            return;
+        };
+        session.update(cx, |session, cx| {
+            if index < session.queue.len() {
+                let text = session.queue.remove(index);
+                session.take_queued_pictures(&text);
+                session.sync_suggestion_queue(cx);
+                cx.notify();
+            }
+        });
     }
 
     /// What the cards of `chat`'s settled turns read their state from: dismissals and opened
@@ -4120,14 +4261,26 @@ fn restore(session: &Entity<ChatSession>, messages: Vec<String>, cx: &mut App) -
         cx.notify();
     });
     let mut refs = Vec::new();
+    let mut pasted = Vec::new();
     let messages: Vec<String> = messages
         .into_iter()
         .map(|message| {
             let (words, referenced) = wack_core::chat_refs::split(&message);
             refs.extend(referenced);
+            let (words, files) = crate::attachments::take(&words);
+            pasted.extend(files);
             words
         })
         .collect();
+    if !pasted.is_empty() {
+        session.update(cx, |session, cx| {
+            for file in pasted {
+                let file = crate::attachments::PastedText::new(&file.text, &session.pasted);
+                session.pasted.push(file);
+            }
+            cx.notify();
+        });
+    }
     let composer = session.read(cx).composer.clone();
     composer.update(cx, |composer, cx| {
         let mut parts = messages;

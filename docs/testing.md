@@ -41,6 +41,7 @@ ask() { echo "$1" | nc -U -w 5 target/automation.sock; }
 ask '{"cmd":"tree"}'                           # window size and every tag's bounds
 ask '{"cmd":"screenshot","path":"/abs/out.png"}'
 ask '{"cmd":"click","tag":"send"}'             # or {"x":10,"y":20}; optional "count", "right"
+ask '{"cmd":"hover","tag":"context-ring"}'     # the pointer moved there, no button: hover states, popovers
 ask '{"cmd":"drag","x":716,"y":250,"to_x":560,"to_y":250}'   # a dock edge, a divider, a pane tab
 ask '{"cmd":"scroll","x":700,"y":350,"dy":600}'   # a wheel turn; positive dy scrolls toward the top
 ask '{"cmd":"type","text":"hello"}'            # into whatever has focus (the window must be in front)

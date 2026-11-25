@@ -37,7 +37,15 @@ pub enum Item {
     /// What the user sent. A slash command shows as `command`, with `text` (the prompt the model
     /// got) behind its name. `suggestion` captions a message that started a suggested task.
     /// `pictures` are the ones the user attached, under the bubble.
-    Prompt { text: SharedString, steered: bool, command: Option<CommandShown>, suggestion: Option<SharedString>, pictures: Vec<crate::pictures::Picture> },
+    Prompt {
+        text: SharedString,
+        steered: bool,
+        command: Option<CommandShown>,
+        suggestion: Option<SharedString>,
+        pictures: Vec<crate::pictures::Picture>,
+        /// Long pastes sent with it: each file's name and line count.
+        files: Vec<(SharedString, usize)>,
+    },
     Work(Work),
     /// A reply's prose. `live`: still streaming in, so its newest words are fresh ink.
     Reply { blocks: Rc<Vec<markdown::Block>>, live: bool },
@@ -306,7 +314,7 @@ pub fn item(item: &Item, previous: Option<&Item>, theme: &Theme, handlers: &Hand
         return div().pt(px(gap_above(item, previous))).child(body).into_any_element();
     }
     let body = match item {
-        Item::Prompt { text, steered, command, suggestion, pictures } => {
+        Item::Prompt { text, steered, command, suggestion, pictures, files } => {
             let bubble = div()
                 .max_w(relative(BUBBLE_SHARE))
                 .px(px(14.))
@@ -334,6 +342,9 @@ pub fn item(item: &Item, previous: Option<&Item>, theme: &Theme, handlers: &Hand
                 })
                 .when(!pictures.is_empty(), |prompt| {
                     prompt.child(crate::pictures::Strip { pictures: pictures.clone(), key: format!("prompt-{}", pictures[0].key).into(), align_end: true })
+                })
+                .when(!files.is_empty(), |prompt| {
+                    prompt.child(div().flex().flex_wrap().justify_end().gap(px(6.)).children(files.iter().map(|(name, lines)| pasted_chip(name, *lines, theme))))
                 })
                 .when(!text.is_empty() || command.is_some(), |prompt| prompt.child(bubble))
                 .when_some(suggestion.as_ref(), |prompt, caption| {
@@ -1106,6 +1117,23 @@ impl RenderOnce for Transcript {
         }
         column
     }
+}
+
+/// A long paste that went with a message, as its bubble shows it.
+fn pasted_chip(name: &SharedString, lines: usize, theme: &Theme) -> impl IntoElement {
+    div()
+        .h(px(34.))
+        .px(px(12.))
+        .rounded(px(10.))
+        .flex()
+        .items_center()
+        .gap(px(8.))
+        .bg(theme.hover)
+        .border_1()
+        .border_color(theme.border)
+        .child(Icon::File.view(px(13.), theme.text_dim))
+        .child(div().typography(Type::Mono).text_color(theme.text_soft).child(name.clone()))
+        .child(div().typography(Type::Small).text_color(theme.text_faint).child(if lines == 1 { "1 line".to_string() } else { format!("{lines} lines") }))
 }
 
 #[cfg(test)]

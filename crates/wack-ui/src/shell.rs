@@ -45,13 +45,13 @@ use gpui::{AnimationExt as _,
 
 use crate::{
     actions::{
-        self, ActivatePane, AddFolder, Back, ChooseBackdrop, ChooseEffort, SlideEffort, ToggleTodos, ToggleWaiting, ChooseFocus, ClearCommandOutput, CloseCommandEditor, CycleAgentMode, SetAgentMode, PickOption, ShowQuestion, NextQuestion, PreviousQuestion, SubmitAnswers, CancelQuestion, WrapUpQuestion, ShowDoneTodos, DiscardPlan, KeepPlan, ConfirmDiscardPlan, ApprovePlan, SavePlan, CopyPlan, ToggleUnrestrictedPlanning, ToggleWebFetch, ToggleWebSearch, ToggleRouteFetch, CloseSearchEditor, SaveSearchProvider, TestSearchProvider, AskDeleteSearchProvider, ConfirmDeleteSearchProvider, CancelDeleteSearchProvider, ResetWebUsage, ChooseSearchProvider, AddSearchProvider, EditSearchProvider, ChooseSearchKey, ChooseSearchMethod, AddMcpServer, EditMcpServer, ToggleMcpServer, ToggleMcpTool, ExpandMcpServer, TestMcpServer, AskDeleteMcpServer, RemoveMcpEntry, ChooseMcpTransport, ChooseMcpScope, ToggleMcpProject, CloseMcpEditor, SaveMcpServer, TestMcpDraft, AddMcpEntry, ConfirmDeleteMcpServer, CancelDeleteMcpServer, ConfirmUnrestrictedPlanning, CancelUnrestrictedPlanning, ToggleMemory, SwitchProjectMemory, NewMemory, EditMemory, ChooseMemoryKind, SaveMemory, CloseMemoryEditor, AskDeleteMemory, AskRemoveMemoryFolder, ConfirmMemoryDelete, CancelMemoryDelete, RevealMemory, ToggleCommitAttribution, ToggleUsageRecording, RevealUsageFolder,
+        self, ActivatePane, AddFolder, Back, ChooseBackdrop, ChooseEffort, SlideEffort, ToggleTodos, ChooseFocus, ClearCommandOutput, CloseCommandEditor, CycleAgentMode, SetAgentMode, PickOption, ShowQuestion, NextQuestion, PreviousQuestion, SubmitAnswers, CancelQuestion, WrapUpQuestion, ShowDoneTodos, DiscardPlan, KeepPlan, ConfirmDiscardPlan, ApprovePlan, SavePlan, CopyPlan, ToggleUnrestrictedPlanning, ToggleWebFetch, ToggleWebSearch, ToggleRouteFetch, CloseSearchEditor, SaveSearchProvider, TestSearchProvider, AskDeleteSearchProvider, ConfirmDeleteSearchProvider, CancelDeleteSearchProvider, ResetWebUsage, ChooseSearchProvider, AddSearchProvider, EditSearchProvider, ChooseSearchKey, ChooseSearchMethod, AddMcpServer, EditMcpServer, ToggleMcpServer, ToggleMcpTool, ExpandMcpServer, TestMcpServer, AskDeleteMcpServer, RemoveMcpEntry, ChooseMcpTransport, ChooseMcpScope, ToggleMcpProject, CloseMcpEditor, SaveMcpServer, TestMcpDraft, AddMcpEntry, ConfirmDeleteMcpServer, CancelDeleteMcpServer, ConfirmUnrestrictedPlanning, CancelUnrestrictedPlanning, ToggleMemory, SwitchProjectMemory, NewMemory, EditMemory, ChooseMemoryKind, SaveMemory, CloseMemoryEditor, AskDeleteMemory, AskRemoveMemoryFolder, ConfirmMemoryDelete, CancelMemoryDelete, RevealMemory, ToggleCommitAttribution, ToggleUsageRecording, RevealUsageFolder,
         ChooseBlur, ChooseDim, ChooseFormat, OpenCommandEditor, OpenConnectionForm, CloseConnectionForm, SwitchConnection, ChooseMode, ChooseModel, ChooseTexture, ChooseTheme, CloseChatTab, CloseMenu, ClosePane,
         ClosePaneId, CloseSettings, CloseTab, Compact, DeleteChat, DiscardConnection, EditConnection, ToggleConnectionKey, EqualizeSplit, FocusNext, FocusPrevious, MovePane, AddModelRow, RemoveModelRow, SaveCommandEditor, SaveConnection,
         NewChat, NewChatIn, SelectDraft, CloseDraft, NewTerminal, NewTerminalWith, TogglePaneMenu, ClosePaneMenu, HideSidePanel, ToggleSidePanel, RevealProject, OpenPaneKind, NextTab, OpenEffortMenu, OpenModelMenu, OpenSettings,
         OpenSettingsSection, PinProject, PreviousTab, RemoveConnection, RemovePicture, ShowCommandOutput, ShowPicture, RemoveProject, ResetDockSize,
         PickCommand, SelectChat, Send, Stop, StopCommand, MoveToBackground, ToggleTasks, ToggleTasksPane, StopTask, ShowTask, ToggleAgentsPane, ToggleBrowserPane, ToggleCanvasPane, ShowCanvas, WriteInComposer, ShowAgent, StopAgent, ToggleChanges, ToggleProject, ToggleSidebar, ToggleTerminal, TriggerProjectCommand, Unqueue,
-        ToggleAutoTitles, ToggleTitleModels, ChooseTitleModel, RenameChat, RenameChatAt, CancelRename, ToggleModelReasoning, ToggleModelRow, ToggleModelVision, AttachPictures, AttachFiles, RemoveAttachment, OpenPicture, ClosePicture, StepPicture, ZoomPicture,
+        ToggleAutoTitles, ToggleTitleModels, ChooseTitleModel, RenameChat, RenameChatAt, CancelRename, ToggleModelReasoning, ToggleModelRow, ToggleModelVision, AttachPictures, AttachFiles, RemoveAttachment, InsertPasted, RemovePasted, SteerQueued, RemoveQueued, OpenPicture, ClosePicture, StepPicture, ZoomPicture,
         StartSuggestion, DismissSuggestion, CopySuggestion, OpenChat,
         ArchiveChat, ArchiveCurrentChat, ClearSearch, RevealScratchpadFile, DeleteAllArchived, DeleteArchivedChat, ToggleArchived, UnarchiveChat,
         ToggleModelEffort, SwitchSkill, SwitchSkillFolder, RemoveSkillFolder, OpenSkill, CopySkill, ChooseSkillUse, NewSkill, SaveSkill,
@@ -1165,6 +1165,8 @@ impl Render for Shell {
             tabs: self.tab_bounds.clone(),
             still: cx.reduce_motion(),
         };
+        // Files dragged in from the Finder land anywhere on a chat, not only on the composer.
+        let droppable = matches!(screen, Screen::NewChat { .. } | Screen::ChatHero { .. } | Screen::Chat { .. });
         let (strip, body) = match screen {
             Screen::Welcome { notice } => {
                 let ground = (clearness > 0.).then_some(Hsla { a: theme.cover(), ..theme.window });
@@ -1212,6 +1214,7 @@ impl Render for Shell {
             }
             Screen::Failed(message) => (div(), failed(message, &theme).into_any_element()),
         };
+        let body = if droppable { drop_zone(body, &theme).into_any_element() } else { body };
         // With the sidebar away, the strip makes room for the traffic lights and offers it back,
         // a clear step from the green light so the two are not mistaken for each other. While the
         // sidebar slides, that room opens and closes with it.
@@ -1743,7 +1746,6 @@ impl Render for Shell {
                     });
                 }))
                 .on_action(cx.listener(|shell, _: &ToggleTodos, _, cx| shell.with_session(cx, |session, cx| session.toggle_todos(cx))))
-                .on_action(cx.listener(|shell, _: &ToggleWaiting, _, cx| shell.with_session(cx, |session, cx| session.toggle_waiting(cx))))
                 .on_action(cx.listener(|shell, _: &ToggleTasks, _, cx| shell.with_session(cx, |session, cx| session.toggle_tasks(cx))))
                 .on_action(cx.listener(|shell, _: &MoveToBackground, _, cx| {
                     shell.with_session(cx, |session, cx| {
@@ -1875,6 +1877,34 @@ impl Render for Shell {
                             app.attach_paths(chat, paths, cx);
                         }
                     });
+                }))
+                .on_action(cx.listener(|shell, action: &InsertPasted, _, cx| {
+                    let index = action.index;
+                    shell.with_app(cx, |app, cx| {
+                        if let Some(chat) = app.composing_in() {
+                            app.insert_pasted(chat, index, cx);
+                        }
+                    });
+                }))
+                .on_action(cx.listener(|shell, action: &RemovePasted, _, cx| {
+                    let index = action.index;
+                    shell.with_app(cx, |app, cx| {
+                        if let Some(chat) = app.composing_in() {
+                            app.remove_pasted(chat, index, cx);
+                        }
+                    });
+                }))
+                .on_action(cx.listener(|shell, action: &SteerQueued, _, cx| {
+                    if let Some(chat) = shell.selected_chat(cx) {
+                        let index = action.index;
+                        shell.with_app(cx, |app, cx| app.steer_queued(&chat, index, cx));
+                    }
+                }))
+                .on_action(cx.listener(|shell, action: &RemoveQueued, _, cx| {
+                    if let Some(chat) = shell.selected_chat(cx) {
+                        let index = action.index;
+                        shell.with_app(cx, |app, cx| app.remove_queued(&chat, index, cx));
+                    }
                 }))
                 .on_action(cx.listener(|shell, action: &RemoveAttachment, _, cx| {
                     let index = action.index;
@@ -2332,11 +2362,13 @@ fn live_view(app: &AppState, cx: &App) -> (SidebarData, Screen, StripData) {
                     archived: None,
                     input: Input::Field(app.draft.clone()),
                     model,
+                    connection: connection_name(resolved.as_ref()),
                     effort,
                     ultra_effort: is_ultra(resolved.as_ref()),
                     mode: AgentMode::Build,
                     key: "chat-area".into(),
                     meter: None,
+                    context_open: false,
                     working: false,
                     waiting: Vec::new(),
                     roomy: true,
@@ -2348,12 +2380,12 @@ fn live_view(app: &AppState, cx: &App) -> (SidebarData, Screen, StripData) {
                     todos: None,
                     activity: None,
                     todos_open: false,
-                    waiting_open: false,
                     tasks: Vec::new(),
                     tasks_open: false,
+                    changes: None,
                     foreground: false,
-                    agents: 0,
                     attachments: app.draft_attachments.clone(),
+                    pasted: app.draft_pasted.clone(),
                     pictures_refused: app.pictures_refused_for(&choice, app.draft_attachments.len()).map(Into::into),
                     comments: None,
                     sent_at: app.sent_at,
@@ -2373,11 +2405,13 @@ fn live_view(app: &AppState, cx: &App) -> (SidebarData, Screen, StripData) {
                         archived: None,
                         input: Input::Field(app.draft.clone()),
                         model,
+                        connection: connection_name(resolved.as_ref()),
                         effort,
                         ultra_effort: is_ultra(resolved.as_ref()),
                         mode: app.new_chat_mode,
                         key: "new-chat".into(),
                         meter: None,
+                        context_open: false,
                         working: false,
                         waiting: Vec::new(),
                         roomy: true,
@@ -2389,12 +2423,12 @@ fn live_view(app: &AppState, cx: &App) -> (SidebarData, Screen, StripData) {
                         todos: None,
                         activity: None,
                         todos_open: false,
-                        waiting_open: false,
                         tasks: Vec::new(),
                         tasks_open: false,
+                        changes: None,
                         foreground: false,
-                        agents: 0,
                         attachments: app.draft_attachments.clone(),
+                        pasted: app.draft_pasted.clone(),
                         pictures_refused: app.pictures_refused_for(&choice, app.draft_attachments.len()).map(Into::into),
                         comments: None,
                         sent_at: app.sent_at,
@@ -2413,7 +2447,7 @@ fn live_view(app: &AppState, cx: &App) -> (SidebarData, Screen, StripData) {
             let (model, effort) = model_words(resolved.as_ref());
             let state = session.read(cx);
             let window = resolved.as_ref().and_then(|resolved| resolved.model.context_window);
-            let meter = state.context_tokens.map(|tokens| meter(tokens, window, !state.is_empty()));
+            let meter = state.context_tokens.map(|tokens| meter(tokens, window, !state.is_empty(), state.context_parts.clone()));
             let mut waiting: Vec<Waiting> =
                 state.steering.iter().map(|text| Waiting { text: first_line(text), steering: true }).collect();
             waiting.extend(state.queue.iter().map(|text| Waiting { text: first_line(text), steering: false }));
@@ -2426,11 +2460,13 @@ fn live_view(app: &AppState, cx: &App) -> (SidebarData, Screen, StripData) {
                     archived: (chat.is_archived()).then(|| chat.id.clone().into()),
                     input: Input::Field(state.composer.clone()),
                     model,
+                    connection: connection_name(resolved.as_ref()),
                     effort,
                     ultra_effort: is_ultra(resolved.as_ref()),
                     mode: chat.mode,
                     key: chat.id.clone().into(),
                     meter,
+                    context_open: false,
                     working: state.running(),
                     waiting,
                     roomy: false,
@@ -2453,12 +2489,12 @@ fn live_view(app: &AppState, cx: &App) -> (SidebarData, Screen, StripData) {
                     },
                     activity: state.running().then(|| state.activity()).flatten(),
                     todos_open: state.todos_open,
-                    waiting_open: state.waiting_open,
                     tasks: task_lines(&state.tasks),
                     tasks_open: state.tasks_open,
+                    changes: state.changes,
                     foreground: state.tasks.has_foreground() || state.agents.active().iter().any(|info| !info.background),
-                    agents: state.agents.active().len(),
                     attachments: state.attachments.clone(),
+                    pasted: state.pasted.clone(),
                     pictures_refused: app.pictures_refused_for(&chat.choice, state.attachments.len()).map(Into::into),
                     comments: {
                         let count: usize = state.comment_drafts.iter().map(|(_, n)| n).sum();
@@ -2591,26 +2627,64 @@ pub fn model_name(id: &str) -> String {
     id.rsplit('/').next().unwrap_or(id).to_string()
 }
 
-/// "14%" of the window, or "41.2k tokens" when the model's window is unknown (the composer
-/// says what it measures in a tooltip). Compact is offered
-/// once there is enough to be worth summarising.
-fn meter(tokens: u64, window: Option<u64>, has_messages: bool) -> Meter {
-    match window.filter(|window| *window > 0) {
+/// A chat that takes files dropped anywhere on it: while they hover, a frosted sheet over the
+/// column says where they will go.
+fn drop_zone(body: gpui::AnyElement, theme: &Theme) -> impl IntoElement {
+    div()
+        .id("chat-drop")
+        .group("chat-drop")
+        .relative()
+        .size_full()
+        .on_drop(|paths: &gpui::ExternalPaths, window, cx| {
+            window.dispatch_action(Box::new(actions::AttachFiles { paths: paths.paths().to_vec() }), cx);
+        })
+        .child(body)
+        .child(
+            div()
+                .absolute()
+                .top_0()
+                .left_0()
+                .size_full()
+                .p(px(14.))
+                .invisible()
+                .group_drag_over::<gpui::ExternalPaths>("chat-drop", |sheet| sheet.visible())
+                .child(
+                    div()
+                        .size_full()
+                        .rounded(px(18.))
+                        .border_2()
+                        .border_color(theme.accent_line)
+                        .bg(Hsla { a: 0.86, ..theme.window })
+                        .flex()
+                        .flex_col()
+                        .items_center()
+                        .justify_center()
+                        .gap(px(10.))
+                        .child(Icon::Paperclip.view(px(26.), theme.accent_text))
+                        .child(div().typography(Type::Heading).text_color(theme.text).child("Drop to attach"))
+                        .child(div().typography(Type::Small).text_color(theme.text_dim).child("Pictures go with your next message")),
+                ),
+        )
+}
+
+/// How full the context is for the ring round Send: getting full from 80% (the agent compacts
+/// on its own there), and worth compacting by hand from a quarter (or 50k tokens when the
+/// model's window is unknown).
+fn meter(tokens: u64, window: Option<u64>, has_messages: bool, parts: Vec<wack_core::context::Part>) -> Meter {
+    let window = window.filter(|window| *window > 0);
+    let (high, can_compact) = match window {
         Some(window) => {
             let percent = tokens as f32 / window as f32 * 100.;
-            let label = if percent > 0. && percent < 1. {
-                "<1%".to_string()
-            } else {
-                format!("{}%", percent.round().min(100.))
-            };
-            Meter { label: label.into(), high: percent >= 80., can_compact: has_messages && percent >= 25. }
+            (percent >= wack_core::context::COMPACT_AT_PERCENT as f32, has_messages && percent >= 25.)
         }
-        None => Meter {
-            label: format!("{} tokens", crate::work::count(tokens)).into(),
-            high: false,
-            can_compact: has_messages && tokens >= 50_000,
-        },
-    }
+        None => (false, has_messages && tokens >= 50_000),
+    };
+    Meter { tokens, window, high, can_compact, parts }
+}
+
+/// The connection's name, for the mark on the model's pill.
+fn connection_name(resolved: Option<&wack_core::Resolved>) -> SharedString {
+    resolved.map(|resolved| resolved.connection.name.clone().into()).unwrap_or_default()
 }
 
 /// What a pane lies on when there is no picture to frost.
@@ -3595,27 +3669,27 @@ mod tests {
     use super::*;
 
     #[test]
-    fn the_meter_reads_as_a_share_and_offers_compact_from_a_quarter() {
-        let small = meter(4_000, Some(1_000_000), true);
-        assert_eq!(small.label.as_ref(), "<1%");
+    fn the_meter_fills_as_a_share_and_offers_compact_from_a_quarter() {
+        let meter = |tokens, window| meter(tokens, window, true, Vec::new());
+        let small = meter(4_000, Some(1_000_000));
+        assert_eq!(small.share(), Some(0.004));
         assert!(!small.can_compact && !small.high);
 
-        let quarter = meter(250_000, Some(1_000_000), true);
-        assert_eq!(quarter.label.as_ref(), "25%");
+        let quarter = meter(250_000, Some(1_000_000));
         assert!(quarter.can_compact);
-        assert!(!meter(250_000, Some(1_000_000), false).can_compact, "nothing to compact in an empty chat");
+        assert!(!super::meter(250_000, Some(1_000_000), false, Vec::new()).can_compact, "nothing to compact in an empty chat");
 
-        assert!(meter(850_000, Some(1_000_000), true).high);
-        assert_eq!(meter(0, Some(1_000), true).label.as_ref(), "0%");
-        assert_eq!(meter(2_000_000, Some(1_000_000), true).label.as_ref(), "100%");
+        assert!(meter(850_000, Some(1_000_000)).high, "from where the agent compacts on its own");
+        assert!(!meter(790_000, Some(1_000_000)).high);
+        assert_eq!(meter(2_000_000, Some(1_000_000)).share(), Some(1.), "a share never passes full");
     }
 
     #[test]
-    fn without_a_window_the_meter_counts_tokens() {
-        let unknown = meter(41_200, None, true);
-        assert_eq!(unknown.label.as_ref(), "41.2k tokens");
+    fn without_a_window_the_meter_has_no_share() {
+        let unknown = meter(41_200, None, true, Vec::new());
+        assert_eq!(unknown.share(), None);
         assert!(!unknown.can_compact);
-        assert!(meter(60_000, Some(0), true).can_compact, "a zero window counts as unknown");
+        assert!(meter(60_000, Some(0), true, Vec::new()).can_compact, "a zero window counts as unknown");
     }
 
     #[test]

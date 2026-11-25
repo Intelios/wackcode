@@ -207,6 +207,11 @@ pub struct Theme {
     /// bright eight. Their own hues, leaning slightly towards the accent; never muted, because
     /// red and green in a terminal carry meaning.
     pub ansi: [Hsla; 16],
+    /// The context popover's parts, in `wack_core::context::Kind` order less Messages (which is
+    /// the accent: the conversation is the user's): WackCode's instructions, tools, project
+    /// instructions, skills, memory, summary, tool results. Fixed hues, quiet next to the accent,
+    /// so what is always sent recedes and the conversation stands out.
+    pub parts: [Hsla; 7],
 
     /// How much of the window's colour lies over a picture behind the window, 0 to 1: the user's
     /// dim, exactly. 0 with none.
@@ -492,6 +497,10 @@ impl Theme {
             dock: hsla(surface(&ramp.sidebar)),
             terminal_text: hsla(neutral(&ramp.text_body)),
             ansi,
+            parts: [(255., 0.025), (290., 0.09), (40., 0.1), (160., 0.09), (320., 0.08), (220., 0.04), (80., 0.1)].map(|(hue, chroma)| {
+                let (l, c) = if dark { (0.72, chroma) } else { (0.6, chroma * 1.2) };
+                hsla(Lch::new(l, c, hue))
+            }),
             veil: veil as f32,
             glass: glass as f32,
             glass_tone: hsla(glass_tone),

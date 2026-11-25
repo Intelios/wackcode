@@ -52,7 +52,7 @@ use crate::{
 };
 
 /// Compaction starts when the conversation fills this share of the model's context window.
-const COMPACT_AT_PERCENT: u64 = 80;
+pub const COMPACT_AT_PERCENT: u64 = 80;
 /// The conversation text sent to the summariser when the window's size is unknown.
 const DEFAULT_SUMMARY_BUDGET_CHARS: usize = 300_000;
 const STOPPED: &str = "Stopped by the user before this tool finished.";
@@ -650,6 +650,23 @@ impl Agent {
             feature.before_request(&mut request);
         }
         request
+    }
+
+    /// What the next request would hold, part by part, adding up to [`Session::context_tokens`]
+    /// (`crate::context`).
+    pub fn context(&self) -> Vec<crate::context::Part> {
+        let mut request = Request {
+            model: self.settings.model.clone(),
+            system: self.system.clone(),
+            messages: self.session.messages().to_vec(),
+            tools: self.registry.defs(self.session.loaded_tools(), self.provider.native_tool_search()),
+            max_output_tokens: None,
+            effort: None,
+        };
+        for feature in &self.features {
+            feature.before_request(&mut request);
+        }
+        crate::context::breakdown(&request, self.session.context_tokens())
     }
 
     fn over_threshold(&self) -> bool {

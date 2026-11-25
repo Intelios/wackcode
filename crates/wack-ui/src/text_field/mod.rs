@@ -175,6 +175,9 @@ pub enum Pasted {
     Picture(Vec<u8>),
     /// A file copied in the Finder.
     File(std::path::PathBuf),
+    /// Text too long to pour into the field ([`crate::attachments::PASTE_FILE_BYTES`] or more):
+    /// its owner attaches it as a file.
+    Text(String),
 }
 
 /// What the last frame drew, for turning positions into offsets and back.
@@ -306,6 +309,11 @@ impl TextField {
         if self.multiline {
             self.insert("\n", EditKind::Typing, cx);
         }
+    }
+
+    /// `text` at the caret, over any selection, as one undo step: a pasted file put back as text.
+    pub fn insert_text(&mut self, text: &str, cx: &mut Context<Self>) {
+        self.insert(text, EditKind::Other, cx);
     }
 
     /// Where the caret is, as a byte offset into [`TextField::text`].
@@ -664,6 +672,11 @@ impl TextField {
             return;
         };
         let text = text.replace("\r\n", "\n").replace('\r', "\n");
+        if self.pictures && text.len() >= crate::attachments::PASTE_FILE_BYTES {
+            self.pasted.push(Pasted::Text(text));
+            cx.emit(TextFieldEvent::PastedPictures);
+            return;
+        }
         let text = if self.multiline { text } else { text.replace('\n', " ") };
         self.insert(&text, EditKind::Other, cx);
     }

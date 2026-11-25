@@ -90,9 +90,34 @@ fn drawn(text: Option<&'static str>, placeholder: &'static str) -> Input {
     Input::Drawn { text: text.map(Into::into), placeholder: placeholder.into() }
 }
 
-fn meter(label: &'static str) -> Option<Meter> {
-    // Compact is offered from a quarter full (shell::meter), so not at these levels.
-    Some(Meter { label: label.into(), high: false, can_compact: false })
+/// The context `percent` full of GLM-5.3-Flash's 200k window, with its parts. Compact is offered
+/// from a quarter full (shell::meter), so not at these levels.
+fn meter(percent: u64) -> Option<Meter> {
+    let tokens = CONTEXT_WINDOW * percent / 100;
+    Some(Meter { tokens, window: Some(CONTEXT_WINDOW), high: percent >= 80, can_compact: percent >= 25, parts: context_parts(tokens) })
+}
+
+pub const CONTEXT_WINDOW: u64 = 200_000;
+
+/// A coding chat's context, part by part, scaled to `tokens`.
+pub fn context_parts(tokens: u64) -> Vec<wack_core::context::Part> {
+    use wack_core::context::{Kind, Part};
+    let parts: [(Kind, &[(&str, u64)]); 6] = [
+        (Kind::Instructions, &[("How WackCode works", 2_100), ("Guide to this chat", 1_400)]),
+        (Kind::Tools, &[("14 built-in tools", 6_300), ("6 MCP tools", 1_400)]),
+        (Kind::Project, &[("wackcode/AGENTS.md", 3_400)]),
+        (Kind::Skills, &[("6 skills", 1_200)]),
+        (Kind::Messages, &[("You", 1_900), ("Replies", 3_100), ("Thinking", 600), ("Tool calls", 500)]),
+        (Kind::ToolResults, &[("read", 13_800), ("bash", 5_600), ("grep", 1_500), ("Other", 600)]),
+    ];
+    let total: u64 = parts.iter().flat_map(|(_, pieces)| pieces.iter().map(|(_, tokens)| tokens)).sum();
+    parts
+        .iter()
+        .map(|(kind, pieces)| {
+            let pieces: Vec<(String, u64)> = pieces.iter().map(|(name, part)| (name.to_string(), part * tokens / total)).collect();
+            Part { kind: *kind, tokens: pieces.iter().map(|(_, tokens)| tokens).sum(), pieces }
+        })
+        .collect()
 }
 
 pub fn composer_empty(roomy: bool) -> ComposerData {
@@ -101,11 +126,13 @@ pub fn composer_empty(roomy: bool) -> ComposerData {
         archived: None,
         input: drawn(None, crate::app::NEW_CHAT_PLACEHOLDER),
         model: "GLM-5.3-Flash".into(),
+        connection: "Testing".into(),
         effort: Some("Medium".into()),
         ultra_effort: false,
         mode: wack_core::AgentMode::Build,
         key: "scene".into(),
         meter: None,
+        context_open: false,
         working: false,
         waiting: Vec::new(),
         roomy,
@@ -117,12 +144,12 @@ pub fn composer_empty(roomy: bool) -> ComposerData {
         todos: None,
         activity: None,
         todos_open: false,
-        waiting_open: false,
         tasks: Vec::new(),
         tasks_open: false,
+        changes: None,
         foreground: false,
-        agents: 0,
         attachments: Vec::new(),
+        pasted: Vec::new(),
         pictures_refused: None,
         sent_at: None,
         comments: None,
@@ -131,7 +158,7 @@ pub fn composer_empty(roomy: bool) -> ComposerData {
 
 /// After a turn, with `input` holding the next message.
 pub fn composer_after_turn(input: Input) -> ComposerData {
-    ComposerData { input, meter: meter("14%"), ..composer_empty(false) }
+    ComposerData { input, meter: meter(14), ..composer_empty(false) }
 }
 
 pub fn composer_working() -> ComposerData {
@@ -139,7 +166,7 @@ pub fn composer_working() -> ComposerData {
         chat_area: false,
         archived: None,
         input: drawn(None, crate::chat::FOLLOW_UP_PLACEHOLDER),
-        meter: meter("21%"),
+        meter: meter(21),
         working: true,
         activity: Some(("Working  ·  8s".into(), Some("Running cargo test -p wack-llm retry".into()))),
         waiting: vec![
@@ -443,7 +470,6 @@ pub fn composer_foreground() -> ComposerData {
         archived: None,
         working: true,
         foreground: true,
-        agents: 0,
         activity: Some(("Working  ·  2m 04s".into(), Some("Running cargo build --release".into()))),
         tasks: crate::shell::task_lines(&tasks()),
         ..composer_after_turn(drawn(None, crate::chat::FOLLOW_UP_PLACEHOLDER))
@@ -1041,7 +1067,6 @@ pub fn composer_agents() -> ComposerData {
         archived: None,
         working: true,
         foreground: true,
-        agents: 3,
         activity: Some(("Working  ·  1m 30s".into(), Some("Waiting on Explore · Find the backoff ceilings".into()))),
         ..composer_after_turn(drawn(None, crate::chat::FOLLOW_UP_PLACEHOLDER))
     }

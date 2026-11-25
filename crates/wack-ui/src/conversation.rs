@@ -38,7 +38,9 @@ pub enum Entry {
     /// `command` what the user typed, which the transcript shows instead. `suggestion` is the
     /// suggested task the message started, its tail already split from `text`.
     /// `pictures` are the ones the user attached.
-    Prompt { text: String, steered: bool, command: Option<CommandUse>, suggestion: Option<Started>, pictures: Vec<Picture> },
+    /// `files` are the long pastes that went with it (their names and line counts); `text` is
+    /// the message without them.
+    Prompt { text: String, steered: bool, command: Option<CommandUse>, suggestion: Option<Started>, pictures: Vec<Picture>, files: Vec<(String, usize)> },
     Turn(Turn),
     /// The older conversation was summarised here.
     Compacted,
@@ -542,11 +544,19 @@ impl Conversation {
             Some(_) => (text.to_string(), None),
             None => suggestions::split(text),
         };
+        // Long pastes travel as a section after the words; the bubble shows them as files.
+        let (text, files) = match command {
+            Some(_) => (text, Vec::new()),
+            None => {
+                let (words, files) = crate::attachments::split(&text);
+                (words.to_string(), files)
+            }
+        };
         if let Some(started) = &suggestion {
             self.started.insert(started.id.clone());
             self.suggestion_view.queued.remove(&started.id);
         }
-        self.entries.push(Entry::Prompt { text, steered, command, suggestion, pictures });
+        self.entries.push(Entry::Prompt { text, steered, command, suggestion, pictures, files });
         let mut turn = Turn::new(at, live);
         turn.notices = std::mem::take(&mut self.held_notices);
         self.entries.push(Entry::Turn(turn));

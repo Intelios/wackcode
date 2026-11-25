@@ -13,6 +13,7 @@ pub mod ask;
 pub mod chat_kit;
 pub mod commands;
 pub mod compaction;
+pub mod context;
 pub mod images;
 pub mod kit;
 pub mod memory;

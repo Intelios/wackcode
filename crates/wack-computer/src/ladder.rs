@@ -84,9 +84,8 @@ pub fn next(step: Step, reason: &Reason, kind: AppKind) -> Next {
     }
 }
 
-/// What to do about something that can't be done in the background. Full-screen control isn't
-/// built yet, so this points at the other ways in; it is the one place to change once it is.
-pub const ESCALATE: &str = "Try another way in: a menu command (`menu`), a keyboard shortcut (`key`), typing into a field by ref, or opening a file with computer_open. If none works, tell the user what you couldn't do in the background.";
+/// What to do about something that can't be done in the background.
+pub const ESCALATE: &str = "Try another way in first: a menu command (`menu`), typing into a field by ref, or opening a file with computer_open. If none works, the same action with `screen: true` and a `reason` asks the user to let you take the screen.";
 
 /// The sentence for an action that stopped, saying what to do instead.
 pub fn advice(step: Step, reason: &Reason, app: &str) -> String {

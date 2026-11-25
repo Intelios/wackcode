@@ -8,6 +8,7 @@
 //! - `ladder`: what an action may try after Accessibility can't do it.
 //! - `change`: what an action changed, from fingerprints before and after.
 //! - `computer`: the app's `Computer` and each chat's `ChatComputer`: grants and access cards.
+//! - `cursor`: the agent's cursor drawn over the app's window; `screen`: full-screen control.
 //! - `tools`: the agent's `computer_*` tools; `feature`: what the loop keeps across compactions.
 //! - `backend`: the `Desktop` trait the tools work through, and a fake one for tests.
 //! - `engine`: one thread per app, where its Accessibility calls run.
@@ -22,7 +23,9 @@
 //! - An app is used only after the user allows it on the access card; nothing a tool does can
 //!   answer the card.
 //! - Secure text fields are never read or typed into.
-//! - In the background, input goes to the target process only, never the user's pointer.
+//! - In the background, input goes to the target process only, never the user's pointer. The
+//!   real pointer and keyboard are used only under full-screen control, which the user grants on
+//!   its own card and takes back by moving (`screen`).
 
 //!
 //! What works in the background (the Phase 0 spike, 2026-11-24, macOS 27, against TextEdit and
@@ -57,4 +60,5 @@ pub mod ladder;
 pub mod native;
 pub mod outline;
 pub mod policy;
+pub mod screen;
 pub mod tools;

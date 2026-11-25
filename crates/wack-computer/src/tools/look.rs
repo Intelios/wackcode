@@ -246,7 +246,11 @@ pub(super) async fn snapshot(call: &Call<'_>, input: Value) -> Result<ToolOutput
 
 #[derive(Deserialize)]
 struct ScreenshotInput {
+    #[serde(default)]
     app: String,
+    /// The whole display, showing only the apps the chat may use.
+    #[serde(default)]
+    screen: bool,
     #[serde(default)]
     window: Option<u32>,
     #[serde(default)]
@@ -260,6 +264,23 @@ pub(super) async fn screenshot(call: &Call<'_>, input: Value) -> Result<ToolOutp
         return Err("This model can't read pictures: use computer_snapshot to read the window.".into());
     }
     let input: ScreenshotInput = parse(input, "computer_screenshot")?;
+    if input.screen {
+        if input.region.is_some() {
+            return Err("`region` zooms into a window's picture; leave out `screen` to zoom.".into());
+        }
+        // Near the app's window, when one is named: its display.
+        let near = match input.app.trim() {
+            "" => None,
+            query => {
+                let (app, _) = call.running_app(query).await?;
+                call.window(&app, input.window).await.ok().and_then(|window| window.frame).map(|frame| frame.center())
+            }
+        };
+        return super::screen::picture(call, near, input.scale.unwrap_or(1.0).clamp(0.1, 1.0)).await;
+    }
+    if input.app.trim().is_empty() {
+        return Err("Name the `app` to picture, or pass `screen: true` for the whole screen.".into());
+    }
     let (app, _) = call.running_app(&input.app).await?;
     let desktop = call.chat.desktop();
     let name = &app.identity.name;

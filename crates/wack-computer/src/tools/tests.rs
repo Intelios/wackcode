@@ -391,3 +391,143 @@ async fn the_clipboard_is_read_and_written_behind_its_own_cards() {
     assert_eq!(asked[0], Ask::Clipboard { write: false });
     assert_eq!(asked[1], Ask::Clipboard { write: true });
 }
+
+mod screen_control {
+    use super::*;
+    use crate::screen::{Ended, ScreenInput};
+    use tokio_util::sync::CancellationToken;
+
+    /// TextEdit's Save button, by ref, with the screen.
+    fn save(reason: &str) -> serde_json::Value {
+        json!({"app": "TextEdit", "action": "click", "ref": "e3", "summary": "Save", "screen": true, "reason": reason})
+    }
+
+    async fn ready() -> (Setup, Arc<std::sync::Mutex<Vec<Ask>>>) {
+        let setup = setup();
+        let asked = answering(&setup.chat, Answer::Allow);
+        run(&setup.chat, "computer_snapshot", json!({"app": "TextEdit"})).await.unwrap();
+        (setup, asked)
+    }
+
+    fn screen_cards(asked: &std::sync::Mutex<Vec<Ask>>) -> usize {
+        asked.lock().unwrap().iter().filter(|ask| matches!(ask, Ask::Screen { .. })).count()
+    }
+
+    #[tokio::test]
+    async fn the_screen_is_asked_for_once_and_driven_with_the_real_pointer() {
+        let (setup, asked) = ready().await;
+        let refused = run(&setup.chat, "computer_act", json!({"app": "TextEdit", "action": "click", "ref": "e3", "summary": " ", "screen": true})).await.unwrap_err();
+        assert!(refused.contains("`reason`"), "{refused}");
+        let done = run(&setup.chat, "computer_act", save("Save only works with TextEdit in front")).await.unwrap().text;
+        assert!(done.contains("clicked at (840, 665) with the pointer"), "{done}");
+        assert!(asked.lock().unwrap().iter().any(|ask| matches!(ask, Ask::Screen { reason, apps } if reason.contains("in front") && apps == &vec!["TextEdit".to_string()])));
+        let state = setup.desktop.state.lock().unwrap();
+        assert_eq!(state.frontmost, Some(10), "TextEdit came to the front");
+        assert!(matches!(state.screen_inputs.as_slice(), [ScreenInput::Click { point: (840.0, 665.0), count: 1, .. }]));
+        assert!(state.watching.is_some(), "the user's input is watched");
+        drop(state);
+        run(&setup.chat, "computer_act", save("again")).await.unwrap();
+        assert_eq!(screen_cards(&asked), 1, "once per run");
+        assert!(setup.chat.holds_screen());
+    }
+
+    #[tokio::test]
+    async fn the_users_input_takes_the_screen_back_until_their_next_message() {
+        let (setup, asked) = ready().await;
+        run(&setup.chat, "computer_act", save("Save")).await.unwrap();
+        let took_back = setup.desktop.state.lock().unwrap().watching.clone().unwrap();
+        took_back(Ended::UserInput);
+        assert!(!setup.chat.holds_screen());
+        assert!(setup.desktop.state.lock().unwrap().watching.is_none(), "the watch stops");
+        let refused = run(&setup.chat, "computer_act", save("Save")).await.unwrap_err();
+        assert!(refused.contains("took the screen back") && refused.contains("next message"), "{refused}");
+        assert_eq!(screen_cards(&asked), 1, "not asked again");
+        setup.chat.clear_denials();
+        run(&setup.chat, "computer_act", save("Save")).await.unwrap();
+        assert_eq!(screen_cards(&asked), 2);
+    }
+
+    #[tokio::test]
+    async fn a_denied_screen_and_another_chats_screen_are_refused() {
+        let setup = setup();
+        let asked = answering(&setup.chat, Answer::Allow);
+        run(&setup.chat, "computer_snapshot", json!({"app": "TextEdit"})).await.unwrap();
+        // Answer the screen card with Deny from here on.
+        let answerer = setup.chat.clone();
+        setup.chat.set_observer(move |_| {
+            if let Some(card) = answerer.card() {
+                answerer.answer(card.id, if matches!(card.ask, Ask::Screen { .. }) { Answer::Deny } else { Answer::Allow });
+            }
+        });
+        let refused = run(&setup.chat, "computer_act", save("Save")).await.unwrap_err();
+        assert!(refused.contains("said no"), "{refused}");
+        assert!(setup.desktop.state.lock().unwrap().screen_inputs.is_empty());
+        drop(asked);
+        // Another chat holds the screen: this one can't take it.
+        let other = setup.computer.chat();
+        answering(&other, Answer::Allow);
+        run(&other, "computer_snapshot", json!({"app": "TextEdit"})).await.unwrap();
+        run(&other, "computer_act", save("Save")).await.unwrap();
+        setup.chat.clear_denials();
+        let refused = run(&setup.chat, "computer_act", save("Save")).await.unwrap_err();
+        assert!(refused.contains("Another chat"), "{refused}");
+    }
+
+    #[tokio::test]
+    async fn input_lands_only_on_the_apps_window_and_typing_stops_when_focus_leaves() {
+        let (setup, _) = ready().await;
+        // Terminal's window comes over TextEdit's.
+        {
+            let mut state = setup.desktop.state.lock().unwrap();
+            let terminal = state.windows.remove(1);
+            state.windows.insert(0, terminal);
+        }
+        let refused = run(&setup.chat, "computer_act", save("Save")).await.unwrap_err();
+        assert!(refused.contains("Terminal's window is over that point"), "{refused}");
+        assert!(setup.desktop.state.lock().unwrap().screen_inputs.is_empty());
+        {
+            let mut state = setup.desktop.state.lock().unwrap();
+            let terminal = state.windows.remove(0);
+            state.windows.insert(1, terminal);
+            state.type_until = Some(3);
+        }
+        let refused = run(&setup.chat, "computer_act", json!({"app": "TextEdit", "action": "type", "text": "hello", "summary": "Type", "screen": true, "reason": "typing"})).await.unwrap_err();
+        assert!(refused.contains("isn't in front any more") && refused.contains("after 3 of 5"), "{refused}");
+        let typed = setup.desktop.state.lock().unwrap().screen_inputs.last().cloned();
+        assert_eq!(typed, Some(ScreenInput::Type { text: "hel".into() }));
+    }
+
+    #[tokio::test]
+    async fn the_run_ending_or_the_stop_chord_gives_the_screen_back() {
+        let (setup, _) = ready().await;
+        let running = setup.chat.begin_run();
+        run(&setup.chat, "computer_act", save("Save")).await.unwrap();
+        assert!(setup.chat.holds_screen());
+        drop(running);
+        assert!(!setup.chat.holds_screen());
+        assert!(setup.desktop.state.lock().unwrap().watching.is_none());
+        // The stop chord stops the run as well.
+        let _running = setup.chat.begin_run();
+        let cancel = CancellationToken::new();
+        let tool = ComputerTool { kind: Kind::Act, chat: setup.chat.clone(), present: Some(true) };
+        let mut context = ToolContext::detached(std::env::temp_dir());
+        context.cancel = cancel.clone();
+        tool.run(save("Save"), &context).await.unwrap();
+        let stop = setup.desktop.state.lock().unwrap().watching.clone().unwrap();
+        stop(Ended::StopChord);
+        assert!(cancel.is_cancelled(), "⌃⌥⌘. stops the run");
+        assert!(!setup.chat.holds_screen());
+    }
+
+    #[tokio::test]
+    async fn a_screen_picture_shows_only_the_apps_the_chat_may_use() {
+        let (setup, _) = ready().await;
+        let shot = run(&setup.chat, "computer_screenshot", json!({"screen": true})).await.unwrap();
+        assert!(shot.text.contains("only the apps this chat may use: TextEdit"), "{}", shot.text);
+        assert_eq!(setup.desktop.state.lock().unwrap().screen_pictures, vec![vec![10]]);
+        // Its coordinates are what a screen action takes: the middle of the picture.
+        run(&setup.chat, "computer_act", json!({"app": "TextEdit", "action": "click", "x": 686, "y": 445, "summary": "Click", "screen": true, "reason": "canvas"})).await.unwrap();
+        let input = setup.desktop.state.lock().unwrap().screen_inputs.last().cloned();
+        assert!(matches!(input, Some(ScreenInput::Click { point, .. }) if (point.0 - 756.0).abs() < 2.0 && (point.1 - 491.0).abs() < 2.0), "{input:?}");
+    }
+}

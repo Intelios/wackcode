@@ -14,6 +14,9 @@
 //!   the card is answered; this crate only reads them (`Settings::always`).
 //! - One card at a time per chat: the chat's agent's computer calls run one after another
 //!   (`ChatComputer::lane`), and sub-agents never reach the tools.
+//! - One chat at a time holds the screen (full-screen control), and only for the run the user
+//!   allowed it in: the run ending, the user's own input, ⌃⌥⌘. or turning computer use off
+//!   gives it back (`screen.rs`).
 
 use std::{
     collections::{HashMap, HashSet},
@@ -31,6 +34,7 @@ use crate::{
     backend::Desktop,
     cursor::{self, Cursor},
     geometry::Rect,
+    screen::Ended,
     policy::{AppIdentity, AppKey, ChatGrants, Grant, Tier},
 };
 
@@ -75,6 +79,16 @@ struct Shared {
     chats: Mutex<Vec<Weak<ChatInner>>>,
     next_chat: AtomicU64,
     cursor: Cursor,
+    /// The chat holding the screen, if one is.
+    screen: Mutex<Option<Holder>>,
+}
+
+/// Who holds the screen: a chat's run, and the run's stop.
+#[derive(Clone)]
+struct Holder {
+    chat: u64,
+    generation: u64,
+    cancel: CancellationToken,
 }
 
 impl Computer {
@@ -84,13 +98,14 @@ impl Computer {
     }
 
     fn with_cursor(desktop: Arc<dyn Desktop>, settings: Settings, cursor: Cursor) -> Self {
-        Self { shared: Arc::new(Shared { desktop, settings: RwLock::new(settings), chats: Mutex::new(Vec::new()), next_chat: AtomicU64::new(1), cursor }) }
+        Self { shared: Arc::new(Shared { desktop, settings: RwLock::new(settings), chats: Mutex::new(Vec::new()), next_chat: AtomicU64::new(1), cursor, screen: Mutex::new(None) }) }
     }
 
     /// The real Mac, with the agent's cursor on screen. Main thread only (it reads the keyboard
     /// layout).
     pub fn native(settings: Settings) -> Self {
-        Self::with_cursor(Arc::new(crate::native::desktop::Mac::new()), settings, crate::native::cursor::cursor())
+        let cursor = crate::native::cursor::cursor();
+        Self::with_cursor(Arc::new(crate::native::desktop::Mac::new().with_cursor(cursor.clone())), settings, cursor)
     }
 
     pub fn cursor(&self) -> &Cursor {
@@ -125,6 +140,7 @@ impl Computer {
         *self.shared.settings.write().unwrap_or_else(|e| e.into_inner()) = settings;
         if turned_off {
             self.shared.cursor.clear();
+            self.end_screen(Ended::TurnedOff, None);
         }
         if !removed.is_empty() {
             for chat in self.chats() {
@@ -146,6 +162,38 @@ impl Computer {
         ChatComputer { inner }
     }
 
+    /// Whether some chat holds the screen.
+    pub fn screen_taken(&self) -> bool {
+        self.shared.screen.lock().unwrap_or_else(|e| e.into_inner()).is_some()
+    }
+
+    fn holds_screen(&self, chat: u64, generation: u64) -> bool {
+        self.shared.screen.lock().unwrap_or_else(|e| e.into_inner()).as_ref().is_some_and(|holder| holder.chat == chat && holder.generation == generation && !holder.cancel.is_cancelled())
+    }
+
+    /// Gives the screen back: from `only` (a chat's run) when given, else from whoever holds
+    /// it. The chat isn't asked again before the user's next message, unless its run ended.
+    pub fn end_screen(&self, ended: Ended, only: Option<(u64, u64)>) {
+        let holder = {
+            let mut screen = self.shared.screen.lock().unwrap_or_else(|e| e.into_inner());
+            match screen.as_ref() {
+                Some(holder) if only.is_none_or(|(chat, generation)| holder.chat == chat && holder.generation == generation) => screen.take(),
+                _ => None,
+            }
+        };
+        let Some(holder) = holder else { return };
+        self.shared.desktop.unwatch_screen();
+        if ended == Ended::StopChord {
+            holder.cancel.cancel();
+        }
+        if let Some(chat) = self.chats().into_iter().find(|chat| chat.inner.id == holder.chat) {
+            if matches!(ended, Ended::UserInput | Ended::StopChord) {
+                chat.state().screen_refused = Some(ended.words().to_string());
+            }
+            chat.signal(Signal::Screen);
+        }
+    }
+
     fn chats(&self) -> Vec<ChatComputer> {
         self.shared.chats.lock().unwrap_or_else(|e| e.into_inner()).iter().filter_map(Weak::upgrade).map(|inner| ChatComputer { inner }).collect()
     }
@@ -158,6 +206,9 @@ pub enum Ask {
     App { app: AppIdentity, tier: Tier, launching: bool, icon: Option<Vec<u8>> },
     /// To read the clipboard, or (`write`) to replace what is on it. Allow or Deny only.
     Clipboard { write: bool },
+    /// To take the screen (the real pointer and keyboard) until the run ends, for `reason`, in
+    /// `apps` (the ones the chat may use). Allow or Deny only.
+    Screen { reason: String, apps: Vec<String> },
 }
 
 #[derive(Debug, Clone, PartialEq)]
@@ -183,6 +234,8 @@ pub enum Answer {
 pub enum Signal {
     /// A card went up or came down.
     Card,
+    /// The chat took the screen or gave it back.
+    Screen,
 }
 
 type Observer = Arc<dyn Fn(Signal) + Send + Sync>;
@@ -215,6 +268,9 @@ struct ChatState {
     /// next message.
     clipboard_read: Option<bool>,
     clipboard_write: Option<bool>,
+    /// Why the screen isn't asked for again before the user's next message: they said no, or
+    /// took it back.
+    screen_refused: Option<String>,
     card: Option<(Card, oneshot::Sender<Answer>)>,
     next_card: u64,
     views: HashMap<i32, AppView>,
@@ -231,14 +287,15 @@ struct ChatInner {
 
 /// Held while a run of a chat goes; dropping it lets go of what the run held.
 pub struct RunGuard {
-    cursor: Cursor,
+    computer: Computer,
     chat: u64,
     generation: u64,
 }
 
 impl Drop for RunGuard {
     fn drop(&mut self) {
-        self.cursor.end_run(self.chat, self.generation);
+        self.computer.end_screen(Ended::RunEnded, Some((self.chat, self.generation)));
+        self.computer.cursor().end_run(self.chat, self.generation);
     }
 }
 
@@ -273,11 +330,23 @@ impl ChatComputer {
     }
 
     /// A run of the chat starts; what it holds is let go when the guard drops (the run ends or
-    /// is stopped): its cursor goes.
+    /// is stopped): its cursor goes, and the screen goes back to the user.
     pub fn begin_run(&self) -> RunGuard {
-        let cursor = self.inner.computer.cursor().clone();
-        let generation = cursor.start_run(self.inner.id);
-        RunGuard { cursor, chat: self.inner.id, generation }
+        let computer = self.inner.computer.clone();
+        // A run the socket left going gives the screen back first.
+        if let Some(earlier) = computer.cursor().run_of(self.inner.id) {
+            computer.end_screen(Ended::RunEnded, Some((self.inner.id, earlier)));
+        }
+        let generation = computer.cursor().start_run(self.inner.id);
+        RunGuard { computer, chat: self.inner.id, generation }
+    }
+
+    /// Ends a run `ensure_run` started for the automation socket: the cursor goes and the
+    /// screen comes back.
+    pub fn end_detached_run(&self) {
+        if let Some(generation) = self.inner.computer.cursor().run_of(self.inner.id) {
+            drop(RunGuard { computer: self.inner.computer.clone(), chat: self.inner.id, generation });
+        }
     }
 
     /// For calls made outside a run (the automation socket): the cursor draws as if one were
@@ -333,6 +402,7 @@ impl ChatComputer {
         let mut guard = self.state();
         let state = &mut *guard;
         state.grants.clear_denials();
+        state.screen_refused = None;
         for grant in [&mut state.clipboard_read, &mut state.clipboard_write] {
             if *grant == Some(false) {
                 *grant = None;
@@ -444,6 +514,65 @@ impl ChatComputer {
             *grant = Some(allowed);
         }
         if allowed { Ok(()) } else { Err(format!("The user said no to letting you {what} for now. Don't ask again in this turn.")) }
+    }
+
+    /// Whether this chat's current run holds the screen.
+    pub fn holds_screen(&self) -> bool {
+        let computer = &self.inner.computer;
+        computer.cursor().run_of(self.inner.id).is_some_and(|generation| computer.holds_screen(self.inner.id, generation))
+    }
+
+    /// Full-screen control for the rest of this run, asking the user the first time. `apps`
+    /// names the apps the chat may use, for the card.
+    pub async fn screen_access(&self, reason: &str, apps: Vec<String>, present: bool, cancel: &CancellationToken) -> Result<(), String> {
+        let computer = self.inner.computer.clone();
+        let generation = computer.cursor().run_of(self.inner.id).ok_or("Full-screen control needs a run going.")?;
+        if computer.holds_screen(self.inner.id, generation) {
+            return Ok(());
+        }
+        if computer.screen_taken() {
+            return Err("Another chat is using the screen right now. Work in the background, or tell the user what is left for them to do.".into());
+        }
+        if let Some(refused) = self.state().screen_refused.clone() {
+            return Err(format!("{refused} Don't take the screen again before the user's next message: work in the background, or tell them what is left for them to do."));
+        }
+        if !present {
+            return Err("Taking the screen needs the user's go-ahead, and nobody is at the window to give it.".into());
+        }
+        let reason = reason.trim();
+        if reason.is_empty() {
+            return Err("Say why you need the screen in `reason`: the user reads it on the card.".into());
+        }
+        let reason: String = reason.chars().take(300).collect();
+        let answer = self.raise(Ask::Screen { reason, apps }, cancel).await?;
+        if !matches!(answer, Answer::Allow | Answer::AlwaysAllow) {
+            self.state().screen_refused = Some("The user said no to letting you take the screen.".into());
+            return Err("The user said no to letting you take the screen. Don't ask again before their next message: work in the background, or tell them what is left for them to do.".into());
+        }
+        {
+            let mut screen = computer.shared.screen.lock().unwrap_or_else(|e| e.into_inner());
+            if screen.as_ref().is_some_and(|holder| holder.chat != self.inner.id) {
+                return Err("Another chat took the screen while the card was up. Work in the background instead.".into());
+            }
+            if cancel.is_cancelled() || computer.cursor().run_of(self.inner.id) != Some(generation) {
+                return Err("The run ended before the screen could be taken.".into());
+            }
+            *screen = Some(Holder { chat: self.inner.id, generation, cancel: cancel.clone() });
+        }
+        // The watch reaches back weakly: the desktop holds it, and the computer holds the desktop.
+        let weak = Arc::downgrade(&computer.shared);
+        let chat = self.inner.id;
+        let watched = computer.shared.desktop.watch_screen(Arc::new(move |ended| {
+            if let Some(shared) = weak.upgrade() {
+                Computer { shared }.end_screen(ended, Some((chat, generation)));
+            }
+        }));
+        if let Err(error) = watched {
+            computer.shared.screen.lock().unwrap_or_else(|e| e.into_inner()).take();
+            return Err(error);
+        }
+        self.signal(Signal::Screen);
+        Ok(())
     }
 
     /// Records refs the model was shown.

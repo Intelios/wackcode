@@ -11,7 +11,7 @@
 //!   (`Target::At`), since the spike found Accessibility's own hit test unreliable in the
 //!   background.
 
-use std::path::PathBuf;
+use std::{path::PathBuf, sync::Arc};
 
 use async_trait::async_trait;
 
@@ -170,6 +170,20 @@ pub trait Desktop: Send + Sync {
     fn seconds_since_typing(&self) -> f64;
     async fn icon(&self, app: &AppIdentity) -> Option<Vec<u8>>;
     async fn clipboard_read(&self) -> Result<Option<String>, String>;
+    /// Whether a password field anywhere has the keyboard (secure input is on).
+    fn secure_input(&self) -> bool;
+    /// Full-screen control's picture: the display holding `near` (the main one without it),
+    /// showing only the windows of `pids`.
+    async fn screen_picture(&self, near: Option<(f64, f64)>, pids: Vec<i32>, scale: f64) -> Result<Shot, String>;
+    /// Full-screen control's input, through the real pointer and keyboard. `go` is asked before
+    /// every event; when it refuses, input stops and anything held down is let go.
+    async fn screen_input(&self, input: crate::screen::ScreenInput, go: crate::screen::Go) -> Result<(), String>;
+    /// Full-screen control starts: watch for the user's own input and ⌃⌥⌘. (calling `ended`
+    /// once, from any thread), and show that the screen is taken. Without the watch there is no
+    /// control: an error means the screen mustn't be taken.
+    fn watch_screen(&self, ended: Arc<dyn Fn(crate::screen::Ended) + Send + Sync>) -> Result<(), String>;
+    /// Full-screen control ends: stop watching and showing.
+    fn unwatch_screen(&self);
     async fn clipboard_write(&self, text: &str) -> Result<(), String>;
 }
 
@@ -177,7 +191,7 @@ pub mod fake {
     //! A desktop in memory for tests: apps, windows and trees the test sets up, and a log of
     //! every action. Typing into a node sets its value; pressing one runs the test's hook.
 
-    use std::sync::{Arc, Mutex};
+    use std::sync::Mutex;
 
     use super::*;
 
@@ -197,6 +211,16 @@ pub mod fake {
         pub outcomes: Vec<Result<Done, Reason>>,
         pub permissions: Permissions,
         pub chromium: Vec<String>,
+        pub secure_input: bool,
+        /// Full-screen input, in order, as far as `go` let it get.
+        pub screen_inputs: Vec<crate::screen::ScreenInput>,
+        /// The display pictures taken, with the pids each showed.
+        pub screen_pictures: Vec<Vec<i32>>,
+        /// While full-screen control is watched: call it to play the user taking the screen
+        /// back.
+        pub watching: Option<Arc<dyn Fn(crate::screen::Ended) + Send + Sync>>,
+        /// How many characters typing gets through before the test's focus check fails.
+        pub type_until: Option<usize>,
     }
 
     #[derive(Clone, Default)]
@@ -371,6 +395,46 @@ pub mod fake {
                 .filter(|(_, window)| window.on_screen && !window.minimized)
                 .filter_map(|(pid, window)| window.frame.map(|frame| crate::geometry::WindowEntry::new(window.id, *pid, frame)))
                 .collect()
+        }
+
+        fn secure_input(&self) -> bool {
+            self.state.lock().unwrap().secure_input
+        }
+
+        async fn screen_picture(&self, _near: Option<(f64, f64)>, pids: Vec<i32>, scale: f64) -> Result<Shot, String> {
+            self.state.lock().unwrap().screen_pictures.push(pids);
+            let bounds = Rect::new(0.0, 0.0, 1512.0, 982.0);
+            let frame = crate::geometry::budget(bounds.width, bounds.height);
+            Ok(Shot { jpeg: vec![0xFF, 0xD8, 0xFF, 0xD9], picture: crate::geometry::scaled(frame, scale), frame, bounds })
+        }
+
+        async fn screen_input(&self, input: crate::screen::ScreenInput, go: crate::screen::Go) -> Result<(), String> {
+            go()?;
+            if let crate::screen::ScreenInput::Type { text } = &input {
+                let until = self.state.lock().unwrap().type_until;
+                let total = text.chars().count();
+                for (done, _) in text.chars().enumerate() {
+                    if until == Some(done) {
+                        self.state.lock().unwrap().frontmost = None;
+                    }
+                    if let Err(why) = go() {
+                        let typed: String = text.chars().take(done).collect();
+                        self.state.lock().unwrap().screen_inputs.push(crate::screen::ScreenInput::Type { text: typed });
+                        return Err(format!("{why} Typing stopped after {done} of {total} characters."));
+                    }
+                }
+            }
+            self.state.lock().unwrap().screen_inputs.push(input);
+            Ok(())
+        }
+
+        fn watch_screen(&self, ended: Arc<dyn Fn(crate::screen::Ended) + Send + Sync>) -> Result<(), String> {
+            self.state.lock().unwrap().watching = Some(ended);
+            Ok(())
+        }
+
+        fn unwatch_screen(&self) {
+            self.state.lock().unwrap().watching = None;
         }
 
         fn frontmost(&self) -> Option<i32> {

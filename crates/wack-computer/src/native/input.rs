@@ -16,13 +16,17 @@ use objc2_core_foundation::{CFArray, CFBoolean, CFDictionary, CFNumber, CFRetain
 use objc2_core_graphics::{
     CGEvent, CGEventField, CGEventFlags, CGEventSource, CGEventSourceStateID, CGEventTapLocation, CGEventType, CGMouseButton,
     CGRectMakeWithDictionaryRepresentation, CGScrollEventUnit, CGSessionCopyCurrentDictionary, CGWindowListCopyWindowInfo, CGWindowListOption,
-    kCGWindowAlpha, kCGWindowBounds, kCGWindowLayer, kCGWindowNumber, kCGWindowOwnerPID,
+    kCGWindowAlpha, kCGWindowBounds, kCGWindowLayer, kCGWindowName, kCGWindowNumber, kCGWindowOwnerPID,
 };
 
 use crate::{
     geometry::{Rect, WindowEntry},
     keys::{self, Chord},
 };
+
+/// The title WackCode's click-through overlays carry (the agent's cursor, the screen's glow), so
+/// the window list marks them the moment they exist (`WindowEntry::overlay`).
+pub const OVERLAY_TITLE: &str = "WackCode overlay";
 
 /// Tags WackCode's synthetic events (`kCGEventSourceUserData`): "WACK".
 pub const EVENT_MARKER: i64 = 0x5741_434B;
@@ -218,6 +222,24 @@ pub fn post_hid_text(units: &[u16]) -> Result<(), String> {
     Ok(())
 }
 
+/// Full-screen control only: one character through the HID tap, on the key `layout` types it
+/// with (shift held where needed) and carrying the character itself, as `text_to_pid` does.
+pub fn post_hid_char(ch: char, layout: &keys::Layout) -> Result<(), String> {
+    let source = source()?;
+    let (code, shift) = layout.stroke(ch).unwrap_or((0, false));
+    let mut units = [0u16; 2];
+    let encoded = ch.encode_utf16(&mut units);
+    for down in [true, false] {
+        let event = CGEvent::new_keyboard_event(Some(&source), code, down).ok_or("macOS refused to create a key event.")?;
+        CGEvent::set_flags(Some(&event), if shift { CGEventFlags::MaskShift } else { CGEventFlags::empty() });
+        if !matches!(ch, '\n' | '\r' | '\t') {
+            unsafe { CGEvent::keyboard_set_unicode_string(Some(&event), encoded.len() as _, encoded.as_ptr()) };
+        }
+        CGEvent::post(CGEventTapLocation::HIDEventTap, Some(&event));
+    }
+    Ok(())
+}
+
 /// Full-screen control only: a scroll at the pointer through the HID tap.
 pub fn post_hid_scroll(dx: f64, dy: f64) -> Result<(), String> {
     let source = source()?;
@@ -248,6 +270,7 @@ pub fn all_windows() -> Vec<WindowEntry> {
 
 fn window_list_with(option: CGWindowListOption) -> Vec<WindowEntry> {
     let Some(list) = CGWindowListCopyWindowInfo(option, 0) else { return Vec::new() };
+    let own = std::process::id() as i32;
     // SAFETY: the window list is an array of dictionaries keyed by strings.
     let list: &CFArray<CFDictionary<CFString, CFType>> = unsafe { list.cast_unchecked() };
     list.iter()
@@ -264,6 +287,11 @@ fn window_list_with(option: CGWindowListOption) -> Vec<WindowEntry> {
                 bounds: Rect::new(rect.origin.x, rect.origin.y, rect.size.width, rect.size.height),
                 layer: number_value(&window, unsafe { kCGWindowLayer }).unwrap_or(0.0) as i32,
                 alpha: number_value(&window, unsafe { kCGWindowAlpha }).unwrap_or(1.0),
+                overlay: pid == own
+                    && window
+                        .get(unsafe { kCGWindowName })
+                        .and_then(|name| name.downcast_ref::<CFString>().map(|name| name.to_string()))
+                        .is_some_and(|name| name.starts_with(OVERLAY_TITLE)),
             })
         })
         .collect()

@@ -191,6 +191,8 @@ fn panel(mtm: MainThreadMarker) -> Option<(Retained<CursorPanel>, Retained<Curso
     panel.setOpaque(false);
     panel.setBackgroundColor(Some(&NSColor::clearColor()));
     panel.setHasShadow(false);
+    panel.setTitle(&NSString::from_str(&format!("{} · cursor", super::input::OVERLAY_TITLE)));
+    panel.setExcludedFromWindowsMenu(true);
     panel.setIgnoresMouseEvents(true);
     panel.setHidesOnDeactivate(false);
     panel.setCollectionBehavior(NSWindowCollectionBehavior::CanJoinAllSpaces | NSWindowCollectionBehavior::FullScreenAuxiliary | NSWindowCollectionBehavior::IgnoresCycle);
@@ -764,6 +766,7 @@ mod debug {
                     }
                 }
             }
+            super::super::glow::render_frames(&dir, &cursor.appearance());
             log(&format!("rendered frames to {}", dir.display()));
         }
         #[cfg(not(debug_assertions))]

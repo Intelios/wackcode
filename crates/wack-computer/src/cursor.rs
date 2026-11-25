@@ -237,6 +237,11 @@ impl Cursor {
         generation
     }
 
+    /// The generation of `chat`'s live run.
+    pub fn run_of(&self, chat: u64) -> Option<u64> {
+        self.state().runs.get(&chat).copied()
+    }
+
     /// Whether `chat` has a run the cursor knows of.
     pub fn has_run(&self, chat: u64) -> bool {
         self.state().runs.contains_key(&chat)

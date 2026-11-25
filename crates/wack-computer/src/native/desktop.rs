@@ -40,12 +40,19 @@ pub struct Mac {
     own: OwnIdentity,
     layout: Mutex<Layout>,
     home: Option<PathBuf>,
+    /// The agent's cursor, whose theme colours the screen's glow wears too.
+    cursor: Option<crate::cursor::Cursor>,
 }
 
 impl Mac {
     /// Main thread only: reads the keyboard layout.
     pub fn new() -> Self {
-        Self { engine: Engine::default(), own: OwnIdentity::current(), layout: Mutex::new(keyboard::current()), home: std::env::var_os("HOME").map(PathBuf::from) }
+        Self { engine: Engine::default(), own: OwnIdentity::current(), layout: Mutex::new(keyboard::current()), home: std::env::var_os("HOME").map(PathBuf::from), cursor: None }
+    }
+
+    pub fn with_cursor(mut self, cursor: crate::cursor::Cursor) -> Self {
+        self.cursor = Some(cursor);
+        self
     }
 
     /// Main thread only: reads the keyboard layout again (the user may have switched it).
@@ -264,7 +271,7 @@ fn menu(thread: &AppThread, path: &[String], app: &str) -> Result<Done, Reason> 
             format!("{joined} is disabled.")
         } else {
             format!(
-                "{joined} reads disabled while {app} is in the background: macOS holds commands on the front document, and their shortcuts, until the app is in front. Do it another way (typing into a field by ref, or computer_open with a file), or tell the user what is left for them to do."
+                "{joined} reads disabled while {app} is in the background: macOS holds commands on the front document, and their shortcuts, until the app is in front. Do it another way (typing into a field by ref, or computer_open with a file), or choose it with `screen: true` and a `reason`, which brings {app} to the front once the user lets you take the screen."
             )
         }));
     }
@@ -445,9 +452,35 @@ impl Desktop for Mac {
             .unwrap_or_default()
     }
 
+    fn secure_input(&self) -> bool {
+        input::secure_input_on()
+    }
+
+    async fn screen_picture(&self, near: Option<(f64, f64)>, pids: Vec<i32>, scale: f64) -> Result<Shot, String> {
+        capture::display(super::screen::display_near(near), pids, scale).await
+    }
+
+    async fn screen_input(&self, input: crate::screen::ScreenInput, go: crate::screen::Go) -> Result<(), String> {
+        let layout = self.layout();
+        tokio::task::spawn_blocking(move || super::screen::perform(input, &go, &layout)).await.map_err(|_| "The input was interrupted.".to_string())?
+    }
+
+    fn watch_screen(&self, ended: std::sync::Arc<dyn Fn(crate::screen::Ended) + Send + Sync>) -> Result<(), String> {
+        let period = self.layout().stroke('.').map(|(code, _)| code).unwrap_or(47);
+        super::screen::watch(ended, period)?;
+        super::glow::show(self.cursor.as_ref().map(crate::cursor::Cursor::appearance).unwrap_or_default());
+        Ok(())
+    }
+
+    fn unwatch_screen(&self) {
+        super::screen::unwatch();
+        super::glow::hide();
+    }
+
     fn screen_windows(&self) -> Vec<crate::geometry::WindowEntry> {
-        let skip: Vec<u32> = super::cursor::window_number().into_iter().collect();
-        input::window_list().into_iter().filter(|window| !skip.contains(&window.number)).collect()
+        let mut skip: Vec<u32> = super::cursor::window_number().into_iter().collect();
+        skip.extend(super::glow::window_numbers());
+        input::window_list().into_iter().filter(|window| !window.overlay && !skip.contains(&window.number)).collect()
     }
 
     fn frontmost(&self) -> Option<i32> {

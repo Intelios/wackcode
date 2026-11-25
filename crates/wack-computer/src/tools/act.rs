@@ -62,6 +62,10 @@ struct ActInput {
     path: Option<Vec<[f64; 2]>>,
     menu: Option<Vec<String>>,
     summary: Option<String>,
+    /// Full-screen control: the real pointer and keyboard, with the app in front.
+    screen: bool,
+    /// Why the screen is needed, for the card.
+    reason: Option<String>,
 }
 
 fn modifiers(names: &[String]) -> Result<Modifiers, String> {
@@ -156,7 +160,7 @@ async fn target(call: &Call<'_>, app: &AppInfo, window: &WindowInfo, input: &Act
         return Ok(Some((Target::Ref(reference), Some(reference))));
     }
     if let (Some(x), Some(y)) = (input.x, input.y) {
-        let point = picture_point(call, app, window, x, y)?;
+        let point = if input.screen { super::screen::picture_point(call, x, y)? } else { picture_point(call, app, window, x, y)? };
         let tree = call.chat.desktop().tree(app.pid, window.id, None).await?;
         let element = element_at(&tree.root, point).map(|node| node.handle as u32);
         if let Some(element) = element {
@@ -286,12 +290,13 @@ pub(super) async fn act(call: &Call<'_>, input: Value) -> Result<ToolOutput, Str
         }
         "drag" => {
             let (Some(x), Some(y)) = (input.x, input.y) else { return Err("drag starts at `x` and `y`, in the last computer_screenshot.".into()) };
-            let mut points = vec![picture_point(call, &app, &window, x, y)?];
+            let point = |x: f64, y: f64| if input.screen { super::screen::picture_point(call, x, y) } else { picture_point(call, &app, &window, x, y) };
+            let mut points = vec![point(x, y)?];
             for [px, py] in input.path.clone().unwrap_or_default() {
-                points.push(picture_point(call, &app, &window, px, py)?);
+                points.push(point(px, py)?);
             }
             if let Some([tx, ty]) = input.to {
-                points.push(picture_point(call, &app, &window, tx, ty)?);
+                points.push(point(tx, ty)?);
             }
             if points.len() < 2 {
                 return Err("drag needs `to` [x, y], or a `path` of points.".into());
@@ -322,13 +327,19 @@ pub(super) async fn act(call: &Call<'_>, input: Value) -> Result<ToolOutput, Str
     if let (Some(marker), Some(point)) = (&marker, cursor_point(&act, before_tree.as_ref())) {
         marker.at(cursor::Target::in_window(app.pid, point, &desktop.screen_windows(), &[]));
     }
-    let done = match desktop.act(app.pid, window.id, act).await {
+    let outcome = if input.screen {
+        let reason = input.reason.as_deref().or(input.summary.as_deref()).unwrap_or_default();
+        super::screen::perform(call, &app, &window, act, reason, before_tree.as_ref()).await
+    } else {
+        desktop.act(app.pid, window.id, act).await.map_err(|reason| ladder::advice(step_of(&action), &reason, &name))
+    };
+    let done = match outcome {
         Ok(done) => done,
-        Err(reason) => {
+        Err(error) => {
             if let Some(marker) = &marker {
                 marker.finish(false);
             }
-            return Err(ladder::advice(step_of(&action), &reason, &name));
+            return Err(error);
         }
     };
     if let Some(marker) = &marker {

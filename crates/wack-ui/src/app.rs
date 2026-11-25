@@ -1050,8 +1050,8 @@ impl AppState {
         let Some(card) = computer.card().filter(|card| card.id == id) else { return };
         let app = match &card.ask {
             Ask::App { app, .. } => app,
-            // A clipboard card is this chat's alone: nothing is saved.
-            Ask::Clipboard { .. } => {
+            // Clipboard and screen cards are this chat's alone: nothing is saved.
+            Ask::Clipboard { .. } | Ask::Screen { .. } => {
                 computer.answer(id, if matches!(answer, Answer::Allow | Answer::AlwaysAllow) { Answer::Allow } else { Answer::Deny });
                 return;
             }

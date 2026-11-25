@@ -24,6 +24,7 @@
 mod act;
 mod clipboard;
 mod look;
+mod screen;
 mod spec;
 #[cfg(test)]
 mod tests;
@@ -44,6 +45,10 @@ pub use spec::{Kind, UNTRUSTED};
 
 /// Every computer tool's name.
 pub const NAMES: [&str; 8] = ["computer_apps", "computer_open", "computer_snapshot", "computer_screenshot", "computer_wait", "computer_act", "computer_batch", "computer_clipboard"];
+
+/// Where the screen's last picture is kept among the per-app pictures (`LastShot`): no app
+/// has pid 0.
+pub(crate) const SCREEN_PID: i32 = 0;
 
 /// The prefix every computer tool's name starts with (copy children deny it).
 pub const PREFIX: &str = "computer_";

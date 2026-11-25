@@ -482,7 +482,7 @@ impl ChatSession {
             Some(card) if self.computer_icon.as_ref().is_none_or(|(id, _)| *id != card.id) => {
                 let icon = match &card.ask {
                     wack_computer::computer::Ask::App { icon, .. } => icon.clone(),
-                    wack_computer::computer::Ask::Clipboard { .. } => None,
+                    wack_computer::computer::Ask::Clipboard { .. } | wack_computer::computer::Ask::Screen { .. } => None,
                 };
                 let picture = icon
                     .as_deref()
@@ -514,6 +514,7 @@ impl ChatSession {
                 icon,
                 error,
                 clipboard: None,
+                screen: None,
             },
             wack_computer::computer::Ask::Clipboard { write } => crate::computer_card::CardData {
                 id: card.id,
@@ -524,6 +525,18 @@ impl ChatSession {
                 icon: None,
                 error,
                 clipboard: Some(*write),
+                screen: None,
+            },
+            wack_computer::computer::Ask::Screen { reason, apps } => crate::computer_card::CardData {
+                id: card.id,
+                app: "your screen".into(),
+                path: None,
+                look_only: false,
+                launching: false,
+                icon: None,
+                error,
+                clipboard: None,
+                screen: Some(crate::computer_card::ScreenAsk { reason: reason.clone().into(), apps: crate::computer_card::list(apps).into() }),
             },
         })
     }

@@ -1479,10 +1479,29 @@ pub fn computer_card(look_only: bool, failed: bool) -> crate::computer_card::Car
         icon,
         error: failed.then(|| "The app couldn’t be saved: the settings file is read-only.".into()),
         clipboard: None,
+        screen: None,
+    }
+}
+
+/// The screen card: the agent asks to take over, to draw in Freeform.
+pub fn screen_card() -> crate::computer_card::CardData {
+    crate::computer_card::CardData {
+        id: 3,
+        app: "your screen".into(),
+        path: None,
+        look_only: false,
+        launching: false,
+        icon: None,
+        error: None,
+        clipboard: None,
+        screen: Some(crate::computer_card::ScreenAsk {
+            reason: "Freeform only draws shapes with the pointer, and the board has to be in front for that.".into(),
+            apps: crate::computer_card::list(&["Freeform".into(), "TextEdit".into()]).into(),
+        }),
     }
 }
 
 /// The clipboard card: asking to read it.
 pub fn clipboard_card() -> crate::computer_card::CardData {
-    crate::computer_card::CardData { id: 2, app: "the clipboard".into(), path: None, look_only: false, launching: false, icon: None, error: None, clipboard: Some(false) }
+    crate::computer_card::CardData { id: 2, app: "the clipboard".into(), path: None, look_only: false, launching: false, icon: None, error: None, clipboard: Some(false), screen: None }
 }

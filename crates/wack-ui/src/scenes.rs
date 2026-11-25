@@ -579,6 +579,12 @@ pub fn all() -> Vec<Scene> {
             build: |_, cx| computer_card_scene_with(fixtures::clipboard_card(), None, cx),
         },
         Scene {
+            name: "computer-card-screen",
+            description: "The screen card: the agent asks to take the pointer and keyboard until it's done, in its own words.",
+            size: WINDOW,
+            build: |_, cx| computer_card_scene_with(fixtures::screen_card(), None, cx),
+        },
+        Scene {
             name: "computer-card-small",
             description: "The computer-use card in the smallest window the app allows, with a save that failed.",
             size: size(px(716.), px(492.)),

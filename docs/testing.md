@@ -50,6 +50,7 @@ ask '{"cmd":"canvas-export","canvas":"c","artboard":"a","format":"pdf","path":"/
 ask '{"cmd":"computer","name":"computer_snapshot","input":{"app":"Calculator"}}'   # a computer tool on the Code chat in front
 ask '{"cmd":"click","tag":"computer-allow"}'   # its access card: computer-allow, -always, -deny, -never
 ask '{"cmd":"computer","pending":1}'           # the call that was waiting on the card
+ask '{"cmd":"computer","end":true}'            # end the socket's run: the cursor goes, the screen comes back
 ask '{"cmd":"key","keys":"cmd-n enter"}'
 ask '{"cmd":"resize","width":900,"height":600}'
 ask '{"cmd":"appearance","theme":"light"}'

@@ -7,6 +7,8 @@
 //!   never answers it; Esc denies (`Shell::back`).
 //! - It waits as long as the user takes. Stop takes it down with the run.
 //! - A clipboard card asks to read, or to write, for this chat: Deny or Allow, nothing saved.
+//! - A screen card asks to take the screen (the real pointer and keyboard) until the run ends,
+//!   in the agent's own words, and says how to take it back: Deny or Allow, nothing saved.
 //! - It says what the agent will be able to do: act in the app in the background, or only look
 //!   (web browsers), and whether the app will be started.
 //! - Answers go through `AppState::answer_computer_card` with the card's id, so a click on a card
@@ -43,6 +45,31 @@ pub struct CardData {
     /// A clipboard card, not an app's: `Some(true)` to write to it, `Some(false)` to read it.
     /// It offers Deny and Allow for this chat only.
     pub clipboard: Option<bool>,
+    /// A screen card, not an app's: the agent's reason, and the apps it may use.
+    pub screen: Option<ScreenAsk>,
+}
+
+/// What a screen card shows.
+#[derive(Clone)]
+pub struct ScreenAsk {
+    pub reason: SharedString,
+    pub apps: SharedString,
+}
+
+/// "TextEdit", "TextEdit and Notes", "TextEdit, Notes and Calculator".
+pub fn list(names: &[String]) -> String {
+    match names {
+        [] => "the apps you allowed".into(),
+        [one] => one.clone(),
+        [rest @ .., last] => format!("{} and {last}", rest.join(", ")),
+    }
+}
+
+impl CardData {
+    /// Clipboard and screen cards are this chat's alone: no Always or Never.
+    fn chat_only(&self) -> bool {
+        self.clipboard.is_some() || self.screen.is_some()
+    }
 }
 
 #[derive(IntoElement)]
@@ -58,6 +85,12 @@ impl ComputerCard {
 
 /// What the agent may do, in the user's words.
 fn reach(data: &CardData) -> String {
+    if let Some(screen) = &data.screen {
+        return format!(
+            "Until it finishes, the agent may bring {} to the front and use your pointer and keyboard there. Move the mouse or press ⌃⌥⌘. to take your screen back.",
+            screen.apps
+        );
+    }
     match data.clipboard {
         Some(true) => return "The agent may put text on the clipboard for this chat, replacing what you last copied.".into(),
         Some(false) => return "The agent may read what you copy, for this chat. Items a password manager marks private are never read.".into(),
@@ -89,9 +122,9 @@ impl RenderOnce for ComputerCard {
             .justify_center()
             .bg(theme.accent_wash)
             .child(match (data.icon.clone(), data.clipboard) {
-                (Some(icon), None) => gpui::img(icon).size(px(28.)).into_any_element(),
                 (_, Some(_)) => Icon::Copy.view(px(17.), theme.accent_text).into_any_element(),
-                (None, None) => Icon::Cursor.view(px(17.), theme.accent_text).into_any_element(),
+                (Some(icon), None) if data.screen.is_none() => gpui::img(icon).size(px(28.)).into_any_element(),
+                _ => Icon::Cursor.view(px(17.), theme.accent_text).into_any_element(),
             });
         let heading = div()
             .flex_1()
@@ -99,17 +132,26 @@ impl RenderOnce for ComputerCard {
             .flex()
             .flex_col()
             .gap(px(1.))
-            .child(div().typography(Type::Small).text_color(theme.accent_text).child(if data.look_only { "Computer use · Look only" } else { "Computer use" }))
-            .child(div().truncate().typography(Type::UiStrong).text_color(theme.text).child(match data.clipboard {
-                Some(true) => "Let the agent copy to your clipboard?".to_string(),
-                Some(false) => "Let the agent read your clipboard?".to_string(),
-                None => format!("Let the agent use {}?", data.app),
+            .child(div().typography(Type::Small).text_color(theme.accent_text).child(if data.look_only {
+                "Computer use · Look only"
+            } else if data.screen.is_some() {
+                "Computer use · Your screen"
+            } else {
+                "Computer use"
+            }))
+            .child(div().truncate().typography(Type::UiStrong).text_color(theme.text).child(match (data.clipboard, &data.screen) {
+                (_, Some(_)) => "Let the agent take over your screen?".to_string(),
+                (Some(true), _) => "Let the agent copy to your clipboard?".to_string(),
+                (Some(false), _) => "Let the agent read your clipboard?".to_string(),
+                (None, None) => format!("Let the agent use {}?", data.app),
             }));
         let head = div().flex().items_center().gap(px(12.)).child(tile).child(heading);
         let body = div()
             .flex()
             .flex_col()
             .gap(px(4.))
+            // The agent's reason, in its own words, before what it may do.
+            .when_some(data.screen.as_ref().map(|screen| screen.reason.clone()), |body, reason| body.child(div().typography(Type::Ui).text_color(theme.text).child(format!("“{reason}”"))))
             .child(div().typography(Type::Ui).text_color(theme.text_soft).child(reach(&data)))
             .when_some(data.path.clone(), |body, path| body.child(div().truncate().typography(Type::Mono).text_color(theme.text_faint).child(path)))
             .when_some(data.error.clone(), |body, error| body.child(div().typography(Type::Small).text_color(theme.danger).child(error)));
@@ -121,16 +163,16 @@ impl RenderOnce for ComputerCard {
             .items_center()
             .gap(px(8.))
             .child(div().child(Button::new("computer-deny", "Deny", Kind::Secondary).action(answer(Answer::Deny))).tag("computer-deny"))
-            .when(data.clipboard.is_none(), |answers| {
+            .when(!data.chat_only(), |answers| {
                 answers.child(div().child(Button::new("computer-always", "Always allow", Kind::Secondary).action(answer(Answer::AlwaysAllow))).tag("computer-always"))
             })
-            .child(div().child(Button::new("computer-allow", "Allow for this chat", Kind::Primary).action(answer(Answer::Allow))).tag("computer-allow"));
+            .child(div().child(Button::new("computer-allow", if data.screen.is_some() { "Allow until it’s done" } else { "Allow for this chat" }, Kind::Primary).action(answer(Answer::Allow))).tag("computer-allow"));
         let actions = div()
             .flex()
             .flex_wrap()
             .items_center()
             .gap(px(8.))
-            .when(data.clipboard.is_none(), |actions| {
+            .when(!data.chat_only(), |actions| {
                 actions.child(div().child(Button::new("computer-never", "Never allow", Kind::Secondary).action(answer(Answer::NeverAllow))).tag("computer-never"))
             })
             .child(answers);

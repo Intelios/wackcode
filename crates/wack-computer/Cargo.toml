@@ -30,7 +30,7 @@ objc2-app-kit = { version = "0.3", default-features = false, features = [
     "NSStringDrawing", "NSView", "NSWindow", "NSWorkspace",
 ] }
 objc2-core-foundation = { version = "0.3", default-features = false, features = [
-    "std", "CFArray", "CFBase", "CFCGTypes", "CFData", "CFDictionary", "CFNumber", "CFString", "CFRunLoop", "CFMachPort",
+    "std", "CFArray", "CFBase", "CFCGTypes", "CFData", "CFDate", "CFDictionary", "CFNumber", "CFString", "CFRunLoop", "CFMachPort",
 ] }
 objc2-core-graphics = { version = "0.3", default-features = false, features = [
     "std", "libc", "CGDirectDisplay", "CGError", "CGEvent", "CGEventSource", "CGEventTypes", "CGGeometry", "CGImage",

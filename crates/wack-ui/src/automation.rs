@@ -142,6 +142,9 @@ enum Command {
         path: Option<PathBuf>,
         #[serde(default)]
         pending: Option<u64>,
+        /// Ends the run the socket's calls draw under: the cursor goes and the screen comes back.
+        #[serde(default)]
+        end: bool,
     },
     Quit,
 }
@@ -448,7 +451,7 @@ async fn run(command: Command, cx: &mut AsyncApp) -> Result<Value, String> {
         }
         Command::Browser(args) => browser(window, cx, *args).await,
         Command::Canvas { name, input, path } => canvas_tool(window, cx, name, input, path).await,
-        Command::Computer { name, input, path, pending } => computer_tool(window, cx, name, input, path, pending).await,
+        Command::Computer { name, input, path, pending, end } => computer_tool(window, cx, name, input, path, pending, end).await,
         Command::CanvasExport { canvas, artboard, format, path } => {
             use wack_canvas::export::Format;
             let format = match format.as_str() {
@@ -567,12 +570,16 @@ static COMPUTER_CALL_NUMBER: std::sync::atomic::AtomicU64 = std::sync::atomic::A
 /// Calls one of the computer tools on the chat in front, as its agent would. Commands run one at a
 /// time, so a call waiting on its access card is answered at once with "pending": the card can
 /// then be clicked, and the result fetched with `{"cmd":"computer","pending":N}`.
-async fn computer_tool(window: AnyWindowHandle, cx: &mut AsyncApp, name: Option<String>, input: Option<Value>, path: Option<PathBuf>, pending: Option<u64>) -> Result<Value, String> {
+async fn computer_tool(window: AnyWindowHandle, cx: &mut AsyncApp, name: Option<String>, input: Option<Value>, path: Option<PathBuf>, pending: Option<u64>, end: bool) -> Result<Value, String> {
     use base64::Engine as _;
     let (computer, cwd) = on_window(window, cx, |window, cx| {
         window.root::<crate::shell::Shell>().flatten().and_then(|shell| shell.read(cx).current_computer(cx))
     })?
     .ok_or("Open a Code chat first: computer use belongs to a Code chat.")?;
+    if end {
+        computer.end_detached_run();
+        return Ok(json!({ "ok": true }));
+    }
     let number = match (pending, name) {
         (Some(number), _) => number,
         (None, Some(name)) => {

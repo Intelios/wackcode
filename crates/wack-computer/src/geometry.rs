@@ -123,12 +123,15 @@ pub struct WindowEntry {
     pub layer: i32,
     /// 0 for windows that are on screen but fully transparent (some utilities keep these).
     pub alpha: f64,
+    /// One of WackCode's click-through overlays (the agent's cursor, the screen's glow): hit
+    /// tests look through it.
+    pub overlay: bool,
 }
 
 impl WindowEntry {
     /// An opaque window on the normal layer.
     pub fn new(number: u32, pid: i32, bounds: Rect) -> Self {
-        Self { number, pid, bounds, layer: 0, alpha: 1.0 }
+        Self { number, pid, bounds, layer: 0, alpha: 1.0, overlay: false }
     }
 }
 
@@ -157,7 +160,7 @@ pub fn topmost_owner(
     describe: impl Fn(i32) -> (String, bool),
 ) -> HitOwner {
     let hit = windows_front_to_back.iter().find(|window| {
-        !skip.contains(&window.number) && window.alpha > 0.0 && window.bounds.width > 0.0 && window.bounds.height > 0.0 && window.bounds.contains(point.0, point.1)
+        !skip.contains(&window.number) && !window.overlay && window.alpha > 0.0 && window.bounds.width > 0.0 && window.bounds.height > 0.0 && window.bounds.contains(point.0, point.1)
     });
     match hit {
         None => HitOwner::Nothing,

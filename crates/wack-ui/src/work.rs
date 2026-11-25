@@ -314,7 +314,7 @@ pub fn activity(rows: &[WorkRow]) -> Option<String> {
         "Watched" => "Watching for",
         "Acted" | "Chained" => "Using",
         "Copied" => "Copying",
-        "Peeked" => "Reading",
+        "Peeked" => "Peeking",
         // The browser's steps (see `browser_words`).
         "Opened" => "Opening",
         "Went" => "Going",

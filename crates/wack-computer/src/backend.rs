@@ -162,6 +162,9 @@ pub trait Desktop: Send + Sync {
     async fn act(&self, pid: i32, window: u32, act: Act) -> Result<Done, Reason>;
     async fn fingerprint(&self, pid: i32, target: Option<u32>) -> Fingerprint;
     fn frontmost(&self) -> Option<i32>;
+    /// The windows on screen, front to back, without WackCode's click-through overlays (the
+    /// agent's cursor).
+    fn screen_windows(&self) -> Vec<crate::geometry::WindowEntry>;
     /// Brings `pid` forward (the user's app, after a target took the front).
     async fn bring_forward(&self, pid: i32) -> bool;
     fn seconds_since_typing(&self) -> f64;
@@ -358,6 +361,16 @@ pub mod fake {
             let windows = state.windows.iter().filter(|(owner, _)| *owner == pid).map(|(_, info)| (info.id, info.title.clone())).collect();
             let value = target.and_then(|handle| state.trees.iter().find_map(|(_, tree)| tree.find(handle as usize)).and_then(|node| node.value.clone()));
             Fingerprint { focused: None, windows, frontmost: state.frontmost, value, target: None }
+        }
+
+        fn screen_windows(&self) -> Vec<crate::geometry::WindowEntry> {
+            let state = self.state.lock().unwrap();
+            state
+                .windows
+                .iter()
+                .filter(|(_, window)| window.on_screen && !window.minimized)
+                .filter_map(|(pid, window)| window.frame.map(|frame| crate::geometry::WindowEntry::new(window.id, *pid, frame)))
+                .collect()
         }
 
         fn frontmost(&self) -> Option<i32> {

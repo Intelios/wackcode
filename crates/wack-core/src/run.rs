@@ -398,6 +398,9 @@ pub async fn run(
         Some(canvases) => agent.with_feature(Box::new(wack_canvas::CanvasFeature::new(canvases.clone()))),
         None => agent,
     };
+    // Held for the run: dropping it, when the run ends or is stopped, takes the agent's cursor
+    // down.
+    let _computer_run = computer.as_ref().map(|computer| computer.begin_run());
     let agent = match computer {
         Some(computer) => agent.with_feature(Box::new(wack_computer::feature::ComputerFeature::new(computer))),
         None => agent,

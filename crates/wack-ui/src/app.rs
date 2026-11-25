@@ -437,6 +437,9 @@ impl AppState {
         };
         app.watch_form(cx);
         theme::apply(app.store.appearance(), cx);
+        // The agent's cursor, drawn over other apps' windows, wears the theme and follows it.
+        app.computer.set_cursor_appearance(crate::theme::Theme::get(cx).cursor_appearance());
+        cx.observe_global::<crate::theme::Theme>(|app, cx| app.computer.set_cursor_appearance(crate::theme::Theme::get(cx).cursor_appearance())).detach();
         app.select(selection, cx);
         app.start_usage_tasks(cx);
         app

@@ -57,6 +57,7 @@ pub fn tools(chat: ChatComputer) -> Vec<Arc<dyn Tool>> {
 /// window, so cards show and wait for a click.
 pub async fn call(chat: ChatComputer, name: String, input: Value, cwd: PathBuf) -> Result<ToolOutput, String> {
     let kind = Kind::from_name(&name).ok_or_else(|| format!("There is no computer tool {name}."))?;
+    chat.ensure_run();
     let tool = ComputerTool { kind, chat, present: Some(true) };
     tool.run(input, &ToolContext::detached(cwd)).await
 }

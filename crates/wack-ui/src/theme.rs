@@ -690,6 +690,19 @@ struct Preference(wack_core::Appearance);
 
 impl Global for Preference {}
 
+impl Theme {
+    /// The colours for the agent's cursor, drawn natively over other apps' windows: the accent
+    /// arrow edged in the window's colour, its label on a card's ground. Alpha is dropped, so
+    /// the label is solid over any app.
+    pub fn cursor_appearance(&self) -> wack_computer::cursor::Appearance {
+        let rgb = |colour: Hsla| {
+            let rgba = colour.to_rgb();
+            [rgba.r as f64, rgba.g as f64, rgba.b as f64]
+        };
+        wack_computer::cursor::Appearance { accent: rgb(self.accent), outline: rgb(self.window), surface: rgb(self.surface), text: rgb(self.text), muted: rgb(self.text_soft) }
+    }
+}
+
 /// The theme for the user's choices, given the system's current appearance.
 pub fn input_for(choice: &wack_core::Appearance, system: Appearance) -> ThemeInput {
     ThemeInput {

@@ -19,12 +19,15 @@ tokio-util.workspace = true
 block2 = "0.6"
 objc2 = "0.6"
 objc2-foundation = { version = "0.3", default-features = false, features = [
-    "std", "block2", "NSArray", "NSBundle", "NSData", "NSDictionary", "NSEnumerator", "NSError", "NSGeometry",
-    "NSString", "NSURL", "NSValue", "NSObjCRuntime",
+    "std", "block2", "NSArray", "NSAttributedString", "NSBundle", "NSData", "NSDictionary", "NSEnumerator", "NSError",
+    "NSGeometry", "NSNotification", "NSObjCRuntime", "NSOperation", "NSRunLoop", "NSString", "NSTimer", "NSURL",
+    "NSValue",
 ] }
 objc2-app-kit = { version = "0.3", default-features = false, features = [
-    "std", "block2", "libc", "objc2-core-graphics", "NSApplication", "NSBitmapImageRep", "NSGraphicsContext", "NSImage",
-    "NSImageRep", "NSPasteboard", "NSResponder", "NSRunningApplication", "NSWorkspace",
+    "std", "block2", "libc", "objc2-core-foundation", "objc2-core-graphics", "NSAccessibility", "NSApplication", "NSAttributedString", "NSBezierPath",
+    "NSBitmapImageRep", "NSColor", "NSFont", "NSFontDescriptor", "NSGraphics", "NSGraphicsContext", "NSImage",
+    "NSImageRep", "NSPanel", "NSPasteboard", "NSResponder", "NSRunningApplication", "NSScreen", "NSShadow",
+    "NSStringDrawing", "NSView", "NSWindow", "NSWorkspace",
 ] }
 objc2-core-foundation = { version = "0.3", default-features = false, features = [
     "std", "CFArray", "CFBase", "CFCGTypes", "CFData", "CFDictionary", "CFNumber", "CFString", "CFRunLoop", "CFMachPort",

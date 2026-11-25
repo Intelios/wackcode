@@ -445,6 +445,11 @@ impl Desktop for Mac {
             .unwrap_or_default()
     }
 
+    fn screen_windows(&self) -> Vec<crate::geometry::WindowEntry> {
+        let skip: Vec<u32> = super::cursor::window_number().into_iter().collect();
+        input::window_list().into_iter().filter(|window| !skip.contains(&window.number)).collect()
+    }
+
     fn frontmost(&self) -> Option<i32> {
         apps::frontmost_pid()
     }

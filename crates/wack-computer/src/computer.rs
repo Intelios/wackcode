@@ -17,7 +17,10 @@
 
 use std::{
     collections::{HashMap, HashSet},
-    sync::{Arc, Mutex, RwLock, Weak},
+    sync::{
+        Arc, Mutex, RwLock, Weak,
+        atomic::{AtomicU64, Ordering},
+    },
 };
 
 use serde::{Deserialize, Serialize};
@@ -26,6 +29,7 @@ use tokio_util::sync::CancellationToken;
 
 use crate::{
     backend::Desktop,
+    cursor::{self, Cursor},
     geometry::Rect,
     policy::{AppIdentity, AppKey, ChatGrants, Grant, Tier},
 };
@@ -69,16 +73,33 @@ struct Shared {
     desktop: Arc<dyn Desktop>,
     settings: RwLock<Settings>,
     chats: Mutex<Vec<Weak<ChatInner>>>,
+    next_chat: AtomicU64,
+    cursor: Cursor,
 }
 
 impl Computer {
+    /// A computer whose cursor draws nothing (tests, the fake desktop).
     pub fn new(desktop: Arc<dyn Desktop>, settings: Settings) -> Self {
-        Self { shared: Arc::new(Shared { desktop, settings: RwLock::new(settings), chats: Mutex::new(Vec::new()) }) }
+        Self::with_cursor(desktop, settings, Cursor::headless())
     }
 
-    /// The real Mac. Main thread only (it reads the keyboard layout).
+    fn with_cursor(desktop: Arc<dyn Desktop>, settings: Settings, cursor: Cursor) -> Self {
+        Self { shared: Arc::new(Shared { desktop, settings: RwLock::new(settings), chats: Mutex::new(Vec::new()), next_chat: AtomicU64::new(1), cursor }) }
+    }
+
+    /// The real Mac, with the agent's cursor on screen. Main thread only (it reads the keyboard
+    /// layout).
     pub fn native(settings: Settings) -> Self {
-        Self::new(Arc::new(crate::native::desktop::Mac::new()), settings)
+        Self::with_cursor(Arc::new(crate::native::desktop::Mac::new()), settings, crate::native::cursor::cursor())
+    }
+
+    pub fn cursor(&self) -> &Cursor {
+        &self.shared.cursor
+    }
+
+    /// The theme's colours for the agent's cursor; the app sends them whenever they change.
+    pub fn set_cursor_appearance(&self, appearance: cursor::Appearance) {
+        self.shared.cursor.set_appearance(appearance);
     }
 
     pub fn desktop(&self) -> &Arc<dyn Desktop> {
@@ -100,7 +121,11 @@ impl Computer {
             let old = self.shared.settings.read().unwrap_or_else(|e| e.into_inner());
             old.always.iter().filter(|app| !settings.always.contains(app)).filter_map(SavedApp::key).collect()
         };
+        let turned_off = !settings.enabled;
         *self.shared.settings.write().unwrap_or_else(|e| e.into_inner()) = settings;
+        if turned_off {
+            self.shared.cursor.clear();
+        }
         if !removed.is_empty() {
             for chat in self.chats() {
                 let mut state = chat.state();
@@ -113,7 +138,8 @@ impl Computer {
 
     /// A new chat's use of the computer.
     pub fn chat(&self) -> ChatComputer {
-        let inner = Arc::new(ChatInner { computer: self.clone(), state: Mutex::new(ChatState::default()), lane: tokio::sync::Mutex::new(()), observer: Mutex::new(None) });
+        let id = self.shared.next_chat.fetch_add(1, Ordering::Relaxed);
+        let inner = Arc::new(ChatInner { id, computer: self.clone(), state: Mutex::new(ChatState::default()), lane: tokio::sync::Mutex::new(()), observer: Mutex::new(None) });
         let mut chats = self.shared.chats.lock().unwrap_or_else(|e| e.into_inner());
         chats.retain(|chat| chat.strong_count() > 0);
         chats.push(Arc::downgrade(&inner));
@@ -195,10 +221,25 @@ struct ChatState {
 }
 
 struct ChatInner {
+    /// Unique among the app's chats: what the cursor knows the chat by.
+    id: u64,
     computer: Computer,
     state: Mutex<ChatState>,
     lane: tokio::sync::Mutex<()>,
     observer: Mutex<Option<Observer>>,
+}
+
+/// Held while a run of a chat goes; dropping it lets go of what the run held.
+pub struct RunGuard {
+    cursor: Cursor,
+    chat: u64,
+    generation: u64,
+}
+
+impl Drop for RunGuard {
+    fn drop(&mut self) {
+        self.cursor.end_run(self.chat, self.generation);
+    }
 }
 
 /// One chat's computer use. Clones share it.
@@ -229,6 +270,28 @@ impl ChatComputer {
     /// The queue the chat's agent's calls take turns in.
     pub fn lane(&self) -> &tokio::sync::Mutex<()> {
         &self.inner.lane
+    }
+
+    /// A run of the chat starts; what it holds is let go when the guard drops (the run ends or
+    /// is stopped): its cursor goes.
+    pub fn begin_run(&self) -> RunGuard {
+        let cursor = self.inner.computer.cursor().clone();
+        let generation = cursor.start_run(self.inner.id);
+        RunGuard { cursor, chat: self.inner.id, generation }
+    }
+
+    /// For calls made outside a run (the automation socket): the cursor draws as if one were
+    /// going, until the chat's next run ends.
+    pub fn ensure_run(&self) {
+        let cursor = self.inner.computer.cursor();
+        if !cursor.has_run(self.inner.id) {
+            cursor.start_run(self.inner.id);
+        }
+    }
+
+    /// One call's use of the agent's cursor, while the chat has a run.
+    pub fn cursor(&self, cancel: &CancellationToken) -> Option<cursor::Session> {
+        self.inner.computer.cursor().session(self.inner.id, cancel.clone())
     }
 
     pub fn set_observer(&self, observer: impl Fn(Signal) + Send + Sync + 'static) {

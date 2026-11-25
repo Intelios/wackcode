@@ -238,6 +238,7 @@ mod acting {
     use super::*;
     use crate::{
         backend::{Act, Target},
+        cursor,
         ladder::Reason,
     };
 
@@ -259,6 +260,33 @@ mod acting {
         assert!(typed.contains("its value is now \"Hello world\""), "{typed}");
         let acts = setup.desktop.acts();
         assert!(matches!(&acts[0].2, Act::Click { target: Target::Ref(3), count: 1, .. }));
+    }
+
+    #[tokio::test]
+    async fn the_cursor_shows_each_action_and_goes_when_the_run_ends() {
+        let setup = allowed();
+        let marker = || setup.computer.cursor().state().marker.clone();
+        run(&setup.chat, "computer_snapshot", json!({"app": "TextEdit"})).await.unwrap();
+        // Calls from the socket draw as if a run were going.
+        run(&setup.chat, "computer_act", json!({"app": "TextEdit", "action": "click", "ref": "e3", "summary": "Save the notes"})).await.unwrap();
+        let shown = marker().unwrap();
+        assert_eq!((shown.target.point, shown.target.anchor.window), ((840.0, 665.0), setup.window), "the middle of Save");
+        assert_eq!(shown.label(false), "Save the notes");
+        assert!(shown.completed.is_some());
+        // A key press has no place of its own: the marker stays where it was.
+        run(&setup.chat, "computer_act", json!({"app": "TextEdit", "action": "key", "keys": "tab", "summary": "Next field"})).await.unwrap();
+        let kept = marker().unwrap();
+        assert_eq!((kept.target.point, kept.kind), ((840.0, 665.0), cursor::Kind::Pressing));
+        // A failed action takes it down.
+        setup.desktop.state.lock().unwrap().outcomes.push(Err(Reason::NoElement));
+        run(&setup.chat, "computer_act", json!({"app": "TextEdit", "action": "click", "ref": "e2", "summary": "Click"})).await.unwrap_err();
+        assert!(marker().is_none());
+        // A real run's marker goes when the run ends.
+        let running = setup.chat.begin_run();
+        run(&setup.chat, "computer_act", json!({"app": "TextEdit", "action": "click", "ref": "e2", "summary": "Click the text"})).await.unwrap();
+        assert_eq!(marker().unwrap().target.point, (500.0, 380.0));
+        drop(running);
+        assert!(marker().is_none());
     }
 
     #[tokio::test]

@@ -19,7 +19,7 @@ use wack_agent::ToolOutput;
 use super::{Call, Kind, app_data, look};
 use crate::{
     backend::{Act, AppInfo, Button, Fingerprint, Target, Via, WindowInfo},
-    change, geometry,
+    change, cursor, geometry,
     keys::{self, Modifiers},
     ladder::{self, Step},
     outline::{self, Node},
@@ -183,6 +183,41 @@ fn step_of(action: &str) -> Step {
     }
 }
 
+/// Where the agent's cursor shows an action: the element's middle, or the point. `None` for
+/// actions with no place on screen (keys, menu commands), which leave it where it is.
+fn cursor_point(act: &Act, tree: Option<&Node>) -> Option<(f64, f64)> {
+    let middle = |node: &Node| node.frame.filter(|frame| frame.has_area()).map(|frame| frame.center());
+    let target = match act {
+        Act::Click { target, .. } | Act::Type { target, .. } | Act::Scroll { target, .. } | Act::Focus { target } => target,
+        Act::Drag { path } => return path.first().copied(),
+        Act::Key { .. } | Act::Menu { .. } => return None,
+    };
+    match target {
+        Target::At { point, .. } => Some(*point),
+        Target::Ref(reference) => tree?.find(*reference as usize).and_then(middle),
+        Target::Focused => {
+            let mut focused = None;
+            tree?.each(&mut |node| {
+                if node.focused && focused.is_none() {
+                    focused = middle(node);
+                }
+            });
+            focused
+        }
+    }
+}
+
+fn cursor_kind(action: &str) -> cursor::Kind {
+    match action {
+        "type" => cursor::Kind::Typing,
+        "key" => cursor::Kind::Pressing,
+        "scroll" => cursor::Kind::Scrolling,
+        "drag" => cursor::Kind::Dragging,
+        "menu" => cursor::Kind::Menu,
+        _ => cursor::Kind::Clicking,
+    }
+}
+
 /// Reads the app until it holds still after an action, at most [`SETTLE_LIMIT`].
 async fn settle(call: &Call<'_>, pid: i32, target: Option<u32>) -> Fingerprint {
     let started = Instant::now();
@@ -275,10 +310,33 @@ pub(super) async fn act(call: &Call<'_>, input: Value) -> Result<ToolOutput, Str
     };
     let before = desktop.fingerprint(app.pid, watched).await;
     let before_tree = desktop.glance(app.pid, window.id).await;
+    // The agent's cursor shows where the action lands, gliding there from the last one.
+    let marker = call.chat.cursor(&call.context.cancel).map(|session| {
+        session.target_app(app.pid);
+        session.begin(cursor_kind(&action), input.summary.as_deref())
+    });
+    let drag_end = match &act {
+        Act::Drag { path } => path.last().copied(),
+        _ => None,
+    };
+    if let (Some(marker), Some(point)) = (&marker, cursor_point(&act, before_tree.as_ref())) {
+        marker.at(cursor::Target::in_window(app.pid, point, &desktop.screen_windows(), &[]));
+    }
     let done = match desktop.act(app.pid, window.id, act).await {
         Ok(done) => done,
-        Err(reason) => return Err(ladder::advice(step_of(&action), &reason, &name)),
+        Err(reason) => {
+            if let Some(marker) = &marker {
+                marker.finish(false);
+            }
+            return Err(ladder::advice(step_of(&action), &reason, &name));
+        }
     };
+    if let Some(marker) = &marker {
+        if let Some(point) = drag_end {
+            marker.at(cursor::Target::in_window(app.pid, point, &desktop.screen_windows(), &[]));
+        }
+        marker.finish(true);
+    }
     let after = settle(call, app.pid, watched).await;
     let mut changes = change::report(&before, &after, app.pid, &name);
     // Inside the window: values that changed elsewhere, and anything that opened over it.

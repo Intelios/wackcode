@@ -48,6 +48,7 @@
 pub mod backend;
 pub mod change;
 pub mod computer;
+pub mod cursor;
 pub mod engine;
 pub mod feature;
 pub mod geometry;

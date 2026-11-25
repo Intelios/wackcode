@@ -56,7 +56,7 @@ ask '{"cmd":"appearance","theme":"light"}'
 ask '{"cmd":"quit"}'
 ```
 
-A computer call that raises the access card answers at once with `"pending"` (commands run one at a time, so it can't wait for the click); answer the card, then fetch the result. Drive only apps you started for the check, on scratch documents (Calculator, or TextEdit with a file in the scratchpad), never the user's own documents. macOS credits a `cargo dev` app's Accessibility and Screen Recording to the terminal that ran it.
+A computer call that raises the access card answers at once with `"pending"` (commands run one at a time, so it can't wait for the click); answer the card, then fetch the result. Drive only apps you started for the check, on scratch documents (Calculator, or TextEdit with a file in the scratchpad), never the user's own documents. macOS credits a `cargo dev` app's Accessibility and Screen Recording to the terminal that ran it. The agent's cursor is a native panel screenshots can't see; in the dev app, `WACKCODE_CURSOR_FRAMES=<dir>` draws each of its states to PNGs in the app's theme when the app starts, `WACKCODE_CURSOR_DEBUG=1` logs why it shows or hides, and `WACKCODE_CURSOR_CAPTURABLE=1` lets screenshots include it.
 
 A failure answers `{"ok":false,"error":"…"}` with a sentence saying what went wrong. Screenshots show what the app drew, at 2x, without the traffic lights (the system draws those). They leave out the browser pane's page, which is a native view, not something GPUI draws: to see it, capture the window with `screencapture -l <window id>`. The full protocol is in `crates/wack-ui/src/automation.rs`.
 

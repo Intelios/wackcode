@@ -34,7 +34,7 @@ use crate::{
     actions::{
         AddModelRow, ChooseFormat, CloseConnectionForm, CloseSettings, DiscardConnection, EditConnection, OpenConnectionForm,
         OpenSettingsSection, RemoveConnection, RemoveModelRow, SaveConnection, SwitchConnection, ToggleConnectionKey,
-        ToggleModelEffort, ToggleModelReasoning, ToggleModelVision,
+        ToggleModelEffort, ToggleModelReasoning, ToggleModelRow, ToggleModelVision,
     },
     appearance_page::{self, AppearanceData},
     button::{Button, Kind},
@@ -58,6 +58,11 @@ pub struct ModelField {
     pub efforts: Vec<Reasoning>,
     /// The Vision switch: whether the model is sent pictures. A new row accepts.
     pub accepts_images: bool,
+    /// The row is open to its fields, as version 2's were. A new row opens; a saved model's
+    /// row starts folded to one line.
+    pub open: bool,
+    /// The model's id and context as last read, for the folded line.
+    pub summary: Option<(SharedString, SharedString)>,
 }
 
 /// What switching Reasoning on starts a model with, as version 2 did.
@@ -138,6 +143,7 @@ impl ProviderForm {
             let context = model.context_window.map(tokens_text);
             self.add_model(&model.id, context.as_deref(), cx);
             if let Some(row) = self.models.last_mut() {
+                row.open = false;
                 row.accepts_images = model.accepts_images;
                 if model.reasons() {
                     row.reasoning = true;
@@ -283,6 +289,15 @@ impl ProviderForm {
             reasoning: false,
             efforts: Vec::new(),
             accepts_images: true,
+            open: true,
+            summary: None,
+        }
+    }
+
+    /// Opens or folds one model's row.
+    pub fn toggle_open(&mut self, index: usize) {
+        if let Some(row) = self.models.get_mut(index) {
+            row.open = !row.open;
         }
     }
 
@@ -553,7 +568,12 @@ impl ProvidersData {
                 address: form.address.clone(),
                 key: form.key.clone(),
                 format: form.format,
-                models: form.models.clone(),
+                models: form
+                    .models
+                    .iter()
+                    .zip(&values.models)
+                    .map(|(row, value)| ModelField { summary: Some((value.id.clone().into(), value.context.clone().into())), ..row.clone() })
+                    .collect(),
                 title,
                 host,
                 model_count: values.models.iter().filter(|model| !model.id.is_empty()).count(),
@@ -605,6 +625,25 @@ impl Section {
         Section::Browser,
         Section::Computer,
     ];
+
+    /// The section's icon in the navigation, as version 2 drew them.
+    pub fn icon(self) -> Icon {
+        match self {
+            Section::Appearance => Icon::Palette,
+            Section::Providers => Icon::Key,
+            Section::Tools => Icon::Hammer,
+            Section::Memory => Icon::Brain,
+            Section::Skills => Icon::Book,
+            Section::Commands => Icon::Slash,
+            Section::Subagents => Icon::Duck,
+            Section::Git => Icon::Branch,
+            Section::Integrations => Icon::Plug,
+            Section::Mcp => Icon::Plug,
+            Section::Web => Icon::Globe,
+            Section::Browser => Icon::Window,
+            Section::Computer => Icon::Cursor,
+        }
+    }
 
     pub fn name(self) -> &'static str {
         match self {
@@ -704,7 +743,34 @@ pub fn strip(section: Section, inset: Pixels, ground: Option<gpui::Hsla>, theme:
 
 /// The navigation, in the sidebar's pane while Settings is open: back to the chats, then the
 /// sections in their groups. `connections` is counted beside Providers.
-pub fn nav(section: Section, connections: usize, theme: &Theme) -> impl IntoElement {
+/// A connection as the navigation lists it under Providers: its id, name, whether it is on, and
+/// whether its editor is the one open.
+#[derive(Clone)]
+pub struct NavConnection {
+    pub id: String,
+    pub name: SharedString,
+    pub enabled: bool,
+    pub open: bool,
+}
+
+impl NavConnection {
+    pub fn list(providers: &ProvidersData) -> Vec<NavConnection> {
+        let open = providers.editor.as_ref().and_then(|editor| editor.editing.clone());
+        providers
+            .connections
+            .iter()
+            .map(|row| NavConnection {
+                id: row.connection.id.clone(),
+                name: row.connection.name.clone().into(),
+                enabled: row.connection.enabled,
+                open: open.as_deref() == Some(row.connection.id.as_str()),
+            })
+            .collect()
+    }
+}
+
+pub fn nav(section: Section, connections: Vec<NavConnection>, theme: &Theme) -> impl IntoElement {
+    let count = connections.len();
     let back = div()
         .id("settings-back")
         .h(px(30.))
@@ -734,6 +800,7 @@ pub fn nav(section: Section, connections: usize, theme: &Theme) -> impl IntoElem
                         .when(lit, |row| row.bg(theme.accent_wash))
                         .when(!lit, |row| row.hover(|row| row.bg(theme.hover)))
                         .on_click(dispatch(OpenSettingsSection { section: target }))
+                        .child(target.icon().view(px(14.), if lit { theme.accent_text } else { theme.text_dim }))
                         .child(
                             div()
                                 .flex_1()
@@ -741,17 +808,51 @@ pub fn nav(section: Section, connections: usize, theme: &Theme) -> impl IntoElem
                                 .text_color(if lit { theme.accent_text } else { theme.text_soft })
                                 .child(name),
                         )
-                        .when(target == Section::Providers && connections > 0, |row| {
-                            row.child(div().typography(Type::Small).text_color(theme.text_faint).child(connections.to_string()))
+                        .when(target == Section::Providers && count > 0, |row| {
+                            row.child(div().typography(Type::Small).text_color(theme.text_faint).child(count.to_string()))
                         })
                         .tag(target.tag())
                         .into_any_element()
                 }
                 None => row
+                    .child(Icon::Pencil.view(px(14.), theme.text_faint))
                     .child(div().flex_1().typography(Type::Ui).text_color(theme.text_faint).child(name))
                     .child(div().typography(Type::Small).text_color(theme.text_faint).child("soon"))
                     .into_any_element(),
             });
+            // On Providers the navigation opens up with every connection beneath it, as version
+            // 2's did: each opens its editor.
+            if target == Some(Section::Providers) && section == Section::Providers && !connections.is_empty() {
+                let mut sub = div().flex().flex_col().gap(px(1.)).ml(px(17.)).pl(px(10.)).border_l_1().border_color(theme.border).my(px(2.));
+                for connection in &connections {
+                    let id = connection.id.clone();
+                    sub = sub.child(
+                        div()
+                            .id(SharedString::from(format!("nav-connection-{}", connection.id)))
+                            .h(px(26.))
+                            .px(px(10.))
+                            .rounded_full()
+                            .flex()
+                            .items_center()
+                            .gap(px(8.))
+                            .cursor_pointer()
+                            .when(connection.open, |row| row.bg(theme.hover))
+                            .when(!connection.open, |row| row.hover(|row| row.bg(theme.hover)))
+                            .on_click(move |_, window, cx| window.dispatch_action(Box::new(EditConnection { id: id.clone() }), cx))
+                            .child(div().flex_none().size(px(6.)).rounded_full().bg(if connection.enabled { theme.success } else { theme.text_faint }))
+                            .child(
+                                div()
+                                    .flex_1()
+                                    .min_w_0()
+                                    .truncate()
+                                    .typography(Type::Small)
+                                    .text_color(if connection.open { theme.text } else if connection.enabled { theme.text_soft } else { theme.text_faint })
+                                    .child(connection.name.clone()),
+                            ),
+                    );
+                }
+                list = list.child(crate::motion::enter("nav-connections", sub));
+            }
         }
     }
     div()
@@ -1178,18 +1279,6 @@ fn models_card(editor: &ProviderEditor, theme: &Theme) -> impl IntoElement {
     if editor.models.is_empty() {
         card = card.child(div().px(px(18.)).pt(px(2.)).pb(px(14.)).typography(Type::Ui).text_color(theme.text_dim).child("No models yet. Add at least one below."));
     } else {
-        card = card.child(
-            div()
-                .px(px(18.))
-                .pt(px(2.))
-                .pb(px(6.))
-                .flex()
-                .items_center()
-                .gap(px(10.))
-                .child(div().flex_1().min_w_0().typography(Type::Small).text_color(theme.text_faint).child("MODEL ID"))
-                .child(div().w(px(CONTEXT_WIDTH)).flex_none().typography(Type::Small).text_color(theme.text_faint).child("CONTEXT WINDOW"))
-                .child(div().w(px(26.)).flex_none()),
-        );
         for (index, row) in editor.models.iter().enumerate() {
             card = card.child(model_row(index, row, theme));
         }
@@ -1208,16 +1297,63 @@ fn models_card(editor: &ProviderEditor, theme: &Theme) -> impl IntoElement {
 const CONTEXT_WIDTH: f32 = 128.;
 
 fn model_row(index: usize, row: &ModelField, theme: &Theme) -> impl IntoElement {
+    let (id, context) = row.summary.clone().unwrap_or_default();
+    let name: SharedString = if id.is_empty() { "New model".into() } else { id };
+    let badge = |word: &'static str| {
+        div().flex_none().h(px(18.)).px(px(7.)).rounded_full().flex().items_center().bg(theme.hover).typography(Type::Small).text_color(theme.text_soft).child(word)
+    };
+    // The folded line, as version 2's: a chevron, the model, its context and what it can do.
+    let head = div()
+        .id(("model-row", index))
+        .flex()
+        .items_center()
+        .gap(px(9.))
+        .cursor_pointer()
+        .on_click(dispatch(ToggleModelRow { index }))
+        .child(
+            Icon::ChevronRight
+                .view(px(12.), theme.text_dim)
+                .with_transformation(gpui::Transformation::rotate(gpui::radians(if row.open { std::f32::consts::FRAC_PI_2 } else { 0. }))),
+        )
+        .child(div().min_w_0().truncate().typography(Type::Mono).text_color(theme.text).child(name))
+        .child(div().flex_1())
+        .when(!context.is_empty(), |head| {
+            head.child(div().flex_none().typography(Type::Small).text_color(theme.text_dim).child(format!("{context} context")))
+        })
+        .when(row.reasoning, |head| head.child(badge("Reasoning")))
+        .when(row.accepts_images, |head| head.child(badge("Vision")))
+        .when(!row.open, |head| head.child(
+            div()
+                .id(("remove-model-head", index))
+                .flex_none()
+                .size(px(26.))
+                .rounded_full()
+                .flex()
+                .items_center()
+                .justify_center()
+                .hover(|button| button.bg(theme.hover))
+                .tooltip(crate::tooltip::tip("Remove this model"))
+                .on_click(move |_, window, cx| {
+                    cx.stop_propagation();
+                    window.dispatch_action(Box::new(RemoveModelRow { index }), cx);
+                })
+                .child(Icon::Trash.view(px(14.), theme.text_dim)),
+        ));
     div()
         .px(px(18.))
-        .py(px(8.))
+        .py(px(10.))
         .border_t_1()
         .border_color(theme.border)
         .flex()
         .flex_col()
-        .gap(px(8.))
-        .child(model_fields(index, row, theme))
-        .child(reasoning_line(index, row, theme))
+        .gap(px(10.))
+        .child(head)
+        .when(row.open, |body| {
+            body.child(crate::motion::enter(
+                gpui::ElementId::NamedInteger("model-row-open".into(), index as u64),
+                div().flex().flex_col().gap(px(8.)).pl(px(21.)).child(model_fields(index, row, theme)).child(reasoning_line(index, row, theme)),
+            ))
+        })
 }
 
 /// Tags for the automation socket, which takes only fixed names.

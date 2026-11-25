@@ -1368,6 +1368,12 @@ impl AppState {
         Some(self.store.scratch_folder(chat))
     }
 
+    pub fn reveal_project(&self) {
+        if let Some(project) = self.current_project() {
+            crate::memory_page::reveal(&project.path);
+        }
+    }
+
     pub fn reveal_scratchpad(&self) {
         if let Some(folder) = self.current_scratchpad() {
             let _ = std::fs::create_dir_all(&folder);

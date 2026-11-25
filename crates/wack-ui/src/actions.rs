@@ -100,6 +100,10 @@ actions!(
         ClosePaneMenu,
         /// Hides the side panel, keeping its panes; a pane toggle brings it back.
         HideSidePanel,
+        /// The chat header's panel button (⌥⌘B): hides the side panel, or shows it again.
+        ToggleSidePanel,
+        /// The chat header's folder pill: shows the chat's project in the Finder.
+        RevealProject,
         /// Closes the pane that has focus.
         ClosePane,
         /// Closes the chat tab in front; the chat itself stays in the sidebar.
@@ -485,6 +489,13 @@ pub struct AttachFiles {
 #[derive(Clone, Debug, PartialEq, Action)]
 #[action(namespace = wackcode, no_json)]
 pub struct RemoveAttachment {
+    pub index: usize,
+}
+
+/// Settings › Providers: opens or folds one model's row in the connection editor.
+#[derive(Clone, Debug, PartialEq, Action)]
+#[action(namespace = wackcode, no_json)]
+pub struct ToggleModelRow {
     pub index: usize,
 }
 
@@ -1038,6 +1049,7 @@ pub fn init(cx: &mut App) {
         KeyBinding::new("shift-tab", FocusPrevious, Some(FORM_CONTEXT)),
         KeyBinding::new("ctrl-cmd-s", ToggleSidebar, Some(CONTEXT)),
         KeyBinding::new("cmd-shift-g", ToggleChanges, Some(CONTEXT)),
+        KeyBinding::new("cmd-alt-b", ToggleSidePanel, Some(CONTEXT)),
         KeyBinding::new("cmd-b", MoveToBackground, Some(CONTEXT)),
         KeyBinding::new("cmd-shift-a", ToggleAgentsPane, Some(CONTEXT)),
         KeyBinding::new("cmd-shift-b", ToggleBrowserPane, Some(CONTEXT)),

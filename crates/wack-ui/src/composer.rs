@@ -314,7 +314,7 @@ impl RenderOnce for Composer {
                 pill("model").min_w(px(MODEL_MIN)).text_color(theme.text_soft).hover(|pill| pill.bg(theme.hover).text_color(theme.text)).child(
                     div().min_w_0().truncate().typography(Type::Ui).child(data.model.clone()),
                 ).child(Icon::ChevronDown.view(px(12.), theme.text_faint)),
-                menu_for(Menu::Model).map(|menu| menu_view(menu, &theme).into_any_element()),
+                menu_for(Menu::Model).map(|menu| ModelPicker { menu }.into_any_element()),
                 true,
                 viewport,
             ));
@@ -1246,73 +1246,150 @@ impl RenderOnce for EffortSlider {
 /// The room each stop's name has beneath the track.
 const STOP_LABEL: f32 = 46.;
 
-fn menu_view(menu: MenuData, theme: &Theme) -> gpui::Stateful<gpui::Div> {
-    let mut card = div()
-        .id("menu")
-        .occlude()
-        .min_w(px(260.))
-        .max_w(px(420.))
-        .py(px(6.))
-        .rounded(px(12.))
-        .bg(theme.raised)
-        .border_1()
-        .border_color(theme.border_strong)
-        .shadow_lg()
-        .flex()
-        .flex_col();
-    let mut index: usize = 0;
-    for (number, group) in menu.groups.into_iter().enumerate() {
-        if number > 0 {
-            card = card.child(div().my(px(6.)).h(px(1.)).bg(theme.border));
-        }
-        if let Some(title) = group.title {
-            card = card.child(div().px(px(14.)).pt(px(4.)).pb(px(2.)).typography(Type::Label).text_color(theme.text_dim).child(title));
-        }
-        for item in group.items {
-            let ultra = matches!(item.choice, Choice::Effort(Some(Reasoning::Ultra)));
-            let action: Box<dyn gpui::Action> = match item.choice {
-                Choice::Model { connection, model } => Box::new(ChooseModel { connection, model }),
-                Choice::Effort(effort) => Box::new(ChooseEffort { effort }),
-            };
-            card = card.child(
-                div()
-                    .id(("menu-item", index))
+/// The model picker, after version 2's: two panels side by side in one card. The first lists the
+/// providers (each connection, with how many models it offers); choosing one slides across to
+/// its models, with a back button to the list. It opens on the provider of the model in use.
+#[derive(IntoElement)]
+struct ModelPicker {
+    menu: MenuData,
+}
+
+/// Which provider the picker shows (`None`: the list of providers), and how many times it has
+/// slid, so each slide plays afresh.
+struct PickerView {
+    provider: Option<usize>,
+    slides: usize,
+    /// The way the last slide went: towards a provider's models, or back.
+    forward: bool,
+}
+
+const PICKER_WIDTH: f32 = 280.;
+const PICKER_SLIDE: f32 = 36.;
+
+impl RenderOnce for ModelPicker {
+    fn render(self, window: &mut Window, cx: &mut App) -> impl IntoElement {
+        let theme = Theme::get(cx).clone();
+        let still = cx.reduce_motion();
+        let groups = self.menu.groups;
+        let current = groups.iter().position(|group| group.items.iter().any(|item| item.selected));
+        let state = window.use_keyed_state("model-picker", cx, move |_, _| PickerView { provider: current.or(Some(0)), slides: 0, forward: true });
+        let (shown, slides, forward) = {
+            let view = state.read(cx);
+            (view.provider.filter(|&index| index < groups.len()), view.slides, view.forward)
+        };
+        let go = move |to: Option<usize>| {
+            let state = state.clone();
+            move |_: &gpui::ClickEvent, window: &mut Window, cx: &mut App| {
+                cx.stop_propagation();
+                state.update(cx, |view, _| {
+                    view.forward = to.is_some();
+                    view.provider = to;
+                    view.slides += 1;
+                });
+                window.refresh();
+            }
+        };
+        let row = |id: (&'static str, usize)| {
+            div().id(id).mx(px(6.)).px(px(8.)).h(px(32.)).rounded(px(8.)).flex().items_center().gap(px(8.)).cursor_pointer().hover(|row| row.bg(theme.hover))
+        };
+        let panel = match shown {
+            None => {
+                let mut list = div()
+                    .flex()
+                    .flex_col()
+                    .child(div().px(px(14.)).pt(px(4.)).pb(px(6.)).typography(Type::Label).text_color(theme.text_dim).child("Providers"));
+                for (index, group) in groups.iter().enumerate() {
+                    let holds_current = current == Some(index);
+                    let name = group.title.clone().unwrap_or_else(|| "Models".into());
+                    list = list.child(
+                        row(("picker-provider", index))
+                            .on_click(go(Some(index)))
+                            .child(Icon::Key.view(px(13.), if holds_current { theme.accent_text } else { theme.text_dim }))
+                            .child(
+                                div()
+                                    .flex_1()
+                                    .min_w_0()
+                                    .truncate()
+                                    .typography(if holds_current { Type::UiStrong } else { Type::Ui })
+                                    .text_color(theme.text)
+                                    .child(name),
+                            )
+                            .child(div().flex_none().typography(Type::Small).text_color(theme.text_faint).child(group.items.len().to_string()))
+                            .child(Icon::ChevronRight.view(px(12.), theme.text_faint)),
+                    );
+                }
+                list.into_any_element()
+            }
+            Some(index) => {
+                let group = &groups[index];
+                let back = div()
+                    .id("picker-back")
                     .mx(px(6.))
-                    .px(px(8.))
+                    .mb(px(4.))
+                    .px(px(6.))
                     .h(px(30.))
-                    .rounded(px(7.))
+                    .rounded(px(8.))
                     .flex()
                     .items_center()
-                    .gap(px(8.))
+                    .gap(px(6.))
+                    .cursor_pointer()
                     .hover(|row| row.bg(theme.hover))
-                    .on_click(move |_, window, cx| window.dispatch_action(action.boxed_clone(), cx))
-                    .child(div().w(px(14.)).flex_none().when(item.selected, |mark| mark.child(Icon::Check.view(px(13.), theme.accent_text))))
-                    .child(if ultra {
-                        div()
-                            .flex_1()
-                            .min_w_0()
-                            .flex()
-                            .items_center()
-                            .gap(px(6.))
-                            .child(UltraLabel::new("menu-ultra", item.label, if item.selected { Type::UiStrong } else { Type::Ui }).decode_on_arrival(false))
-                            .child(UltraMark::new("menu-ultra-mark", px(10.)))
-                    } else {
-                        div()
-                            .flex_1()
-                            .min_w_0()
-                            .truncate()
-                            .typography(if item.selected { Type::UiStrong } else { Type::Ui })
-                            .text_color(theme.text)
-                            .child(item.label)
-                    })
-                    .when_some(item.detail, |row, detail| {
-                        row.child(div().flex_none().typography(Type::Small).text_color(theme.text_faint).child(detail))
-                    }),
-            );
-            index += 1;
-        }
+                    .on_click(go(None))
+                    .child(Icon::ChevronRight.view(px(12.), theme.text_dim).with_transformation(gpui::Transformation::rotate(gpui::radians(std::f32::consts::PI))))
+                    .child(div().flex_1().min_w_0().truncate().typography(Type::UiStrong).text_color(theme.text).child(group.title.clone().unwrap_or_else(|| "Models".into())))
+                    .tag("picker-back");
+                let mut list = div().flex().flex_col().child(back).child(div().mx(px(12.)).mb(px(4.)).h(px(1.)).bg(theme.border));
+                for (number, item) in group.items.iter().enumerate() {
+                    let action: Box<dyn gpui::Action> = match item.choice.clone() {
+                        Choice::Model { connection, model } => Box::new(ChooseModel { connection, model }),
+                        Choice::Effort(effort) => Box::new(ChooseEffort { effort }),
+                    };
+                    list = list.child(
+                        row(("menu-item", index * 1000 + number))
+                            .when(item.selected, |row| row.bg(theme.accent_wash))
+                            .on_click(move |_, window, cx| window.dispatch_action(action.boxed_clone(), cx))
+                            .child(
+                                div()
+                                    .flex_1()
+                                    .min_w_0()
+                                    .truncate()
+                                    .typography(if item.selected { Type::UiStrong } else { Type::Ui })
+                                    .text_color(if item.selected { theme.accent_text } else { theme.text })
+                                    .child(item.label.clone()),
+                            )
+                            .when_some(item.detail.clone(), |row, detail| {
+                                row.child(div().flex_none().typography(Type::Small).text_color(theme.text_faint).child(detail))
+                            })
+                            .when(item.selected, |row| row.child(Icon::Check.view(px(13.), theme.accent_text))),
+                    );
+                }
+                list.into_any_element()
+            }
+        };
+        // Each slide comes in from the side it was asked for: a provider's models from the right,
+        // the list from the left.
+        let from = if forward { PICKER_SLIDE } else { -PICKER_SLIDE };
+        let panel = div().w_full().child(panel);
+        let panel = if slides == 0 || still {
+            panel.into_any_element()
+        } else {
+            crate::motion::slide_in(ElementId::NamedInteger("picker-slide".into(), slides as u64), panel, from, 0.).into_any_element()
+        };
+        div()
+            .id("menu")
+            .occlude()
+            .w(px(PICKER_WIDTH))
+            .max_h(px(420.))
+            .overflow_y_scroll()
+            .overflow_x_hidden()
+            .py(px(6.))
+            .rounded(px(14.))
+            .bg(theme.raised)
+            .border_1()
+            .border_color(theme.border_strong)
+            .shadow_lg()
+            .child(panel)
     }
-    card
 }
 
 /// The mode ⇧Tab moves to: Build → Plan → Ultra Plan → Build.

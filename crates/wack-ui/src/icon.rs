@@ -90,6 +90,12 @@ pub enum Icon {
     Tasks,
     /// The side panel at the window's right: hiding it.
     PanelRight,
+    /// Settings › Appearance.
+    Palette,
+    /// A connection to another service: Integrations, MCP servers.
+    Plug,
+    /// A browser window: Settings › Browser.
+    Window,
     /// The canvas's hand tool, which pans.
     Hand,
 }
@@ -98,6 +104,9 @@ pub enum Icon {
 const FILES: &[(&str, &[u8])] = &[
     ("icons/alert.svg", include_bytes!("../assets/icons/alert.svg")),
     ("icons/tasks.svg", include_bytes!("../assets/icons/tasks.svg")),
+    ("icons/palette.svg", include_bytes!("../assets/icons/palette.svg")),
+    ("icons/plug.svg", include_bytes!("../assets/icons/plug.svg")),
+    ("icons/window.svg", include_bytes!("../assets/icons/window.svg")),
     ("icons/panel-right.svg", include_bytes!("../assets/icons/panel-right.svg")),
     ("icons/code.svg", include_bytes!("../assets/icons/code.svg")),
     ("icons/archive.svg", include_bytes!("../assets/icons/archive.svg")),
@@ -206,6 +215,9 @@ impl Icon {
             Icon::Sliders => "icons/sliders.svg",
             Icon::Tasks => "icons/tasks.svg",
             Icon::PanelRight => "icons/panel-right.svg",
+            Icon::Palette => "icons/palette.svg",
+            Icon::Plug => "icons/plug.svg",
+            Icon::Window => "icons/window.svg",
             Icon::Hand => "icons/hand.svg",
         }
     }

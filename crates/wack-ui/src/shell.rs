@@ -48,10 +48,10 @@ use crate::{
         self, ActivatePane, AddFolder, Back, ChooseBackdrop, ChooseEffort, SlideEffort, ToggleTodos, ToggleWaiting, ChooseFocus, ClearCommandOutput, CloseCommandEditor, CycleAgentMode, SetAgentMode, PickOption, ShowQuestion, NextQuestion, PreviousQuestion, SubmitAnswers, CancelQuestion, WrapUpQuestion, ShowDoneTodos, DiscardPlan, KeepPlan, ConfirmDiscardPlan, ApprovePlan, SavePlan, CopyPlan, ToggleUnrestrictedPlanning, ToggleWebFetch, ToggleWebSearch, ToggleRouteFetch, CloseSearchEditor, SaveSearchProvider, TestSearchProvider, AskDeleteSearchProvider, ConfirmDeleteSearchProvider, CancelDeleteSearchProvider, ResetWebUsage, ChooseSearchProvider, AddSearchProvider, EditSearchProvider, ChooseSearchKey, ChooseSearchMethod, AddMcpServer, EditMcpServer, ToggleMcpServer, ToggleMcpTool, ExpandMcpServer, TestMcpServer, AskDeleteMcpServer, RemoveMcpEntry, ChooseMcpTransport, ChooseMcpScope, ToggleMcpProject, CloseMcpEditor, SaveMcpServer, TestMcpDraft, AddMcpEntry, ConfirmDeleteMcpServer, CancelDeleteMcpServer, ConfirmUnrestrictedPlanning, CancelUnrestrictedPlanning, ToggleMemory, SwitchProjectMemory, NewMemory, EditMemory, ChooseMemoryKind, SaveMemory, CloseMemoryEditor, AskDeleteMemory, AskRemoveMemoryFolder, ConfirmMemoryDelete, CancelMemoryDelete, RevealMemory, ToggleCommitAttribution, ToggleUsageRecording, RevealUsageFolder,
         ChooseBlur, ChooseDim, ChooseFormat, OpenCommandEditor, OpenConnectionForm, CloseConnectionForm, SwitchConnection, ChooseMode, ChooseModel, ChooseTexture, ChooseTheme, CloseChatTab, CloseMenu, ClosePane,
         ClosePaneId, CloseSettings, CloseTab, Compact, DeleteChat, DiscardConnection, EditConnection, ToggleConnectionKey, EqualizeSplit, FocusNext, FocusPrevious, MovePane, AddModelRow, RemoveModelRow, SaveCommandEditor, SaveConnection,
-        NewChat, NewChatIn, NewTerminal, NewTerminalWith, TogglePaneMenu, ClosePaneMenu, HideSidePanel, OpenPaneKind, NextTab, OpenEffortMenu, OpenModelMenu, OpenSettings,
+        NewChat, NewChatIn, NewTerminal, NewTerminalWith, TogglePaneMenu, ClosePaneMenu, HideSidePanel, ToggleSidePanel, RevealProject, OpenPaneKind, NextTab, OpenEffortMenu, OpenModelMenu, OpenSettings,
         OpenSettingsSection, PinProject, PreviousTab, RemoveConnection, RemovePicture, ShowCommandOutput, ShowPicture, RemoveProject, ResetDockSize,
         PickCommand, SelectChat, Send, Stop, StopCommand, MoveToBackground, ToggleTasks, ToggleTasksPane, StopTask, ShowTask, ToggleAgentsPane, ToggleBrowserPane, ToggleCanvasPane, ShowCanvas, WriteInComposer, ShowAgent, StopAgent, ToggleChanges, ToggleProject, ToggleSidebar, ToggleTerminal, TriggerProjectCommand, Unqueue,
-        ToggleAutoTitles, ToggleTitleModels, ChooseTitleModel, RenameChat, RenameChatAt, CancelRename, ToggleModelReasoning, ToggleModelVision, AttachPictures, AttachFiles, RemoveAttachment, OpenPicture, ClosePicture, StepPicture, ZoomPicture,
+        ToggleAutoTitles, ToggleTitleModels, ChooseTitleModel, RenameChat, RenameChatAt, CancelRename, ToggleModelReasoning, ToggleModelRow, ToggleModelVision, AttachPictures, AttachFiles, RemoveAttachment, OpenPicture, ClosePicture, StepPicture, ZoomPicture,
         StartSuggestion, DismissSuggestion, CopySuggestion, OpenChat,
         ArchiveChat, ArchiveCurrentChat, ClearSearch, RevealScratchpadFile, DeleteAllArchived, DeleteArchivedChat, ToggleArchived, UnarchiveChat,
         ToggleModelEffort, SwitchSkill, SwitchSkillFolder, RemoveSkillFolder, OpenSkill, CopySkill, ChooseSkillUse, NewSkill, SaveSkill,
@@ -1089,7 +1089,7 @@ impl Render for Shell {
         let gutter = FRAME_GUTTER;
         // While Settings is open the sidebar's pane holds its navigation.
         let settings_nav = match &screen {
-            Screen::Settings(data) => Some((data.section, data.providers.connections.len())),
+            Screen::Settings(data) => Some((data.section, settings::NavConnection::list(&data.providers))),
             _ => None,
         };
         let sidebar = solution.sidebar.then(|| {
@@ -1870,6 +1870,13 @@ impl Render for Shell {
                         }
                     });
                 }))
+                .on_action(cx.listener(|shell, action: &ToggleModelRow, _, cx| {
+                    let index = action.index;
+                    shell.with_app(cx, |app, cx| {
+                        app.form.toggle_open(index);
+                        cx.notify();
+                    });
+                }))
                 .on_action(cx.listener(|shell, action: &ToggleModelVision, _, cx| {
                     let index = action.index;
                     shell.with_app(cx, |app, cx| app.toggle_model_vision(index, cx));
@@ -1958,6 +1965,23 @@ impl Render for Shell {
                         _ => {}
                     }
                     cx.notify();
+                }))
+                .on_action(cx.listener(|shell, _: &RevealProject, _, cx| shell.with_app(cx, |app, _| app.reveal_project())))
+                .on_action(cx.listener(|shell, _: &ToggleSidePanel, window, cx| {
+                    shell.pane_menu = false;
+                    let had_focus = shell.focused_pane(window, cx).is_some();
+                    let chat_area = shell.app().is_some_and(|app| app.read(cx).area() == ChatKind::Chat);
+                    shell.change_layout(cx, |layout| {
+                        if layout.dock(Dock::Right).is_some() {
+                            let hidden = layout.hidden(Dock::Right);
+                            layout.set_hidden(Dock::Right, !hidden);
+                        } else {
+                            layout.open(if chat_area { PaneKind::Browser } else { PaneKind::Changes });
+                        }
+                    });
+                    if had_focus {
+                        shell.focus_composer(window, cx);
+                    }
                 }))
                 .on_action(cx.listener(|shell, _: &HideSidePanel, window, cx| {
                     shell.pane_menu = false;
@@ -2085,6 +2109,8 @@ pub struct PaneWords {
     pub canvas: bool,
     /// A Chat chat: no project, so no Changes or Terminal, and its scratchpad instead.
     pub chat_area: bool,
+    /// Some other pane shows in the side panel (Tasks, Agents…).
+    pub other_pane: bool,
 }
 
 impl PaneWords {
@@ -2102,6 +2128,7 @@ impl PaneWords {
             has_canvas: panes.canvases().is_some_and(|canvases| !canvases.is_empty()) || panes.layout.first_of(PaneKind::Canvas).is_some(),
             canvas: visible.iter().any(|pane| pane.kind == PaneKind::Canvas),
             chat_area: false,
+            other_pane: panes.layout.shown(Dock::Right).is_some(),
         }
     }
 }
@@ -3181,46 +3208,92 @@ fn chat_header(
     viewport: Size<Pixels>,
     theme: &Theme,
 ) -> impl IntoElement {
-    // In a narrow header the chips give way before the buttons, their words cut short.
-    let chip = |icon: Icon, text: SharedString| {
+    // Where the chat lives, as small pills under its title, after version 2: the folder (which
+    // shows it in the Finder) and the branch. In a narrow header they give way before the
+    // buttons, their words cut short.
+    let pill = |id: &'static str, icon: Icon, text: SharedString, tip: SharedString| {
         div()
+            .id(id)
             .flex_shrink_1()
             .min_w(px(40.))
-            .h(px(22.))
-            .px(px(9.))
+            .max_w(px(340.))
+            .h(px(20.))
+            .pl(px(7.))
+            .pr(px(8.))
             .rounded_full()
             .flex()
             .items_center()
             .gap(px(5.))
-            .bg(Hsla { a: 0.6, ..theme.hover })
-            .border_1()
-            .border_color(theme.glass_edge)
-            .child(div().flex_none().child(icon.view(px(12.), theme.text_dim)))
+            .bg(Hsla { a: 0.05, ..theme.text })
+            .hover(|pill| pill.bg(Hsla { a: 0.1, ..theme.text }))
+            .tooltip(crate::tooltip::tip(tip))
+            .child(div().flex_none().child(icon.view(px(12.), theme.accent_text)))
             .child(div().min_w_0().truncate().typography(Type::Small).text_color(theme.text_soft).child(text))
     };
+    // The folder as its last two parts, as version 2 showed it.
+    let folder: SharedString = {
+        let parts: Vec<&str> = project.path.split('/').filter(|part| !part.is_empty() && *part != "~").collect();
+        if parts.is_empty() { project.name.clone() } else { parts[parts.len().saturating_sub(2)..].join("/").into() }
+    };
     let commands = strip.commands.as_ref().filter(|_| !words.chat_area).map(|commands| {
-        div().flex_none().flex().items_center().gap(px(6.)).children(
+        div().flex_none().flex().items_center().gap(px(8.)).children(
             commands.iter().map(|button| run_button::split_button(button, strip.command_editor.as_ref(), compact, None, viewport, theme)),
         )
     });
+    let panel_on = words.changes || words.terminal || words.browser || words.canvas || words.other_pane;
+    let panel_button = div()
+        .id("toggle-side-panel")
+        .occlude()
+        .flex_none()
+        .size(px(30.))
+        .rounded_full()
+        .flex()
+        .items_center()
+        .justify_center()
+        .border_1()
+        .border_color(if panel_on { theme.border_strong } else { theme.border })
+        .when(panel_on, |button| button.bg(Hsla { a: 0.6, ..theme.hover }))
+        .hover(|button| button.bg(theme.hover).border_color(theme.border_strong))
+        .cursor_pointer()
+        .tooltip(crate::tooltip::tip(if panel_on { "Hide panel  ⌥⌘B" } else { "Show panel  ⌥⌘B" }))
+        .on_click(|_, window, cx| window.dispatch_action(Box::new(ToggleSidePanel), cx))
+        .child(Icon::PanelRight.view(px(14.), if panel_on { theme.text } else { theme.text_soft }))
+        .tag("toggle-side-panel");
     div()
         .flex_none()
         .w_full()
+        .min_h(px(58.))
         .flex()
         .items_center()
         .gap(px(12.))
-        .pl(px(22.))
+        .pl(px(20.))
         .pr(px(14.))
-        .pt(px(12.))
-        .pb(px(6.))
+        .pt(px(10.))
+        .pb(px(9.))
+        .border_b_1()
+        .border_color(theme.border)
         .child(
             div()
                 .flex_1()
                 .min_w_0()
                 .flex()
                 .flex_col()
-                .gap(px(6.))
-                .child(div().min_w_0().truncate().typography(Type::Heading).text_color(theme.text).child(title))
+                .gap(px(4.))
+                .child(
+                    div()
+                        .id("chat-title")
+                        .min_w_0()
+                        .truncate()
+                        .typography(Type::Heading)
+                        .text_color(theme.text)
+                        .tooltip(crate::tooltip::tip("Double-click to rename"))
+                        .on_click(|event, window, cx| {
+                            if event.click_count() >= 2 {
+                                window.dispatch_action(Box::new(RenameChat), cx);
+                            }
+                        })
+                        .child(title),
+                )
                 .when(!project.name.is_empty(), |text| {
                     text.child(
                         div()
@@ -3228,14 +3301,19 @@ fn chat_header(
                             .overflow_hidden()
                             .flex()
                             .items_center()
-                            .gap(px(6.))
-                            .child(chip(Icon::Folder, project.name.clone()))
-                            .when_some(project.branch.clone(), |chips, branch| chips.child(chip(Icon::Branch, branch))),
+                            .gap(px(5.))
+                            .child(
+                                pill("header-folder", Icon::Folder, folder, format!("{} · Show in Finder", project.path).into())
+                                    .cursor_pointer()
+                                    .on_click(|_, window, cx| window.dispatch_action(Box::new(RevealProject), cx)),
+                            )
+                            .when_some(project.branch.clone(), |pills, branch| {
+                                pills.child(pill("header-branch", Icon::Branch, branch.clone(), format!("On {branch}").into()))
+                            }),
                     )
                 }),
         )
-        .children(commands)
-        .child(pane_toggles(words, theme))
+        .child(div().flex_none().flex().items_center().gap(px(8.)).children(commands).child(pane_toggles(words, theme)).child(panel_button))
         .tag("chat-header")
 }
 
@@ -3247,9 +3325,9 @@ fn pane_toggles(words: &PaneWords, theme: &Theme) -> impl IntoElement {
             .id(id)
             .occlude()
             .flex_none()
-            .h(px(26.))
-            .min_w(px(30.))
-            .px(px(8.))
+            .h(px(28.))
+            .min_w(px(32.))
+            .px(px(9.))
             .rounded_full()
             .flex()
             .items_center()
@@ -3260,7 +3338,7 @@ fn pane_toggles(words: &PaneWords, theme: &Theme) -> impl IntoElement {
             .cursor_pointer()
             .tooltip(crate::tooltip::tip(label))
             .on_click(move |_, window, cx| window.dispatch_action(action.boxed_clone(), cx))
-            .child(icon.view(px(13.), if on { theme.accent_text } else { theme.text_dim }))
+            .child(icon.view(px(14.), if on { theme.accent_text } else { theme.text_dim }))
             .when_some(count, |toggle, count| {
                 toggle.child(div().typography(Type::Small).text_color(if on { theme.accent_text } else { theme.text_faint }).child(count.to_string()))
             })
@@ -3268,7 +3346,7 @@ fn pane_toggles(words: &PaneWords, theme: &Theme) -> impl IntoElement {
     };
     div()
         .flex_none()
-        .h(px(30.))
+        .h(px(32.))
         .p(px(2.))
         .rounded_full()
         .flex()
@@ -3279,7 +3357,7 @@ fn pane_toggles(words: &PaneWords, theme: &Theme) -> impl IntoElement {
         .border_color(theme.glass_edge)
         .when(!words.chat_area, |segment| {
             segment
-                .child(toggle("toggle-changes", Icon::Commit, "Changes ⌘⇧G", words.changed_files, words.changes, Box::new(ToggleChanges)))
+                .child(toggle("toggle-changes", Icon::Branch, "Changes ⌘⇧G", words.changed_files, words.changes, Box::new(ToggleChanges)))
                 .child(toggle("toggle-terminal", Icon::Terminal, "Terminal ⌃`", None, words.terminal, Box::new(ToggleTerminal)))
         })
         .when(words.chat_area, |segment| {

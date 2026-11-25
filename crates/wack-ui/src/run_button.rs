@@ -172,7 +172,7 @@ pub fn split_button(
     let pill = div()
         .occlude()
         .flex_none()
-        .h(px(26.))
+        .h(px(30.))
         .rounded_full()
         .border_1()
         .border_color(shell_border)

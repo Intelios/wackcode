@@ -112,6 +112,7 @@ pub fn card(title: Option<&'static str>, badge: Option<SharedString>, note: Opti
 
 /// One row of a card. The first row of a card with no title draws no hairline above it.
 pub struct Row {
+    icon: Option<Icon>,
     label: SharedString,
     about: Option<SharedString>,
     control: Option<gpui::AnyElement>,
@@ -120,7 +121,38 @@ pub struct Row {
 }
 
 pub fn row(label: impl Into<SharedString>, about: Option<&'static str>) -> Row {
-    Row { label: label.into(), about: about.map(Into::into), control: None, stacked: false, first: false }
+    let label = label.into();
+    Row { icon: mark(&label), label, about: about.map(Into::into), control: None, stacked: false, first: false }
+}
+
+/// The icon a setting carries in its row, as version 2's settings did: each page's own
+/// settings get one, by their label, so a page reads at a glance. Rows that list things (an
+/// app, a skill's fields) have none.
+fn mark(label: &str) -> Option<Icon> {
+    Some(match label {
+        "Theme" => Icon::Palette,
+        "Light or dark" => Icon::Eye,
+        "Pictures" => Icon::Board,
+        "Texture" => Icon::Sliders,
+        "Blur" | "Dim" => Icon::Sliders,
+        "Keep in view" => Icon::Pin,
+        "Use memory" | "Memory" => Icon::Brain,
+        "Delegation" => Icon::Duck,
+        "Helper model" | "Title model" | "Model" => Icon::Spark,
+        "Automatic titles" => Icon::Pencil,
+        "Web Fetch" => Icon::Link,
+        "Web Search" => Icon::Search,
+        "Remove Plan / Ultra Plan read-only restrictions" => Icon::Lock,
+        "WackCode as co-author" => Icon::Commit,
+        "Record TokenTrail usage" => Icon::Plug,
+        "Let the agent use your Mac’s apps" => Icon::Cursor,
+        "Accessibility" => Icon::Hand,
+        "Screen Recording" => Icon::Eye,
+        "Show the Browser pane when the agent opens a tab" => Icon::Window,
+        "Open at" => Icon::Phone,
+        "Clear browsing data" => Icon::Trash,
+        _ => return None,
+    })
 }
 
 impl Row {
@@ -146,7 +178,26 @@ impl Row {
         self
     }
 
+    /// The row's mark: its icon on a round wash of the accent.
+    pub fn icon(mut self, icon: Icon) -> Self {
+        self.icon = Some(icon);
+        self
+    }
+
     pub fn view(self, theme: &Theme) -> gpui::Div {
+        let mark = self.icon.map(|icon| {
+            div()
+                .flex_none()
+                .size(px(30.))
+                .rounded_full()
+                .flex()
+                .items_center()
+                .justify_center()
+                .bg(theme.accent_wash)
+                .border_1()
+                .border_color(theme.accent_line)
+                .child(icon.view(px(14.), theme.accent_text))
+        });
         let words = div()
             .flex_1()
             .min_w_0()
@@ -163,7 +214,7 @@ impl Row {
             .when(!self.first, |row| row.border_t_1().border_color(theme.border))
             .when(self.stacked, |row| row.flex_col().gap(px(12.)))
             .when(!self.stacked, |row| row.items_center())
-            .child(words)
+            .child(div().flex_1().min_w_0().flex().items_center().gap(px(12.)).children(mark).child(words))
             .children(self.control.map(|control| div().flex_none().flex().when(self.stacked, |slot| slot.w_full()).child(control)))
     }
 }

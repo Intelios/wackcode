@@ -256,6 +256,14 @@ pub fn sheen_at(t: f32) -> Option<f32> {
     (cross < 1.).then(|| smooth(cross.max(0.)))
 }
 
+/// A small pop: past its size by a few percent, then settling, for a tick landing. It is the one
+/// curve that overshoots, as version 2's check did; everything that arrives uses [`spring`].
+pub fn pop(t: f32) -> f32 {
+    const BACK: f32 = 1.4;
+    let t = t.clamp(0., 1.) - 1.;
+    1. + (BACK + 1.) * t * t * t + BACK * t * t
+}
+
 fn smooth(x: f32) -> f32 {
     x * x * (3. - 2. * x)
 }
@@ -343,6 +351,14 @@ pub fn paddle_rest() {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn a_pop_overshoots_a_little_and_lands() {
+        assert!(pop(0.).abs() < 1e-5);
+        assert!((pop(1.) - 1.).abs() < 1e-5);
+        let peak = (1..100).map(|step| pop(step as f32 / 100.)).fold(0., f32::max);
+        assert!(peak > 1.02 && peak < 1.12, "a few percent past, never a bounce: {peak}");
+    }
 
     #[test]
     fn a_sheen_crosses_then_rests() {

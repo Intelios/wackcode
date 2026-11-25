@@ -32,6 +32,7 @@ pub fn sidebar(selected: Selected) -> SidebarData {
         state,
         selected: selected == this && this != Selected::None,
         confirming_archive: false,
+        fresh: false,
     };
     let closed = |name: &'static str, chats: usize, pinned: bool| ProjectRow {
         id: name.into(),
@@ -1320,6 +1321,7 @@ pub fn chat_sidebar(selected: bool, other_waiting: bool) -> SidebarData {
         state,
         selected: this && selected,
         confirming_archive: false,
+        fresh: false,
     };
     SidebarData {
         area: wack_core::ChatKind::Chat,

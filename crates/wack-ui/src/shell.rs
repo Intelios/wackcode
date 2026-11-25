@@ -120,6 +120,8 @@ const COMPACT_COMMANDS_BELOW: f32 = 640.;
 /// The widest the centred new-chat and welcome blocks get.
 const NEW_CHAT_WIDTH: f32 = 680.;
 const WELCOME_WIDTH: f32 = 560.;
+/// A chat this new grows into the sidebar's list instead of appearing.
+const FRESH_ROW_MS: u64 = 2_500;
 /// How far the transcript's text fades as it scrolls out under the title strip.
 const TOP_FADE: Pixels = px(24.);
 
@@ -2096,6 +2098,7 @@ fn live_view(app: &AppState, cx: &App) -> (SidebarData, Screen, StripData) {
             },
             selected: *app.selection() == Selection::Chat(chat.id.clone()),
             confirming_archive: asking(&chat.id, RowConfirm::Archive),
+            fresh: crate::chat::now_millis().saturating_sub(chat.created) < FRESH_ROW_MS,
         }
     };
     if area == ChatKind::Chat {

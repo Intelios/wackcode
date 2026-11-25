@@ -39,7 +39,8 @@ pub enum Item {
     /// `pictures` are the ones the user attached, under the bubble.
     Prompt { text: SharedString, steered: bool, command: Option<CommandShown>, suggestion: Option<SharedString>, pictures: Vec<crate::pictures::Picture> },
     Work(Work),
-    Reply(Rc<Vec<markdown::Block>>),
+    /// A reply's prose. `live`: still streaming in, so its newest words are fresh ink.
+    Reply { blocks: Rc<Vec<markdown::Block>>, live: bool },
     /// The pictures a reply named (`![…](img:…)`), under it, and the references nothing answered.
     ReplyPictures { key: SharedString, pictures: Vec<crate::pictures::Picture>, missing: Vec<SharedString> },
     /// Facts about a finished turn: time, tokens.
@@ -92,6 +93,8 @@ pub struct Work {
     /// What it did, counted (`work::tally`): beside the chip, past its dotted rule.
     pub tally: SharedString,
     pub live: bool,
+    /// The model is reasoning now: its last row is a thought still coming, before any reply.
+    pub thinking: bool,
     pub open: bool,
     pub rows: Vec<WorkRow>,
 }
@@ -352,7 +355,7 @@ pub fn item(item: &Item, previous: Option<&Item>, theme: &Theme, handlers: &Hand
                 .into_any_element()
         }
         Item::Work(work) => work_log(work, theme, handlers).into_any_element(),
-        Item::Reply(blocks) => reply(blocks, theme, handlers).into_any_element(),
+        Item::Reply { blocks, live } => reply_inked(blocks, *live && !handlers.still, theme, handlers).into_any_element(),
         Item::ReplyPictures { key, pictures, missing } => div()
             .flex()
             .flex_col()
@@ -370,7 +373,7 @@ pub fn item(item: &Item, previous: Option<&Item>, theme: &Theme, handlers: &Hand
             .child(text.clone())
             .into_any_element(),
         // Lined up with the work log's marks, which hang on its rail.
-        Item::News(row) => div().pl(px(RAIL - ICON / 2.)).child(log_row(row, false, theme, handlers)).into_any_element(),
+        Item::News(row) => div().pl(px(RAIL - ICON / 2.)).child(log_row(row, false, false, theme, handlers)).into_any_element(),
         // Drawn above by `chat_transcript::item`.
         Item::ChatDivider(_)
         | Item::ChatSpeaker { .. }
@@ -496,8 +499,9 @@ fn work_log(work: &Work, theme: &Theme, handlers: &Handlers) -> impl IntoElement
         .py(px(4.))
         .on_children_prepainted(move |children, _, _| end.set(children.last().map(|row| row.origin.y + px(MARK_MIDDLE))))
         .child(rail);
-    for row in &work.rows {
-        rows = rows.child(log_row(row, work.live, theme, handlers));
+    let last = work.rows.len().saturating_sub(1);
+    for (index, row) in work.rows.iter().enumerate() {
+        rows = rows.child(log_row(row, work.live, work.thinking && index == last, theme, handlers));
     }
 
     div().flex().flex_col().gap(px(6.)).child(header).when(work.open && !work.rows.is_empty(), |log| log.child(rows))
@@ -509,7 +513,7 @@ const RAIL_ALPHA: f32 = 0.6;
 /// A row's round mark, lit: its icon (by its verb) on the glass's tone, ringed and glowing in the
 /// accent, or in success's colour for a command that passed and danger's for a step that failed.
 /// A step under way breathes; an event (a retry, a compaction) is a small bead on the rail.
-fn row_mark(row: &WorkRow, theme: &Theme, still: bool) -> AnyElement {
+fn row_mark(row: &WorkRow, thinking: bool, theme: &Theme, still: bool) -> AnyElement {
     let Some(icon) = row_icon(&row.verb) else {
         return div()
             .flex_none()
@@ -545,6 +549,7 @@ fn row_mark(row: &WorkRow, theme: &Theme, still: bool) -> AnyElement {
         }])
         .child(icon.view(px(12.), ink));
     match row.meta {
+        _ if thinking => crate::motion::breathing(SharedString::from(format!("{}-breath", row.key)), mark, still),
         Meta::Running => crate::motion::breathing(SharedString::from(format!("{}-breath", row.key)), mark, still),
         _ => mark.into_any_element(),
     }
@@ -573,7 +578,9 @@ fn row_icon(verb: &str) -> Option<Icon> {
 }
 
 /// `live`: the row is in the log of a run still going, so its mark lands as it arrives.
-fn log_row(row: &WorkRow, live: bool, theme: &Theme, handlers: &Handlers) -> AnyElement {
+/// `thinking`: it is the thought the model is having now, so it reads "Thinking", a light running
+/// along the word, and its mark breathes.
+fn log_row(row: &WorkRow, live: bool, thinking: bool, theme: &Theme, handlers: &Handlers) -> AnyElement {
     if let Some(agent) = &row.agent {
         return agent_row(&row.key, agent, theme);
     }
@@ -626,7 +633,7 @@ fn log_row(row: &WorkRow, live: bool, theme: &Theme, handlers: &Handlers) -> Any
                         .on_click(move |_, window, cx| toggle(key.clone(), window, cx))
                 })
                 .child({
-                    let mark = div().flex_none().child(row_mark(row, theme, handlers.still));
+                    let mark = div().flex_none().child(row_mark(row, thinking, theme, handlers.still));
                     if live {
                         crate::motion::land(SharedString::from(format!("{}-land", row.key)), mark, handlers.still)
                     } else {
@@ -634,7 +641,13 @@ fn log_row(row: &WorkRow, live: bool, theme: &Theme, handlers: &Handlers) -> Any
                     }
                 })
                 .when(!row.verb.is_empty(), |line| {
-                    line.child(div().flex_none().w(px(VERB_WIDTH)).typography(Type::Ui).text_color(theme.text_dim).child(row.verb.clone()))
+                    let verb = if thinking {
+                        let id = SharedString::from(format!("{}-thinking", row.key));
+                        crate::motion::shining_text(id, "Thinking".into(), theme.text_dim, theme.accent_text, handlers.still)
+                    } else {
+                        row.verb.clone().into_any_element()
+                    };
+                    line.child(div().flex_none().w(px(VERB_WIDTH)).typography(Type::Ui).text_color(theme.text_dim).child(verb))
                 })
                 .child(div().flex_1().min_w_0().truncate().child(target))
                 .child(div().flex_none().typography(Type::Small).child(meta)),
@@ -855,26 +868,74 @@ pub fn diff_line(line: &DiffLine, theme: &Theme) -> AnyElement {
 }
 
 pub(crate) fn reply(blocks: &[markdown::Block], theme: &Theme, handlers: &Handlers) -> impl IntoElement {
+    reply_inked(blocks, false, theme, handlers)
+}
+
+/// A reply; `fresh`, while it streams in, its newest words are fresh ink (`freshen`).
+fn reply_inked(blocks: &[markdown::Block], fresh: bool, theme: &Theme, handlers: &Handlers) -> impl IntoElement {
     let mut column = div().flex().flex_col().gap(px(12.));
     for (index, block) in blocks.iter().enumerate() {
-        column = column.child(block_view(block, &format!("b{index}"), theme, handlers));
+        let last = index + 1 == blocks.len();
+        column = column.child(block_view(block, &format!("b{index}"), fresh && last, theme, handlers));
     }
     column
 }
 
-fn block_view(block: &markdown::Block, key: &str, theme: &Theme, handlers: &Handlers) -> AnyElement {
+/// How many of a streaming reply's newest characters are still fresh ink.
+const FRESH_INK: usize = 36;
+/// How far the newest character leans to the accent, and how faint it is.
+const FRESH_TINT: f32 = 0.55;
+const FRESH_FADE: f32 = 0.5;
+
+/// Splits the last [`FRESH_INK`] characters of `text` into runs of their own, each leaning to
+/// `accent` and fading the newer it is, so words arrive faintly in the accent and settle into ink
+/// as more come after them: version 2's fresh ink, by place rather than by time.
+fn freshen(text: &str, runs: Vec<TextRun>, accent: Hsla) -> Vec<TextRun> {
+    let count = text.chars().count();
+    let fresh = FRESH_INK.min(count);
+    if fresh == 0 {
+        return runs;
+    }
+    let tail = text.char_indices().nth(count - fresh).map_or(text.len(), |(at, _)| at);
+    let mut out = Vec::with_capacity(runs.len() + fresh);
+    let mut at = 0;
+    let mut from_end = fresh;
+    for run in runs {
+        let end = at + run.len;
+        if end <= tail {
+            at = end;
+            out.push(run);
+            continue;
+        }
+        if at < tail {
+            out.push(TextRun { len: tail - at, ..run.clone() });
+            at = tail;
+        }
+        for letter in text[at..end].chars() {
+            from_end -= 1;
+            let newness = 1. - from_end as f32 / fresh as f32;
+            let leaned = run.color.blend(Hsla { a: FRESH_TINT * newness, ..accent });
+            out.push(TextRun { len: letter.len_utf8(), color: Hsla { a: leaned.a * (1. - FRESH_FADE * newness), ..leaned }, ..run.clone() });
+        }
+        at = end;
+    }
+    out
+}
+
+/// `fresh`: the block is the newest of a streaming reply, so its tail is fresh ink.
+fn block_view(block: &markdown::Block, key: &str, fresh: bool, theme: &Theme, handlers: &Handlers) -> AnyElement {
     use markdown::Block;
     match block {
         // A paragraph of nothing but pictures: they show under the reply.
         Block::Paragraph(spans) if spans.iter().all(|span| span.picture.is_some() || span.text.trim().is_empty()) => div().into_any_element(),
         Block::Paragraph(spans) => {
-            div().typography(Type::Body).text_color(theme.text_body).child(rich(spans, key, theme, handlers)).into_any_element()
+            div().typography(Type::Body).text_color(theme.text_body).child(rich(spans, key, fresh, theme, handlers)).into_any_element()
         }
         Block::Heading(level, spans) => div()
             .pt(px(6.))
             .typography(if *level <= 2 { Type::Heading } else { Type::UiStrong })
             .text_color(theme.text)
-            .child(rich(spans, key, theme, handlers))
+            .child(rich(spans, key, fresh, theme, handlers))
             .into_any_element(),
         Block::List { start, items } => {
             let mut list = div().flex().flex_col().gap(px(6.));
@@ -887,7 +948,8 @@ fn block_view(block: &markdown::Block, key: &str, theme: &Theme, handlers: &Hand
                 };
                 let mut body = div().flex_1().min_w_0().flex().flex_col().gap(px(6.));
                 for (inner, block) in item.blocks.iter().enumerate() {
-                    body = body.child(block_view(block, &format!("{key}-{index}-{inner}"), theme, handlers));
+                    let newest = fresh && index + 1 == items.len() && inner + 1 == item.blocks.len();
+                    body = body.child(block_view(block, &format!("{key}-{index}-{inner}"), newest, theme, handlers));
                 }
                 list = list.child(
                     div()
@@ -909,7 +971,7 @@ fn block_view(block: &markdown::Block, key: &str, theme: &Theme, handlers: &Hand
         Block::Quote(blocks) => {
             let mut quote = div().pl(px(14.)).border_l_2().border_color(theme.border_strong).flex().flex_col().gap(px(8.));
             for (index, block) in blocks.iter().enumerate() {
-                quote = quote.child(block_view(block, &format!("{key}-q{index}"), theme, handlers));
+                quote = quote.child(block_view(block, &format!("{key}-q{index}"), fresh && index + 1 == blocks.len(), theme, handlers));
             }
             quote.into_any_element()
         }
@@ -926,7 +988,7 @@ fn block_view(block: &markdown::Block, key: &str, theme: &Theme, handlers: &Hand
                             .py(px(5.))
                             .typography(if strong { Type::UiStrong } else { Type::Ui })
                             .text_color(if strong { theme.text } else { theme.text_body })
-                            .child(rich(cell, &format!("{row_key}-{index}"), theme, handlers)),
+                            .child(rich(cell, &format!("{row_key}-{index}"), false, theme, handlers)),
                     );
                 }
                 line
@@ -940,8 +1002,9 @@ fn block_view(block: &markdown::Block, key: &str, theme: &Theme, handlers: &Hand
     }
 }
 
-/// Running text with bold, italic, inline code and links, wrapped as one run of text.
-fn rich(spans: &[Span], key: &str, theme: &Theme, handlers: &Handlers) -> AnyElement {
+/// Running text with bold, italic, inline code and links, wrapped as one run of text. `fresh`: its
+/// tail is a streaming reply's newest words.
+fn rich(spans: &[Span], key: &str, fresh: bool, theme: &Theme, handlers: &Handlers) -> AnyElement {
     let mut text = String::new();
     let mut runs = Vec::new();
     let mut links = Vec::new();
@@ -975,6 +1038,7 @@ fn rich(spans: &[Span], key: &str, theme: &Theme, handlers: &Handlers) -> AnyEle
     if text.is_empty() {
         return div().into_any_element();
     }
+    let runs = if fresh { freshen(&text, runs, theme.accent_text) } else { runs };
     let styled = StyledText::new(text).with_runs(runs);
     if links.is_empty() {
         return styled.into_any_element();
@@ -1041,5 +1105,31 @@ impl RenderOnce for Transcript {
             column = column.child(item(current, previous, &theme, &handlers));
         }
         column
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    fn run(len: usize, color: Hsla) -> TextRun {
+        TextRun { len, font: font(UI_FONT), color, background_color: None, underline: None, strikethrough: None }
+    }
+
+    #[test]
+    fn fresh_ink_is_the_newest_words_leaning_to_the_accent_and_faint() {
+        let ink = Hsla { h: 0., s: 0., l: 0.9, a: 1. };
+        let accent = Hsla { h: 0.9, s: 0.8, l: 0.7, a: 1. };
+        let text = "Settled words come first, then the newest ones arrive here at the end.";
+        let runs = freshen(text, vec![run(10, ink), run(text.len() - 10, ink)], accent);
+        assert_eq!(runs.iter().map(|run| run.len).sum::<usize>(), text.len(), "every byte keeps a run");
+        assert_eq!(runs.len(), 2 + FRESH_INK, "the settled part stays whole; each fresh letter is its own run");
+        assert_eq!(runs[0].color, ink, "older words are ink");
+        let (older, newest) = (runs[runs.len() - FRESH_INK].color, runs.last().unwrap().color);
+        assert!(newest.a < older.a, "the newest letter is the faintest");
+        assert!((newest.h - accent.h).abs() < (older.h - accent.h).abs() + 1e-3, "and leans furthest to the accent");
+        // Shorter than the fresh tail: all of it is fresh, and nothing is lost.
+        let short = freshen("Hi.", vec![run(3, ink)], accent);
+        assert_eq!(short.len(), 3);
     }
 }

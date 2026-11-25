@@ -125,6 +125,7 @@ pub fn entry_items(
                         summary: summary(turn, now).into(),
                         tally: tally(&rows).into(),
                         live: turn.live,
+                        thinking: turn.live && turn.reply.trim().is_empty() && matches!(turn.steps.last(), Some(Step::Thought(_))),
                         rows,
                         key: key.clone().into(),
                     }));
@@ -150,7 +151,7 @@ pub fn entry_items(
                 if !reply.trim().is_empty() {
                     let blocks = cache.get(index, &reply);
                     let named = crate::pictures::referenced(&blocks);
-                    items.push(Item::Reply(blocks));
+                    items.push(Item::Reply { blocks, live: turn.live });
                     if !named.is_empty() {
                         let (found, missing): (Vec<_>, Vec<_>) = named
                             .into_iter()
@@ -1401,6 +1402,23 @@ mod tests {
     }
 
     #[test]
+    fn a_log_is_thinking_while_its_last_step_is_a_thought_and_no_reply_has_come() {
+        let thinking = |conversation: &Conversation| {
+            items(conversation, Path::new("/"), &HashSet::new(), 5, &mut ReplyCache::default())
+                .iter()
+                .find_map(|item| if let Item::Work(work) = item { Some(work.thinking) } else { None })
+        };
+        let mut conversation = Conversation::default();
+        conversation.send("Why?", 1);
+        conversation.apply(&wack_core::Event::Thinking("Let me see".into()), 2);
+        assert_eq!(thinking(&conversation), Some(true));
+        conversation.apply(&wack_core::Event::Text("Because.".into()), 3);
+        assert_eq!(thinking(&conversation), Some(false), "the reply has begun");
+        conversation.finish(&Ok(wack_core::Outcome::Done), 4);
+        assert_eq!(thinking(&conversation), Some(false), "a finished turn thinks no more");
+    }
+
+    #[test]
     fn a_plan_proposed_in_prose_shows_as_the_card_not_twice() {
         assert_eq!(without_proposed_plan("Here it is.\n<proposed_plan>\n1. Do it\n</proposed_plan>\nThoughts?"), "Here it is.\n\nThoughts?");
         assert_eq!(without_proposed_plan("No block here."), "No block here.");
@@ -1414,7 +1432,7 @@ mod tests {
         let plans: Vec<_> = items.iter().filter_map(|item| if let Item::Plan(card) = item { Some(card) } else { None }).collect();
         assert_eq!(plans.len(), 1);
         assert!(plans[0].current);
-        let replies = items.iter().filter(|item| matches!(item, Item::Reply(_))).count();
+        let replies = items.iter().filter(|item| matches!(item, Item::Reply { .. })).count();
         assert_eq!(replies, 1, "the prose before the block stays");
     }
 
@@ -1535,7 +1553,7 @@ mod tests {
         conversation.finish(&Ok(wack_core::Outcome::Done), 20_000);
         let items = items(&conversation, Path::new("/w"), &HashSet::new(), 30_000, &mut ReplyCache::default());
         assert!(matches!(&items[0], Item::Prompt { .. }));
-        assert!(matches!(&items[1], Item::Reply(blocks) if blocks.len() == 1));
+        assert!(matches!(&items[1], Item::Reply { blocks, live: false } if blocks.len() == 1));
         assert!(matches!(&items[2], Item::Footer(text) if text.as_ref() == "19s  ·  12k in  ·  300 out"));
     }
 

@@ -8,7 +8,7 @@
 
 use std::collections::HashSet;
 
-use gpui::{Hsla, SharedString, div, prelude::*, px};
+use gpui::{AnimationExt as _, Hsla, SharedString, div, prelude::*, px};
 use wack_core::todo::{Status, Task, TodoList};
 
 use crate::{
@@ -115,11 +115,23 @@ pub fn todo_panel(data: TodoData, theme: &Theme) -> impl IntoElement {
         .tag("todo-panel")
 }
 
+/// How long a tick takes to land.
+const TICK: std::time::Duration = std::time::Duration::from_millis(320);
+
 fn row(task: &Task, show_ids: bool, theme: &Theme) -> impl IntoElement {
     let done = task.status == Status::Completed;
     let working = task.status == Status::InProgress;
     let mark = div().flex_none().size(px(14.)).flex().items_center().justify_center().child(if done {
-        Icon::Check.view(px(13.), theme.success).into_any_element()
+        // The tick lands with a small pop as the task is done.
+        let ink = theme.success;
+        let tick = move |scale: f32| div().size(px(14.)).flex().items_center().justify_center().child(Icon::Check.view(px(13. * scale), ink));
+        tick(1.)
+            .with_animation(
+                gpui::ElementId::NamedInteger("todo-tick".into(), task.id),
+                gpui::Animation::new(TICK),
+                move |_, t| tick(0.4 + 0.6 * crate::motion::pop(t)).opacity(t.min(1.) * 2.),
+            )
+            .into_any_element()
     } else {
         let ring: Hsla = if working { theme.accent_text } else { theme.text_faint };
         div()

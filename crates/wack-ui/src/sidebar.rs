@@ -172,6 +172,8 @@ pub struct ChatRow {
     pub selected: bool,
     /// Its Archive was clicked once and asks.
     pub confirming_archive: bool,
+    /// Made a moment ago: it grows into the list.
+    pub fresh: bool,
 }
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
@@ -481,7 +483,29 @@ fn project_rows(project: ProjectRow, theme: &Theme) -> impl IntoElement {
     rows
 }
 
-fn chat_row(chat: ChatRow, theme: &Theme) -> impl IntoElement {
+/// A chat's row. One made a moment ago grows into the list, from nothing to its height, as it
+/// fades in.
+fn chat_row(chat: ChatRow, theme: &Theme) -> gpui::AnyElement {
+    let (fresh, id) = (chat.fresh, chat.id.clone());
+    let row = chat_row_body(chat, theme);
+    if !fresh {
+        return row.into_any_element();
+    }
+    div()
+        .overflow_hidden()
+        .child(row)
+        .with_animation(
+            SharedString::from(format!("{id}-grow")),
+            gpui::Animation::new(crate::motion::ARRIVE).with_easing(crate::motion::spring),
+            |row, t| row.h(px(CHAT_ROW_HEIGHT * t)).opacity(t),
+        )
+        .into_any_element()
+}
+
+/// A chat row's height.
+const CHAT_ROW_HEIGHT: f32 = 28.;
+
+fn chat_row_body(chat: ChatRow, theme: &Theme) -> impl IntoElement {
     let title_colour = if chat.selected || chat.state == ChatState::Unread { theme.text } else { theme.text_soft };
     let group: SharedString = format!("chat-{}", chat.id).into();
     let id = chat.id.to_string();
@@ -495,7 +519,7 @@ fn chat_row(chat: ChatRow, theme: &Theme) -> impl IntoElement {
         .id(SharedString::from(format!("{id}-chat")))
         .group(group.clone())
         .relative()
-        .h(px(28.))
+        .h(px(CHAT_ROW_HEIGHT))
         .pl(px(4.))
         .pr(px(4.))
         .rounded_full()

@@ -95,6 +95,11 @@ actions!(
         /// Shows the chat's terminal, or hides its dock when it is in front.
         ToggleTerminal,
         NewTerminal,
+        /// The side panel's "+": opens or closes its menu of panes.
+        TogglePaneMenu,
+        ClosePaneMenu,
+        /// Hides the side panel, keeping its panes; a pane toggle brings it back.
+        HideSidePanel,
         /// Closes the pane that has focus.
         ClosePane,
         /// Closes the chat tab in front; the chat itself stays in the sidebar.
@@ -731,6 +736,13 @@ pub struct ActivatePane {
 #[action(namespace = wackcode, no_json)]
 pub struct ClosePaneId {
     pub pane: PaneId,
+}
+
+/// The side panel's "+" menu: shows a pane of this kind (a new one, for a terminal).
+#[derive(Clone, Debug, PartialEq, Action)]
+#[action(namespace = wackcode, no_json)]
+pub struct OpenPaneKind {
+    pub kind: crate::panes::PaneKind,
 }
 
 /// A dragged tab was dropped.

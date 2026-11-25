@@ -2,7 +2,9 @@
 //!
 //! Each chat has two docks: one to the right of the transcript, one along the bottom. Every pane
 //! opens in the right dock, as version 2's side panel did, so a terminal sits beside the chat; the
-//! bottom dock holds only what the user drags there. A dock holds a tree whose leaves are tab stacks and whose branches split their space in a row or a
+//! bottom dock holds only what the user drags there, and never a terminal (the owner's call,
+//! 2026-11-25: a terminal lives in the side panel only, so one is never moved there and a saved
+//! layout that had one there brings it back to the side panel). A dock holds a tree whose leaves are tab stacks and whose branches split their space in a row or a
 //! column, by weight.
 //!
 //! Invariants every operation keeps (the tests check them after every random step):
@@ -59,6 +61,11 @@ impl PaneKind {
     /// Where a new pane of this kind opens: beside the transcript, as a tab of the right dock.
     pub fn home(self) -> Dock {
         Dock::Right
+    }
+
+    /// Whether a pane of this kind may sit in `dock`.
+    pub fn fits(self, dock: Dock) -> bool {
+        !(self == PaneKind::Terminal && dock == Dock::Bottom)
     }
 }
 
@@ -386,11 +393,22 @@ impl Layout {
         let Some(pane) = self.panes().into_iter().find(|(_, pane)| pane.id == id).map(|(_, pane)| pane) else {
             return;
         };
+        if !self.target_dock(target).is_none_or(|to| pane.kind.fits(to)) {
+            return;
+        }
         let slot = self.dock_mut(dock);
         if let Some(node) = slot.take() {
             *slot = remove(node, id).0;
         }
         self.insert(pane, target);
+    }
+
+    /// The dock a move to `target` would land in.
+    fn target_dock(&self, target: Target) -> Option<Dock> {
+        match target {
+            Target::Dock(dock) => Some(dock),
+            Target::With(other) | Target::Beside(other, _) => self.find(other).map(|(dock, _)| dock),
+        }
     }
 
     fn insert(&mut self, pane: Pane, target: Target) {
@@ -461,10 +479,22 @@ impl Layout {
     /// A layout read from disk, or an empty one if it is damaged: a broken layout must never
     /// stop a chat from opening.
     pub fn from_saved(value: Option<&serde_json::Value>) -> Self {
-        value
+        let mut layout: Layout = value
             .and_then(|value| serde_json::from_value::<Layout>(value.clone()).ok())
             .filter(Layout::is_sound)
-            .unwrap_or_default()
+            .unwrap_or_default();
+        let misplaced: Vec<Pane> = layout.panes().into_iter().filter(|(dock, pane)| !pane.kind.fits(*dock)).map(|(_, pane)| pane).collect();
+        for pane in misplaced {
+            let slot = layout.dock_mut(Dock::Bottom);
+            if let Some(node) = slot.take() {
+                *slot = remove(node, pane.id).0;
+            }
+            layout.insert(pane, Target::Dock(pane.kind.home()));
+        }
+        if layout.bottom.is_none() {
+            layout.bottom_hidden = false;
+        }
+        layout
     }
 }
 
@@ -696,6 +726,28 @@ pub(crate) mod tests {
                 }
             }
         }
+    }
+
+    #[test]
+    fn a_terminal_never_goes_to_the_bottom_dock() {
+        let mut layout = Layout::default();
+        let terminal = layout.add(PaneKind::Terminal);
+        let changes = layout.add(PaneKind::Changes);
+        layout.move_pane(changes, Target::Dock(Dock::Bottom));
+        assert!(layout.bottom.is_some());
+        let before = layout.clone();
+        layout.move_pane(terminal, Target::Dock(Dock::Bottom));
+        layout.move_pane(terminal, Target::With(changes));
+        layout.move_pane(terminal, Target::Beside(changes, Edge::Left));
+        assert_eq!(layout, before, "every move into the bottom dock is refused");
+
+        // A layout saved with a terminal at the bottom brings it back to the side panel.
+        let mut saved = Layout::default();
+        saved.bottom = Some(Node::Stack(Stack { panes: vec![Pane { id: 7, kind: PaneKind::Terminal }], active: 0 }));
+        saved.next_id = 8;
+        let restored = Layout::from_saved(Some(&serde_json::to_value(&saved).unwrap()));
+        assert!(restored.bottom.is_none());
+        assert_eq!(restored.find(7).map(|(dock, _)| dock), Some(Dock::Right));
     }
 
     #[test]

@@ -86,6 +86,10 @@ pub enum Icon {
     Unarchive,
     /// An artboard's tweaks.
     Sliders,
+    /// A list: the Tasks pane's background commands.
+    Tasks,
+    /// The side panel at the window's right: hiding it.
+    PanelRight,
     /// The canvas's hand tool, which pans.
     Hand,
 }
@@ -93,6 +97,8 @@ pub enum Icon {
 /// Every icon file, by asset path. One list, so a missing file fails the test below.
 const FILES: &[(&str, &[u8])] = &[
     ("icons/alert.svg", include_bytes!("../assets/icons/alert.svg")),
+    ("icons/tasks.svg", include_bytes!("../assets/icons/tasks.svg")),
+    ("icons/panel-right.svg", include_bytes!("../assets/icons/panel-right.svg")),
     ("icons/code.svg", include_bytes!("../assets/icons/code.svg")),
     ("icons/archive.svg", include_bytes!("../assets/icons/archive.svg")),
     ("icons/unarchive.svg", include_bytes!("../assets/icons/unarchive.svg")),
@@ -198,6 +204,8 @@ impl Icon {
             Icon::Archive => "icons/archive.svg",
             Icon::Unarchive => "icons/unarchive.svg",
             Icon::Sliders => "icons/sliders.svg",
+            Icon::Tasks => "icons/tasks.svg",
+            Icon::PanelRight => "icons/panel-right.svg",
             Icon::Hand => "icons/hand.svg",
         }
     }

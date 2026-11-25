@@ -101,6 +101,27 @@ pub struct Solution {
     pub dividers: Vec<Divider>,
 }
 
+impl Solution {
+    /// The layout while the sidebar opens or closes, `open` (0–1) of the way to open: the window
+    /// solved as if the sidebar were away and its space `open` × its width narrower, then moved
+    /// right by that much. At either end it is exactly the settled layout, so the panes glide
+    /// with the sidebar rather than jump.
+    pub fn sliding(width: f32, height: f32, open: f32, layout: &Layout) -> Solution {
+        let shift = (f32::from(SIDEBAR_WIDTH) * open.clamp(0., 1.)).round();
+        let mut solution = solve(width - shift, height, false, layout);
+        let move_rect = |rect: &mut Rect| rect.x += shift;
+        move_rect(&mut solution.strip);
+        move_rect(&mut solution.transcript);
+        solution.gap.as_mut().map(move_rect);
+        solution.right.as_mut().map(move_rect);
+        solution.bottom.as_mut().map(move_rect);
+        solution.stacks.iter_mut().for_each(|place| move_rect(&mut place.rect));
+        solution.dividers.iter_mut().for_each(|divider| move_rect(&mut divider.line));
+        solution.sidebar = shift > 0.;
+        solution
+    }
+}
+
 /// The right dock's width before the user drags it: half of what the sidebar leaves.
 pub fn balanced_width(width: f32, sidebar: f32) -> f32 {
     ((width - sidebar - GAP) / 2.).max(DOCK_MIN_WIDTH)
@@ -301,6 +322,22 @@ mod tests {
         layout.right_width = size(random);
         layout.canvas_width = size(random);
         layout.bottom_height = size(random);
+    }
+
+    #[test]
+    fn a_sliding_sidebar_ends_where_the_settled_layouts_are() {
+        let mut layout = Layout::default();
+        layout.add(PaneKind::Terminal);
+        for (width, height) in [(1400., 900.), (1000., 700.)] {
+            let open = solve(width, height, true, &layout);
+            if !open.sidebar {
+                continue;
+            }
+            let ends = (Solution::sliding(width, height, 1., &layout), Solution::sliding(width, height, 0., &layout));
+            assert_eq!(ends.0.transcript, open.transcript);
+            assert_eq!(ends.0.right, open.right);
+            assert_eq!(ends.1.transcript, solve(width, height, false, &layout).transcript);
+        }
     }
 
     #[test]

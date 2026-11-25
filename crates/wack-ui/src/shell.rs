@@ -48,7 +48,7 @@ use crate::{
         self, ActivatePane, AddFolder, Back, ChooseBackdrop, ChooseEffort, SlideEffort, ToggleTodos, ToggleWaiting, ChooseFocus, ClearCommandOutput, CloseCommandEditor, CycleAgentMode, SetAgentMode, PickOption, ShowQuestion, NextQuestion, PreviousQuestion, SubmitAnswers, CancelQuestion, WrapUpQuestion, ShowDoneTodos, DiscardPlan, KeepPlan, ConfirmDiscardPlan, ApprovePlan, SavePlan, CopyPlan, ToggleUnrestrictedPlanning, ToggleWebFetch, ToggleWebSearch, ToggleRouteFetch, CloseSearchEditor, SaveSearchProvider, TestSearchProvider, AskDeleteSearchProvider, ConfirmDeleteSearchProvider, CancelDeleteSearchProvider, ResetWebUsage, ChooseSearchProvider, AddSearchProvider, EditSearchProvider, ChooseSearchKey, ChooseSearchMethod, AddMcpServer, EditMcpServer, ToggleMcpServer, ToggleMcpTool, ExpandMcpServer, TestMcpServer, AskDeleteMcpServer, RemoveMcpEntry, ChooseMcpTransport, ChooseMcpScope, ToggleMcpProject, CloseMcpEditor, SaveMcpServer, TestMcpDraft, AddMcpEntry, ConfirmDeleteMcpServer, CancelDeleteMcpServer, ConfirmUnrestrictedPlanning, CancelUnrestrictedPlanning, ToggleMemory, SwitchProjectMemory, NewMemory, EditMemory, ChooseMemoryKind, SaveMemory, CloseMemoryEditor, AskDeleteMemory, AskRemoveMemoryFolder, ConfirmMemoryDelete, CancelMemoryDelete, RevealMemory, ToggleCommitAttribution, ToggleUsageRecording, RevealUsageFolder,
         ChooseBlur, ChooseDim, ChooseFormat, OpenCommandEditor, OpenConnectionForm, CloseConnectionForm, SwitchConnection, ChooseMode, ChooseModel, ChooseTexture, ChooseTheme, CloseChatTab, CloseMenu, ClosePane,
         ClosePaneId, CloseSettings, CloseTab, Compact, DeleteChat, DiscardConnection, EditConnection, ToggleConnectionKey, EqualizeSplit, FocusNext, FocusPrevious, MovePane, AddModelRow, RemoveModelRow, SaveCommandEditor, SaveConnection,
-        NewChat, NewChatIn, NewTerminal, NewTerminalWith, NextTab, OpenEffortMenu, OpenModelMenu, OpenSettings,
+        NewChat, NewChatIn, NewTerminal, NewTerminalWith, TogglePaneMenu, ClosePaneMenu, HideSidePanel, OpenPaneKind, NextTab, OpenEffortMenu, OpenModelMenu, OpenSettings,
         OpenSettingsSection, PinProject, PreviousTab, RemoveConnection, RemovePicture, ShowCommandOutput, ShowPicture, RemoveProject, ResetDockSize,
         PickCommand, SelectChat, Send, Stop, StopCommand, MoveToBackground, ToggleTasks, ToggleTasksPane, StopTask, ShowTask, ToggleAgentsPane, ToggleBrowserPane, ToggleCanvasPane, ShowCanvas, WriteInComposer, ShowAgent, StopAgent, ToggleChanges, ToggleProject, ToggleSidebar, ToggleTerminal, TriggerProjectCommand, Unqueue,
         ToggleAutoTitles, ToggleTitleModels, ChooseTitleModel, RenameChat, RenameChatAt, CancelRename, ToggleModelReasoning, ToggleModelVision, AttachPictures, AttachFiles, RemoveAttachment, OpenPicture, ClosePicture, StepPicture, ZoomPicture,
@@ -72,7 +72,7 @@ use crate::{
     panes::{
         Axis, ChatPanes, Dock, Layout, PaneId, PaneKind, PaneModel, Rect,
         dock::{self, DraggedTab, Resizing},
-        solve::{self, DOCK_MIN_HEIGHT, DOCK_MIN_WIDTH, STACK_MIN_HEIGHT, STACK_MIN_WIDTH, solve},
+        solve::{self, DOCK_MIN_HEIGHT, DOCK_MIN_WIDTH, STACK_MIN_HEIGHT, STACK_MIN_WIDTH, Solution, solve},
     },
     run_button::{self, CommandButtonData, CommandEditorData},
     settings::{self, ProvidersData, Section, SettingsData},
@@ -94,6 +94,11 @@ pub const FRAME_GUTTER: Pixels = px(solve::GAP);
 pub const PANE_RADIUS: f32 = 14.;
 /// Where macOS draws the traffic lights: inside the sidebar pane, centred on the title strip.
 pub const TRAFFIC_LIGHTS: (f32, f32) = (20., 16.);
+/// From the traffic lights' left edge to the sidebar toggle beside them, with the sidebar away:
+/// the three lights take 52 points, and the toggle stands well clear of the green one.
+const TOGGLE_CLEAR: f32 = 80.;
+/// The sidebar toggle's width.
+const SIDEBAR_TOGGLE: f32 = 24.;
 
 /// The pane solver's space for a window of `width` × `height`: the window less the frame's
 /// gutters. The sidebar, the title strip, the stage and the side panel tile it.
@@ -171,6 +176,10 @@ pub struct Shell {
     focused: Option<Selection>,
     /// The pane whose tab is being dragged.
     dragging: Option<PaneId>,
+    /// The side panel's "+" menu is open.
+    pane_menu: bool,
+    /// How open the sidebar is (0–1), easing as it opens and closes; unset until the first frame.
+    sidebar_open: Option<motion::Ease>,
     /// A scene's panes and sidebar preference; the app's come from the chat and the store.
     scene_panes: Option<ChatPanes>,
     scene_sidebar_hidden: bool,
@@ -193,6 +202,10 @@ pub struct Shell {
     /// hop, and the sidebar's page and the stage arrive from the side of the switch's segment.
     area: Option<ChatKind>,
     hops: usize,
+    /// How many times Settings has opened or closed, each a rebuild of the window
+    /// (`motion::rebuild`), and whether the last frame showed it.
+    rebuilds: usize,
+    was_settings: Option<bool>,
     /// The open tab's bead in the tab tray, and where each tab was laid out on the last frame.
     bead: Rc<RefCell<motion::Bead>>,
     tab_bounds: Rc<RefCell<Vec<gpui::Bounds<Pixels>>>>,
@@ -224,6 +237,8 @@ impl Shell {
             traffic_light_stand_ins: false,
             focused: None,
             dragging: None,
+            pane_menu: false,
+            sidebar_open: None,
             scene_panes: None,
             scene_sidebar_hidden: false,
             scene_backdrop: None,
@@ -235,6 +250,8 @@ impl Shell {
             had_settings_editor: false,
             area: None,
             hops: 0,
+            rebuilds: 0,
+            was_settings: None,
             bead: Default::default(),
             tab_bounds: Default::default(),
             side_shown: None,
@@ -252,6 +269,8 @@ impl Shell {
             traffic_light_stand_ins: true,
             focused: None,
             dragging: None,
+            pane_menu: false,
+            sidebar_open: None,
             scene_panes: None,
             scene_sidebar_hidden: false,
             scene_backdrop: None,
@@ -263,6 +282,8 @@ impl Shell {
             had_settings_editor: false,
             area: None,
             hops: 0,
+            rebuilds: 0,
+            was_settings: None,
             bead: Default::default(),
             tab_bounds: Default::default(),
             side_shown: None,
@@ -900,6 +921,12 @@ impl Render for Shell {
             self.hops += 1;
         }
         self.area = Some(sidebar_data.area);
+        // Opening or closing Settings rebuilds the window, as version 2 did.
+        let in_settings = matches!(screen, Screen::Settings(_));
+        if self.was_settings.is_some_and(|was| was != in_settings) {
+            self.rebuilds += 1;
+        }
+        self.was_settings = Some(in_settings);
         let hop = (self.hops > 0).then(|| {
             let from = if sidebar_data.area == ChatKind::Chat { motion::HOP } else { -motion::HOP };
             (self.hops, from)
@@ -931,6 +958,12 @@ impl Render for Shell {
         let (window_width, window_height) = (f32::from(viewport.width), f32::from(viewport.height));
         let (width, height) = solver_space(window_width, window_height);
         let mouse = window.mouse_position();
+        let still = cx.reduce_motion();
+        let mut sidebar_open = self.sidebar_open.take();
+        let rebuild_step = (self.rebuilds > 0 && !still).then_some(self.rebuilds);
+        let ms = std::time::Duration::from_millis;
+        // 1 while the sidebar is settled; how far open it is while it slides.
+        let mut sidebar_shown = 1.;
         let (solution, docks, words) = {
             let empty = ChatPanes::new(Layout::default(), Default::default());
             let panes = match (&screen, &self.source) {
@@ -942,7 +975,18 @@ impl Render for Shell {
                 (Screen::Chat { .. } | Screen::NewChat { .. }, Source::Fixed(_)) => self.scene_panes.as_ref().unwrap_or(&empty),
                 _ => &empty,
             };
-            let solution = solve(width, height, !sidebar_hidden, &panes.layout);
+            let settled = solve(width, height, !sidebar_hidden, &panes.layout);
+            // The sidebar slides open and shut, and the panes glide with it.
+            let target = if settled.sidebar { 1. } else { 0. };
+            let ease = sidebar_open.get_or_insert(motion::Ease::at(target));
+            ease.toward(target, still);
+            let solution = if ease.moving() {
+                window.request_animation_frame();
+                sidebar_shown = ease.value();
+                Solution::sliding(width, height, sidebar_shown, &panes.layout)
+            } else {
+                settled
+            };
             let frame = dock::Frame {
                 panes,
                 solution: &solution,
@@ -952,6 +996,11 @@ impl Render for Shell {
                     let (x, y) = to_solver(f32::from(mouse.x), f32::from(mouse.y));
                     (pane, point(px(x), px(y)))
                 }),
+                addable: [PaneKind::Changes, PaneKind::Terminal, PaneKind::Tasks, PaneKind::Agents, PaneKind::Browser, PaneKind::Canvas]
+                    .into_iter()
+                    .filter(|&kind| self.pane_allowed(kind, cx))
+                    .collect(),
+                menu_open: self.pane_menu,
             };
             let docks = dock::docks(&frame, &theme, cx);
             let words = match &screen {
@@ -960,6 +1009,7 @@ impl Render for Shell {
             };
             (solution, docks, words)
         };
+        self.sidebar_open = sidebar_open;
         let narrow = solution.transcript.width < NARROW_TRANSCRIPT;
         let transcript_height = solution.transcript.height;
         // Build and Run shrink to icons when the chat's header is short of room.
@@ -1043,7 +1093,12 @@ impl Render for Shell {
             _ => None,
         };
         let sidebar = solution.sidebar.then(|| {
-            div().flex_none().w(gutter + SIDEBAR_WIDTH).h_full().p(gutter).flex().flex_col().child(pane(
+            // While it slides the column narrows and the sidebar slips out under its left edge.
+            let column = (gutter + SIDEBAR_WIDTH) * sidebar_shown;
+            let hidden_part = (gutter + SIDEBAR_WIDTH) - column;
+            let column_box = div().flex_none().w(column).h_full().overflow_hidden().opacity(sidebar_shown.powf(0.6));
+            motion::rebuild(rebuild_step, "rebuild-sidebar", column_box.child(
+            div().relative().left(-hidden_part).w(gutter + SIDEBAR_WIDTH).h_full().p(gutter).flex().flex_col().child(pane(
                 div()
                     .size_full()
                     .flex()
@@ -1062,13 +1117,20 @@ impl Render for Shell {
                             .child(AreaSwitch { area: sidebar_data.area, other_waiting: sidebar_data.other_waiting })
                             .child(sidebar_toggle(&theme)),
                     ))
-                    .child(match settings_nav {
-                        Some((section, connections)) => settings::nav(section, connections, &theme).into_any_element(),
-                        None => hop_in("hop-sidebar", Sidebar::new(sidebar_data).into_any_element()),
-                    })
+                    .child(motion::rebuild(
+                        rebuild_step,
+                        "rebuild-sidebar-rows",
+                        div().w_full().flex_1().min_h_0().flex().flex_col().child(match settings_nav {
+                            Some((section, connections)) => settings::nav(section, connections, &theme).into_any_element(),
+                            None => hop_in("hop-sidebar", Sidebar::new(sidebar_data).into_any_element()),
+                        }),
+                        ms(100),
+                        0.,
+                        8.,
+                    ))
                     .into_any_element(),
                 PaneGround::Flat,
-            ))
+            ))), ms(0), -28., 0.)
         });
 
         // A screen arrives as it is opened; a chat does not, so switching tabs never moves text.
@@ -1129,15 +1191,18 @@ impl Render for Shell {
             }
             Screen::Failed(message) => (div(), failed(message, &theme).into_any_element()),
         };
-        // With the sidebar away, the strip makes room for the traffic lights and offers it back.
-        let strip = if solution.sidebar {
+        // With the sidebar away, the strip makes room for the traffic lights and offers it back,
+        // a clear step from the green light so the two are not mistaken for each other. While the
+        // sidebar slides, that room opens and closes with it.
+        let away = if solution.sidebar { 1. - sidebar_shown } else { 1. };
+        let strip = if away <= 0. {
             strip
         } else {
             div()
                 .size_full()
                 .flex()
-                .child(div().flex_none().w(px(TRAFFIC_LIGHTS.0 + 56.) - gutter))
-                .child(div().flex_none().pt(px(10.)).child(sidebar_toggle(&theme)))
+                .child(div().flex_none().w((px(TRAFFIC_LIGHTS.0 + TOGGLE_CLEAR) - gutter) * away))
+                .child(div().flex_none().w(px(SIDEBAR_TOGGLE + 8.) * away).overflow_hidden().opacity(away).pt(px(10.)).child(sidebar_toggle(&theme)))
                 .child(div().flex_1().min_w_0().child(strip))
         };
 
@@ -1154,7 +1219,7 @@ impl Render for Shell {
                     .w(px(transcript.width))
                     .h(px(transcript.height))
                     .overflow_hidden()
-                    .child(hop_in("hop-stage", body)),
+                    .child(motion::rebuild(rebuild_step, "rebuild-stage", div().size_full().child(hop_in("hop-stage", body)), ms(80), 0., 18.)),
             )
             .children(docks.stage);
         let stage = pane(div().flex_1().min_h_0().w_full().child(content).into_any_element(), PaneGround::Stage);
@@ -1168,7 +1233,8 @@ impl Render for Shell {
             .pb(gutter)
             .when(solution.right.is_none(), |main| main.pr(gutter))
             .when(!solution.sidebar, |main| main.pl(gutter))
-            .child(drag_strip("title-strip", TITLE_STRIP_HEIGHT, strip))
+            .when(solution.sidebar && sidebar_shown < 1., |main| main.pl(gutter * (1. - sidebar_shown)))
+            .child(drag_strip("title-strip", TITLE_STRIP_HEIGHT, motion::rebuild(rebuild_step, "rebuild-strip", div().size_full().child(strip), ms(140), 0., 10.)))
             .child(stage);
         // The side panel: the right dock, a pane of its own from the frame's top to its foot. Each
         // time it comes into view it slides in from the right as its glass frosts over.
@@ -1874,6 +1940,33 @@ impl Render for Shell {
                 .on_action(cx.listener(|shell, _: &ToggleTerminal, window, cx| shell.toggle_pane(PaneKind::Terminal, window, cx)))
                 .on_action(cx.listener(|shell, _: &NewTerminal, window, cx| shell.new_terminal(None, window, cx)))
                 .on_action(cx.listener(|shell, action: &NewTerminalWith, window, cx| shell.new_terminal(Some(action.pane), window, cx)))
+                .on_action(cx.listener(|shell, _: &TogglePaneMenu, _, cx| {
+                    shell.pane_menu = !shell.pane_menu;
+                    cx.notify();
+                }))
+                .on_action(cx.listener(|shell, _: &ClosePaneMenu, _, cx| {
+                    shell.pane_menu = false;
+                    cx.notify();
+                }))
+                .on_action(cx.listener(|shell, action: &OpenPaneKind, window, cx| {
+                    shell.pane_menu = false;
+                    match action.kind {
+                        PaneKind::Terminal => shell.new_terminal(None, window, cx),
+                        kind if shell.pane_allowed(kind, cx) => {
+                            shell.change_layout(cx, |layout| layout.open(kind));
+                        }
+                        _ => {}
+                    }
+                    cx.notify();
+                }))
+                .on_action(cx.listener(|shell, _: &HideSidePanel, window, cx| {
+                    shell.pane_menu = false;
+                    let had_focus = shell.focused_pane(window, cx).is_some();
+                    shell.change_layout(cx, |layout| layout.set_hidden(Dock::Right, true));
+                    if had_focus {
+                        shell.focus_composer(window, cx);
+                    }
+                }))
                 .on_action(cx.listener(Self::close_focused_pane))
                 .on_action(cx.listener(|shell, action: &ClosePaneId, window, cx| shell.close_pane(action.pane, window, cx)))
                 .on_action(cx.listener(|shell, action: &ActivatePane, window, cx| {
@@ -3046,9 +3139,9 @@ fn tab_strip(strip: &StripData, tray: &Tray, theme: &Theme) -> gpui::Div {
         .on_children_prepainted(move |children, _, _| *recorded.borrow_mut() = children)
         .children(tabs);
     let tray_box = div().relative().flex_initial().min_w_0().h(px(34.)).p(px(3.)).flex().items_center().child(bead).child(row);
-    // While a new chat is open its own tab stands for this. Outside the clipped row, so it shows
-    // however many tabs there are.
-    let new_tab = (!strip.new_chat).then(|| {
+    // Always there, as version 2's was (on a new chat it keeps the new chat in front). Outside the
+    // clipped row, so it shows however many tabs there are.
+    let new_tab = Some(()).map(|_| {
         tray.glass(
             17.,
             div()

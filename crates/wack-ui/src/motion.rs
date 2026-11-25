@@ -107,6 +107,28 @@ pub fn slide_in<E: IntoElement + Styled + 'static>(
     })
 }
 
+/// How long each piece of the rebuild takes to land, once its turn comes.
+pub const REBUILD: Duration = Duration::from_millis(400);
+
+/// Version 2's rebuild, as Settings opens or closes: each piece of the window flies in from the
+/// edge it belongs to, `dx` and `dy` points away, after `delay`, overshooting a touch and
+/// settling, so the screen reads as assembling itself. `step` names the rebuild, so each one
+/// plays afresh. With Reduce Motion, or before any rebuild, the piece is simply there.
+pub fn rebuild<E: IntoElement + Styled + 'static>(step: Option<usize>, name: &'static str, element: E, delay: Duration, dx: f32, dy: f32) -> AnyElement {
+    let Some(step) = step else {
+        return element.into_any_element();
+    };
+    let whole = delay + REBUILD;
+    let lead = delay.as_secs_f32() / whole.as_secs_f32();
+    element
+        .with_animation(ElementId::NamedInteger(name.into(), step as u64), Animation::new(whole), move |element, t| {
+            let local = ((t - lead) / (1. - lead)).clamp(0., 1.);
+            let rest = 1. - pop(local);
+            element.opacity(spring(local)).relative().left(px(dx * rest)).top(px(dy * rest))
+        })
+        .into_any_element()
+}
+
 /// Fades in, without moving: for something laid over the window, such as the backdrop's hero.
 pub fn fade_in<E: IntoElement + Styled + 'static>(id: impl Into<ElementId>, element: E) -> impl IntoElement {
     element.with_animation(id, Animation::new(FADE).with_easing(spring), |element, t| element.opacity(t))

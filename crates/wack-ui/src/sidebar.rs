@@ -771,7 +771,8 @@ pub struct AreaSwitch {
 }
 
 /// Each segment's width and height, and the track's padding.
-const SEGMENT: (f32, f32) = (34., 22.);
+/// A segment holds its icon and its word, as version 2's did.
+const SEGMENT: (f32, f32) = (60., 22.);
 const SWITCH_PAD: f32 = 2.;
 const GLIDE: std::time::Duration = std::time::Duration::from_millis(240);
 
@@ -822,7 +823,7 @@ impl RenderOnce for AreaSwitch {
             })
             .into_any_element()
         };
-        let segment = |id: &'static str, icon: Icon, target: ChatKind, tooltip: &'static str, action: Box<dyn gpui::Action>| {
+        let segment = |id: &'static str, icon: Icon, word: &'static str, target: ChatKind, tooltip: &'static str, action: Box<dyn gpui::Action>| {
             let on = target == area;
             let waiting = self.other_waiting && !on;
             div()
@@ -841,9 +842,11 @@ impl RenderOnce for AreaSwitch {
                     cx.stop_propagation();
                     window.dispatch_action(action.boxed_clone(), cx);
                 })
-                .child(icon.view(px(14.), if on { theme.text } else { theme.text_dim }))
+                .gap(px(5.))
+                .child(icon.view(px(12.), if on { theme.accent_text } else { theme.text_dim }))
+                .child(div().typography(Type::Small).text_color(if on { theme.text } else { theme.text_dim }).child(word))
                 .when(waiting, |segment| {
-                    segment.child(div().absolute().top(px(3.)).right(px(6.)).size(px(6.)).rounded_full().bg(theme.accent_text))
+                    segment.child(div().absolute().top(px(3.)).right(px(5.)).size(px(6.)).rounded_full().bg(theme.accent_text))
                 })
                 .tag(id)
         };
@@ -859,8 +862,8 @@ impl RenderOnce for AreaSwitch {
             .rounded_full()
             .bg(theme.hover)
             .child(pill)
-            .child(segment("area-code", Icon::Code, ChatKind::Code, "Code  ⌥⌘1", Box::new(EnterCodeArea)))
-            .child(segment("area-chat", Icon::Comment, ChatKind::Chat, "Chat  ⌥⌘2", Box::new(EnterChatArea)))
+            .child(segment("area-code", Icon::Code, "Code", ChatKind::Code, "Code  ⌥⌘1", Box::new(EnterCodeArea)))
+            .child(segment("area-chat", Icon::Comment, "Chat", ChatKind::Chat, "Chat  ⌥⌘2", Box::new(EnterChatArea)))
             .tag("area-switch")
     }
 }

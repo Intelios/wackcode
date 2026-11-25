@@ -7,10 +7,11 @@
 //! applies to the chat, so a gallery scene draws the same docks and simply ignores them.
 //!
 //! The right dock is the side panel, a pane of its own beside the stage that runs the frame's full
-//! height; its top stack's tabs sit on the title strip's centre line, beside the chat tabs. The
-//! bottom dock lies under the transcript inside the stage, on `theme.dock`, a step back from the
-//! lit page. A stack's tabs are pills, the one in front raised with the accent's rim, as the chat
-//! tabs' bead is.
+//! height; its top stack's bar, as tall as the title strip, also holds version 2's "+" (a menu of
+//! the panes not open yet) and Hide. The bottom dock lies under the transcript inside the stage,
+//! on `theme.dock`, a step back from the lit page. A stack's tabs are pills centred in their bar,
+//! each with its pane's icon, the one in front raised with the accent's rim, as the chat tabs' bead
+//! is.
 
 use gpui::{
     AnyElement, App, Context, CursorStyle, Hsla, IntoElement, Pixels, Point, SharedString, Window, div, prelude::*, px,
@@ -23,7 +24,7 @@ use super::{
     solve::{Rect, STRIP_HEIGHT, Solution, StackPlace},
 };
 use crate::{
-    actions::{ActivatePane, ClosePaneId, EqualizeSplit, MovePane, NewTerminalWith, ResetDockSize},
+    actions::{ActivatePane, ClosePaneId, ClosePaneMenu, EqualizeSplit, HideSidePanel, MovePane, NewTerminalWith, OpenPaneKind, ResetDockSize, TogglePaneMenu},
     icon::Icon,
     motion,
     tags::Tag,
@@ -165,6 +166,24 @@ pub struct Frame<'a> {
     pub height: f32,
     /// The tab being dragged and the mouse in content coordinates, while a tab is dragged.
     pub dragging: Option<(PaneId, Point<Pixels>)>,
+    /// The panes the side panel's "+" offers (those this chat may have), and whether its menu is
+    /// open.
+    pub addable: Vec<PaneKind>,
+    pub menu_open: bool,
+}
+
+/// A pane kind's icon, on its tab and in the "+" menu, as version 2 drew them.
+pub fn kind_icon(kind: PaneKind) -> Icon {
+    match kind {
+        PaneKind::Changes => Icon::Branch,
+        PaneKind::Terminal => Icon::Terminal,
+        PaneKind::Build => Icon::Hammer,
+        PaneKind::Run => Icon::Play,
+        PaneKind::Tasks => Icon::Tasks,
+        PaneKind::Agents => Icon::Duck,
+        PaneKind::Browser => Icon::Globe,
+        PaneKind::Canvas => Icon::Board,
+    }
 }
 
 /// The docks' elements, each group placed absolutely in its own parent.
@@ -196,7 +215,7 @@ pub fn docks(frame: &Frame, theme: &Theme, cx: &App) -> Docks {
     }
     for place in &solution.stacks {
         if let Some(stack) = frame.panes.layout.stack(place.dock, &place.path) {
-            let view = stack_view(place, stack, frame.panes, theme, cx);
+            let view = stack_view(place, stack, frame, theme, cx);
             match place.dock {
                 Dock::Right => docks.side.push(at(side, place.rect).child(view).into_any_element()),
                 Dock::Bottom => docks.stage.push(at(stage, place.rect).child(view).into_any_element()),
@@ -238,17 +257,13 @@ pub fn docks(frame: &Frame, theme: &Theme, cx: &App) -> Docks {
     docks
 }
 
-fn stack_view(place: &StackPlace, stack: &Stack, panes: &ChatPanes, theme: &Theme, cx: &App) -> AnyElement {
+fn stack_view(place: &StackPlace, stack: &Stack, frame: &Frame, theme: &Theme, cx: &App) -> AnyElement {
+    let panes = frame.panes;
     let active = stack.active_pane();
-    // The side panel's top stack heads the frame beside the title strip: its header is the strip's
-    // band, and its tabs sit on the strip's centre line with the chat tabs.
+    // The side panel's top stack heads the panel: its bar is as tall as the title strip, and holds
+    // the panel's "+" and Hide.
     let heads_frame = place.dock == Dock::Right && place.rect.y <= 0.5;
-    let (header_height, tabs_top) = if heads_frame {
-        let line = f32::from(crate::shell::TITLE_STRIP_HEIGHT) / 2. - f32::from(crate::shell::FRAME_GUTTER);
-        (STRIP_HEIGHT, line - TAB_HEIGHT / 2.)
-    } else {
-        (HEADER_HEIGHT, (HEADER_HEIGHT - TAB_HEIGHT) / 2.)
-    };
+    let header_height = if heads_frame { STRIP_HEIGHT } else { HEADER_HEIGHT };
     let over_picture = theme.veil > 0.;
     let raised = if over_picture { Hsla { a: 0.86, ..theme.raised } } else { theme.raised };
     let tabs = stack.panes.iter().map(|pane| {
@@ -270,7 +285,7 @@ fn stack_view(place: &StackPlace, stack: &Stack, panes: &ChatPanes, theme: &Them
             .flex_none()
             .max_w(px(200.))
             .h(px(TAB_HEIGHT))
-            .pl(px(11.))
+            .pl(px(9.))
             .pr(px(4.))
             .rounded_full()
             .flex()
@@ -292,6 +307,7 @@ fn stack_view(place: &StackPlace, stack: &Stack, panes: &ChatPanes, theme: &Them
             })
             .on_click(move |_, window, cx| window.dispatch_action(Box::new(ActivatePane { pane: id }), cx))
             .on_drag(dragged, |tab, _, _, cx| cx.new(|_| tab.clone()))
+            .child(kind_icon(pane.kind).view(px(13.), if selected { theme.accent_text } else { theme.text_dim }))
             .when_some(status_dot, |tab, dot| {
                 tab.child(div().flex_none().size(px(6.)).rounded_full().bg(dot))
             })
@@ -337,9 +353,9 @@ fn stack_view(place: &StackPlace, stack: &Stack, panes: &ChatPanes, theme: &Them
                 PaneKind::Canvas => "pane-tab-canvas",
             })
     });
-    let add_terminal = (active.kind == PaneKind::Terminal).then(|| {
+    let round = |id: &'static str, icon: Icon, tip: &'static str| {
         div()
-            .id("new-terminal")
+            .id(id)
             .flex_none()
             .size(px(TAB_HEIGHT))
             .rounded_full()
@@ -347,22 +363,43 @@ fn stack_view(place: &StackPlace, stack: &Stack, panes: &ChatPanes, theme: &Them
             .items_center()
             .justify_center()
             .hover(|button| button.bg(theme.hover))
-            .on_click(move |_, window, cx| window.dispatch_action(Box::new(NewTerminalWith { pane: active.id }), cx))
-            .child(Icon::Plus.view(px(13.), theme.text_dim))
-            .tag("new-terminal")
+            .tooltip(crate::tooltip::tip(tip))
+            .child(icon.view(px(13.), theme.text_dim))
+    };
+    // The side panel's "+" offers every pane; a lower stack's, a terminal beside its own.
+    let add = if heads_frame {
+        Some(
+            div()
+                .relative()
+                .flex_none()
+                .child(round("pane-add", Icon::Plus, "Open a pane").on_click(|_, window, cx| window.dispatch_action(Box::new(TogglePaneMenu), cx)).tag("pane-add"))
+                .when(frame.menu_open, |host| host.child(pane_menu(frame, theme)))
+                .into_any_element(),
+        )
+    } else {
+        (active.kind == PaneKind::Terminal).then(|| {
+            round("new-terminal", Icon::Plus, "New terminal")
+                .on_click(move |_, window, cx| window.dispatch_action(Box::new(NewTerminalWith { pane: active.id }), cx))
+                .tag("new-terminal")
+                .into_any_element()
+        })
+    };
+    let hide = heads_frame.then(|| {
+        round("hide-side-panel", Icon::PanelRight, "Hide panel").on_click(|_, window, cx| window.dispatch_action(Box::new(HideSidePanel), cx)).tag("hide-side-panel")
     });
     let header = div()
         .flex_none()
         .h(px(header_height))
         .px(px(8.))
-        .pt(px(tabs_top))
         .flex()
-        .items_start()
+        .items_center()
         .gap(px(4.))
         .border_b_1()
         .border_color(theme.border)
-        .child(div().flex_1().min_w_0().flex().gap(px(2.)).overflow_hidden().children(tabs))
-        .children(add_terminal);
+        .child(div().flex_shrink_1().min_w_0().flex().items_center().gap(px(2.)).overflow_hidden().children(tabs))
+        .children(add)
+        .child(div().flex_1())
+        .children(hide);
     let content = match panes.model(active.id) {
         Some(PaneModel::Changes(model)) => changes::view(model, place.rect.width, theme, cx),
         Some(PaneModel::Terminal(model)) => model.clone().into_any_element(),
@@ -387,6 +424,61 @@ fn stack_view(place: &StackPlace, stack: &Stack, panes: &ChatPanes, theme: &Them
         .child(header)
         .child(div().flex_1().min_h_0().overflow_hidden().child(content))
         .into_any_element()
+}
+
+/// The "+" menu: every pane this chat may have, those already open marked, with their keys.
+fn pane_menu(frame: &Frame, theme: &Theme) -> impl IntoElement {
+    let viewport_cover = gpui::anchored().position_mode(gpui::AnchoredPositionMode::Window).position(gpui::point(px(0.), px(0.))).child(
+        div().id("pane-menu-backdrop").w(px(frame.width + 400.)).h(px(frame.height + 400.)).on_mouse_down(gpui::MouseButton::Left, |_, window, cx| {
+            cx.stop_propagation();
+            window.dispatch_action(Box::new(ClosePaneMenu), cx);
+        }),
+    );
+    let rows = frame.addable.iter().map(|&kind| {
+        let open = frame.panes.layout.first_of(kind).is_some() && kind != PaneKind::Terminal;
+        let label = match kind {
+            PaneKind::Terminal if frame.panes.layout.first_of(kind).is_some() => "New terminal",
+            _ => kind.title(),
+        };
+        let keys = match kind {
+            PaneKind::Changes => Some("⌘⇧G"),
+            PaneKind::Terminal => Some("⌃`"),
+            _ => None,
+        };
+        div()
+            .id(("pane-menu-item", kind as usize))
+            .h(px(30.))
+            .px(px(10.))
+            .rounded(px(8.))
+            .flex()
+            .items_center()
+            .gap(px(9.))
+            .cursor_pointer()
+            .hover(|row| row.bg(theme.hover))
+            .on_click(move |_, window, cx| window.dispatch_action(Box::new(OpenPaneKind { kind }), cx))
+            .child(kind_icon(kind).view(px(14.), if open { theme.accent_text } else { theme.text_dim }))
+            .child(div().flex_1().typography(Type::Ui).text_color(theme.text).child(label))
+            .when(open, |row| row.child(div().size(px(5.)).rounded_full().bg(theme.accent_text)))
+            .when_some(keys, |row, keys| row.child(div().typography(Type::Small).text_color(theme.text_faint).child(keys)))
+    });
+    let card = div()
+        .id("pane-menu")
+        .occlude()
+        .w(px(220.))
+        .p(px(5.))
+        .rounded(px(12.))
+        .bg(theme.raised)
+        .border_1()
+        .border_color(theme.border_strong)
+        .shadow_lg()
+        .flex()
+        .flex_col()
+        .children(rows);
+    div()
+        .child(gpui::deferred(viewport_cover).with_priority(1))
+        .child(gpui::deferred(div().absolute().top(px(TAB_HEIGHT)).left_0().child(
+            gpui::anchored().offset(gpui::point(px(0.), px(6.))).snap_to_window_with_margin(px(8.)).child(motion::enter("pane-menu-arrive", card)),
+        )).with_priority(2))
 }
 
 /// The hairlines between the transcript and the bottom dock and between stacks, with their
@@ -494,9 +586,12 @@ mod tests {
         // Its own stack, alone: no target in the middle or at an edge.
         assert!(drop_target(&layout, &solution, terminal, stack.x + stack.width / 2., stack.y + 120.).is_none());
         assert!(drop_target(&layout, &solution, terminal, stack.x + 5., stack.y + 120.).is_none());
-        // Over the transcript's foot, it would open the bottom dock.
+        // Over the transcript's foot, Changes would open the bottom dock; a terminal never does.
         let transcript = solution.transcript;
-        let (target, _) = drop_target(&layout, &solution, terminal, transcript.x + 50., transcript.bottom() - 10.).unwrap();
+        assert!(drop_target(&layout, &solution, terminal, transcript.x + 50., transcript.bottom() - 10.).is_none());
+        let changes = layout.add(PaneKind::Changes);
+        let solution = solve(1400., 900., false, &layout);
+        let (target, _) = drop_target(&layout, &solution, changes, transcript.x + 50., transcript.bottom() - 10.).unwrap();
         assert_eq!(target, Target::Dock(Dock::Bottom));
     }
 }

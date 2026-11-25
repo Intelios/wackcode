@@ -583,7 +583,7 @@ impl Shell {
         self.focus_composer(window, cx);
     }
 
-    /// A new terminal: as a tab beside `with`, or in the bottom dock.
+    /// A new terminal: as a tab beside `with`, or in the right dock.
     fn new_terminal(&mut self, with: Option<PaneId>, window: &mut Window, cx: &mut Context<Self>) {
         if !self.pane_allowed(PaneKind::Terminal, cx) {
             return;

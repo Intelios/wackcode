@@ -447,9 +447,9 @@ mod tests {
         // Its own stack, alone: no target in the middle or at an edge.
         assert!(drop_target(&layout, &solution, terminal, stack.x + stack.width / 2., stack.y + 120.).is_none());
         assert!(drop_target(&layout, &solution, terminal, stack.x + 5., stack.y + 120.).is_none());
-        // Over the transcript's right edge, it would open the right dock.
+        // Over the transcript's foot, it would open the bottom dock.
         let transcript = solution.transcript;
-        let (target, _) = drop_target(&layout, &solution, terminal, transcript.right() - 10., transcript.y + 50.).unwrap();
-        assert_eq!(target, Target::Dock(Dock::Right));
+        let (target, _) = drop_target(&layout, &solution, terminal, transcript.x + 50., transcript.bottom() - 10.).unwrap();
+        assert_eq!(target, Target::Dock(Dock::Bottom));
     }
 }

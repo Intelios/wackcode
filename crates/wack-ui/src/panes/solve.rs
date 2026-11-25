@@ -400,7 +400,7 @@ mod tests {
         let solved = solve(1400., 900., false, &layout);
         assert_eq!(solved.dividers.len(), 1);
         let divider = &solved.dividers[0];
-        assert_eq!(divider.before + divider.after, solved.bottom.unwrap().width);
+        assert_eq!(divider.before + divider.after, solved.right.unwrap().width);
     }
 
     #[test]

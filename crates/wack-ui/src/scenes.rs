@@ -8,7 +8,7 @@ use wack_core::{CommandKind, CommandSession, CommandStatus};
 
 use crate::{
     composer::{ComposerData, Input},
-    panes::{AgentsPane, BrowserPane, ChangesPane, ChatPanes, Dock, Edge, Layout, PaneKind, PaneModel, RunPane, Target, TasksPane, TerminalPane},
+    panes::{AgentsPane, BrowserPane, ChangesPane, ChatPanes, Edge, Layout, PaneKind, PaneModel, RunPane, Target, TasksPane, TerminalPane},
     run_button::{CommandButtonData, CommandEditorData},
     settings::{ProviderForm, ProvidersData, Section, SettingsData},
     fixtures::{self, Selected},
@@ -262,7 +262,7 @@ pub fn all() -> Vec<Scene> {
         },
         Scene {
             name: "chat-panes",
-            description: "A chat with Changes beside the transcript and a terminal below, at a wide window.",
+            description: "A chat with a terminal beside the transcript, a tab of the right dock next to Changes, at a wide window.",
             size: size(px(1480.), px(940.)),
             build: |_, cx| {
                 let mut layout = Layout::default();
@@ -293,7 +293,6 @@ pub fn all() -> Vec<Scene> {
                 let second = layout.add(PaneKind::Terminal);
                 layout.move_pane(first, Target::Beside(changes, Edge::Bottom));
                 layout.move_pane(second, Target::With(first));
-                layout.set_hidden(Dock::Bottom, true);
                 panes_scene(layout, &[changes, first, second], true, cx)
             },
         },
@@ -1171,7 +1170,7 @@ pub fn all() -> Vec<Scene> {
         },
         Scene {
             name: "build-run-new-chat",
-            description: "New chat screen with centered Build/Run pills and an open Run output dock.",
+            description: "New chat screen with centered Build/Run pills and the Run output open in the right dock.",
             size: WINDOW,
             build: |_, cx| {
                 let mut strip = fixtures::strip(None);
@@ -1271,7 +1270,7 @@ pub fn all() -> Vec<Scene> {
         },
         Scene {
             name: "build-run-panes",
-            description: "Failed Build and active Run panes stacked in the bottom dock beside Changes.",
+            description: "Failed Build and active Run panes stacked in the right dock under Changes.",
             size: size(px(1480.), px(940.)),
             build: |_, cx| {
                 let mut strip = fixtures::strip(Some(fixtures::FINISHED_TITLE));
@@ -1294,8 +1293,9 @@ pub fn all() -> Vec<Scene> {
                     let changes_id = layout.open(PaneKind::Changes);
                     let run_id = layout.open(PaneKind::Run);
                     let build_id = layout.open(PaneKind::Build);
-                    layout.right_width = Some(520.);
-                    layout.bottom_height = Some(280.);
+                    layout.move_pane(run_id, Target::Beside(changes_id, Edge::Bottom));
+                    layout.move_pane(build_id, Target::With(run_id));
+                    layout.right_width = Some(560.);
                     let mut panes = ChatPanes::new(layout, "/Users/you/Code/wackcode".into());
                     panes.insert(
                         changes_id,
@@ -1408,13 +1408,13 @@ pub fn all() -> Vec<Scene> {
         },
         Scene {
             name: "tasks-pane",
-            description: "The Tasks pane in the bottom dock: a running server, a failed suite, a watch.",
+            description: "The Tasks pane in the right dock: a running server, a failed suite, a watch.",
             size: size(px(1480.), px(940.)),
             build: |_, cx| {
                 cx.new(|cx| {
                     let mut layout = Layout::default();
                     let tasks_id = layout.open(PaneKind::Tasks);
-                    layout.bottom_height = Some(320.);
+                    layout.right_width = Some(560.);
                     let mut panes = ChatPanes::new(layout, "/Users/you/Code/wackcode".into());
                     let tasks = fixtures::tasks();
                     panes.insert(

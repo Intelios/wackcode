@@ -1,7 +1,8 @@
 //! A chat's panes as plain data: which panes are open, where, and how the user sized them.
 //!
-//! Each chat has two docks: one to the right of the transcript, one along the bottom. A dock
-//! holds a tree whose leaves are tab stacks and whose branches split their space in a row or a
+//! Each chat has two docks: one to the right of the transcript, one along the bottom. Every pane
+//! opens in the right dock, as version 2's side panel did, so a terminal sits beside the chat; the
+//! bottom dock holds only what the user drags there. A dock holds a tree whose leaves are tab stacks and whose branches split their space in a row or a
 //! column, by weight.
 //!
 //! Invariants every operation keeps (the tests check them after every random step):
@@ -55,12 +56,9 @@ impl PaneKind {
         matches!(self, PaneKind::Changes | PaneKind::Build | PaneKind::Run | PaneKind::Tasks | PaneKind::Agents | PaneKind::Browser | PaneKind::Canvas)
     }
 
-    /// Where a new pane of this kind opens.
+    /// Where a new pane of this kind opens: beside the transcript, as a tab of the right dock.
     pub fn home(self) -> Dock {
-        match self {
-            PaneKind::Changes | PaneKind::Agents | PaneKind::Browser | PaneKind::Canvas => Dock::Right,
-            PaneKind::Terminal | PaneKind::Build | PaneKind::Run | PaneKind::Tasks => Dock::Bottom,
-        }
+        Dock::Right
     }
 }
 
@@ -749,9 +747,11 @@ pub(crate) mod tests {
         let second = layout.add(PaneKind::Terminal);
         assert_ne!(first, second);
         assert_eq!(layout.find(changes).map(|(dock, _)| dock), Some(Dock::Right));
-        assert_eq!(layout.find(second).map(|(dock, _)| dock), Some(Dock::Bottom));
-        // Two terminals share the bottom dock as tabs; the newest is in front.
-        assert_eq!(layout.stack(Dock::Bottom, &[]).map(|stack| stack.active_pane().id), Some(second));
+        assert_eq!(layout.find(second).map(|(dock, _)| dock), Some(Dock::Right));
+        // Terminals join Changes as tabs of the right dock; the newest is in front.
+        assert_eq!(layout.stack(Dock::Right, &[]).map(|stack| stack.panes.len()), Some(3));
+        assert_eq!(layout.stack(Dock::Right, &[]).map(|stack| stack.active_pane().id), Some(second));
+        assert!(layout.bottom.is_none());
     }
 
     #[test]
@@ -760,10 +760,10 @@ pub(crate) mod tests {
         let terminal = layout.toggle(PaneKind::Terminal).unwrap();
         assert!(layout.visible().iter().any(|pane| pane.id == terminal));
         assert_eq!(layout.toggle(PaneKind::Terminal), None);
-        assert!(layout.bottom_hidden);
+        assert!(layout.right_hidden);
         assert!(layout.find(terminal).is_some(), "hidden, not closed");
         assert_eq!(layout.toggle(PaneKind::Terminal), Some(terminal), "the same terminal comes back");
-        assert!(!layout.bottom_hidden);
+        assert!(!layout.right_hidden);
     }
 
     #[test]
@@ -772,16 +772,16 @@ pub(crate) mod tests {
         let a = layout.add(PaneKind::Terminal);
         let b = layout.add(PaneKind::Terminal);
         layout.move_pane(b, Target::Beside(a, Edge::Right));
-        assert!(matches!(layout.bottom, Some(Node::Split { axis: Axis::Row, ref children }) if children.len() == 2));
+        assert!(matches!(layout.right, Some(Node::Split { axis: Axis::Row, ref children }) if children.len() == 2));
         let c = layout.add(PaneKind::Terminal);
         layout.move_pane(c, Target::Beside(b, Edge::Right));
         // A third column joins the row rather than nesting a new one.
-        assert!(matches!(layout.bottom, Some(Node::Split { axis: Axis::Row, ref children }) if children.len() == 3));
+        assert!(matches!(layout.right, Some(Node::Split { axis: Axis::Row, ref children }) if children.len() == 3));
         layout.close(b);
         layout.close(c);
-        assert!(matches!(layout.bottom, Some(Node::Stack(_))), "a split of one is just its child");
+        assert!(matches!(layout.right, Some(Node::Stack(_))), "a split of one is just its child");
         layout.close(a);
-        assert!(layout.bottom.is_none());
+        assert!(layout.right.is_none());
     }
 
     #[test]
@@ -811,21 +811,21 @@ pub(crate) mod tests {
         let a = layout.add(PaneKind::Terminal);
         let b = layout.add(PaneKind::Terminal);
         layout.move_pane(b, Target::Beside(a, Edge::Right));
-        layout.resize_split(Dock::Bottom, &[], 0, 300., 100.);
-        let Some(Node::Split { children, .. }) = &layout.bottom else { panic!() };
+        layout.resize_split(Dock::Right, &[], 0, 300., 100.);
+        let Some(Node::Split { children, .. }) = &layout.right else { panic!() };
         assert!((children[0].weight - 1.5).abs() < 1e-4 && (children[1].weight - 0.5).abs() < 1e-4);
     }
 
     #[test]
-    fn build_and_run_are_singletons_in_bottom_dock() {
+    fn build_and_run_are_singletons_in_right_dock() {
         let mut layout = Layout::default();
         let build = layout.open(PaneKind::Build);
         let run = layout.open(PaneKind::Run);
         assert_ne!(build, run);
         assert_eq!(layout.open(PaneKind::Build), build);
         assert_eq!(layout.open(PaneKind::Run), run);
-        assert_eq!(layout.find(build).map(|(dock, _)| dock), Some(Dock::Bottom));
-        assert_eq!(layout.find(run).map(|(dock, _)| dock), Some(Dock::Bottom));
+        assert_eq!(layout.find(build).map(|(dock, _)| dock), Some(Dock::Right));
+        assert_eq!(layout.find(run).map(|(dock, _)| dock), Some(Dock::Right));
 
         let saved = serde_json::to_value(&layout).unwrap();
         assert_eq!(Layout::from_saved(Some(&saved)), layout);

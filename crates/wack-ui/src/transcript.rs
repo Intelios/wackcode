@@ -2,9 +2,11 @@
 //!
 //! - The user's message is a bubble on the right, its tail corner tucked in.
 //! - The agent's work opens with a chip ("Worked for 19s", the duck paddling while it works), a
-//!   dotted rule and a count of what it did. Opened, it is a log of compact rows hung from a
-//!   dotted rail: a round icon, the verb, what it acted on (in mono for paths and commands), its
-//!   meta. A row with more to show (a diff, a command's output, a long thought) opens in place.
+//!   dotted rule and a count of what it did. Opened, it is a lit log of compact rows strung on a
+//!   rail in the accent's sweep: a round mark lit in the accent (a command that passed in the
+//!   success colour, a failure in danger's, a step under way breathing), the verb, what it acted
+//!   on (in mono for paths and commands), its meta. A row with more to show (a diff, a command's
+//!   output, a long thought) opens in place.
 //! - Diffs, output and code are sheets: rounded, with a head band naming what they hold (and a
 //!   copy button on code) over the code's own ground.
 //! - The reply is running text in the UI face, with code in mono.
@@ -413,8 +415,10 @@ const VERB_WIDTH: f32 = 62.;
 const SHEET_INDENT: f32 = ICON + ROW_GAP;
 const WORDS_INDENT: f32 = ICON + ROW_GAP + VERB_WIDTH + ROW_GAP;
 /// The log's rail drops from the middle of the chip's duck: the chip's padding and edge, then half
-/// the duck.
+/// the duck. The rows' marks are strung on it.
 const RAIL: f32 = 8. + 1. + 7.;
+/// The middle of a row's mark, down from the row's top: its line is 28 points.
+const MARK_MIDDLE: f32 = 14.;
 
 fn work_log(work: &Work, theme: &Theme, handlers: &Handlers) -> impl IntoElement {
     let toggle = handlers.toggle.clone();
@@ -461,16 +465,43 @@ fn work_log(work: &Work, theme: &Theme, handlers: &Handlers) -> impl IntoElement
             header.child(div().flex_none().typography(Type::Small).text_color(theme.text_faint).child(work.tally.clone()))
         });
 
+    // The rail runs from under the chip to the last row's mark, measured as the rows are laid out
+    // (prepaint is over before anything paints).
+    let end = Rc::new(std::cell::Cell::new(None::<gpui::Pixels>));
+    let (top, bottom) = match theme.accent_sweep {
+        Some(stops) => (stops[0], stops[2]),
+        None => (theme.accent, theme.accent),
+    };
+    let (top, bottom) = (Hsla { a: RAIL_ALPHA, ..top }, Hsla { a: RAIL_ALPHA, ..bottom });
+    let rail = {
+        let end = end.clone();
+        gpui::canvas(
+            |_, _, _| (),
+            move |area, _, window, _| {
+                let Some(end) = end.get() else { return };
+                let start = area.origin.y + px(2.);
+                if end <= start {
+                    return;
+                }
+                let line = gpui::Bounds::new(gpui::point(area.origin.x + px(ICON / 2. - 1.), start), gpui::size(px(2.), end - start));
+                let paint = gpui::linear_gradient(180., gpui::linear_color_stop(top, 0.), gpui::linear_color_stop(bottom, 1.));
+                window.paint_quad(gpui::fill(line, paint).corner_radii(px(1.)));
+            },
+        )
+        .absolute()
+        .top_0()
+        .left_0()
+        .size_full()
+    };
     let mut rows = div()
-        .ml(px(RAIL))
-        .pl(px(ROW_GAP))
-        .border_l_1()
-        .border_dashed()
-        .border_color(theme.border_strong)
+        .relative()
+        .ml(px(RAIL - ICON / 2.))
         .flex()
         .flex_col()
         .gap(px(2.))
-        .py(px(4.));
+        .py(px(4.))
+        .on_children_prepainted(move |children, _, _| end.set(children.last().map(|row| row.origin.y + px(MARK_MIDDLE))))
+        .child(rail);
     for row in &work.rows {
         rows = rows.child(log_row(row, theme, handlers));
     }
@@ -478,9 +509,56 @@ fn work_log(work: &Work, theme: &Theme, handlers: &Handlers) -> impl IntoElement
     div().flex().flex_col().gap(px(6.)).child(header).when(work.open && !work.rows.is_empty(), |log| log.child(rows))
 }
 
-/// A row's round icon, by its verb; an edit is lit in the accent.
-fn row_icon(verb: &str, theme: &Theme) -> impl IntoElement {
-    let icon = match verb {
+/// How strongly the rail shows behind the marks.
+const RAIL_ALPHA: f32 = 0.6;
+
+/// A row's round mark, lit: its icon (by its verb) on the glass's tone, ringed and glowing in the
+/// accent, or in success's colour for a command that passed and danger's for a step that failed.
+/// A step under way breathes; an event (a retry, a compaction) is a small bead on the rail.
+fn row_mark(row: &WorkRow, theme: &Theme, still: bool) -> AnyElement {
+    let Some(icon) = row_icon(&row.verb) else {
+        return div()
+            .flex_none()
+            .size(px(ICON))
+            .flex()
+            .items_center()
+            .justify_center()
+            .child(div().size(px(7.)).rounded_full().bg(theme.glass_tone).border_1().border_color(theme.accent_line))
+            .into_any_element();
+    };
+    let (ink, ring, glow) = match &row.meta {
+        Meta::Failed(_) => (theme.danger, Hsla { a: 0.6, ..theme.danger }, theme.danger),
+        Meta::Running => (theme.accent_text, theme.accent_line, theme.accent),
+        _ if matches!(row.verb.as_ref(), "Ran" | "Finished") => (theme.success, Hsla { a: 0.6, ..theme.success }, theme.success),
+        _ => (theme.accent_text, theme.accent_line, theme.accent),
+    };
+    let mark = div()
+        .flex_none()
+        .size(px(ICON))
+        .rounded_full()
+        .flex()
+        .items_center()
+        .justify_center()
+        .bg(theme.glass_tone)
+        .border_1()
+        .border_color(ring)
+        .shadow(vec![gpui::BoxShadow {
+            color: Hsla { a: 0.3, ..glow },
+            offset: gpui::point(px(0.), px(0.)),
+            blur_radius: px(10.),
+            spread_radius: px(-2.),
+            inset: false,
+        }])
+        .child(icon.view(px(12.), ink));
+    match row.meta {
+        Meta::Running => crate::motion::breathing(SharedString::from(format!("{}-breath", row.key)), mark, still),
+        _ => mark.into_any_element(),
+    }
+}
+
+/// A row's icon, by its verb; none for an event.
+fn row_icon(verb: &str) -> Option<Icon> {
+    match verb {
         "Read" => Some(Icon::File),
         "Searched" | "Found" | "Looked for" => Some(Icon::Search),
         "Listed" => Some(Icon::Folder),
@@ -497,21 +575,7 @@ fn row_icon(verb: &str, theme: &Theme) -> impl IntoElement {
         verb if crate::work::COMPUTER_VERBS.contains(&verb) => Some(Icon::Cursor),
         "" => None,
         _ => Some(Icon::Hammer),
-    };
-    let lit = matches!(verb, "Edited" | "Wrote");
-    div()
-        .flex_none()
-        .size(px(ICON))
-        .rounded_full()
-        .flex()
-        .items_center()
-        .justify_center()
-        .when(icon.is_some(), |circle| circle.bg(if lit { theme.accent_wash } else { theme.hover }))
-        .child(match icon {
-            Some(icon) => icon.view(px(12.), if lit { theme.accent_text } else { theme.text_dim }).into_any_element(),
-            // An event (a retry, a compaction): a quiet dot on the rail.
-            None => div().size(px(5.)).rounded_full().bg(theme.text_faint).into_any_element(),
-        })
+    }
 }
 
 fn log_row(row: &WorkRow, theme: &Theme, handlers: &Handlers) -> AnyElement {
@@ -566,7 +630,7 @@ fn log_row(row: &WorkRow, theme: &Theme, handlers: &Handlers) -> AnyElement {
                         .hover(move |line| line.bg(hover))
                         .on_click(move |_, window, cx| toggle(key.clone(), window, cx))
                 })
-                .child(row_icon(&row.verb, theme))
+                .child(row_mark(row, theme, handlers.still))
                 .when(!row.verb.is_empty(), |line| {
                     line.child(div().flex_none().w(px(VERB_WIDTH)).typography(Type::Ui).text_color(theme.text_dim).child(row.verb.clone()))
                 })
@@ -599,7 +663,9 @@ fn agent_row(key: &SharedString, agent: &AgentLine, theme: &Theme) -> AnyElement
         .flex()
         .items_center()
         .justify_center()
-        .bg(if working { theme.accent_wash } else { theme.hover })
+        .bg(theme.glass_tone)
+        .border_1()
+        .border_color(if working { theme.accent_line } else { theme.border_strong })
         .child(if working {
             crate::motion::paddling(div().child(Icon::Duck.view(px(12.), theme.accent_text))).into_any_element()
         } else {

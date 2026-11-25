@@ -32,7 +32,7 @@ use std::{
     time::{Duration, Instant},
 };
 
-use gpui::{Animation, AnimationExt, App, ElementId, HighlightStyle, Hsla, IntoElement, SharedString, Styled, StyledText, px};
+use gpui::{AnimationExt, AnyElement, Animation, App, ElementId, HighlightStyle, Hsla, IntoElement, SharedString, Styled, StyledText, px};
 
 /// How long an arrival takes.
 pub const ARRIVE: Duration = Duration::from_millis(260);
@@ -187,6 +187,27 @@ impl Bead {
     }
 }
 
+/// One breath of a step still under way: down to [`BREATH_LOW`] and back.
+pub const BREATH: Duration = Duration::from_millis(1600);
+pub const BREATH_LOW: f32 = 0.45;
+
+/// Breathes, for a step still under way: it dims and brightens again, over and over. With Reduce
+/// Motion it holds still, fully lit.
+pub fn breathing<E: IntoElement + Styled + 'static>(id: impl Into<ElementId>, element: E, still: bool) -> AnyElement {
+    if still {
+        return element.into_any_element();
+    }
+    element
+        .with_animation(id, Animation::new(BREATH).repeat(), |element, t| element.opacity(breath(t)))
+        .into_any_element()
+}
+
+/// How lit a breathing step is `t` (0–1) of the way through a breath: full at both ends.
+fn breath(t: f32) -> f32 {
+    let wave = 0.5 + 0.5 * (t * std::f32::consts::TAU).cos();
+    BREATH_LOW + (1. - BREATH_LOW) * wave
+}
+
 /// Raises a working duck to the paddle's current step.
 pub fn paddling<E: Styled>(element: E) -> E {
     element.relative().top(px(PADDLE[PADDLE_AT.load(Ordering::Relaxed) % PADDLE.len()]))
@@ -205,6 +226,13 @@ pub fn paddle_rest() {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn a_breath_starts_and_ends_fully_lit() {
+        assert_eq!(breath(0.), 1.);
+        assert!((breath(1.) - 1.).abs() < 1e-5);
+        assert!((breath(0.5) - BREATH_LOW).abs() < 1e-5);
+    }
 
     #[test]
     fn the_spring_settles_without_overshooting() {

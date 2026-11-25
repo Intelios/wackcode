@@ -90,7 +90,8 @@ pub fn split_button(
             CommandKind::Build => Icon::Hammer,
             CommandKind::Run => Icon::Play,
         };
-        let ink = if configured { theme.text_soft } else { theme.text_dim };
+        // A command ready to run wears the accent, as WackCode 2's pills did.
+        let ink = if configured { theme.accent_text } else { theme.text_dim };
         (icon, kind.title(), ink)
     };
 
@@ -107,6 +108,8 @@ pub fn split_button(
         (Some(Hsla { a: 0.14, ..theme.danger }), Hsla { a: 0.34, ..theme.danger })
     } else if data.editor_open {
         (Some(theme.hover), theme.border_strong)
+    } else if configured {
+        (Some(Hsla { a: 0.6, ..theme.accent_wash }), theme.accent_line)
     } else {
         (ground, theme.border)
     };
@@ -169,7 +172,7 @@ pub fn split_button(
     let pill = div()
         .occlude()
         .flex_none()
-        .h(px(22.))
+        .h(px(26.))
         .rounded_full()
         .border_1()
         .border_color(shell_border)

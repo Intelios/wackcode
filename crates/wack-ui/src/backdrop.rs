@@ -228,6 +228,66 @@ pub fn artwork(picture: &Picture, light: bool, cx: &mut App) -> Option<Arc<Rende
     None
 }
 
+/// How much the glass's copy of the picture boosts its colour, as WackCode 2's glass did with
+/// `saturate(1.55)`: laying the window's colour over a picture greys it, and this gives it back.
+pub const VIBRANCY: f32 = 1.55;
+
+/// The glass panes' copies of pictures, by softened copy's path; `None` while one is being made.
+#[derive(Default)]
+struct Vibrant {
+    images: Vec<(SharedString, Option<Arc<RenderImage>>)>,
+}
+
+impl Global for Vibrant {}
+
+/// The picture's softened copy with its colour boosted by [`VIBRANCY`], for the glass panes to lay
+/// under themselves (`glass::Under`), or `None` while it is being made (the windows redraw when it
+/// is ready). The copy on disk is never changed.
+pub fn vibrant(picture: &Picture, cx: &mut App) -> Option<Arc<RenderImage>> {
+    let key = picture.soft_path.clone();
+    let vibrant = cx.default_global::<Vibrant>();
+    if let Some((_, image)) = vibrant.images.iter().find(|(path, _)| *path == key) {
+        return image.clone();
+    }
+    vibrant.images.push((key.clone(), None));
+    if vibrant.images.len() > KEPT {
+        vibrant.images.remove(0);
+    }
+    let path = key.clone();
+    cx.spawn(async move |cx| {
+        let made = cx.background_executor().spawn(async move { saturated(path.as_ref()) }).await;
+        cx.update(|cx| {
+            // A copy that cannot be read leaves the panes blurring live, and is not retried.
+            let Some(image) = made else { return };
+            if let Some(entry) = cx.default_global::<Vibrant>().images.iter_mut().find(|(path, _)| *path == key) {
+                entry.1 = Some(Arc::new(image));
+            }
+            cx.refresh_windows();
+        });
+    })
+    .detach();
+    None
+}
+
+/// The picture at `path`, its colour boosted by [`VIBRANCY`], in the BGRA order GPUI draws.
+fn saturated(path: &str) -> Option<RenderImage> {
+    let mut pixels = image::open(path).ok()?.to_rgba8();
+    for pixel in pixels.pixels_mut() {
+        let [r, g, b, a] = pixel.0;
+        let [r, g, b] = boost([r, g, b], VIBRANCY);
+        pixel.0 = [b, g, r, a];
+    }
+    Some(RenderImage::new([image::Frame::new(pixels)]))
+}
+
+/// `colour` moved `amount` times as far from its own grey, keeping its luma, so it gains colour
+/// without getting lighter or darker: the theme's readability sums still hold over it.
+fn boost([r, g, b]: [u8; 3], amount: f32) -> [u8; 3] {
+    let luma = 0.2126 * r as f32 + 0.7152 * g as f32 + 0.0722 * b as f32;
+    let channel = |value: u8| (luma + (value as f32 - luma) * amount).round().clamp(0., 255.) as u8;
+    [channel(r), channel(g), channel(b)]
+}
+
 /// The picture as it is, up to [`PLAIN_EDGE`] on its long side, in the BGRA order GPUI draws.
 fn plain(path: &str) -> Option<RenderImage> {
     let picture = image::open(path).ok()?;
@@ -395,6 +455,15 @@ mod tests {
         };
         let [r, g, b, a] = source.colour(5, 3);
         assert_eq!(plain.get_pixel(5, 3).0, [b, g, r, a]);
+    }
+
+    #[test]
+    fn vibrancy_adds_colour_and_keeps_greys() {
+        assert_eq!(boost([128, 128, 128], VIBRANCY), [128, 128, 128], "a grey has no colour to boost");
+        let [r, g, b] = boost([180, 120, 200], VIBRANCY);
+        assert!(r > 180 && g < 120 && b > 200, "further from its grey: {:?}", [r, g, b]);
+        let luma = |[r, g, b]: [u8; 3]| 0.2126 * r as f32 + 0.7152 * g as f32 + 0.0722 * b as f32;
+        assert!((luma([r, g, b]) - luma([180, 120, 200])).abs() < 1.5, "as light as before");
     }
 
     #[test]

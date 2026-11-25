@@ -139,6 +139,54 @@ impl Ease {
     }
 }
 
+/// How long the open tab's bead takes to reach a new tab: its leading edge gets there in
+/// `BEAD_LEAD`, its tail in `BEAD_TAIL`, so it stretches towards the tab and then gathers up.
+pub const BEAD_LEAD: Duration = Duration::from_millis(260);
+pub const BEAD_TAIL: Duration = Duration::from_millis(460);
+
+/// The open tab's bead in the tab tray: a span across the tray (its left and right edges) that runs
+/// to each newly opened tab like a drop of liquid, leading edge first. The holder calls
+/// [`Bead::at`] as it paints and asks for another frame while [`Bead::moving`].
+#[derive(Clone, Debug, Default)]
+pub struct Bead {
+    /// The tab it is heading for.
+    key: Option<SharedString>,
+    from: (f32, f32),
+    to: (f32, f32),
+    since: Option<Instant>,
+}
+
+impl Bead {
+    /// Where the bead is drawn at `now`, on its way to `key`'s tab, which spans `span`. A new key
+    /// sets it off from wherever it is; the same key follows its tab at once, so a tab that moves
+    /// (another closed, the window resized) keeps its bead. It never moves the first time, or
+    /// with Reduce Motion on (`still`).
+    pub fn at(&mut self, key: &SharedString, span: (f32, f32), still: bool, now: Instant) -> (f32, f32) {
+        if self.key.as_ref() != Some(key) {
+            let first = self.key.is_none();
+            self.from = if first { span } else { self.value_at(now) };
+            self.since = (!first && !still).then_some(now);
+            self.key = Some(key.clone());
+        }
+        self.to = span;
+        self.value_at(now)
+    }
+
+    fn value_at(&self, now: Instant) -> (f32, f32) {
+        let Some(since) = self.since else { return self.to };
+        let elapsed = now.saturating_duration_since(since).as_secs_f32();
+        // The edge on the side it is heading for leads.
+        let rightwards = self.to.0 + self.to.1 > self.from.0 + self.from.1;
+        let (left, right) = if rightwards { (BEAD_TAIL, BEAD_LEAD) } else { (BEAD_LEAD, BEAD_TAIL) };
+        let along = |time: Duration| spring(elapsed / time.as_secs_f32());
+        (self.from.0 + (self.to.0 - self.from.0) * along(left), self.from.1 + (self.to.1 - self.from.1) * along(right))
+    }
+
+    pub fn moving(&self, now: Instant) -> bool {
+        self.since.is_some_and(|since| now.saturating_duration_since(since) < BEAD_TAIL)
+    }
+}
+
 /// Raises a working duck to the paddle's current step.
 pub fn paddling<E: Styled>(element: E) -> E {
     element.relative().top(px(PADDLE[PADDLE_AT.load(Ordering::Relaxed) % PADDLE.len()]))
@@ -169,6 +217,27 @@ mod tests {
             last = value;
         }
         assert!(spring(0.3) > 0.7, "most of the way there early: {}", spring(0.3));
+    }
+
+    #[test]
+    fn the_bead_stretches_towards_a_new_tab_and_gathers_up() {
+        let (first, second): (SharedString, SharedString) = ("a".into(), "b".into());
+        let start = Instant::now();
+        let mut bead = Bead::default();
+        assert_eq!(bead.at(&first, (10., 110.), false, start), (10., 110.), "the first tab: no motion");
+        assert!(!bead.moving(start));
+        // Off to the right: the right edge leads, so the bead is wider on the way.
+        let (left, right) = bead.at(&second, (200., 300.), false, start);
+        assert_eq!((left, right), (10., 110.));
+        let (left, right) = bead.at(&second, (200., 300.), false, start + BEAD_LEAD / 2);
+        assert!(right - left > 100., "stretched: {left}..{right}");
+        assert!(bead.moving(start + BEAD_LEAD));
+        assert_eq!(bead.at(&second, (200., 300.), false, start + BEAD_TAIL), (200., 300.), "gathered at the tab");
+        assert!(!bead.moving(start + BEAD_TAIL));
+        // The same tab moving (another closed) is followed at once.
+        assert_eq!(bead.at(&second, (150., 250.), false, start + BEAD_TAIL * 2), (150., 250.));
+        // Reduce Motion lands at once.
+        assert_eq!(bead.at(&first, (10., 110.), true, start + BEAD_TAIL * 3), (10., 110.));
     }
 
     #[test]

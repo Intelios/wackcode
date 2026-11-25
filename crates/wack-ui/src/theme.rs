@@ -26,12 +26,13 @@
 //!     difference, and painting all three is open with the owner.
 //!
 //! Over a picture (the fourth input, [`Ground`]) the picture is dimmed exactly as the user chose
-//! ([`Theme::veil`]), and text sits on glass panes over it: the window's colour at
-//! [`Theme::glass`] over the blurred picture. Ink must read on that glass over the picture's
-//! worst part. The glass is never thinner than [`GLASS_MIN`]; the quieter steps of ink move
-//! towards the loud end by one shared amount, keeping their order, and only when that is not
-//! enough does the glass thicken. Without a picture the panes are solid and the ramp is used as
-//! it stands.
+//! ([`Theme::veil`]), and text sits on glass panes over it: the window's colour, leaning towards
+//! the accent ([`Theme::glass_tone`]), at [`Theme::glass`] over the softened picture. The glass is
+//! thin, as WackCode 2's was, so the picture shows through as colour and shape. Ink must read on
+//! that glass over the picture's worst part. The glass is never thinner than [`GLASS_MIN`]; the
+//! quieter steps of ink move towards the loud end by one shared amount, keeping their order, and
+//! only when that is not enough does the glass thicken. Without a picture the panes are solid and
+//! the ramp is used as it stands.
 //!
 //! Meaning colours (danger, warning, success, diff) are fixed per appearance and never follow the
 //! accent. Syntax colours keep their own hues so code stays readable, leaning slightly towards the
@@ -214,13 +215,28 @@ pub struct Theme {
     /// dimmed picture, 0 to 1: at least [`GLASS_MIN`], more where the picture is too bright or
     /// dark for text otherwise. 1 with no picture, where the panes are solid.
     pub glass: f32,
+    /// The glass's fill over a picture: the window's colour leaning towards the accent, so the
+    /// theme colours the glass, as WackCode 2's did. Laid at [`Theme::glass`].
+    pub glass_tone: Hsla,
+    /// How a pane catches the light (`glass::Lit`): a sheen down from its top, the line along its
+    /// top edge, its one-point rim, and the shadow under a pane floating over a picture.
+    pub glass_sheen: Hsla,
+    pub glass_highlight: Hsla,
+    pub glass_edge: Hsla,
+    pub glass_shadow: Hsla,
 }
 
 impl Global for Theme {}
 
-/// The thinnest the glass panes get over a picture: enough of the picture shows to feel it, and
-/// the blur under the glass does the rest.
-pub const GLASS_MIN: f32 = 0.72;
+/// The thinnest the glass panes get over a picture: about WackCode 2's, so the picture shows through
+/// as colour and shape. A picture too bright or dark for text at this thickness gets thicker glass.
+pub const GLASS_MIN: f32 = 0.5;
+/// How strongly the glass leans towards the accent: a share of the accent's chroma.
+const GLASS_TONE_DARK: f64 = 0.24;
+const GLASS_TONE_LIGHT: f64 = 0.14;
+/// How much more of the theme's hue the surfaces carry than ink does, so a theme colours the
+/// whole app while text stays neutral enough to read.
+const SURFACE_TINT: f64 = 1.5;
 
 /// The most a theme's background may tint the neutrals, as a multiple of the ramp's own chroma.
 const MAX_TINT: f64 = 2.;
@@ -317,7 +333,7 @@ impl Theme {
         // In dark the surfaces keep their steps from the theme's own window; ink keeps its
         // lightness, so contrast never depends on the theme.
         let shift = if dark { background.l - DARK.window.l } else { 0. };
-        let surface = |step: &Step| neutral(&Step { l: step.l + shift, c: step.c });
+        let surface = |step: &Step| neutral(&Step { l: step.l + shift, c: step.c * SURFACE_TINT });
         let window = if dark { Srgb::from_hex(colours.background).unwrap_or(surface(&ramp.window).to_srgb()) } else { surface(&ramp.window).to_srgb() };
 
         // Over a picture, ink is drawn on glass over the dimmed picture, so it must read over the
@@ -388,6 +404,22 @@ impl Theme {
         let hsla = |colour: Lch| to_hsla(colour.to_srgb());
         let fixed = meaning(dark);
 
+        // The glass leans towards the accent; a grey accent leaves it the window's grey.
+        let window_lch = window.to_lch();
+        let glass_tone = if grey_accent {
+            window_lch
+        } else {
+            let lean = if dark { GLASS_TONE_DARK } else { GLASS_TONE_LIGHT };
+            Lch::new(window_lch.l, window_lch.c.max(accent.c * lean), accent.h)
+        };
+        let white = |alpha: f32| Hsla { a: alpha, ..hsla(Lch::new(1., 0., 0.)) };
+        let shade = |alpha: f32, l: f64| Hsla { a: alpha, ..hsla(Lch::new(l, if grey_accent { 0. } else { 0.03 }, accent.h)) };
+        let (glass_sheen, glass_highlight, glass_edge, glass_shadow) = if dark {
+            (white(0.06), white(0.11), white(0.07), shade(0.5, 0.))
+        } else {
+            (white(0.42), white(0.85), shade(0.1, 0.3), shade(0.2, 0.3))
+        };
+
         // ANSI: six hues at a fixed lightness, and four tinted greys for black and white.
         let ansi_hue = |hue: f64, bright: bool| {
             let (l, c) = match (dark, bright) {
@@ -456,6 +488,11 @@ impl Theme {
             ansi,
             veil: veil as f32,
             glass: glass as f32,
+            glass_tone: hsla(glass_tone),
+            glass_sheen,
+            glass_highlight,
+            glass_edge,
+            glass_shadow,
             input,
         }
     }

@@ -1137,7 +1137,7 @@ pub fn all() -> Vec<Scene> {
         },
         Scene {
             name: "build-run-buttons",
-            description: "A chat's title strip with configured Build and active Run split buttons.",
+            description: "A chat's header with configured Build and active Run split buttons.",
             size: WINDOW,
             build: |_, cx| {
                 let mut strip = fixtures::strip(Some(fixtures::FINISHED_TITLE));
@@ -1669,7 +1669,7 @@ pub fn all() -> Vec<Scene> {
         },
         Scene {
             name: "build-run-narrow",
-            description: "Smallest window (716pt): compact icon-only Build and Run strip buttons.",
+            description: "Smallest window (716pt): compact icon-only Build and Run buttons in the chat's header.",
             size: size(px(716.), px(720.)),
             build: |_, cx| {
                 let mut strip = fixtures::strip(Some(fixtures::FINISHED_TITLE));

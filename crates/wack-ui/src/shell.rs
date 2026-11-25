@@ -13,14 +13,19 @@
 //! minimum width at any size the window allows, and the sidebar steps aside before a dock shrinks.
 //!
 //! The window is a frame around two panes: the sidebar, and the stage holding the screen (the
-//! transcript and its docks, a new chat, Settings). The title strip with the chat tabs runs across
-//! the frame above the stage. Every edge keeps [`FRAME_GUTTER`]: the solver works in the frame's
-//! inner space ([`solver_space`]), and anything that turns the mouse into a layout position goes
-//! through [`to_solver`].
+//! transcript and its docks, a new chat, Settings). The title strip runs across the frame above
+//! the stage, holding the chat tabs in a glass tray (`tab_strip`): the open tab is marked by a
+//! bead that slides to whichever tab opens next (`motion::Bead`). A chat's stage opens with its
+//! header (`chat_header`): the title, the project and branch, Build and Run, and the toggles
+//! that show and hide its panes, as version 2's chat header did.
+//!
+//! Every edge keeps [`FRAME_GUTTER`]: the solver works in the frame's inner space
+//! ([`solver_space`]), and anything that turns the mouse into a layout position goes through
+//! [`to_solver`].
 //!
 //! Over an image backdrop the picture fills the window, blurred and dimmed as the user chose, and
-//! both panes are frosted glass over it (`glass.rs`); text outside them (the tabs) sits on pills
-//! of the same glass. The new-chat and welcome screens show the picture clear across the whole
+//! both panes are frosted glass over it (`glass.rs`); text outside them (the tabs) sits on the
+//! same glass. The new-chat and welcome screens show the picture clear across the whole
 //! stage, with glass only behind the heading (`backdrop.rs`); opening a chat eases it away to the
 //! glass, and New chat eases it back (`clear`, `motion::Ease`). Without a picture the frame is the
 //! sidebar's colour and the stage is the lit window.
@@ -29,7 +34,7 @@
 //! from [`AppState`] on every frame and the shell handles the actions its views dispatch; a
 //! gallery scene hands it fixed data instead and handles nothing.
 
-use std::rc::Rc;
+use std::{cell::RefCell, rc::Rc};
 
 use wack_core::{AgentMode, ChatKind};
 use gpui::{AnimationExt as _, 
@@ -60,7 +65,7 @@ use crate::{
     appearance_page::AppearanceData,
     backdrop::{self, Picture},
     edge_fade::faded,
-    glass::{GLASS_BLUR, glass},
+    glass::{GLASS_BLUR, Lit, Under, glass},
     chat::ChatSession,
     composer::{Choice, Composer, ComposerData, Input, MenuData, MenuGroup, MenuItem, Meter, Waiting},
     motion,
@@ -110,9 +115,7 @@ const DOCK_FADE: Pixels = px(36.);
 /// Below this width the transcript draws closer to its edges, so lines stay long enough to read.
 const NARROW_TRANSCRIPT: f32 = 600.;
 const NARROW_INSET: Pixels = px(32.);
-/// The main column's width from which the title strip also names the chat's project.
-const ROOMY_STRIP: f32 = 980.;
-/// Below this main-column width the Build/Run split buttons collapse to icons in the title strip.
+/// Below this transcript width the Build/Run split buttons collapse to icons in the chat's header.
 const COMPACT_COMMANDS_BELOW: f32 = 640.;
 /// The widest the centred new-chat and welcome blocks get.
 const NEW_CHAT_WIDTH: f32 = 680.;
@@ -188,6 +191,9 @@ pub struct Shell {
     /// hop, and the sidebar's page and the stage arrive from the side of the switch's segment.
     area: Option<ChatKind>,
     hops: usize,
+    /// The open tab's bead in the tab tray, and where each tab was laid out on the last frame.
+    bead: Rc<RefCell<motion::Bead>>,
+    tab_bounds: Rc<RefCell<Vec<gpui::Bounds<Pixels>>>>,
 }
 
 impl Shell {
@@ -223,6 +229,8 @@ impl Shell {
             had_settings_editor: false,
             area: None,
             hops: 0,
+            bead: Default::default(),
+            tab_bounds: Default::default(),
         }
     }
 
@@ -247,6 +255,8 @@ impl Shell {
             had_settings_editor: false,
             area: None,
             hops: 0,
+            bead: Default::default(),
+            tab_bounds: Default::default(),
         }
     }
 
@@ -944,10 +954,8 @@ impl Render for Shell {
         let left = if solution.sidebar { SIDEBAR_WIDTH } else { px(0.) };
         let narrow = solution.transcript.width < NARROW_TRANSCRIPT;
         let transcript_height = solution.transcript.height;
-        // The project's name yields to the tabs when the strip is short of room.
-        let main_width = width - f32::from(left);
-        let roomy_strip = main_width >= ROOMY_STRIP;
-        let compact_commands = main_width < COMPACT_COMMANDS_BELOW;
+        // Build and Run shrink to icons when the chat's header is short of room.
+        let compact_commands = solution.transcript.width < COMPACT_COMMANDS_BELOW;
         let inset = if narrow { NARROW_INSET } else { CONTENT_INSET };
 
         // The picture, when there is one: blurred and dimmed behind everything, and clear across
@@ -987,13 +995,31 @@ impl Render for Shell {
             }
             None => (None, None),
         };
-        // The panes: frosted glass over a picture; without one, the sidebar lies flat on the frame
-        // beside the lit stage.
+        // The panes: thin, vibrant glass over a picture, painted from its softened copy once that is
+        // ready; without one, the sidebar lies flat on the frame beside the lit stage.
+        let under = picture.as_ref().and_then(|picture| {
+            let image = backdrop::vibrant(picture, cx)?;
+            let fitted = backdrop::cover(whole, (picture.width, picture.height), picture.focus);
+            let blur = if picture.blur > backdrop::SOFT_COPY_BLUR {
+                (picture.blur * picture.blur - backdrop::SOFT_COPY_BLUR * backdrop::SOFT_COPY_BLUR).sqrt()
+            } else {
+                0.
+            };
+            Some(Under {
+                image,
+                fitted: gpui::Bounds::new(point(px(fitted.x), px(fitted.y)), gpui::size(px(fitted.width), px(fitted.height))),
+                veil: Hsla { a: theme.veil, ..theme.window },
+                blur,
+            })
+        });
         let pane = |child: gpui::AnyElement, stage: bool| -> gpui::AnyElement {
             if over_picture {
-                glass(PANE_RADIUS, GLASS_BLUR, Hsla { a: theme.glass, ..theme.window }, theme.border, child).into_any_element()
+                glass(PANE_RADIUS, GLASS_BLUR, Hsla { a: theme.glass, ..theme.glass_tone }, theme.glass_edge, child)
+                    .under(under.clone())
+                    .lit(Lit::of(&theme, true))
+                    .into_any_element()
             } else if stage {
-                glass(PANE_RADIUS, 0., theme.window, theme.border, child).into_any_element()
+                glass(PANE_RADIUS, 0., theme.window, theme.border, child).lit(Lit::of(&theme, false)).into_any_element()
             } else {
                 child
             }
@@ -1037,7 +1063,13 @@ impl Render for Shell {
         let arrive = |id: String, body: gpui::AnyElement| {
             motion::enter(ElementId::Name(id.into()), div().size_full().child(body)).into_any_element()
         };
-        let strip_ground = over_picture.then_some(Hsla { a: theme.glass, ..theme.window });
+        let strip_ground = over_picture.then_some(Hsla { a: theme.glass, ..theme.glass_tone });
+        let tray = Tray {
+            glass: strip_ground.map(|fill| (fill, under.clone())),
+            bead: self.bead.clone(),
+            tabs: self.tab_bounds.clone(),
+            still: cx.reduce_motion(),
+        };
         let (strip, body) = match screen {
             Screen::Welcome { notice } => {
                 let ground = (clearness > 0.).then_some(Hsla { a: theme.cover(), ..theme.window });
@@ -1047,24 +1079,18 @@ impl Render for Shell {
                 let id = format!("arrive-new-chat-{}", project.path);
                 let ground = (clearness > 0.).then_some(Hsla { a: theme.cover(), ..theme.window });
                 let body = new_chat(project, composer, &strip, viewport, notice, ground, &theme).into_any_element();
-                (tab_strip(&strip, None, compact_commands, viewport, strip_ground, &theme), arrive(id, body))
+                (tab_strip(&strip, &tray, &theme), arrive(id, body))
             }
             Screen::ChatHero { greeting, ideas, composer, notice } => {
                 let ground = (clearness > 0.).then_some(Hsla { a: theme.cover(), ..theme.window });
                 let still = cx.reduce_motion();
                 let body = chat_hero(greeting, ideas, composer, notice, over_picture, ground, still, &theme).into_any_element();
-                (tab_strip(&strip, None, compact_commands, viewport, strip_ground, &theme), arrive("arrive-chat-hero".into(), body))
+                (tab_strip(&strip, &tray, &theme), arrive("arrive-chat-hero".into(), body))
             }
-            Screen::Chat { project, body, composer, .. } => (
-                tab_strip(
-                    &strip,
-                    Some((roomy_strip.then_some(project), words.unwrap_or_default())),
-                    compact_commands,
-                    viewport,
-                    strip_ground,
-                    &theme,
-                ),
+            Screen::Chat { title, project, body, composer } => (
+                tab_strip(&strip, &tray, &theme),
                 {
+                    let header = chat_header(title, &project, &strip, &words.unwrap_or_default(), compact_commands, viewport, &theme).into_any_element();
                     // A Chat chat scrolled up from its end offers the way back.
                     let jump = match &body {
                         Body::Live(session, list) if session.read(cx).is_chat_area() && list.is_scrolled_to_end() == Some(false) => {
@@ -1072,7 +1098,7 @@ impl Render for Shell {
                         }
                         _ => None,
                     };
-                    chat(body, composer, narrow, transcript_height, cx.reduce_motion(), jump).into_any_element()
+                    chat(body, composer, header, narrow, transcript_height, cx.reduce_motion(), jump).into_any_element()
                 },
             ),
             Screen::Settings(data) => {
@@ -1914,7 +1940,7 @@ fn present_mark(mark: fn(&mut Window)) -> impl IntoElement {
     gpui::canvas(|_, _, _| (), move |_, _, window, _| mark(window)).absolute().size_0()
 }
 
-/// The words at the right of a chat's title strip that show and hide its panes.
+/// The toggles at the right of a chat's header that show and hide its panes.
 #[derive(Clone, Debug, Default)]
 pub struct PaneWords {
     pub changes: bool,
@@ -2757,18 +2783,52 @@ fn sidebar_toggle(theme: &Theme) -> impl IntoElement {
         .tag("toggle-sidebar")
 }
 
-/// The open chats as pills across the strip, the one in front lit and wearing its close button,
-/// then a round button for a new chat. On a chat, its project and the
-/// pane words sit at the right. Over a picture everything sits on `ground`, the panes' glass, so
-/// it reads on the frame.
-fn tab_strip(
-    strip: &StripData,
-    chat: Option<(Option<ProjectInfo>, PaneWords)>,
-    compact_commands: bool,
-    viewport: Size<Pixels>,
-    ground: Option<Hsla>,
-    theme: &Theme,
-) -> gpui::Div {
+/// What the tab tray is laid on, and its bead, carried from the shell into the strip.
+pub struct Tray {
+    /// Over a picture: the panes' glass fill and the softened copy beneath it.
+    glass: Option<(Hsla, Option<Under>)>,
+    bead: Rc<RefCell<motion::Bead>>,
+    /// Each tab's bounds as last laid out, in window coordinates, in order.
+    tabs: Rc<RefCell<Vec<gpui::Bounds<Pixels>>>>,
+    still: bool,
+}
+
+impl Tray {
+    /// `child` on the tray's glass: the panes' own over a picture, the lit stage's without.
+    fn glass(&self, radius: f32, child: impl IntoElement, theme: &Theme) -> crate::glass::Glass {
+        match &self.glass {
+            Some((fill, under)) => glass(radius, GLASS_BLUR, *fill, theme.glass_edge, child).under(under.clone()).lit(Lit::of(theme, false)),
+            None => glass(radius, 0., theme.window, theme.border, child).lit(Lit::of(theme, false)),
+        }
+    }
+}
+
+/// How the open tab's bead looks: raised glass with an accent rim, glowing faintly.
+#[derive(Clone, Copy)]
+struct BeadLook {
+    fill: Hsla,
+    line: Hsla,
+    highlight: Hsla,
+    glow: Hsla,
+}
+
+fn paint_bead(rect: gpui::Bounds<Pixels>, look: BeadLook, window: &mut Window) {
+    let corners = gpui::Corners::all(rect.size.height / 2.);
+    let line = |colour: Hsla, offset: f32, blur: f32, spread: f32, inset: bool| gpui::BoxShadow {
+        color: colour,
+        offset: point(px(0.), px(offset)),
+        blur_radius: px(blur),
+        spread_radius: px(spread),
+        inset,
+    };
+    window.paint_drop_shadows(rect, corners, &[line(look.glow, 4., 14., -4., false)]);
+    window.paint_layer(rect, |window| window.paint_quad(gpui::quad(rect, corners, look.fill, px(1.), look.line, Default::default())));
+    window.paint_layer(rect, |window| window.paint_inset_shadows(rect, corners, &[line(look.highlight, 1., 0., 0., true)]));
+}
+
+/// The open chats in a tray of glass across the strip, the one in front carried by a bead that
+/// slides to each tab as it opens, then a round button for a new chat.
+fn tab_strip(strip: &StripData, tray: &Tray, theme: &Theme) -> gpui::Div {
     let tab = |id: Option<SharedString>, title: SharedString, look: TitleLook, active: bool, state: ChatState| {
         let group: SharedString = format!("chat-tab-{}", id.as_deref().unwrap_or("new")).into();
         let close = match &id {
@@ -2791,9 +2851,7 @@ fn tab_strip(
             .flex()
             .items_center()
             .gap(px(6.))
-            .when_some(ground, |tab, ground| tab.bg(ground))
-            .when(active, |tab| tab.bg(ground.unwrap_or(theme.window)).border_1().border_color(theme.border_strong))
-            .when(!active, |tab| tab.hover(|tab| tab.bg(theme.hover)))
+            .when(!active, |tab| tab.hover(|tab| tab.bg(Hsla { a: 0.5, ..theme.hover })))
             .when_some(select, |tab, select| {
                 tab.on_click(move |event, window, cx| {
                     let action: Box<dyn gpui::Action> = if event.click_count() == 2 {
@@ -2876,29 +2934,101 @@ fn tab_strip(
     if strip.new_chat {
         tabs.push(tab(None, "New chat".into(), TitleLook::Plain, true, ChatState::Idle));
     }
+    // The tab the bead carries, by place in the row and by name.
+    let active = strip
+        .tabs
+        .iter()
+        .position(|tab| tab.active)
+        .map(|index| (index, strip.tabs[index].id.clone()))
+        .or_else(|| strip.new_chat.then(|| (strip.tabs.len(), SharedString::from("new"))));
+    let look = BeadLook {
+        fill: if tray.glass.is_some() { Hsla { a: 0.86, ..theme.raised } } else { theme.raised },
+        line: theme.accent_line,
+        highlight: theme.glass_highlight,
+        glow: Hsla { a: 0.32, ..theme.accent },
+    };
+    let (state, bounds, still) = (tray.bead.clone(), tray.tabs.clone(), tray.still);
+    // Painted under the tabs, from where they were laid out this frame: the row records them as it
+    // is prepainted, which is over before anything paints.
+    let bead = gpui::canvas(
+        |_, _, _| (),
+        move |area, _, window, _| {
+            let Some((index, key)) = active else { return };
+            let Some(tab) = bounds.borrow().get(index).copied() else { return };
+            let now = std::time::Instant::now();
+            let mut bead = state.borrow_mut();
+            let span = (f32::from(tab.origin.x), f32::from(tab.origin.x + tab.size.width));
+            let (left, right) = bead.at(&key, span, still, now);
+            if bead.moving(now) {
+                window.request_animation_frame();
+            }
+            // A tab scrolled out of the row keeps its bead inside the tray.
+            let (inner_left, inner_right) = (f32::from(area.origin.x) + 3., f32::from(area.origin.x + area.size.width) - 3.);
+            let (left, right) = (left.max(inner_left), right.min(inner_right));
+            if right - left > 1. {
+                paint_bead(gpui::Bounds::new(point(px(left), tab.origin.y), gpui::size(px(right - left), tab.size.height)), look, window);
+            }
+        },
+    )
+    .absolute()
+    .top_0()
+    .left_0()
+    .size_full();
+    let recorded = tray.tabs.clone();
+    let row = div()
+        .h(px(28.))
+        .min_w_0()
+        .flex()
+        .items_center()
+        .gap(px(2.))
+        .overflow_hidden()
+        .on_children_prepainted(move |children, _, _| *recorded.borrow_mut() = children)
+        .children(tabs);
+    let tray_box = div().relative().flex_initial().min_w_0().h(px(34.)).p(px(3.)).flex().items_center().child(bead).child(row);
     // While a new chat is open its own tab stands for this. Outside the clipped row, so it shows
     // however many tabs there are.
     let new_tab = (!strip.new_chat).then(|| {
-        div()
-            .id("new-tab")
-            .occlude()
-            .flex_none()
-            .size(px(28.))
-            .rounded_full()
-            .flex()
-            .items_center()
-            .justify_center()
-            .when_some(ground, |button, ground| button.bg(ground))
-            .hover(|button| button.bg(theme.hover))
-            .on_click(|_, window, cx| window.dispatch_action(Box::new(NewChat), cx))
-            .child(Icon::Plus.view(px(14.), theme.text_dim))
-            .tag("new-tab")
+        tray.glass(
+            17.,
+            div()
+                .id("new-tab")
+                .occlude()
+                .flex_none()
+                .size(px(34.))
+                .rounded_full()
+                .flex()
+                .items_center()
+                .justify_center()
+                .hover(|button| button.bg(Hsla { a: 0.5, ..theme.hover }))
+                .on_click(|_, window, cx| window.dispatch_action(Box::new(NewChat), cx))
+                .child(Icon::Plus.view(px(14.), theme.text_dim))
+                .tag("new-tab"),
+            theme,
+        )
     });
-    let word = |id: &'static str, label: &'static str, count: Option<usize>, on: bool, action: Box<dyn gpui::Action>| {
+    div()
+        .size_full()
+        .pl(px(2.))
+        .flex()
+        .items_center()
+        .gap(px(8.))
+        .child(tray.glass(17., tray_box, theme))
+        .children(new_tab)
+}
+
+/// A chat's header over its transcript: its title, the project and branch it works in, and at
+/// the right its Build and Run buttons and the toggles for its panes.
+fn chat_header(
+    title: SharedString,
+    project: &ProjectInfo,
+    strip: &StripData,
+    words: &PaneWords,
+    compact: bool,
+    viewport: Size<Pixels>,
+    theme: &Theme,
+) -> impl IntoElement {
+    let chip = |icon: Icon, text: SharedString| {
         div()
-            .id(id)
-            .occlude()
-            .relative()
             .flex_none()
             .h(px(22.))
             .px(px(9.))
@@ -2906,74 +3036,101 @@ fn tab_strip(
             .flex()
             .items_center()
             .gap(px(5.))
-            .typography(if on { Type::UiStrong } else { Type::Ui })
-            .text_color(if on { theme.text } else { theme.text_dim })
-            .when(on, |word| word.bg(theme.hover))
-            .hover(|word| word.text_color(theme.text))
-            .on_click(move |_, window, cx| window.dispatch_action(action.boxed_clone(), cx))
-            .child(label)
-            .when_some(count.filter(|count| *count > 0), |word, count| {
-                word.child(div().typography(Type::Small).text_color(theme.text_faint).child(count.to_string()))
-            })
-            .tag(id)
+            .bg(Hsla { a: 0.6, ..theme.hover })
+            .border_1()
+            .border_color(theme.glass_edge)
+            .child(icon.view(px(12.), theme.text_dim))
+            .child(div().typography(Type::Small).text_color(theme.text_soft).child(text))
     };
-    let right = chat.map(|(project, words)| {
+    let commands = strip.commands.as_ref().filter(|_| !words.chat_area).map(|commands| {
+        div().flex_none().flex().items_center().gap(px(6.)).children(
+            commands.iter().map(|button| run_button::split_button(button, strip.command_editor.as_ref(), compact, None, viewport, theme)),
+        )
+    });
+    div()
+        .flex_none()
+        .w_full()
+        .flex()
+        .items_center()
+        .gap(px(12.))
+        .pl(px(22.))
+        .pr(px(14.))
+        .pt(px(12.))
+        .pb(px(6.))
+        .child(
+            div()
+                .flex_1()
+                .min_w_0()
+                .flex()
+                .flex_col()
+                .gap(px(6.))
+                .child(div().min_w_0().truncate().typography(Type::Heading).text_color(theme.text).child(title))
+                .when(!project.name.is_empty(), |text| {
+                    text.child(
+                        div()
+                            .flex()
+                            .items_center()
+                            .gap(px(6.))
+                            .child(chip(Icon::Folder, project.name.clone()))
+                            .when_some(project.branch.clone(), |chips, branch| chips.child(chip(Icon::Branch, branch))),
+                    )
+                }),
+        )
+        .children(commands)
+        .child(pane_toggles(words, theme))
+        .tag("chat-header")
+}
+
+/// The toggles for a chat's panes, as one segment of icons; the open ones lit in the accent.
+fn pane_toggles(words: &PaneWords, theme: &Theme) -> impl IntoElement {
+    let toggle = |id: &'static str, icon: Icon, label: &'static str, count: Option<usize>, on: bool, action: Box<dyn gpui::Action>| {
+        let count = count.filter(|count| *count > 0);
         div()
+            .id(id)
+            .occlude()
             .flex_none()
-            .h(px(28.))
+            .h(px(26.))
+            .min_w(px(30.))
+            .px(px(8.))
             .rounded_full()
             .flex()
             .items_center()
-            .pl(px(6.))
-            .pr(px(4.))
-            .when_some(ground, |right, ground| right.bg(ground))
-            .when_some(project, |right, project| {
-                right.child(
-                    div()
-                        .max_w(px(200.))
-                        .pr(px(10.))
-                        .truncate()
-                        .typography(Type::Small)
-                        .text_color(theme.text_faint)
-                        .child(match project.branch {
-                            Some(branch) => format!("{} · {branch}", project.name),
-                            None => project.name.to_string(),
-                        }),
-                )
+            .justify_center()
+            .gap(px(5.))
+            .when(on, |toggle| toggle.bg(theme.accent_wash).border_1().border_color(theme.accent_line))
+            .when(!on, |toggle| toggle.hover(|toggle| toggle.bg(Hsla { a: 0.6, ..theme.hover })))
+            .cursor_pointer()
+            .tooltip(crate::tooltip::tip(label))
+            .on_click(move |_, window, cx| window.dispatch_action(action.boxed_clone(), cx))
+            .child(icon.view(px(13.), if on { theme.accent_text } else { theme.text_dim }))
+            .when_some(count, |toggle, count| {
+                toggle.child(div().typography(Type::Small).text_color(if on { theme.accent_text } else { theme.text_faint }).child(count.to_string()))
             })
-            .when_some(strip.commands.as_ref(), |right, commands| {
-                right
-                    .child(
-                        div()
-                            .flex_none()
-                            .flex()
-                            .items_center()
-                            .gap(px(4.))
-                            .children(commands.iter().map(|button| {
-                                run_button::split_button(button, strip.command_editor.as_ref(), compact_commands, None, viewport, theme)
-                            })),
-                    )
-                    .child(div().flex_none().w(px(1.)).h(px(12.)).mx(px(4.)).bg(theme.border))
-            })
-            .when(!words.chat_area, |strip| {
-                strip
-                    .child(word("toggle-changes", "Changes", words.changed_files, words.changes, Box::new(ToggleChanges)))
-                    .child(word("toggle-terminal", "Terminal", None, words.terminal, Box::new(ToggleTerminal)))
-            })
-            .when(words.chat_area, |strip| strip.child(word("reveal-scratchpad", "Scratchpad", None, false, Box::new(RevealScratchpad))))
-            .child(word("toggle-browser", "Browser", None, words.browser, Box::new(ToggleBrowserPane)))
-            .when(words.has_canvas, |strip| strip.child(word("toggle-canvas", "Canvas", None, words.canvas, Box::new(ToggleCanvasPane))))
-    });
+            .tag(id)
+    };
     div()
-        .size_full()
-        .pl(px(4.))
+        .flex_none()
+        .h(px(30.))
+        .p(px(2.))
+        .rounded_full()
         .flex()
         .items_center()
-        .gap(px(8.))
-        .child(div().flex_initial().min_w_0().h_full().flex().items_center().gap(px(4.)).overflow_hidden().children(tabs))
-        .children(new_tab)
-        .child(div().flex_1())
-        .children(right)
+        .gap(px(2.))
+        .bg(Hsla { a: 0.45, ..theme.sidebar })
+        .border_1()
+        .border_color(theme.glass_edge)
+        .when(!words.chat_area, |segment| {
+            segment
+                .child(toggle("toggle-changes", Icon::Commit, "Changes ⌘⇧G", words.changed_files, words.changes, Box::new(ToggleChanges)))
+                .child(toggle("toggle-terminal", Icon::Terminal, "Terminal ⌃`", None, words.terminal, Box::new(ToggleTerminal)))
+        })
+        .when(words.chat_area, |segment| {
+            segment.child(toggle("reveal-scratchpad", Icon::Folder, "Scratchpad", None, false, Box::new(RevealScratchpad)))
+        })
+        .child(toggle("toggle-browser", Icon::Globe, "Browser", None, words.browser, Box::new(ToggleBrowserPane)))
+        .when(words.has_canvas, |segment| {
+            segment.child(toggle("toggle-canvas", Icon::Board, "Canvas", None, words.canvas, Box::new(ToggleCanvasPane)))
+        })
 }
 
 /// The space kept either side of the centred transcript.
@@ -2997,7 +3154,15 @@ const TRANSCRIPT_KEPT: f32 = 72.;
 
 /// `jump`: the transcript is scrolled up from its end (its list, and whether a reply is coming
 /// in), so a pill over the composer takes it back.
-fn chat(body: Body, composer: ComposerData, narrow: bool, height: f32, still: bool, jump: Option<(ListState, bool)>) -> impl IntoElement {
+fn chat(
+    body: Body,
+    composer: ComposerData,
+    header: gpui::AnyElement,
+    narrow: bool,
+    height: f32,
+    still: bool,
+    jump: Option<(ListState, bool)>,
+) -> impl IntoElement {
     // An open question may take more of the chat: answering it is what the chat waits on.
     let kept = if composer.question.is_some() { TRANSCRIPT_KEPT / 3. } else { TRANSCRIPT_KEPT };
     let transcript = match body {
@@ -3042,7 +3207,8 @@ fn chat(body: Body, composer: ComposerData, narrow: bool, height: f32, still: bo
         .size_full()
         .flex()
         .flex_col()
-        // Text fades out as it scrolls under the title strip and the composer, rather than
+        .child(header)
+        // Text fades out as it scrolls under the chat's header and the composer, rather than
         // being cut off; the fade is the text's own, so a backdrop shows through untouched.
         .child(
             div()

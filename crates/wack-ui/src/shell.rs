@@ -1100,7 +1100,8 @@ impl Render for Shell {
                         }
                         _ => None,
                     };
-                    chat(body, composer, header, narrow, transcript_height, cx.reduce_motion(), jump).into_any_element()
+                    let veil = over_picture.then_some(theme.reading_veil);
+                    chat(body, composer, header, narrow, transcript_height, cx.reduce_motion(), jump, veil).into_any_element()
                 },
             ),
             Screen::Settings(data) => {
@@ -3184,6 +3185,7 @@ const TRANSCRIPT_KEPT: f32 = 72.;
 
 /// `jump`: the transcript is scrolled up from its end (its list, and whether a reply is coming
 /// in), so a pill over the composer takes it back.
+#[allow(clippy::too_many_arguments)]
 fn chat(
     body: Body,
     composer: ComposerData,
@@ -3192,6 +3194,7 @@ fn chat(
     height: f32,
     still: bool,
     jump: Option<(ListState, bool)>,
+    veil: Option<Hsla>,
 ) -> impl IntoElement {
     // An open question may take more of the chat: answering it is what the chat waits on.
     let kept = if composer.question.is_some() { TRANSCRIPT_KEPT / 3. } else { TRANSCRIPT_KEPT };
@@ -3234,9 +3237,11 @@ fn chat(
         }
     };
     div()
+        .relative()
         .size_full()
         .flex()
         .flex_col()
+        .children(veil.map(|veil| reading_veil(veil, narrow)))
         .child(header)
         // Text fades out as it scrolls under the chat's header and the composer, rather than
         // being cut off; the fade is the text's own, so a backdrop shows through untouched.
@@ -3272,6 +3277,26 @@ fn chat(
                         .child(Composer::new(composer)),
                 ),
         )
+}
+
+/// Over a picture, a band of calmer glass down the stage behind the transcript's column: full
+/// across the column, fading out through the gutters either side, so it has no edge to see.
+fn reading_veil(veil: Hsla, narrow: bool) -> impl IntoElement {
+    let clear = Hsla { a: 0., ..veil };
+    let side = gutter(narrow);
+    let fade = |from: Hsla, to: Hsla| {
+        div().flex_none().w(side).h_full().bg(gpui::linear_gradient(90., gpui::linear_color_stop(from, 0.), gpui::linear_color_stop(to, 1.)))
+    };
+    div().absolute().top_0().left_0().size_full().flex().justify_center().child(
+        div()
+            .w_full()
+            .max_w(TRANSCRIPT_MAX_WIDTH + side * 2.)
+            .h_full()
+            .flex()
+            .child(fade(clear, veil))
+            .child(div().flex_1().h_full().bg(veil))
+            .child(fade(veil, clear)),
+    )
 }
 
 /// "Jump to latest", or "New messages" while a reply comes in below: over the transcript's foot.

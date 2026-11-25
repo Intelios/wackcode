@@ -224,6 +224,9 @@ pub struct Theme {
     pub glass_highlight: Hsla,
     pub glass_edge: Hsla,
     pub glass_shadow: Hsla,
+    /// A soft band of the window's colour behind the transcript's column over a picture, so the
+    /// reading line sits on calmer glass than the stage around it.
+    pub reading_veil: Hsla,
 }
 
 impl Global for Theme {}
@@ -233,6 +236,9 @@ impl Global for Theme {}
 pub const GLASS_MIN: f32 = 0.5;
 /// How strongly the glass leans towards the accent: a share of the accent's chroma.
 const GLASS_TONE_DARK: f64 = 0.24;
+/// How much of the window's colour the reading veil lays over the stage's glass.
+const READING_VEIL_DARK: f32 = 0.36;
+const READING_VEIL_LIGHT: f32 = 0.4;
 const GLASS_TONE_LIGHT: f64 = 0.14;
 /// How much more of the theme's hue the surfaces carry than ink does, so a theme colours the
 /// whole app while text stays neutral enough to read.
@@ -493,6 +499,7 @@ impl Theme {
             glass_highlight,
             glass_edge,
             glass_shadow,
+            reading_veil: Hsla { a: if dark { READING_VEIL_DARK } else { READING_VEIL_LIGHT }, ..to_hsla(window) },
             input,
         }
     }

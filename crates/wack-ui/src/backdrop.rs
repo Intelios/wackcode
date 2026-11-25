@@ -2,9 +2,10 @@
 //!
 //! - **Behind everything** ([`behind`]): on every screen the picture fills the window, blurred
 //!   and dimmed towards the window's colour exactly as the user chose. The sidebar, the stage
-//!   and the side panel are thin glass panes over it (`glass.rs`), painted from the softened copy
-//!   with its colour boosted ([`vibrant`]), just thick enough that text on them reads; only the
-//!   window's frame around them shows the picture as chosen.
+//!   and the side panel are thin glass panes over it (`glass.rs`), painted from a copy of the
+//!   picture with its colour boosted ([`vibrant`]) and blurred exactly as the user chose, no more:
+//!   the glass tints, it does not soften of its own accord. Only the window's frame around the
+//!   panes shows the picture untinted.
 //! - **The hero** ([`hero`]): on the new-chat and welcome screens the whole stage shows the
 //!   picture clear, as it is or through a texture, undimmed and uncut: the owner wants to see it
 //!   there, and a patch of glass behind the heading read as a dim. The screen's smaller words sit
@@ -52,6 +53,8 @@ pub struct Picture {
     pub width: u32,
     pub height: u32,
     pub focus: (f32, f32),
+    /// How much the picture is magnified over a fit that covers the window, 1 to 4.
+    pub zoom: f32,
     /// 0–1: how much of the window's colour the user lays over the picture, drawn exactly.
     pub dim: f32,
     /// How soft the picture is, in points.
@@ -68,13 +71,17 @@ impl Picture {
     }
 }
 
-/// The picture drawn to cover `frame`, keeping `focus` (0–1 across and down) in view.
-pub fn cover(frame: Rect, picture: (u32, u32), focus: (f32, f32)) -> Rect {
+/// The picture drawn to cover `frame`, magnified `zoom` times over a fit that just covers it, with
+/// `focus` (0–1 across and down) saying which part of what overflows shows: 0 flush with the left
+/// or top edge, 1 with the right or bottom. Being a share of the overflow, a focus set in one
+/// window's shape still fills another.
+pub fn cover(frame: Rect, picture: (u32, u32), focus: (f32, f32), zoom: f32) -> Rect {
     let aspect = picture.0.max(1) as f32 / picture.1.max(1) as f32;
+    let zoom = zoom.max(1.);
     let (width, height) = if frame.width / frame.height.max(1.) > aspect {
-        (frame.width, frame.width / aspect)
+        (frame.width * zoom, frame.width / aspect * zoom)
     } else {
-        (frame.height * aspect, frame.height)
+        (frame.height * aspect * zoom, frame.height * zoom)
     };
     Rect {
         x: frame.x - (width - frame.width) * focus.0.clamp(0., 1.),
@@ -84,11 +91,37 @@ pub fn cover(frame: Rect, picture: (u32, u32), focus: (f32, f32)) -> Rect {
     }
 }
 
+/// `focus` after dragging the picture `delta` points across `frame` (a window, or a miniature of
+/// one): the picture follows the pointer, and an axis with nothing overflowing stays put.
+pub fn pan(frame: Rect, picture: (u32, u32), focus: (f32, f32), zoom: f32, delta: (f32, f32)) -> (f32, f32) {
+    let drawn = cover(frame, picture, focus, zoom);
+    let axis = |focus: f32, delta: f32, overflow: f32| if overflow < 0.5 { focus } else { (focus - delta / overflow).clamp(0., 1.) };
+    (axis(focus.0, delta.0, drawn.width - frame.width), axis(focus.1, delta.1, drawn.height - frame.height))
+}
+
+/// `focus` at a new `zoom`, keeping whatever was at the middle of `frame` at its middle.
+pub fn zoom_focus(frame: Rect, picture: (u32, u32), focus: (f32, f32), from: f32, to: f32) -> (f32, f32) {
+    let before = cover(frame, picture, focus, from);
+    let after = cover(frame, picture, focus, to);
+    let axis = |focus: f32, was: f32, now: f32, visible: f32| {
+        let overflow = now - visible;
+        if overflow < 0.5 {
+            return 0.5;
+        }
+        // The share of the picture at the frame's middle, carried across the zoom.
+        let middle = (focus * (was - visible) + visible / 2.) / was;
+        ((middle * now - visible / 2.) / overflow).clamp(0., 1.)
+    };
+    (axis(focus.0, before.width, after.width, frame.width), axis(focus.1, before.height, after.height, frame.height))
+}
+
 /// About how soft the copy made on import already is, in points across a laptop's window.
 pub const SOFT_COPY_BLUR: f32 = 14.;
 
 /// Which copy of the picture to draw for a blur of `blur` points, and how much more the GPU must
-/// blur it: blurs add in squares, so the softened copy covers its share of a heavy one.
+/// blur it: blurs add in squares, so the softened copy covers its share of a heavy one. The glass
+/// panes follow the same plan, adding no softness of their own: with Blur at None the picture
+/// shows through them as sharp as it is, only tinted, as it did behind WackCode 2's chats.
 pub fn blur_plan(blur: f32) -> (bool, f32) {
     if blur >= SOFT_COPY_BLUR {
         (true, (blur * blur - SOFT_COPY_BLUR * SOFT_COPY_BLUR).sqrt())
@@ -100,7 +133,7 @@ pub fn blur_plan(blur: f32) -> (bool, f32) {
 /// The picture across the whole `window`, blurred and dimmed as the user chose: `dim` of
 /// `ground` (the window's colour) over it.
 pub fn behind(picture: &Picture, window: Rect, ground: Hsla, dim: f32) -> impl IntoElement + use<> {
-    let drawn = cover(window, (picture.width, picture.height), picture.focus);
+    let drawn = cover(window, (picture.width, picture.height), picture.focus, picture.zoom);
     let (soft, blur) = blur_plan(picture.blur);
     let path = if soft { &picture.soft_path } else { &picture.path };
     div()
@@ -139,7 +172,7 @@ pub fn behind(picture: &Picture, window: Rect, ground: Hsla, dim: f32) -> impl I
 /// The clear picture filling its parent (the stage), fitted to the whole `window` like
 /// [`behind`], with `radius`-rounded corners.
 pub fn hero(artwork: Arc<RenderImage>, picture: &Picture, window: Rect, radius: f32) -> impl IntoElement + use<> {
-    let fitted = cover(window, (picture.width, picture.height), picture.focus);
+    let fitted = cover(window, (picture.width, picture.height), picture.focus, picture.zoom);
     canvas(
         |_, _, _| {},
         move |bounds: Bounds<Pixels>, _, window: &mut Window, _| {
@@ -233,7 +266,8 @@ pub fn artwork(picture: &Picture, light: bool, cx: &mut App) -> Option<Arc<Rende
 /// `saturate(1.55)`: laying the window's colour over a picture greys it, and this gives it back.
 pub const VIBRANCY: f32 = 1.55;
 
-/// The glass panes' copies of pictures, by softened copy's path; `None` while one is being made.
+/// The glass panes' copies of pictures, by the copy's path (the clear one's ends in `#clear`);
+/// `None` while one is being made.
 #[derive(Default)]
 struct Vibrant {
     images: Vec<(SharedString, Option<Arc<RenderImage>>)>,
@@ -241,11 +275,12 @@ struct Vibrant {
 
 impl Global for Vibrant {}
 
-/// The picture's softened copy with its colour boosted by [`VIBRANCY`], for the glass panes to lay
-/// under themselves (`glass::Under`), or `None` while it is being made (the windows redraw when it
-/// is ready). The copy on disk is never changed.
-pub fn vibrant(picture: &Picture, cx: &mut App) -> Option<Arc<RenderImage>> {
-    let key = picture.soft_path.clone();
+/// A copy of the picture with its colour boosted by [`VIBRANCY`], for the glass panes to lay under
+/// themselves (`glass::Under`): the softened copy made on import (`soft`), or the clear picture
+/// brought down to [`PLAIN_EDGE`]; `None` while it is being made (the windows redraw when it
+/// is ready). The files on disk are never changed.
+pub fn vibrant(picture: &Picture, soft: bool, cx: &mut App) -> Option<Arc<RenderImage>> {
+    let key: SharedString = if soft { picture.soft_path.clone() } else { format!("{}#clear", picture.path).into() };
     let vibrant = cx.default_global::<Vibrant>();
     if let Some((_, image)) = vibrant.images.iter().find(|(path, _)| *path == key) {
         return image.clone();
@@ -254,9 +289,9 @@ pub fn vibrant(picture: &Picture, cx: &mut App) -> Option<Arc<RenderImage>> {
     if vibrant.images.len() > KEPT {
         vibrant.images.remove(0);
     }
-    let path = key.clone();
+    let path = if soft { picture.soft_path.clone() } else { picture.path.clone() };
     cx.spawn(async move |cx| {
-        let made = cx.background_executor().spawn(async move { saturated(path.as_ref()) }).await;
+        let made = cx.background_executor().spawn(async move { saturated(path.as_ref(), !soft) }).await;
         cx.update(|cx| {
             // A copy that cannot be read leaves the panes blurring live, and is not retried.
             let Some(image) = made else { return };
@@ -270,9 +305,12 @@ pub fn vibrant(picture: &Picture, cx: &mut App) -> Option<Arc<RenderImage>> {
     None
 }
 
-/// The picture at `path`, its colour boosted by [`VIBRANCY`], in the BGRA order GPUI draws.
-fn saturated(path: &str) -> Option<RenderImage> {
-    let mut pixels = image::open(path).ok()?.to_rgba8();
+/// The picture at `path`, its colour boosted by [`VIBRANCY`], in the BGRA order GPUI draws. A
+/// `clear` copy is brought down to [`PLAIN_EDGE`], enough for a full-screen Retina window.
+fn saturated(path: &str, clear: bool) -> Option<RenderImage> {
+    let picture = image::open(path).ok()?;
+    let picture = if clear && picture.width().max(picture.height()) > PLAIN_EDGE { picture.thumbnail(PLAIN_EDGE, PLAIN_EDGE) } else { picture };
+    let mut pixels = picture.to_rgba8();
     for pixel in pixels.pixels_mut() {
         let [r, g, b, a] = pixel.0;
         let [r, g, b] = boost([r, g, b], VIBRANCY);
@@ -476,12 +514,31 @@ mod tests {
     #[test]
     fn the_picture_covers_and_keeps_its_focus() {
         let frame = Rect { x: 0., y: 0., width: 1000., height: 500. };
-        let tall = cover(frame, (1000, 1000), (0.5, 0.));
+        let tall = cover(frame, (1000, 1000), (0.5, 0.), 1.);
         assert_eq!((tall.width, tall.height, tall.y), (1000., 1000., 0.));
-        let bottom = cover(frame, (1000, 1000), (0.5, 1.));
+        let bottom = cover(frame, (1000, 1000), (0.5, 1.), 1.);
         assert_eq!(bottom.y, -500.);
-        let wide = cover(frame, (4000, 1000), (0., 0.5));
+        let wide = cover(frame, (4000, 1000), (0., 0.5), 1.);
         assert_eq!((wide.width, wide.height, wide.x), (2000., 500., 0.));
+    }
+
+    #[test]
+    fn dragging_moves_the_picture_with_the_pointer_and_zoom_keeps_the_middle() {
+        let frame = Rect { x: 0., y: 0., width: 400., height: 250. };
+        // A square picture in a wide frame overflows only down: across it stays put.
+        let moved = pan(frame, (1000, 1000), (0.5, 0.5), 1., (40., -30.));
+        assert_eq!(moved.0, 0.5);
+        assert!(moved.1 > 0.5, "dragging up shows more of the bottom");
+        assert_eq!(pan(frame, (1000, 1000), (0.5, 1.), 1., (0., -500.)).1, 1., "never past the edge");
+        // Zoomed in, the point at the middle stays at the middle.
+        let at = |focus: (f32, f32), zoom: f32| {
+            let drawn = cover(frame, (1000, 1000), focus, zoom);
+            ((200. - drawn.x) / drawn.width, (125. - drawn.y) / drawn.height)
+        };
+        let before = at((0.3, 0.7), 1.5);
+        let focus = zoom_focus(frame, (1000, 1000), (0.3, 0.7), 1.5, 3.);
+        let after = at(focus, 3.);
+        assert!((before.0 - after.0).abs() < 0.001 && (before.1 - after.1).abs() < 0.001, "{before:?} {after:?}");
     }
 
     #[test]
@@ -492,3 +549,4 @@ mod tests {
         assert!(soft && (more - (40f32 * 40. - SOFT_COPY_BLUR * SOFT_COPY_BLUR).sqrt()).abs() < 0.01);
     }
 }
+

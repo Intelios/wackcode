@@ -46,6 +46,10 @@ pub const MAX_DIM: u8 = 90;
 pub const DEFAULT_DIM: u8 = 20;
 /// The most a backdrop can be blurred, in points.
 pub const MAX_BLUR: u8 = 40;
+/// How far the picture can be magnified over a fit that just covers the window, in percent, as
+/// WackCode 2 allowed.
+pub const MIN_ZOOM: u16 = 100;
+pub const MAX_ZOOM: u16 = 400;
 /// How much a backdrop is blurred unless the user chooses otherwise, in points.
 pub const DEFAULT_BLUR: u8 = 8;
 /// The softened copy's long side, in pixels: it is blurred, so it loses nothing by being small.
@@ -185,6 +189,10 @@ pub struct Backdrop {
     pub focus_x: f32,
     #[serde(default = "middle")]
     pub focus_y: f32,
+    /// How much the picture is magnified over a fit that just covers the window, [`MIN_ZOOM`] to
+    /// [`MAX_ZOOM`] percent; the focus then says which part of the larger picture shows.
+    #[serde(default = "default_zoom")]
+    pub zoom: u16,
     /// How much of the window's colour covers the picture, 0 to [`MAX_DIM`] percent. Drawn
     /// exactly as chosen; the glass over it thickens on its own where text needs it.
     #[serde(default = "default_dim")]
@@ -202,6 +210,10 @@ pub struct Backdrop {
     /// that has not been shown since the library began.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub theme: Option<ThemeName>,
+}
+
+fn default_zoom() -> u16 {
+    MIN_ZOOM
 }
 
 fn middle() -> f32 {
@@ -323,6 +335,7 @@ impl Appearance {
             let unit = |value: f32| if value.is_finite() { value.clamp(0., 1.) } else { 0.5 };
             backdrop.focus_x = unit(backdrop.focus_x);
             backdrop.focus_y = unit(backdrop.focus_y);
+            backdrop.zoom = backdrop.zoom.clamp(MIN_ZOOM, MAX_ZOOM);
             backdrop.dim = backdrop.dim.min(MAX_DIM);
             backdrop.blur = backdrop.blur.min(MAX_BLUR);
             if backdrop.file.contains('/') || backdrop.file.starts_with('.') {
@@ -466,6 +479,7 @@ pub fn import_backdrop(source: &Path, backgrounds: &Path) -> Result<Backdrop, St
         height: picture.height(),
         focus_x: 0.5,
         focus_y: 0.5,
+        zoom: MIN_ZOOM,
         dim: DEFAULT_DIM,
         blur: DEFAULT_BLUR,
         texture: Texture::None,
@@ -550,6 +564,7 @@ mod tests {
             height: 10,
             focus_x: 0.5,
             focus_y: 0.5,
+            zoom: MIN_ZOOM,
             dim: DEFAULT_DIM,
             blur: DEFAULT_BLUR,
             texture: Texture::None,

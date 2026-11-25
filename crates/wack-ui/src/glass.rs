@@ -2,11 +2,12 @@
 //! sidebar, the stage and the side panel are glass over an image backdrop.
 //!
 //! Over a picture the glass is thin and vibrant, as WackCode 2's was: the picture shows through
-//! as colour and shape, tinted by the theme. Where the only thing beneath a pane is the picture,
-//! the pane paints the picture's softened copy itself ([`Under`]): already blurred on import, its
-//! colour boosted (`backdrop::vibrant`), cropped to the pane's rounded shape. That is what gives
-//! the glass its colour (GPUI's blur cannot saturate), and it costs less than blurring live. Until
-//! that copy is ready, the pane blurs what was painted beneath it instead.
+//! as colour and shape, tinted by the theme, and only as soft as the user's Blur makes it. Where
+//! the only thing beneath a pane is the picture, the pane paints a copy of the picture itself
+//! ([`Under`]): its colour boosted (`backdrop::vibrant`), cropped to the pane's rounded shape, and
+//! blurred as the user chose (a heavy blur starts from the copy softened on import). That is what
+//! gives the glass its colour (GPUI's blur cannot saturate). Until that copy is ready, the pane
+//! blurs what was painted beneath it instead.
 //!
 //! A lit pane ([`Lit`]) catches the light: a sheen down from its top, a bright top edge, and a
 //! soft shadow beneath.
@@ -42,7 +43,7 @@ pub fn glass(radius: f32, blur: f32, fill: Hsla, edge: Hsla, child: impl IntoEle
     Glass { radius, blur, fill, edge, under: None, lit: None, child: child.into_any_element() }
 }
 
-/// What a pane lays under itself instead of blurring live: the picture's softened, vibrant copy,
+/// What a pane lays under itself instead of blurring what lies beneath: the picture's vibrant copy,
 /// fitted to the window exactly as the picture behind it is, and dimmed as the user chose.
 #[derive(Clone)]
 pub struct Under {
@@ -51,7 +52,7 @@ pub struct Under {
     pub fitted: Bounds<Pixels>,
     /// The user's dim: the window's colour at the veil.
     pub veil: Hsla,
-    /// How much more to blur the copy live, for a picture the user made softer than the copy.
+    /// How much to blur the copy live: the user's blur, less what the copy already has.
     pub blur: f32,
 }
 

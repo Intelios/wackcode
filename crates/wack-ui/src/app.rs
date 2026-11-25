@@ -182,6 +182,9 @@ pub struct AppState {
     pub draft_attachments: Vec<crate::attachments::Attachment>,
     /// Long pastes attached to it as text files.
     pub draft_pasted: Vec<crate::attachments::PastedText>,
+    /// Where a drag in Settings › Appearance has the backdrop's focus, shown everywhere but saved
+    /// only when the drag ends.
+    pub crop_preview: Option<(f32, f32)>,
     /// The picture open over the window.
     pub lightbox: Option<crate::pictures::Lightbox>,
     /// The mode the new chat starts in.
@@ -417,6 +420,7 @@ impl AppState {
             draft,
             draft_attachments: Vec::new(),
             draft_pasted: Vec::new(),
+            crop_preview: None,
             lightbox: None,
             slash: None,
             slash_dismissed: None,
@@ -1258,9 +1262,15 @@ impl AppState {
         .detach();
     }
 
-    /// The backdrop to draw, if there is one.
+    /// The backdrop to draw, if there is one, where a drag in the position editor has it now.
     pub fn backdrop(&self) -> Option<Picture> {
-        self.store.appearance().backdrop().map(|backdrop| self.picture(backdrop))
+        self.store.appearance().backdrop().map(|backdrop| {
+            let picture = self.picture(backdrop);
+            match self.crop_preview {
+                Some(focus) => Picture { focus, ..picture },
+                None => picture,
+            }
+        })
     }
 
     /// Every picture in the library, for Settings › Appearance.
@@ -1292,6 +1302,7 @@ impl AppState {
             width: backdrop.width,
             height: backdrop.height,
             focus: (backdrop.focus_x, backdrop.focus_y),
+            zoom: backdrop.zoom as f32 / 100.,
             dim: backdrop.dim as f32 / 100.,
             blur: backdrop.blur as f32,
             texture: backdrop.texture,

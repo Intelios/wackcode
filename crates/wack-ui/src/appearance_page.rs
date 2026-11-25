@@ -2,20 +2,24 @@
 //! (`settings_kit.rs`).
 //!
 //! Everything applies the moment it is chosen, so the page itself is the preview: the Blur and
-//! Dim sliders save as they are dragged. A theme is chosen from WackCode 2's ten, never made:
+//! Dim sliders save as they are dragged. The picture is placed in the Position editor, a
+//! miniature of the window: drag to move it (the whole window follows live, and the place is saved
+//! when the button comes up), the slider to zoom in, keeping the middle where it is. A theme is chosen from WackCode 2's ten, never made:
 //! each tile is a small window drawn in that theme's own tokens, in the
 //! appearance showing now, so it shows what choosing it gives. Pictures are a library shown as a
 //! strip, each captioned with the theme it remembers: choosing one
 //! brings that theme back. The page draws from plain data and dispatches actions, like every page.
 
-use gpui::{ObjectFit, SharedString, div, img, prelude::*, px};
+use std::cell::Cell;
+
+use gpui::{CursorStyle, DispatchPhase, Hsla, MouseButton, MouseMoveEvent, MouseUpEvent, ObjectFit, Pixels, Point, SharedString, canvas, div, img, prelude::*, px};
 use wack_core::{Mode, ThemeName};
 
 use crate::{
-    actions::{ChooseBackdrop, ChooseBlur, ChooseDim, ChooseFocus, ChooseMode, ChooseTexture, ChooseTheme, RemovePicture, ShowPicture},
+    actions::{ChooseBackdrop, ChooseBlur, ChooseDim, ChooseMode, ChooseTexture, ChooseTheme, ChooseZoom, CommitCrop, PreviewCrop, RemovePicture, ResetCrop, ShowPicture},
     backdrop::Picture,
     icon::Icon,
-    settings_kit::{card, dispatch, row, segmented, slider, staged_head},
+    settings_kit::{card, dispatch, labelled_slider, row, segmented, slider, staged_head},
     tags::Tag,
     theme::{Theme, ThemeInput},
     typography::{Type, Typography},
@@ -180,24 +184,141 @@ fn backdrop(data: &AppearanceData, theme: &Theme) -> gpui::Div {
     let textures = segmented("texture", &textures, picture.texture, |texture| Box::new(ChooseTexture { texture }), theme);
     let blur = slider("blur-slider", picture.blur.round() as u8, MOST_BLUR, 2, " pt", |blur| Box::new(ChooseBlur { blur }), theme);
     let dim = slider("dim-slider", (picture.dim * 100.).round() as u8, MOST_DIM, 5, "%", |dim| Box::new(ChooseDim { dim }), theme);
-    // A 3×3 grid: which part of the picture stays in view when the window crops it.
-    let focus = div().flex().flex_col().gap(px(3.)).children((0..3u8).map(|row| {
-        div().flex().gap(px(3.)).children((0..3u8).map(move |column| {
-            let chosen = (picture.focus.0 * 2.).round() as u8 == column && (picture.focus.1 * 2.).round() as u8 == row;
-            div()
-                .id(("focus", (row * 3 + column) as usize))
-                .size(px(14.))
-                .rounded_full()
-                .cursor_pointer()
-                .when(chosen, |cell| cell.bg(theme.accent))
-                .when(!chosen, |cell| cell.border_1().border_color(theme.border_strong).hover(|cell| cell.bg(theme.hover)))
-                .on_click(dispatch(ChooseFocus { across: column, down: row }))
-        }))
-    }));
+    let thumb = data.pictures.iter().find(|thumbnail| thumbnail.shown).map(|thumbnail| thumbnail.thumb.clone()).unwrap_or_else(|| picture.path.clone());
+    let steps = ((picture.zoom * 100. - 100.) / 10.).round().clamp(0., 30.) as u8;
+    let zoom = labelled_slider("zoom-slider", steps, 30, 1, format!("{}%", 100 + steps as u16 * 10).into(), |steps| Box::new(ChooseZoom { steps }), theme);
+    let centred = steps == 0 && (picture.focus.0 - 0.5).abs() < 0.001 && (picture.focus.1 - 0.5).abs() < 0.001;
+    let reset = div()
+        .id("reset-crop")
+        .flex_none()
+        .h(px(28.))
+        .px(px(12.))
+        .rounded_full()
+        .flex()
+        .items_center()
+        .border_1()
+        .border_color(theme.border)
+        .typography(Type::Small)
+        .text_color(if centred { theme.text_faint } else { theme.text_soft })
+        .when(!centred, |button| button.cursor_pointer().hover(|button| button.bg(theme.hover)).on_click(dispatch(ResetCrop)))
+        .child("Reset")
+        .tag("reset-crop");
+    let position = div()
+        .flex()
+        .flex_col()
+        .gap(px(12.))
+        .child(Position { picture: picture.clone(), thumb })
+        .child(div().flex().items_center().gap(px(12.)).child(zoom).child(reset));
     card.child(row("Texture", Some("How the picture is drawn behind a new chat.")).control(textures).view(theme))
         .child(row("Blur", Some("How soft the picture is behind a chat.")).control(blur).view(theme))
         .child(row("Dim", Some("How far the picture fades toward the window behind a chat.")).control(dim).view(theme))
-        .child(row("Keep in view", Some("The part of the picture kept when the window crops it.")).control(focus).view(theme))
+        .child(
+            row("Position", Some("Drag the picture to move it, and zoom to fill the window with the part you want. The outlines are the sidebar and the composer."))
+                .control(position)
+                .stacked()
+                .view(theme),
+        )
+}
+
+/// The position editor's width.
+const EDITOR_WIDTH: f32 = 420.;
+
+/// A drag in the position editor: where the press was, and the focus then.
+type CropDrag = (Point<Pixels>, (f32, f32));
+
+thread_local! {
+    static CROP_DRAG: Cell<Option<CropDrag>> = const { Cell::new(None) };
+}
+
+/// A miniature of the window with the backdrop in it, as the window draws it (`backdrop::cover`
+/// over the window's own shape, so what lines up here lines up there). Dragging moves the
+/// picture: the whole window follows live (`PreviewCrop`) and the place is saved when the button
+/// comes up (`CommitCrop`). Outlines of the sidebar and the composer show what will sit over it.
+#[derive(IntoElement)]
+struct Position {
+    picture: Picture,
+    thumb: SharedString,
+}
+
+impl RenderOnce for Position {
+    fn render(self, window: &mut gpui::Window, cx: &mut gpui::App) -> impl IntoElement {
+        let theme = Theme::get(cx).clone();
+        let viewport = window.viewport_size();
+        let (window_width, window_height) = (f32::from(viewport.width).max(1.), f32::from(viewport.height).max(1.));
+        let width = EDITOR_WIDTH;
+        let height = (width * window_height / window_width).round();
+        let scale = width / window_width;
+        let frame = crate::panes::Rect { x: 0., y: 0., width, height };
+        let size = (self.picture.width, self.picture.height);
+        let (focus, zoom) = (self.picture.focus, self.picture.zoom);
+        let drawn = crate::backdrop::cover(frame, size, focus, zoom);
+        // The guides, to scale: the sidebar down the left, the composer at the stage's foot.
+        let sidebar = (f32::from(crate::sidebar::SIDEBAR_WIDTH) + 2. * crate::panes::solve::GAP) * scale;
+        let stage = width - sidebar;
+        let composer_width = (760f32.min(stage / scale - 48.)).max(0.) * scale;
+        let composer_height = 96. * scale;
+        let guide = Hsla { a: 0.85, ..theme.text };
+        let shade = Hsla { a: 0.22, ..theme.window };
+        let follow = canvas(
+            |_, _, _| {},
+            move |_, _, window, _| {
+                window.on_mouse_event(move |event: &MouseMoveEvent, phase, window, cx| {
+                    if phase != DispatchPhase::Bubble || event.pressed_button != Some(MouseButton::Left) {
+                        return;
+                    }
+                    let Some((start, from)) = CROP_DRAG.with(Cell::get) else { return };
+                    let delta = event.position - start;
+                    let (across, down) = crate::backdrop::pan(frame, size, from, zoom, (f32::from(delta.x), f32::from(delta.y)));
+                    window.dispatch_action(Box::new(PreviewCrop { across, down }), cx);
+                });
+                window.on_mouse_event(|_: &MouseUpEvent, phase, window, cx| {
+                    if phase == DispatchPhase::Bubble && CROP_DRAG.with(|drag| drag.take()).is_some() {
+                        window.dispatch_action(Box::new(CommitCrop), cx);
+                    }
+                });
+            },
+        );
+        div()
+            .id("crop-editor")
+            .relative()
+            .flex_none()
+            .w(px(width))
+            .h(px(height))
+            .rounded(px(12.))
+            .overflow_hidden()
+            .bg(theme.window)
+            .border_1()
+            .border_color(theme.border_strong)
+            .cursor(CursorStyle::OpenHand)
+            .on_mouse_down(MouseButton::Left, move |event, _, cx| {
+                cx.stop_propagation();
+                CROP_DRAG.with(|drag| drag.set(Some((event.position, focus))));
+            })
+            .child(
+                img(std::path::PathBuf::from(self.thumb.as_ref()))
+                    .absolute()
+                    .left(px(drawn.x))
+                    .top(px(drawn.y))
+                    .w(px(drawn.width))
+                    .h(px(drawn.height))
+                    .object_fit(ObjectFit::Fill),
+            )
+            .child(div().absolute().left_0().top_0().h_full().w(px(sidebar)).bg(shade).border_r_1().border_color(guide))
+            .child(
+                div()
+                    .absolute()
+                    .left(px(sidebar + (stage - composer_width) / 2.))
+                    .bottom(px(22. * scale))
+                    .w(px(composer_width))
+                    .h(px(composer_height))
+                    .rounded(px(18. * scale))
+                    .bg(shade)
+                    .border_1()
+                    .border_color(guide),
+            )
+            .child(follow.absolute().left_0().top_0().size_full())
+            .tag("crop-editor")
+    }
 }
 
 /// A picture tile's size: the shape of a laptop's window.
@@ -212,7 +333,7 @@ fn strip(data: &AppearanceData, theme: &Theme) -> impl IntoElement {
     let pictures = data.pictures.iter().enumerate().map(|(index, thumbnail)| {
         let picture = &thumbnail.picture;
         let area = crate::panes::Rect { x: 0., y: 0., width: PICTURE_WIDTH, height: PICTURE_HEIGHT };
-        let drawn = crate::backdrop::cover(area, (picture.width, picture.height), picture.focus);
+        let drawn = crate::backdrop::cover(area, (picture.width, picture.height), picture.focus, picture.zoom);
         let group = SharedString::from(format!("picture-{index}"));
         let file = thumbnail.file.to_string();
         // Shown on hover; a press here removes the picture without showing it first.

@@ -1039,13 +1039,31 @@ pub struct ChooseTexture {
     pub texture: wack_core::Texture,
 }
 
-/// The part of the backdrop kept in view: 0, 1 or 2 across and down.
+/// The backdrop moved in Settings › Appearance's position editor, shown at once but not saved
+/// until the drag ends ([`CommitCrop`]): its focus, 0–1 across and down.
 #[derive(Clone, Debug, PartialEq, Action)]
 #[action(namespace = wackcode, no_json)]
-pub struct ChooseFocus {
-    pub across: u8,
-    pub down: u8,
+pub struct PreviewCrop {
+    pub across: f32,
+    pub down: f32,
 }
+
+/// Saves the position the drag left the backdrop in.
+#[derive(Clone, Debug, PartialEq, Action)]
+#[action(namespace = wackcode, no_json)]
+pub struct CommitCrop;
+
+/// The backdrop's zoom, in steps of 10% over 100%, keeping the middle in place.
+#[derive(Clone, Debug, PartialEq, Action)]
+#[action(namespace = wackcode, no_json)]
+pub struct ChooseZoom {
+    pub steps: u8,
+}
+
+/// The backdrop back in the middle, not magnified.
+#[derive(Clone, Debug, PartialEq, Action)]
+#[action(namespace = wackcode, no_json)]
+pub struct ResetCrop;
 
 /// The Canvas pane: move the selection to the next artboard that way.
 #[derive(Clone, Debug, PartialEq, Action)]

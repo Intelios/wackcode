@@ -45,7 +45,7 @@ use gpui::{AnimationExt as _,
 
 use crate::{
     actions::{
-        self, ActivatePane, AddFolder, Back, ChooseBackdrop, ChooseEffort, SlideEffort, ToggleTodos, ChooseFocus, ClearCommandOutput, CloseCommandEditor, CycleAgentMode, SetAgentMode, PickOption, ShowQuestion, NextQuestion, PreviousQuestion, SubmitAnswers, CancelQuestion, WrapUpQuestion, ShowDoneTodos, DiscardPlan, KeepPlan, ConfirmDiscardPlan, ApprovePlan, SavePlan, CopyPlan, ToggleUnrestrictedPlanning, ToggleWebFetch, ToggleWebSearch, ToggleRouteFetch, CloseSearchEditor, SaveSearchProvider, TestSearchProvider, AskDeleteSearchProvider, ConfirmDeleteSearchProvider, CancelDeleteSearchProvider, ResetWebUsage, ChooseSearchProvider, AddSearchProvider, EditSearchProvider, ChooseSearchKey, ChooseSearchMethod, AddMcpServer, EditMcpServer, ToggleMcpServer, ToggleMcpTool, ExpandMcpServer, TestMcpServer, AskDeleteMcpServer, RemoveMcpEntry, ChooseMcpTransport, ChooseMcpScope, ToggleMcpProject, CloseMcpEditor, SaveMcpServer, TestMcpDraft, AddMcpEntry, ConfirmDeleteMcpServer, CancelDeleteMcpServer, ConfirmUnrestrictedPlanning, CancelUnrestrictedPlanning, ToggleMemory, SwitchProjectMemory, NewMemory, EditMemory, ChooseMemoryKind, SaveMemory, CloseMemoryEditor, AskDeleteMemory, AskRemoveMemoryFolder, ConfirmMemoryDelete, CancelMemoryDelete, RevealMemory, ToggleCommitAttribution, ToggleUsageRecording, RevealUsageFolder,
+        self, ActivatePane, AddFolder, Back, ChooseBackdrop, ChooseEffort, SlideEffort, ToggleTodos, PreviewCrop, CommitCrop, ChooseZoom, ResetCrop, ClearCommandOutput, CloseCommandEditor, CycleAgentMode, SetAgentMode, PickOption, ShowQuestion, NextQuestion, PreviousQuestion, SubmitAnswers, CancelQuestion, WrapUpQuestion, ShowDoneTodos, DiscardPlan, KeepPlan, ConfirmDiscardPlan, ApprovePlan, SavePlan, CopyPlan, ToggleUnrestrictedPlanning, ToggleWebFetch, ToggleWebSearch, ToggleRouteFetch, CloseSearchEditor, SaveSearchProvider, TestSearchProvider, AskDeleteSearchProvider, ConfirmDeleteSearchProvider, CancelDeleteSearchProvider, ResetWebUsage, ChooseSearchProvider, AddSearchProvider, EditSearchProvider, ChooseSearchKey, ChooseSearchMethod, AddMcpServer, EditMcpServer, ToggleMcpServer, ToggleMcpTool, ExpandMcpServer, TestMcpServer, AskDeleteMcpServer, RemoveMcpEntry, ChooseMcpTransport, ChooseMcpScope, ToggleMcpProject, CloseMcpEditor, SaveMcpServer, TestMcpDraft, AddMcpEntry, ConfirmDeleteMcpServer, CancelDeleteMcpServer, ConfirmUnrestrictedPlanning, CancelUnrestrictedPlanning, ToggleMemory, SwitchProjectMemory, NewMemory, EditMemory, ChooseMemoryKind, SaveMemory, CloseMemoryEditor, AskDeleteMemory, AskRemoveMemoryFolder, ConfirmMemoryDelete, CancelMemoryDelete, RevealMemory, ToggleCommitAttribution, ToggleUsageRecording, RevealUsageFolder,
         ChooseBlur, ChooseDim, ChooseFormat, OpenCommandEditor, OpenConnectionForm, CloseConnectionForm, SwitchConnection, ChooseMode, ChooseModel, ChooseTexture, ChooseTheme, CloseChatTab, CloseMenu, ClosePane,
         ClosePaneId, CloseSettings, CloseTab, Compact, DeleteChat, DiscardConnection, EditConnection, ToggleConnectionKey, EqualizeSplit, FocusNext, FocusPrevious, MovePane, AddModelRow, RemoveModelRow, SaveCommandEditor, SaveConnection,
         NewChat, NewChatIn, SelectDraft, CloseDraft, NewTerminal, NewTerminalWith, TogglePaneMenu, ClosePaneMenu, HideSidePanel, ToggleSidePanel, RevealProject, OpenPaneKind, NextTab, OpenEffortMenu, OpenModelMenu, OpenSettings,
@@ -1074,16 +1074,14 @@ impl Render for Shell {
             }
             None => (None, None),
         };
-        // The panes: thin, vibrant glass over a picture, painted from its softened copy once that is
-        // ready; without one, the sidebar lies flat on the frame beside the lit stage.
+        // The panes: thin, vibrant glass over a picture, painted from its vibrant copy once that is
+        // ready and blurred only as the user chose; without one, the sidebar lies flat on the frame
+        // beside the lit stage.
+        let pane_blur = picture.as_ref().map_or(GLASS_BLUR, |picture| picture.blur);
         let under = picture.as_ref().and_then(|picture| {
-            let image = backdrop::vibrant(picture, cx)?;
-            let fitted = backdrop::cover(whole, (picture.width, picture.height), picture.focus);
-            let blur = if picture.blur > backdrop::SOFT_COPY_BLUR {
-                (picture.blur * picture.blur - backdrop::SOFT_COPY_BLUR * backdrop::SOFT_COPY_BLUR).sqrt()
-            } else {
-                0.
-            };
+            let (soft, blur) = backdrop::blur_plan(picture.blur);
+            let image = backdrop::vibrant(picture, soft, cx)?;
+            let fitted = backdrop::cover(whole, (picture.width, picture.height), picture.focus, picture.zoom);
             Some(Under {
                 image,
                 fitted: gpui::Bounds::new(point(px(fitted.x), px(fitted.y)), gpui::size(px(fitted.width), px(fitted.height))),
@@ -1095,7 +1093,7 @@ impl Render for Shell {
         // back; the sidebar lies flat on the frame.
         let pane = |child: gpui::AnyElement, kind: PaneGround| -> gpui::AnyElement {
             if over_picture {
-                glass(PANE_RADIUS, GLASS_BLUR, Hsla { a: theme.glass, ..theme.glass_tone }, theme.glass_edge, child)
+                glass(PANE_RADIUS, pane_blur, Hsla { a: theme.glass, ..theme.glass_tone }, theme.glass_edge, child)
                     .under(under.clone())
                     .lit(Lit::of(&theme, true))
                     .into_any_element()
@@ -1972,9 +1970,30 @@ impl Render for Shell {
                     let texture = action.texture;
                     shell.change_backdrop(cx, |backdrop| backdrop.texture = texture);
                 }))
-                .on_action(cx.listener(|shell, action: &ChooseFocus, _, cx| {
-                    let (across, down) = (action.across.min(2) as f32 / 2., action.down.min(2) as f32 / 2.);
+                .on_action(cx.listener(|shell, action: &PreviewCrop, _, cx| {
+                    let focus = (action.across.clamp(0., 1.), action.down.clamp(0., 1.));
+                    shell.with_app(cx, |app, cx| {
+                        app.crop_preview = Some(focus);
+                        cx.notify();
+                    });
+                }))
+                .on_action(cx.listener(|shell, _: &CommitCrop, _, cx| {
+                    let mut taken = None;
+                    shell.with_app(cx, |app, _| taken = app.crop_preview.take());
+                    let Some((across, down)) = taken else { return };
                     shell.change_backdrop(cx, |backdrop| (backdrop.focus_x, backdrop.focus_y) = (across, down));
+                }))
+                .on_action(cx.listener(|shell, action: &ChooseZoom, window, cx| {
+                    let zoom = (wack_core::appearance::MIN_ZOOM + action.steps as u16 * 10).min(wack_core::appearance::MAX_ZOOM);
+                    let viewport = window.viewport_size();
+                    let frame = crate::panes::Rect { x: 0., y: 0., width: f32::from(viewport.width), height: f32::from(viewport.height) };
+                    shell.change_backdrop(cx, |backdrop| {
+                        let focus = backdrop::zoom_focus(frame, (backdrop.width, backdrop.height), (backdrop.focus_x, backdrop.focus_y), backdrop.zoom as f32 / 100., zoom as f32 / 100.);
+                        (backdrop.focus_x, backdrop.focus_y, backdrop.zoom) = (focus.0, focus.1, zoom);
+                    });
+                }))
+                .on_action(cx.listener(|shell, _: &ResetCrop, _, cx| {
+                    shell.change_backdrop(cx, |backdrop| (backdrop.focus_x, backdrop.focus_y, backdrop.zoom) = (0.5, 0.5, wack_core::appearance::MIN_ZOOM));
                 }))
                 .on_action(cx.listener(|shell, action: &PickCommand, _, cx| {
                     let index = action.index;

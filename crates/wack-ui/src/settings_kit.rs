@@ -285,6 +285,20 @@ pub fn slider(
     action: fn(u8) -> Box<dyn gpui::Action>,
     theme: &Theme,
 ) -> impl IntoElement {
+    let shown: SharedString = if value == 0 { "None".into() } else { format!("{}{unit}", value.min(max)).into() };
+    labelled_slider(id, value, max, step, shown, action, theme)
+}
+
+/// A slider whose value reads as `shown` beside it ("250%").
+pub fn labelled_slider(
+    id: &'static str,
+    value: u8,
+    max: u8,
+    step: u8,
+    shown: SharedString,
+    action: fn(u8) -> Box<dyn gpui::Action>,
+    theme: &Theme,
+) -> impl IntoElement {
     const WIDTH: f32 = 220.;
     const HEIGHT: f32 = 22.;
     const KNOB: f32 = 18.;
@@ -333,7 +347,6 @@ pub fn slider(
             slide::begin(id);
             pick(event.position.x, window, cx)
         });
-    let shown: SharedString = if value == 0 { "None".into() } else { format!("{value}{unit}").into() };
     div()
         .flex()
         .items_center()

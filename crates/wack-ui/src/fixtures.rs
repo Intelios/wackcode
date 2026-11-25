@@ -123,6 +123,7 @@ pub fn composer_empty(roomy: bool) -> ComposerData {
         agents: 0,
         attachments: Vec::new(),
         pictures_refused: None,
+        sent_at: None,
         comments: None,
     }
 }

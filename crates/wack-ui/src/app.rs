@@ -145,6 +145,8 @@ pub struct AppState {
     session_subscriptions: HashMap<String, Vec<Subscription>>,
     /// Projects whose chats the sidebar lists.
     open_projects: HashSet<String>,
+    /// When a message last left a composer, for the composer's send moment (`motion::send_moment`).
+    pub sent_at: Option<std::time::Instant>,
     /// Each project's checked-out branch, looked up off the UI thread.
     branches: HashMap<String, Option<String>>,
     /// The new-chat composer, shared by every project.
@@ -369,6 +371,7 @@ impl AppState {
             store,
             before_settings: selection.clone(),
             selection: Selection::Welcome,
+            sent_at: None,
             sessions: HashMap::new(),
             browser,
             chat_tasks: HashMap::new(),
@@ -1939,6 +1942,7 @@ impl AppState {
             return;
         }
         let job = with_pictures(job, &pictures);
+        self.sent_at = Some(std::time::Instant::now());
         let opening = if opening.is_empty() { pictures.iter().map(|picture| picture.name.to_string()).collect::<Vec<_>>().join(", ") } else { opening };
         let title = match &job {
             Job::Command { command, .. } | Job::Attached { command: Some(command), .. } => title_from(&command.line()),
@@ -2675,6 +2679,7 @@ impl AppState {
         }
         let owner = Some(chat.to_string());
         let clear = |app: &mut Self, cx: &mut Context<Self>| {
+            app.sent_at = Some(std::time::Instant::now());
             app.mention_refs.remove(&owner);
             composer.update(cx, |composer, cx| composer.set_text("", cx));
             session.update(cx, |session, cx| {

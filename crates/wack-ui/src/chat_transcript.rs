@@ -24,7 +24,7 @@ use std::{
     path::{Component, Path, PathBuf},
 };
 
-use gpui::{AnimationExt, AnyElement, ClipboardItem, ElementId, SharedString, div, prelude::*, px, relative};
+use gpui::{AnimationExt, AnyElement, ElementId, SharedString, div, prelude::*, px, relative};
 use serde_json::Value;
 use wack_core::clock;
 
@@ -663,7 +663,7 @@ pub fn item(item: &Item, theme: &Theme, handlers: &Handlers, still: bool) -> Opt
                     .bg(theme.hover)
                     .child(crate::transcript::reply(blocks, theme, handlers)),
             )
-            .when_some(copy.clone(), |column, copy| column.child(copy_button(copy, theme)))
+            .when_some(copy.clone(), |column, copy| column.child(copy_button(copy)))
             .into_any_element(),
         Item::ChatThought { key, text, open } => {
             let toggle = handlers.toggle.clone();
@@ -859,21 +859,8 @@ fn typing(mood: Mood, still: bool, theme: &Theme) -> impl IntoElement {
 }
 
 /// Copies a settled reply's words.
-fn copy_button(text: SharedString, theme: &Theme) -> impl IntoElement {
-    div()
-        .id(ElementId::Name(format!("copy-reply-{}", text.len()).into()))
-        .h(px(22.))
-        .px(px(8.))
-        .rounded_full()
-        .flex()
-        .items_center()
-        .gap(px(5.))
-        .cursor_pointer()
-        .hover(|button| button.bg(theme.hover))
-        .on_click(move |_, _, cx| cx.write_to_clipboard(ClipboardItem::new_string(text.to_string())))
-        .child(Icon::Copy.view(px(11.), theme.text_faint))
-        .child(div().typography(Type::Small).text_color(theme.text_faint).child("Copy"))
-        .tag("copy-reply")
+fn copy_button(text: SharedString) -> impl IntoElement {
+    crate::copy::CopyButton::new(format!("reply-{}", text.len()), text, "Copy", "copy-reply")
 }
 
 #[cfg(test)]

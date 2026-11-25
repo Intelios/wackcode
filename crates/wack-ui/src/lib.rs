@@ -22,6 +22,7 @@ pub mod composer;
 pub mod computer_card;
 pub mod computer_page;
 pub mod conversation;
+pub mod copy;
 pub mod edge_fade;
 pub mod fixtures;
 pub mod browser_page;

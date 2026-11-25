@@ -2,12 +2,20 @@
 //!
 //! - **Presence** ([`enter`]): something new arrives by rising a few points as it fades in. A
 //!   screen, a menu, a settings section.
-//! - **From an edge** ([`slide_in`]): a dock's pane arrives from the side it opens on.
+//! - **From an edge** ([`slide_in`], [`PANEL_ARRIVE`]): a dock's pane arrives from the side it
+//!   opens on, and the side panel slides in from the right as its glass frosts over.
+//! - **Between tabs** ([`Bead`]): the open tab's bead stretches towards the next tab, its leading
+//!   edge ahead, and gathers up behind.
 //! - **Between areas** ([`slide_in`], [`HOP`]): switching between Code and Chat, the sidebar's
 //!   page and the stage arrive from the side of the switch's segment while its pill glides.
 //! - **Between states** ([`Ease`]): the picture clears on a new chat and frosts over once the
 //!   first message is sent.
-//! - **At work** ([`paddling`]): the duck paddles while the agent works.
+//! - **At work** ([`paddling`], [`sheen_band`], [`shining_text`], [`breathing`]): the duck
+//!   paddles while the agent works, a light crosses its chat's tab and runs along "Working", and
+//!   the step under way breathes.
+//! - **Landing** ([`land`]): each work-log mark drops onto the rail as its step starts.
+//! - **Sending** ([`send_moment`]): the composer lifts a point or two and settles as a message
+//!   leaves, its rim lit while a glint crosses it.
 //! - **A new name** ([`TitleSwap`]): a title the model wrote swipes in on its tab, the old one
 //!   leaving to the left, and an accent glint passes over it; its sidebar row crossfades. Only the
 //!   model's title gets this beat: a typed name or the opening-line stand-in just changes.
@@ -22,7 +30,9 @@
 //!
 //! Every movement respects the system's Reduce Motion setting: GPUI's `with_animation` draws the
 //! end state of an arrival when [`App::reduce_motion`] is set, the shell takes no paddle steps,
-//! and [`follow_system`] keeps that in step with macOS.
+//! anything that repeats (a sheen, a breath) or follows the clock (the send moment, the bead)
+//! takes its still form, and [`follow_system`] keeps that in step with macOS. The gallery renders
+//! with it set, so a scene shows where everything comes to rest.
 //!
 //! `enter` and `slide_in` offset an element with relative positioning, so they are for elements
 //! in the flow: wrap an absolutely placed element in its own positioned box first.
@@ -32,7 +42,12 @@ use std::{
     time::{Duration, Instant},
 };
 
-use gpui::{AnimationExt, AnyElement, Animation, App, ElementId, HighlightStyle, Hsla, IntoElement, SharedString, Styled, StyledText, px};
+use std::f32::consts::PI;
+
+use gpui::{
+    AnimationExt, AnyElement, Animation, App, ElementId, HighlightStyle, Hsla, IntoElement, ParentElement, SharedString, Styled, StyledText, div,
+    linear_color_stop, linear_gradient, px, relative,
+};
 
 /// How long an arrival takes.
 pub const ARRIVE: Duration = Duration::from_millis(260);
@@ -187,6 +202,26 @@ impl Bead {
     }
 }
 
+/// How far a work-log mark drops as it lands.
+const LAND_DROP: f32 = 7.;
+
+/// Drops into place from a few points above, fading in: a work-log mark as its step starts. With
+/// Reduce Motion it is simply there.
+pub fn land<E: IntoElement + Styled + 'static>(id: impl Into<ElementId>, element: E, still: bool) -> AnyElement {
+    if still {
+        return element.into_any_element();
+    }
+    element
+        .with_animation(id, Animation::new(ARRIVE).with_easing(spring), |element, t| {
+            element.opacity(t).relative().top(px(-LAND_DROP * (1. - t)))
+        })
+        .into_any_element()
+}
+
+/// The side panel's arrival: it slides in this far from the right as its glass frosts over.
+pub const PANEL_ARRIVE: Duration = Duration::from_millis(380);
+pub const PANEL_TRAVEL: f32 = 40.;
+
 /// One breath of a step still under way: down to [`BREATH_LOW`] and back.
 pub const BREATH: Duration = Duration::from_millis(1600);
 pub const BREATH_LOW: f32 = 0.45;
@@ -208,6 +243,88 @@ fn breath(t: f32) -> f32 {
     BREATH_LOW + (1. - BREATH_LOW) * wave
 }
 
+/// One pass of a sheen over something at work (a working tab, the Working chip): it crosses in
+/// the first [`SHEEN_CROSS`] of the time, then rests before the next pass.
+pub const SHEEN: Duration = Duration::from_millis(2600);
+const SHEEN_CROSS: f32 = 0.55;
+/// A sheen band's share of what it crosses.
+const SHEEN_BAND: f32 = 0.42;
+
+/// How far across a sheen is `t` (0–1) into its pass, eased in and out; `None` while it rests.
+pub fn sheen_at(t: f32) -> Option<f32> {
+    let cross = t / SHEEN_CROSS;
+    (cross < 1.).then(|| smooth(cross.max(0.)))
+}
+
+fn smooth(x: f32) -> f32 {
+    x * x * (3. - 2. * x)
+}
+
+/// `text` with a light passing along it again and again, for words about something at work.
+/// With Reduce Motion it is just the words.
+pub fn shining_text(id: impl Into<ElementId>, text: SharedString, colour: Hsla, light: Hsla, still: bool) -> AnyElement {
+    if still {
+        return text.into_any_element();
+    }
+    StyledText::new(text.clone())
+        .with_animation(id, Animation::new(SHEEN).repeat(), move |_, t| match sheen_at(t) {
+            Some(across) => glint_text(text.clone(), -GLINT_BAND + (1. + 2. * GLINT_BAND) * across, colour, light),
+            None => StyledText::new(text.clone()),
+        })
+        .into_any_element()
+}
+
+/// A soft band of `light` crossing its parent again and again, under what the parent holds: a
+/// sheen on something at work. The parent must be relative, and `radius` its corners, so the
+/// band's ends round as its parent's do. With Reduce Motion there is none.
+pub fn sheen_band(id: impl Into<ElementId>, light: Hsla, radius: f32, still: bool) -> Option<AnyElement> {
+    if still {
+        return None;
+    }
+    let clear = Hsla { a: 0., ..light };
+    let half = |from: Hsla, to: Hsla| div().flex_1().h_full().bg(linear_gradient(90., linear_color_stop(from, 0.), linear_color_stop(to, 1.)));
+    let band = div()
+        .absolute()
+        .top_0()
+        .h_full()
+        .w(relative(SHEEN_BAND))
+        .flex()
+        .child(half(clear, light).rounded_l(px(radius)))
+        .child(half(light, clear).rounded_r(px(radius)))
+        .with_animation(id, Animation::new(SHEEN).repeat(), |band, t| match sheen_at(t) {
+            // It fades in from one end and out at the other, so it never shows a hard edge.
+            Some(across) => band.left(relative(across * (1. - SHEEN_BAND))).opacity((across * PI).sin()),
+            None => band.opacity(0.),
+        });
+    Some(band.into_any_element())
+}
+
+/// How long the composer's send moment lasts: it lifts and settles while a glint crosses it.
+pub const SEND: Duration = Duration::from_millis(720);
+/// How far the composer lifts as a message leaves, in points.
+const SEND_LIFT: f32 = 2.;
+
+/// The composer at one point of its send moment.
+#[derive(Clone, Copy, Debug, PartialEq)]
+pub struct SendMoment {
+    /// Points above its place.
+    pub lift: f32,
+    /// Where the glint is, 0 to 1 across.
+    pub across: f32,
+    /// How bright the glint and the rim are, 0 to 1.
+    pub light: f32,
+}
+
+/// The send moment `elapsed` after a send; `None` once it is over, and always with Reduce Motion.
+pub fn send_moment(elapsed: Duration, still: bool) -> Option<SendMoment> {
+    let t = elapsed.as_secs_f32() / SEND.as_secs_f32();
+    if still || t >= 1. {
+        return None;
+    }
+    let swell = (t * PI).sin();
+    Some(SendMoment { lift: SEND_LIFT * swell, across: smooth(t), light: swell })
+}
+
 /// Raises a working duck to the paddle's current step.
 pub fn paddling<E: Styled>(element: E) -> E {
     element.relative().top(px(PADDLE[PADDLE_AT.load(Ordering::Relaxed) % PADDLE.len()]))
@@ -226,6 +343,24 @@ pub fn paddle_rest() {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn a_sheen_crosses_then_rests() {
+        assert_eq!(sheen_at(0.), Some(0.));
+        let middle = sheen_at(SHEEN_CROSS / 2.).unwrap();
+        assert!((middle - 0.5).abs() < 1e-5);
+        assert_eq!(sheen_at(SHEEN_CROSS + 0.01), None, "it rests before the next pass");
+    }
+
+    #[test]
+    fn the_send_moment_lifts_and_settles() {
+        let start = send_moment(Duration::ZERO, false).unwrap();
+        assert_eq!((start.lift, start.across), (0., 0.));
+        let peak = send_moment(SEND / 2, false).unwrap();
+        assert!((peak.lift - SEND_LIFT).abs() < 1e-4 && (peak.light - 1.).abs() < 1e-4);
+        assert_eq!(send_moment(SEND, false), None, "over, it is back in its place");
+        assert_eq!(send_moment(SEND / 2, true), None, "Reduce Motion: no moment at all");
+    }
 
     #[test]
     fn a_breath_starts_and_ends_fully_lit() {

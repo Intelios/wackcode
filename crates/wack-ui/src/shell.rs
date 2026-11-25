@@ -194,6 +194,10 @@ pub struct Shell {
     /// The open tab's bead in the tab tray, and where each tab was laid out on the last frame.
     bead: Rc<RefCell<motion::Bead>>,
     tab_bounds: Rc<RefCell<Vec<gpui::Bounds<Pixels>>>>,
+    /// Whether the side panel showed last frame, and how many times it has come into view, so
+    /// each arrival slides it in once.
+    side_shown: Option<bool>,
+    side_arrivals: usize,
 }
 
 impl Shell {
@@ -231,6 +235,8 @@ impl Shell {
             hops: 0,
             bead: Default::default(),
             tab_bounds: Default::default(),
+            side_shown: None,
+            side_arrivals: 0,
         }
     }
 
@@ -257,6 +263,8 @@ impl Shell {
             hops: 0,
             bead: Default::default(),
             tab_bounds: Default::default(),
+            side_shown: None,
+            side_arrivals: 0,
         }
     }
 
@@ -1160,12 +1168,28 @@ impl Render for Shell {
             .when(!solution.sidebar, |main| main.pl(gutter))
             .child(drag_strip("title-strip", TITLE_STRIP_HEIGHT, strip))
             .child(stage);
-        // The side panel: the right dock, a pane of its own from the frame's top to its foot.
+        // The side panel: the right dock, a pane of its own from the frame's top to its foot. Each
+        // time it comes into view it slides in from the right as its glass frosts over.
+        let side_open = solution.right.is_some();
+        if self.side_shown == Some(false) && side_open {
+            self.side_arrivals += 1;
+        }
+        self.side_shown = Some(side_open);
         let side = solution.right.map(|right| {
-            div().flex_none().w(px(right.width) + gutter * 2.).h_full().p(gutter).flex().flex_col().child(pane(
+            let side = div().flex_none().w(px(right.width) + gutter * 2.).h_full().p(gutter).flex().flex_col().child(pane(
                 div().flex_1().min_h_0().w_full().relative().children(docks.side).into_any_element(),
                 PaneGround::Side,
-            ))
+            ));
+            if self.side_arrivals > 0 && !still {
+                side.with_animation(
+                    ("side-arrive", self.side_arrivals),
+                    gpui::Animation::new(motion::PANEL_ARRIVE).with_easing(motion::spring),
+                    |side, t| side.opacity(t).relative().left(px(motion::PANEL_TRAVEL * (1. - t))),
+                )
+                .into_any_element()
+            } else {
+                side.into_any_element()
+            }
         });
         // Lines, handles and drop zones lie over everything, in the solver's space.
         let over = div().absolute().left(gutter).top(gutter).w(px(width)).h(px(height)).children(docks.over);
@@ -2185,6 +2209,7 @@ fn live_view(app: &AppState, cx: &App) -> (SidebarData, Screen, StripData) {
                     attachments: app.draft_attachments.clone(),
                     pictures_refused: app.pictures_refused_for(&choice, app.draft_attachments.len()).map(Into::into),
                     comments: None,
+                    sent_at: app.sent_at,
                 },
                 notice: app.notice.clone(),
             }
@@ -2225,6 +2250,7 @@ fn live_view(app: &AppState, cx: &App) -> (SidebarData, Screen, StripData) {
                         attachments: app.draft_attachments.clone(),
                         pictures_refused: app.pictures_refused_for(&choice, app.draft_attachments.len()).map(Into::into),
                         comments: None,
+                        sent_at: app.sent_at,
                     },
                     notice: app.notice.clone(),
                 }
@@ -2291,6 +2317,7 @@ fn live_view(app: &AppState, cx: &App) -> (SidebarData, Screen, StripData) {
                         let count: usize = state.comment_drafts.iter().map(|(_, n)| n).sum();
                         state.comment_drafts.first().map(|(canvas, _)| (count, canvas.clone()))
                     },
+                    sent_at: app.sent_at,
                 },
             }
         }
@@ -2888,6 +2915,10 @@ fn tab_strip(strip: &StripData, tray: &Tray, theme: &Theme) -> gpui::Div {
                     };
                     window.dispatch_action(action, cx);
                 })
+            })
+            // A light crosses a tab while its chat works, under its words.
+            .when(state == ChatState::Working, |tab| {
+                tab.children(motion::sheen_band(SharedString::from(format!("sheen-{group}")), Hsla { a: 0.22, ..theme.accent }, 14., tray.still))
             })
             // The same marks as the sidebar: the paddling duck while it works, a dot once it has
             // finished unseen.

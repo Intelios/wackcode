@@ -113,6 +113,8 @@ pub struct ComposerData {
     /// Comments drafted on a canvas, which go with the next message: how many, and the canvas
     /// the chip opens.
     pub comments: Option<(usize, String)>,
+    /// When a message last left a composer: for a moment after, it lifts and a glint crosses it.
+    pub sent_at: Option<Instant>,
 }
 
 /// A background command as its list above the composer shows it.
@@ -400,8 +402,18 @@ impl RenderOnce for Composer {
             })
             .child(card);
         let card = if ultra_plan { prism_edge(CARD_RADIUS, card, &theme).into_any_element() } else { card.into_any_element() };
+        // A message leaving: the card lifts and settles while a glint crosses it.
+        let moment = data.sent_at.and_then(|at| crate::motion::send_moment(at.elapsed(), cx.reduce_motion()));
+        if moment.is_some() {
+            window.request_animation_frame();
+        }
         // The `/` menu rises from the card's top edge, over whatever is above it.
-        let card = div().relative().child(card).when_some(data.slash.clone(), |card, slash| {
+        let card = div()
+            .relative()
+            .when_some(moment, |card, moment| card.top(px(-moment.lift)))
+            .child(card)
+            .children(moment.map(|moment| send_glint(moment, &theme)))
+            .when_some(data.slash.clone(), |card, slash| {
             card.child(
                 deferred(
                     div()
@@ -544,6 +556,37 @@ impl RenderOnce for Composer {
 
 /// The composer card's corners, the space above its field, and between the field and the bar.
 const CARD_RADIUS: f32 = 18.;
+/// The glint's share of the card it crosses as a message leaves.
+const SEND_GLINT_BAND: f32 = 0.36;
+
+/// The send moment over the card: its rim lit in the accent, and a band of light crossing it.
+fn send_glint(moment: crate::motion::SendMoment, theme: &Theme) -> impl IntoElement {
+    let light = Hsla { a: 0.2 * moment.light, ..theme.accent };
+    let clear = Hsla { a: 0., ..light };
+    let half = |from: Hsla, to: Hsla| {
+        div().flex_1().h_full().bg(gpui::linear_gradient(90., gpui::linear_color_stop(from, 0.), gpui::linear_color_stop(to, 1.)))
+    };
+    div()
+        .absolute()
+        .top_0()
+        .left_0()
+        .size_full()
+        .rounded(px(CARD_RADIUS))
+        .border_1()
+        .border_color(Hsla { a: theme.accent_line.a.max(0.6) * moment.light, ..theme.accent_line })
+        .overflow_hidden()
+        .child(
+            div()
+                .absolute()
+                .top_0()
+                .h_full()
+                .w(gpui::relative(SEND_GLINT_BAND))
+                .left(gpui::relative(-SEND_GLINT_BAND + (1. + SEND_GLINT_BAND) * moment.across))
+                .flex()
+                .child(half(clear, light))
+                .child(half(light, clear)),
+        )
+}
 const CARD_TOP: f32 = 14.;
 const CARD_GAP: f32 = 10.;
 /// The least of the model's pill a narrow composer keeps.

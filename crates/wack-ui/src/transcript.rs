@@ -20,7 +20,7 @@
 use std::rc::Rc;
 
 use gpui::{
-    AnyElement, App, ClipboardItem, ElementId, FontStyle, FontWeight, Hsla, InteractiveText, SharedString, StrikethroughStyle,
+    AnyElement, App, ElementId, FontStyle, FontWeight, Hsla, InteractiveText, SharedString, StrikethroughStyle,
     StyledText, TextRun, UnderlineStyle, Window, div, font, prelude::*, px, relative,
 };
 
@@ -263,20 +263,7 @@ fn sent_prompt(key: &SharedString, text: &SharedString, theme: &Theme) -> impl I
                 .flex()
                 .items_center()
                 .child(div().flex_1().typography(Type::Label).text_color(theme.text_dim).child("Prompt sent to the agent"))
-                .child(
-                    div()
-                        .id(ElementId::Name(format!("{key}-copy").into()))
-                        .flex()
-                        .items_center()
-                        .gap(px(4.))
-                        .typography(Type::Small)
-                        .text_color(theme.text_dim)
-                        .hover(|button| button.text_color(theme.text))
-                        .cursor_pointer()
-                        .on_click(move |_, _, cx| cx.write_to_clipboard(ClipboardItem::new_string(copied.to_string())))
-                        .child(Icon::Copy.view(px(12.), theme.text_dim))
-                        .child("Copy prompt"),
-                ),
+                .child(crate::copy::CopyButton::new(format!("{key}-prompt"), copied, "Copy prompt", "copy-prompt")),
         )
         .child(
             div()
@@ -382,7 +369,8 @@ pub fn item(item: &Item, previous: Option<&Item>, theme: &Theme, handlers: &Hand
             .text_color(if *failed { theme.danger } else { theme.text_dim })
             .child(text.clone())
             .into_any_element(),
-        Item::News(row) => div().pl(px(RAIL + ROW_GAP + 1.)).child(log_row(row, theme, handlers)).into_any_element(),
+        // Lined up with the work log's marks, which hang on its rail.
+        Item::News(row) => div().pl(px(RAIL - ICON / 2.)).child(log_row(row, false, theme, handlers)).into_any_element(),
         // Drawn above by `chat_transcript::item`.
         Item::ChatDivider(_)
         | Item::ChatSpeaker { .. }
@@ -450,7 +438,13 @@ fn work_log(work: &Work, theme: &Theme, handlers: &Handlers) -> impl IntoElement
             div()
                 .typography(if work.live { Type::UiStrong } else { Type::Ui })
                 .text_color(if work.live { theme.accent_text } else { theme.text_soft })
-                .child(work.summary.clone()),
+                // While it works, a light runs along its words.
+                .child(if work.live {
+                    let id = SharedString::from(format!("{}-shine", work.key));
+                    crate::motion::shining_text(id, work.summary.clone(), theme.accent_text, theme.text, handlers.still)
+                } else {
+                    work.summary.clone().into_any_element()
+                }),
         )
         .when(!work.live, |chip| {
             chip.child(if work.open { Icon::ChevronDown } else { Icon::ChevronRight }.view(px(11.), theme.text_faint))
@@ -503,7 +497,7 @@ fn work_log(work: &Work, theme: &Theme, handlers: &Handlers) -> impl IntoElement
         .on_children_prepainted(move |children, _, _| end.set(children.last().map(|row| row.origin.y + px(MARK_MIDDLE))))
         .child(rail);
     for row in &work.rows {
-        rows = rows.child(log_row(row, theme, handlers));
+        rows = rows.child(log_row(row, work.live, theme, handlers));
     }
 
     div().flex().flex_col().gap(px(6.)).child(header).when(work.open && !work.rows.is_empty(), |log| log.child(rows))
@@ -578,7 +572,8 @@ fn row_icon(verb: &str) -> Option<Icon> {
     }
 }
 
-fn log_row(row: &WorkRow, theme: &Theme, handlers: &Handlers) -> AnyElement {
+/// `live`: the row is in the log of a run still going, so its mark lands as it arrives.
+fn log_row(row: &WorkRow, live: bool, theme: &Theme, handlers: &Handlers) -> AnyElement {
     if let Some(agent) = &row.agent {
         return agent_row(&row.key, agent, theme);
     }
@@ -630,7 +625,14 @@ fn log_row(row: &WorkRow, theme: &Theme, handlers: &Handlers) -> AnyElement {
                         .hover(move |line| line.bg(hover))
                         .on_click(move |_, window, cx| toggle(key.clone(), window, cx))
                 })
-                .child(row_mark(row, theme, handlers.still))
+                .child({
+                    let mark = div().flex_none().child(row_mark(row, theme, handlers.still));
+                    if live {
+                        crate::motion::land(SharedString::from(format!("{}-land", row.key)), mark, handlers.still)
+                    } else {
+                        mark.into_any_element()
+                    }
+                })
                 .when(!row.verb.is_empty(), |line| {
                     line.child(div().flex_none().w(px(VERB_WIDTH)).typography(Type::Ui).text_color(theme.text_dim).child(row.verb.clone()))
                 })
@@ -986,22 +988,7 @@ fn rich(spans: &[Span], key: &str, theme: &Theme, handlers: &Handlers) -> AnyEle
 
 /// A reply's code: a sheet whose head band names the language and copies the code.
 fn code_block(language: &str, text: &str, key: &str, theme: &Theme) -> impl IntoElement {
-    let copied = text.to_string();
-    let copy = div()
-        .id(SharedString::from(format!("{key}-copy")))
-        .flex_none()
-        .h(px(22.))
-        .px(px(8.))
-        .rounded_full()
-        .flex()
-        .items_center()
-        .gap(px(5.))
-        .typography(Type::Small)
-        .text_color(theme.text_dim)
-        .hover(|button| button.bg(theme.hover).text_color(theme.text))
-        .on_click(move |_, _, cx| cx.write_to_clipboard(ClipboardItem::new_string(copied.clone())))
-        .child(Icon::Copy.view(px(12.), theme.text_dim))
-        .child("Copy");
+    let copy = crate::copy::CopyButton::new(key.to_string(), text.to_string(), "Copy", "copy-code");
     sheet(theme)
         .child(
             head_band(theme)

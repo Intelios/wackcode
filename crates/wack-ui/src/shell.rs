@@ -48,7 +48,7 @@ use crate::{
         self, ActivatePane, AddFolder, Back, ChooseBackdrop, ChooseEffort, SlideEffort, ToggleTodos, ToggleWaiting, ChooseFocus, ClearCommandOutput, CloseCommandEditor, CycleAgentMode, SetAgentMode, PickOption, ShowQuestion, NextQuestion, PreviousQuestion, SubmitAnswers, CancelQuestion, WrapUpQuestion, ShowDoneTodos, DiscardPlan, KeepPlan, ConfirmDiscardPlan, ApprovePlan, SavePlan, CopyPlan, ToggleUnrestrictedPlanning, ToggleWebFetch, ToggleWebSearch, ToggleRouteFetch, CloseSearchEditor, SaveSearchProvider, TestSearchProvider, AskDeleteSearchProvider, ConfirmDeleteSearchProvider, CancelDeleteSearchProvider, ResetWebUsage, ChooseSearchProvider, AddSearchProvider, EditSearchProvider, ChooseSearchKey, ChooseSearchMethod, AddMcpServer, EditMcpServer, ToggleMcpServer, ToggleMcpTool, ExpandMcpServer, TestMcpServer, AskDeleteMcpServer, RemoveMcpEntry, ChooseMcpTransport, ChooseMcpScope, ToggleMcpProject, CloseMcpEditor, SaveMcpServer, TestMcpDraft, AddMcpEntry, ConfirmDeleteMcpServer, CancelDeleteMcpServer, ConfirmUnrestrictedPlanning, CancelUnrestrictedPlanning, ToggleMemory, SwitchProjectMemory, NewMemory, EditMemory, ChooseMemoryKind, SaveMemory, CloseMemoryEditor, AskDeleteMemory, AskRemoveMemoryFolder, ConfirmMemoryDelete, CancelMemoryDelete, RevealMemory, ToggleCommitAttribution, ToggleUsageRecording, RevealUsageFolder,
         ChooseBlur, ChooseDim, ChooseFormat, OpenCommandEditor, OpenConnectionForm, CloseConnectionForm, SwitchConnection, ChooseMode, ChooseModel, ChooseTexture, ChooseTheme, CloseChatTab, CloseMenu, ClosePane,
         ClosePaneId, CloseSettings, CloseTab, Compact, DeleteChat, DiscardConnection, EditConnection, ToggleConnectionKey, EqualizeSplit, FocusNext, FocusPrevious, MovePane, AddModelRow, RemoveModelRow, SaveCommandEditor, SaveConnection,
-        NewChat, NewChatIn, NewTerminal, NewTerminalWith, TogglePaneMenu, ClosePaneMenu, HideSidePanel, ToggleSidePanel, RevealProject, OpenPaneKind, NextTab, OpenEffortMenu, OpenModelMenu, OpenSettings,
+        NewChat, NewChatIn, SelectDraft, CloseDraft, NewTerminal, NewTerminalWith, TogglePaneMenu, ClosePaneMenu, HideSidePanel, ToggleSidePanel, RevealProject, OpenPaneKind, NextTab, OpenEffortMenu, OpenModelMenu, OpenSettings,
         OpenSettingsSection, PinProject, PreviousTab, RemoveConnection, RemovePicture, ShowCommandOutput, ShowPicture, RemoveProject, ResetDockSize,
         PickCommand, SelectChat, Send, Stop, StopCommand, MoveToBackground, ToggleTasks, ToggleTasksPane, StopTask, ShowTask, ToggleAgentsPane, ToggleBrowserPane, ToggleCanvasPane, ShowCanvas, WriteInComposer, ShowAgent, StopAgent, ToggleChanges, ToggleProject, ToggleSidebar, ToggleTerminal, TriggerProjectCommand, Unqueue,
         ToggleAutoTitles, ToggleTitleModels, ChooseTitleModel, RenameChat, RenameChatAt, CancelRename, ToggleModelReasoning, ToggleModelRow, ToggleModelVision, AttachPictures, AttachFiles, RemoveAttachment, OpenPicture, ClosePicture, StepPicture, ZoomPicture,
@@ -211,8 +211,10 @@ pub struct Shell {
     tab_bounds: Rc<RefCell<Vec<gpui::Bounds<Pixels>>>>,
     /// Whether the side panel showed last frame, and how many times it has come into view, so
     /// each arrival slides it in once.
-    side_shown: Option<bool>,
-    side_arrivals: usize,
+    /// How far in the side panel is (0–1), easing as it shows and hides, and its width when it
+    /// last showed, for sliding it out.
+    side_open: Option<motion::Ease>,
+    side_width: f32,
 }
 
 impl Shell {
@@ -254,8 +256,8 @@ impl Shell {
             was_settings: None,
             bead: Default::default(),
             tab_bounds: Default::default(),
-            side_shown: None,
-            side_arrivals: 0,
+            side_open: None,
+            side_width: 0.,
         }
     }
 
@@ -286,8 +288,8 @@ impl Shell {
             was_settings: None,
             bead: Default::default(),
             tab_bounds: Default::default(),
-            side_shown: None,
-            side_arrivals: 0,
+            side_open: None,
+            side_width: 0.,
         }
     }
 
@@ -661,9 +663,9 @@ impl Shell {
     fn close_tab(&mut self, _: &mut Window, cx: &mut Context<Self>) {
         self.with_app(cx, |app, cx| match app.selection().clone() {
             Selection::Chat(id) => app.close_tab(&id, cx),
-            Selection::NewChat(_) => {
-                if let Some(last) = app.tabs().last().cloned() {
-                    app.select(Selection::Chat(last), cx);
+            Selection::NewChat(_) | Selection::NewChatArea => {
+                if let Some((key, _)) = app.draft_tabs().into_iter().find(|(_, active)| *active) {
+                    app.close_draft(key, cx);
                 }
             }
             _ => {}
@@ -960,6 +962,10 @@ impl Render for Shell {
         let mouse = window.mouse_position();
         let still = cx.reduce_motion();
         let mut sidebar_open = self.sidebar_open.take();
+        let mut side_open = self.side_open.take();
+        let mut side_width = self.side_width;
+        // 1 while the side panel is settled; how far in it is while it slides.
+        let mut side_shown = 1.;
         let rebuild_step = (self.rebuilds > 0 && !still).then_some(self.rebuilds);
         let ms = std::time::Duration::from_millis;
         // 1 while the sidebar is settled; how far open it is while it slides.
@@ -985,7 +991,20 @@ impl Render for Shell {
                 sidebar_shown = ease.value();
                 Solution::sliding(width, height, sidebar_shown, &panes.layout)
             } else {
-                settled
+                // The side panel slides in and out from the frame's right edge.
+                let target = if settled.right.is_some() { 1. } else { 0. };
+                if let Some(right) = settled.right {
+                    side_width = right.width;
+                }
+                let ease = side_open.get_or_insert(motion::Ease::at(target));
+                ease.toward(target, still);
+                if ease.moving() && side_width > 0. && panes.layout.dock(Dock::Right).is_some() {
+                    window.request_animation_frame();
+                    side_shown = ease.value();
+                    Solution::panel_sliding(width, height, settled.sidebar, &panes.layout, side_width, side_shown)
+                } else {
+                    settled
+                }
             };
             let frame = dock::Frame {
                 panes,
@@ -1010,6 +1029,8 @@ impl Render for Shell {
             (solution, docks, words)
         };
         self.sidebar_open = sidebar_open;
+        self.side_open = side_open;
+        self.side_width = side_width;
         let narrow = solution.transcript.width < NARROW_TRANSCRIPT;
         let transcript_height = solution.transcript.height;
         // Build and Run shrink to icons when the chat's header is short of room.
@@ -1232,31 +1253,24 @@ impl Render for Shell {
             .flex_col()
             .pb(gutter)
             .when(solution.right.is_none(), |main| main.pr(gutter))
+            .when(solution.right.is_some() && side_shown < 1., |main| main.pr(gutter * (1. - side_shown)))
             .when(!solution.sidebar, |main| main.pl(gutter))
             .when(solution.sidebar && sidebar_shown < 1., |main| main.pl(gutter * (1. - sidebar_shown)))
             .child(drag_strip("title-strip", TITLE_STRIP_HEIGHT, motion::rebuild(rebuild_step, "rebuild-strip", div().size_full().child(strip), ms(140), 0., 10.)))
             .child(stage);
-        // The side panel: the right dock, a pane of its own from the frame's top to its foot. Each
-        // time it comes into view it slides in from the right as its glass frosts over.
-        let side_open = solution.right.is_some();
-        if self.side_shown == Some(false) && side_open {
-            self.side_arrivals += 1;
-        }
-        self.side_shown = Some(side_open);
+        // The side panel: the right dock, a pane of its own from the frame's top to its foot. It
+        // slides in from the window's right edge and back out, its column narrowing as the stage
+        // takes the room.
         let side = solution.right.map(|right| {
-            let side = div().flex_none().w(px(right.width) + gutter * 2.).h_full().p(gutter).flex().flex_col().child(pane(
+            let full = px(right.width) + gutter * 2.;
+            let panel = div().flex_none().w(full).h_full().p(gutter).flex().flex_col().child(pane(
                 div().flex_1().min_h_0().w_full().relative().children(docks.side).into_any_element(),
                 PaneGround::Side,
             ));
-            if self.side_arrivals > 0 && !still {
-                side.with_animation(
-                    ("side-arrive", self.side_arrivals),
-                    gpui::Animation::new(motion::PANEL_ARRIVE).with_easing(motion::spring),
-                    |side, t| side.opacity(t).relative().left(px(motion::PANEL_TRAVEL * (1. - t))),
-                )
-                .into_any_element()
+            if side_shown < 1. {
+                div().flex_none().w(full * side_shown).h_full().overflow_hidden().opacity(side_shown.powf(0.5)).child(panel).into_any_element()
             } else {
-                side.into_any_element()
+                panel.into_any_element()
             }
         });
         // Lines, handles and drop zones lie over everything, in the solver's space.
@@ -1947,6 +1961,14 @@ impl Render for Shell {
                 .on_action(cx.listener(|shell, _: &ToggleTerminal, window, cx| shell.toggle_pane(PaneKind::Terminal, window, cx)))
                 .on_action(cx.listener(|shell, _: &NewTerminal, window, cx| shell.new_terminal(None, window, cx)))
                 .on_action(cx.listener(|shell, action: &NewTerminalWith, window, cx| shell.new_terminal(Some(action.pane), window, cx)))
+                .on_action(cx.listener(|shell, action: &SelectDraft, _, cx| {
+                    let key = action.key;
+                    shell.with_app(cx, |app, cx| app.select_draft(key, cx));
+                }))
+                .on_action(cx.listener(|shell, action: &CloseDraft, _, cx| {
+                    let key = action.key;
+                    shell.with_app(cx, |app, cx| app.close_draft(key, cx));
+                }))
                 .on_action(cx.listener(|shell, _: &TogglePaneMenu, _, cx| {
                     shell.pane_menu = !shell.pane_menu;
                     cx.notify();
@@ -2148,6 +2170,8 @@ pub struct TabData {
 pub struct StripData {
     pub tabs: Vec<TabData>,
     pub new_chat: bool,
+    /// The area's new chats, each a tab of its own: their keys, and which is on screen.
+    pub drafts: Vec<(u64, bool)>,
     pub commands: Option<[CommandButtonData; 2]>,
     pub command_editor: Option<CommandEditorData>,
 }
@@ -2466,6 +2490,7 @@ fn live_view(app: &AppState, cx: &App) -> (SidebarData, Screen, StripData) {
             })
             .collect(),
         new_chat: matches!(app.selection(), Selection::NewChat(_) | Selection::NewChatArea),
+        drafts: app.draft_tabs(),
         commands: app.command_buttons(),
         command_editor: app.command_editor_data(cx),
     };
@@ -2773,7 +2798,7 @@ fn new_chat(
                         .justify_center()
                         .gap(px(8.))
                         .children(commands.iter().map(|button| {
-                            run_button::split_button(button, strip.command_editor.as_ref(), false, ground, viewport, theme)
+                            run_button::split_button(button, strip.command_editor.as_ref(), false, viewport, theme)
                         })),
                 )
             })
@@ -3004,15 +3029,20 @@ fn paint_bead(rect: gpui::Bounds<Pixels>, look: BeadLook, window: &mut Window) {
 /// The open chats in a tray of glass across the strip, the one in front carried by a bead that
 /// slides to each tab as it opens, then a round button for a new chat.
 fn tab_strip(strip: &StripData, tray: &Tray, theme: &Theme) -> gpui::Div {
-    let tab = |id: Option<SharedString>, title: SharedString, look: TitleLook, active: bool, state: ChatState| {
-        let group: SharedString = format!("chat-tab-{}", id.as_deref().unwrap_or("new")).into();
+    // A chat's tab, or (with no id) a new chat's, by its draft key.
+    let tab = |id: Option<SharedString>, draft: u64, title: SharedString, look: TitleLook, active: bool, state: ChatState| {
+        let name: SharedString = match &id {
+            Some(id) => id.clone(),
+            None => format!("new-{draft}").into(),
+        };
+        let group: SharedString = format!("chat-tab-{name}").into();
         let close = match &id {
             Some(id) => Box::new(CloseChatTab { id: id.to_string() }) as Box<dyn gpui::Action>,
-            None => Box::new(CloseTab),
+            None => Box::new(CloseDraft { key: draft }),
         };
         let select = id.clone().map(|id| SelectChat { id: id.to_string() });
         div()
-            .id(SharedString::from(format!("tab-{}", id.as_deref().unwrap_or("new"))))
+            .id(SharedString::from(format!("tab-{name}")))
             .group(group.clone())
             .occlude()
             .relative()
@@ -3029,6 +3059,9 @@ fn tab_strip(strip: &StripData, tray: &Tray, theme: &Theme) -> gpui::Div {
             .items_center()
             .gap(px(6.))
             .when(!active, |tab| tab.hover(|tab| tab.bg(Hsla { a: 0.5, ..theme.hover })))
+            .when(id.is_none() && !active, |tab| {
+                tab.on_click(move |_, window, cx| window.dispatch_action(Box::new(SelectDraft { key: draft }), cx))
+            })
             .when_some(select, |tab, select| {
                 tab.on_click(move |event, window, cx| {
                     let action: Box<dyn gpui::Action> = if event.click_count() == 2 {
@@ -3093,7 +3126,7 @@ fn tab_strip(strip: &StripData, tray: &Tray, theme: &Theme) -> gpui::Div {
             })
             .child(
                 div()
-                    .id(SharedString::from(format!("close-{}", id.as_deref().unwrap_or("new"))))
+                    .id(SharedString::from(format!("close-{name}")))
                     .flex_none()
                     .size(px(18.))
                     .rounded_full()
@@ -3111,17 +3144,17 @@ fn tab_strip(strip: &StripData, tray: &Tray, theme: &Theme) -> gpui::Div {
             .tag(if active { "chat-tab-active" } else { "chat-tab" })
     };
     let mut tabs: Vec<_> =
-        strip.tabs.iter().map(|data| tab(Some(data.id.clone()), data.title.clone(), data.look.clone(), data.active, data.state)).collect();
-    if strip.new_chat {
-        tabs.push(tab(None, "New chat".into(), TitleLook::Plain, true, ChatState::Idle));
-    }
+        strip.tabs.iter().map(|data| tab(Some(data.id.clone()), 0, data.title.clone(), data.look.clone(), data.active, data.state)).collect();
+    // Every new chat of the area is a tab after the chats'; a scene's new chat has no draft yet.
+    let drafts: Vec<(u64, bool)> = if strip.drafts.is_empty() && strip.new_chat { vec![(0, true)] } else { strip.drafts.clone() };
+    tabs.extend(drafts.iter().map(|&(key, active)| tab(None, key, "New chat".into(), TitleLook::Plain, active, ChatState::Idle)));
     // The tab the bead carries, by place in the row and by name.
     let active = strip
         .tabs
         .iter()
         .position(|tab| tab.active)
         .map(|index| (index, strip.tabs[index].id.clone()))
-        .or_else(|| strip.new_chat.then(|| (strip.tabs.len(), SharedString::from("new"))));
+        .or_else(|| drafts.iter().position(|(_, active)| *active).map(|at| (strip.tabs.len() + at, SharedString::from(format!("new-{}", drafts[at].0)))));
     let look = BeadLook {
         fill: if tray.glass.is_some() { Hsla { a: 0.86, ..theme.raised } } else { theme.raised },
         line: theme.accent_line,
@@ -3166,7 +3199,7 @@ fn tab_strip(strip: &StripData, tray: &Tray, theme: &Theme) -> gpui::Div {
         .on_children_prepainted(move |children, _, _| *recorded.borrow_mut() = children)
         .children(tabs);
     let tray_box = div().relative().flex_initial().min_w_0().h(px(34.)).p(px(3.)).flex().items_center().child(bead).child(row);
-    // Always there, as version 2's was (on a new chat it keeps the new chat in front). Outside the
+    // Always there, as version 2's was: on a new chat it opens another beside it. Outside the
     // clipped row, so it shows however many tabs there are.
     let new_tab = Some(()).map(|_| {
         tray.glass(
@@ -3237,7 +3270,7 @@ fn chat_header(
     };
     let commands = strip.commands.as_ref().filter(|_| !words.chat_area).map(|commands| {
         div().flex_none().flex().items_center().gap(px(8.)).children(
-            commands.iter().map(|button| run_button::split_button(button, strip.command_editor.as_ref(), compact, None, viewport, theme)),
+            commands.iter().map(|button| run_button::split_button(button, strip.command_editor.as_ref(), compact, viewport, theme)),
         )
     });
     let panel_on = words.changes || words.terminal || words.browser || words.canvas || words.other_pane;

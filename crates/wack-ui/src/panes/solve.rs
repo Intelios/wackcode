@@ -122,6 +122,25 @@ impl Solution {
     }
 }
 
+impl Solution {
+    /// The layout while the side panel slides in or out, `open` (0–1) of the way in: the panel
+    /// keeps its settled width `panel` and the window is solved as if it were wider by the part
+    /// of the panel still beyond its right edge, so the transcript widens or narrows with it. At
+    /// either end it is exactly the settled layout (open: the panel at `panel` wide; shut: the
+    /// transcript as wide as without it, the panel wholly past the edge).
+    pub fn panel_sliding(width: f32, height: f32, sidebar_open: bool, layout: &Layout, panel: f32, open: f32) -> Solution {
+        let mut showing = layout.clone();
+        showing.set_hidden(Dock::Right, false);
+        if showing.canvas_in_front() {
+            showing.canvas_width = Some(panel);
+        } else {
+            showing.right_width = Some(panel);
+        }
+        let beyond = ((1. - open.clamp(0., 1.)) * (panel + GAP)).round();
+        solve(width + beyond, height, sidebar_open, &showing)
+    }
+}
+
 /// The right dock's width before the user drags it: half of what the sidebar leaves.
 pub fn balanced_width(width: f32, sidebar: f32) -> f32 {
     ((width - sidebar - GAP) / 2.).max(DOCK_MIN_WIDTH)
@@ -322,6 +341,21 @@ mod tests {
         layout.right_width = size(random);
         layout.canvas_width = size(random);
         layout.bottom_height = size(random);
+    }
+
+    #[test]
+    fn a_sliding_panel_ends_where_the_settled_layouts_are() {
+        let mut layout = Layout::default();
+        layout.add(PaneKind::Terminal);
+        let open = solve(1400., 900., true, &layout);
+        let panel = open.right.unwrap().width;
+        let ends = Solution::panel_sliding(1400., 900., true, &layout, panel, 1.);
+        assert_eq!(ends.transcript, open.transcript);
+        assert_eq!(ends.right, open.right);
+        layout.set_hidden(Dock::Right, true);
+        let shut = Solution::panel_sliding(1400., 900., true, &layout, panel, 0.);
+        assert_eq!(shut.transcript.width, solve(1400., 900., true, &layout).transcript.width);
+        assert!(shut.right.unwrap().x >= 1400., "the panel waits wholly past the edge");
     }
 
     #[test]

@@ -65,12 +65,10 @@ pub fn split_button(
     data: &CommandButtonData,
     editor: Option<&CommandEditorData>,
     compact: bool,
-    ground: Option<Hsla>,
     viewport: Size<Pixels>,
     theme: &Theme,
 ) -> impl IntoElement {
     let kind = data.kind;
-    let configured = data.command.is_some();
     let active = data.status.is_active();
     let stopping = data.status == CommandStatus::Stopping;
 
@@ -90,8 +88,9 @@ pub fn split_button(
             CommandKind::Build => Icon::Hammer,
             CommandKind::Run => Icon::Play,
         };
-        // A command ready to run wears the accent, as WackCode 2's pills did.
-        let ink = if configured { theme.accent_text } else { theme.text_dim };
+        // Build and Run always wear the accent, as WackCode 2's pills did, so they are easy to
+        // find whether or not a command is set yet.
+        let ink = theme.accent_text;
         (icon, kind.title(), ink)
     };
 
@@ -108,17 +107,15 @@ pub fn split_button(
         (Some(Hsla { a: 0.14, ..theme.danger }), Hsla { a: 0.34, ..theme.danger })
     } else if data.editor_open {
         (Some(theme.hover), theme.border_strong)
-    } else if configured {
-        (Some(Hsla { a: 0.6, ..theme.accent_wash }), theme.accent_line)
     } else {
-        (ground, theme.border)
+        (Some(theme.accent_wash), theme.accent_line)
     };
 
     let main_part = div()
         .id(main_id)
         .h_full()
-        .pl(px(8.))
-        .pr(px(if compact { 6. } else { 7. }))
+        .pl(px(if compact { 9. } else { 11. }))
+        .pr(px(if compact { 7. } else { 9. }))
         .rounded_l_full()
         .flex()
         .items_center()
@@ -130,7 +127,7 @@ pub fn split_button(
                     button.bg(if active {
                         Hsla { a: 0.22, ..theme.danger }
                     } else {
-                        theme.hover
+                        theme.accent_wash
                     })
                 })
                 .on_click(move |_, window, cx| {
@@ -139,22 +136,16 @@ pub fn split_button(
         })
         .when(stopping, |button| button.opacity(0.6))
         .tooltip(tip(main_tip))
-        .child(icon.view(px(11.), main_ink))
-        .when(!compact, |button| {
-            button.child(
-                div()
-                    .typography(if active || configured { Type::Ui } else { Type::Small })
-                    .text_color(main_ink)
-                    .child(label),
-            )
-        })
+        .gap(px(6.))
+        .child(icon.view(px(13.), main_ink))
+        .when(!compact, |button| button.child(div().typography(Type::UiStrong).font_weight(gpui::FontWeight::SEMIBOLD).text_color(main_ink).child(label)))
         .tag(main_tag);
 
     let config_part = div()
         .id(config_id)
         .h_full()
-        .pl(px(4.))
-        .pr(px(7.))
+        .pl(px(5.))
+        .pr(px(9.))
         .rounded_r_full()
         .cursor_pointer()
         .flex()
@@ -166,13 +157,13 @@ pub fn split_button(
         .on_click(move |_, window, cx| {
             window.dispatch_action(Box::new(OpenCommandEditor { kind }), cx);
         })
-        .child(Icon::ChevronDown.view(px(10.), if data.editor_open { theme.text } else { theme.text_dim }))
+        .child(Icon::ChevronDown.view(px(11.), if active { theme.danger } else { theme.accent_text }))
         .tag(config_tag);
 
     let pill = div()
         .occlude()
         .flex_none()
-        .h(px(30.))
+        .h(px(32.))
         .rounded_full()
         .border_1()
         .border_color(shell_border)
@@ -180,7 +171,7 @@ pub fn split_button(
         .flex()
         .items_center()
         .child(main_part)
-        .child(div().flex_none().w(px(1.)).h(px(12.)).bg(shell_border))
+        .child(div().flex_none().w(px(1.)).h(px(14.)).bg(shell_border))
         .child(config_part);
 
     let open_editor = editor.filter(|editor| editor.kind == kind);

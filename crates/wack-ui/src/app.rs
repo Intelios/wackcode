@@ -95,6 +95,22 @@ pub enum Menu {
     Effort,
 }
 
+/// A new chat being written, kept as a tab while another is on screen.
+#[derive(Clone)]
+pub struct DraftTab {
+    pub key: u64,
+    /// Its project; `None` in the Chat area.
+    pub project: Option<String>,
+    text: String,
+    attachments: Vec<crate::attachments::Attachment>,
+}
+
+impl DraftTab {
+    fn blank(&self) -> bool {
+        self.text.trim().is_empty() && self.attachments.is_empty()
+    }
+}
+
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub enum Selection {
     /// No project yet.
@@ -214,6 +230,12 @@ pub struct AppState {
     parked: HashMap<ChatKind, Selection>,
     /// What each area's new-chat composer held when the other area was entered.
     parked_drafts: HashMap<ChatKind, String>,
+    /// New chats being written, each a tab of its own as in version 2: "+" on a new chat opens
+    /// another beside it. The one on screen is `active_draft`; its words live in `draft` while
+    /// it shows and in its tab while it does not.
+    drafts: Vec<DraftTab>,
+    active_draft: Option<u64>,
+    next_draft: u64,
     /// Counts the Chat area's new-chat screens, so each visit gets its own idea chips.
     pub hero_visit: u64,
     sidebar_hidden: bool,
@@ -425,6 +447,9 @@ impl AppState {
             tabs,
             parked: HashMap::new(),
             parked_drafts: HashMap::new(),
+            drafts: Vec::new(),
+            active_draft: None,
+            next_draft: 1,
             hero_visit: now_millis() / 1000,
             sidebar_hidden: ui.sidebar_hidden,
             unsaved_layouts: HashSet::new(),
@@ -1540,6 +1565,10 @@ impl AppState {
     pub fn select(&mut self, selection: Selection, cx: &mut Context<Self>) {
         // Leaving an area parks where it was, and its new chat's draft, so coming back finds
         // both; Settings shows over an area without leaving it.
+        // Leaving a new chat keeps its words in its tab.
+        if Self::draft_target(&self.selection).is_some() {
+            self.park_draft(cx);
+        }
         let leaving = if self.selection == Selection::Settings { self.before_settings.clone() } else { self.selection.clone() };
         let (from, to) = (self.area_of(&leaving), self.area_of(&selection));
         if let (Some(from), Some(to)) = (from, to)
@@ -1623,12 +1652,124 @@ impl AppState {
             }
             Selection::Welcome => {}
         }
+        match Self::draft_target(&selection) {
+            // A new chat on screen is always one of the draft tabs: the one it was, else the
+            // project's latest, else a fresh one.
+            Some(project) => {
+                let current = self.active_draft.filter(|key| self.drafts.iter().any(|draft| draft.key == *key && draft.project == project));
+                let key = match current.or_else(|| self.drafts.iter().rev().find(|draft| draft.project == project).map(|draft| draft.key)) {
+                    Some(key) => key,
+                    None => self.add_draft(project),
+                };
+                self.load_draft(key, cx);
+            }
+            // A blank new chat left for a chat goes; one with words in it stays a tab.
+            None if matches!(selection, Selection::Chat(_)) => {
+                self.drafts.retain(|draft| !draft.blank());
+                self.active_draft = None;
+            }
+            None => {}
+        }
         self.notice = None;
         self.menu = None;
         self.command_editor = None;
         self.selection = selection;
         self.save_ui();
         cx.notify();
+    }
+
+    /// The project a new-chat selection writes in (`None` for the Chat area); `None` for any
+    /// other selection.
+    fn draft_target(selection: &Selection) -> Option<Option<String>> {
+        match selection {
+            Selection::NewChat(project) => Some(Some(project.clone())),
+            Selection::NewChatArea => Some(None),
+            _ => None,
+        }
+    }
+
+    fn add_draft(&mut self, project: Option<String>) -> u64 {
+        let key = self.next_draft;
+        self.next_draft += 1;
+        self.drafts.push(DraftTab { key, project, text: String::new(), attachments: Vec::new() });
+        key
+    }
+
+    /// Keeps what the composer holds in the draft tab on screen.
+    fn park_draft(&mut self, cx: &App) {
+        let text = self.draft.read(cx).text().to_string();
+        let attachments = self.draft_attachments.clone();
+        if let Some(key) = self.active_draft
+            && let Some(draft) = self.drafts.iter_mut().find(|draft| draft.key == key)
+        {
+            draft.text = text;
+            draft.attachments = attachments;
+        }
+    }
+
+    /// Puts a draft tab's words back in the composer, and makes it the one on screen.
+    fn load_draft(&mut self, key: u64, cx: &mut Context<Self>) {
+        let Some(draft) = self.drafts.iter().find(|draft| draft.key == key).cloned() else { return };
+        self.draft.update(cx, |field, cx| field.set_text(&draft.text, cx));
+        self.draft_attachments = draft.attachments;
+        self.active_draft = Some(key);
+    }
+
+    /// The draft tabs of the area on screen: their keys, and which is on screen.
+    pub fn draft_tabs(&self) -> Vec<(u64, bool)> {
+        let on_draft = Self::draft_target(&self.selection).is_some();
+        let area = self.area();
+        self.drafts
+            .iter()
+            .filter(|draft| if draft.project.is_some() { area == ChatKind::Code } else { area == ChatKind::Chat })
+            .map(|draft| (draft.key, on_draft && self.active_draft == Some(draft.key)))
+            .collect()
+    }
+
+    /// "+" (⌘N) on a new chat: another new chat beside it, in the same place.
+    fn another_new_chat(&mut self, cx: &mut Context<Self>) {
+        let Some(project) = Self::draft_target(&self.selection) else { return };
+        self.park_draft(cx);
+        let key = self.add_draft(project);
+        self.load_draft(key, cx);
+        self.select(self.selection.clone(), cx);
+    }
+
+    /// A draft tab clicked: its new chat comes back on screen with its words.
+    pub fn select_draft(&mut self, key: u64, cx: &mut Context<Self>) {
+        let Some(project) = self.drafts.iter().find(|draft| draft.key == key).map(|draft| draft.project.clone()) else { return };
+        if Self::draft_target(&self.selection).is_some() {
+            self.park_draft(cx);
+        }
+        self.load_draft(key, cx);
+        self.select(project.map_or(Selection::NewChatArea, Selection::NewChat), cx);
+    }
+
+    /// A draft tab closed: its words go. If it was on screen, another draft tab of the area takes
+    /// its place, else the area's last chat, else a fresh new chat.
+    pub fn close_draft(&mut self, key: u64, cx: &mut Context<Self>) {
+        let Some(at) = self.drafts.iter().position(|draft| draft.key == key) else { return };
+        let closed = self.drafts.remove(at);
+        let on_screen = Self::draft_target(&self.selection).is_some() && self.active_draft == Some(key);
+        if !on_screen {
+            cx.notify();
+            return;
+        }
+        self.active_draft = None;
+        let next = self.draft_tabs().last().map(|(key, _)| *key);
+        if let Some(next) = next {
+            self.load_draft(next, cx);
+            let project = self.drafts.iter().find(|draft| draft.key == next).and_then(|draft| draft.project.clone());
+            self.select(project.map_or(Selection::NewChatArea, Selection::NewChat), cx);
+        } else if let Some(last) = self.area_tabs().last().cloned() {
+            self.draft.update(cx, |field, cx| field.set_text("", cx));
+            self.draft_attachments.clear();
+            self.select(Selection::Chat(last), cx);
+        } else {
+            let key = self.add_draft(closed.project.clone());
+            self.load_draft(key, cx);
+            self.select(self.selection.clone(), cx);
+        }
     }
 
     pub fn close_settings(&mut self, cx: &mut Context<Self>) {
@@ -1646,6 +1787,13 @@ impl AppState {
     /// A new chat in `project`, or in the current project when `None`; in the Chat area, a new
     /// chat there.
     pub fn new_chat(&mut self, project: Option<String>, cx: &mut Context<Self>) {
+        // On a new chat already, "+" opens another beside it, as version 2's did.
+        if let Some(here) = Self::draft_target(&self.selection)
+            && (project.is_none() || project == here)
+        {
+            self.another_new_chat(cx);
+            return;
+        }
         if project.is_none() && self.area() == ChatKind::Chat {
             self.select(Selection::NewChatArea, cx);
             return;
@@ -1989,6 +2137,10 @@ impl AppState {
         }
         self.draft.update(cx, |draft, cx| draft.set_text("", cx));
         self.draft_attachments.clear();
+        // The draft tab becomes the chat's tab.
+        if let Some(key) = self.active_draft.take() {
+            self.drafts.retain(|draft| draft.key != key);
+        }
         self.mention_refs.remove(&None);
         self.select(Selection::Chat(chat.id.clone()), cx);
         self.run(&chat.id, job, cx);

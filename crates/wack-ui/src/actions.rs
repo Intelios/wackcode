@@ -730,6 +730,20 @@ pub struct Unqueue {
     pub index: usize,
 }
 
+/// A new chat's tab clicked: it comes back on screen with what was written in it.
+#[derive(Clone, Debug, PartialEq, Action)]
+#[action(namespace = wackcode, no_json)]
+pub struct SelectDraft {
+    pub key: u64,
+}
+
+/// A new chat's tab closed: what was written in it goes.
+#[derive(Clone, Debug, PartialEq, Action)]
+#[action(namespace = wackcode, no_json)]
+pub struct CloseDraft {
+    pub key: u64,
+}
+
 #[derive(Clone, Debug, PartialEq, Action)]
 #[action(namespace = wackcode, no_json)]
 pub struct CloseChatTab {

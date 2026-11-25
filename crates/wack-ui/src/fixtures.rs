@@ -724,6 +724,7 @@ pub fn strip(active: Option<&'static str>) -> crate::shell::StripData {
             tab("Tool search for other hosts", ChatState::Unread),
         ],
         new_chat: active.is_none(),
+        drafts: Vec::new(),
         commands: Some([
             crate::run_button::CommandButtonData::idle(wack_core::CommandKind::Build, None),
             crate::run_button::CommandButtonData::idle(wack_core::CommandKind::Run, None),
@@ -1461,6 +1462,7 @@ pub fn chat_strip(active: Option<&'static str>) -> crate::shell::StripData {
     crate::shell::StripData {
         tabs: vec![tab(CHAT_AREA_TITLE, ChatState::Idle), tab("Lisbon in four days", ChatState::Working)],
         new_chat: active.is_none(),
+        drafts: Vec::new(),
         commands: None,
         command_editor: None,
     }

@@ -2,8 +2,9 @@
 //!
 //! - **Presence** ([`enter`]): something new arrives by rising a few points as it fades in. A
 //!   screen, a menu, a settings section.
-//! - **From an edge** ([`slide_in`], [`PANEL_ARRIVE`]): a dock's pane arrives from the side it
-//!   opens on, and the side panel slides in from the right as its glass frosts over.
+//! - **From an edge** ([`slide_in`]): a dock's pane arrives from the side it opens on. The
+//!   sidebar and the side panel slide in and out from the window's edges on an [`Ease`], the
+//!   stage glide beside them (`Solution::sliding`, `Solution::panel_sliding`).
 //! - **Between tabs** ([`Bead`]): the open tab's bead stretches towards the next tab, its leading
 //!   edge ahead, and gathers up behind.
 //! - **Between areas** ([`slide_in`], [`HOP`]): switching between Code and Chat, the sidebar's
@@ -243,9 +244,6 @@ pub fn land<E: IntoElement + Styled + 'static>(id: impl Into<ElementId>, element
         .into_any_element()
 }
 
-/// The side panel's arrival: it slides in this far from the right as its glass frosts over.
-pub const PANEL_ARRIVE: Duration = Duration::from_millis(380);
-pub const PANEL_TRAVEL: f32 = 40.;
 
 /// One breath of a step still under way: down to [`BREATH_LOW`] and back.
 pub const BREATH: Duration = Duration::from_millis(1600);

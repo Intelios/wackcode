@@ -862,7 +862,7 @@ pub fn nav(section: Section, connections: Vec<NavConnection>, theme: &Theme) -> 
         .flex()
         .flex_col()
         .child(div().flex_none().px(px(10.)).pt(px(4.)).child(back))
-        .child(div().id("settings-nav").flex_1().min_h_0().overflow_y_scroll().child(list))
+        .child(div().flex_1().min_h_0().child(crate::pixel_scroll::PixelScroll::new("settings-nav", list)))
 }
 
 /// Below this stage width the connection editor's Name and API format stack, so the format
@@ -906,7 +906,9 @@ pub fn page(data: SettingsData, inline_nav: bool, narrow: bool, stack_form: bool
         .flex()
         .flex_col()
         .child(
-            div().id("settings-body").flex_1().min_h_0().w_full().overflow_y_scroll().child(
+            // Scrolled on whole pixels, so its cards and words move as one (`pixel_scroll.rs`).
+            div().flex_1().min_h_0().w_full().child(crate::pixel_scroll::PixelScroll::new(
+                "settings-body",
                 div()
                     .w_full()
                     .px(padding)
@@ -915,7 +917,7 @@ pub fn page(data: SettingsData, inline_nav: bool, narrow: bool, stack_form: bool
                     .flex()
                     .justify_center()
                     .child(div().flex_1().min_w_0().max_w(px(PAGE_WIDTH)).flex().flex_col().children(nav).child(content)),
-            ),
+            )),
         )
         .children(footer)
 }

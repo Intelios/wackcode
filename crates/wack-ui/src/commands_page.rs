@@ -24,7 +24,7 @@ use crate::{
     button::{Button, Kind as ButtonKind},
     icon::Icon,
     settings::{Section, field, text_area, text_input},
-    settings_kit::{card, dispatch, head, pill},
+    settings_kit::{card, dispatch, head, pill, staged_head},
     tags::Tag,
     text_field::TextField,
     theme::Theme,
@@ -148,7 +148,7 @@ pub fn page(data: CommandsData, theme: &Theme) -> AnyElement {
         return editor_page(editor, theme).into_any_element();
     }
     let new = pill("command-new", "New command", Some(Icon::Plus), true, theme).on_click(dispatch(NewSlashCommand)).tag("command-new");
-    let mut page = div().flex().flex_col().gap(px(18.)).child(head(
+    let mut page = div().flex().flex_col().gap(px(18.)).child(staged_head(crate::settings::Section::Commands, 
         "Commands",
         "What you can type after / in the composer. Your own commands send a prompt you wrote, with what you type after the name filled in.",
         Some(new.into_any_element()),

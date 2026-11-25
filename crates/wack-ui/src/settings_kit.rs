@@ -1,7 +1,8 @@
 //! The parts every Settings page is built from.
 //!
 //! A page opens with a [`head`]: the section's name in the serif, a line saying what it is for,
-//! and at most one primary action, an accent pill at the right. Below it the page is [`card`]s of
+//! and at most one primary action, an accent pill at the right. A section's own page opens with a
+//! [`staged_head`] instead, its little animated picture (`stage.rs`) above the action. Below it the page is [`card`]s of
 //! [`row`]s: the label and a sentence on the left, the control on the right, a hairline between
 //! rows. A control too wide to sit beside its label drops beneath it ([`Row::stacked`]).
 //!
@@ -17,7 +18,9 @@ use gpui::{App, Bounds, MouseButton, Pixels, SharedString, Window, div, prelude:
 
 use crate::{
     icon::Icon,
+    settings::Section,
     slide,
+    stage::Stage,
     tags::Tag,
     theme::Theme,
     typography::{Type, Typography},
@@ -40,17 +43,31 @@ pub fn head(title: &'static str, about: &'static str, action: Option<gpui::AnyEl
         .items_end()
         .gap(px(24.))
         .pb(px(22.))
-        .child(
-            div()
-                .flex_1()
-                .min_w_0()
-                .flex()
-                .flex_col()
-                .gap(px(6.))
-                .child(div().typography(Type::Title).text_color(theme.text).child(title))
-                .child(div().max_w(px(540.)).typography(Type::Body).text_color(theme.text_soft).child(about)),
-        )
+        .child(head_words(title, about, theme))
         .children(action.map(|action| div().flex_none().pb(px(2.)).child(action)))
+}
+
+/// A section's own page opens with its [`Stage`] at the right of the head, the page's one action
+/// beneath it. Editors and other pages within a section keep the plain [`head`].
+pub fn staged_head(section: Section, title: &'static str, about: &'static str, action: Option<gpui::AnyElement>, theme: &Theme) -> impl IntoElement {
+    div()
+        .flex()
+        .items_end()
+        .gap(px(24.))
+        .pb(px(22.))
+        .child(head_words(title, about, theme))
+        .child(div().flex_none().flex().flex_col().items_end().gap(px(12.)).child(Stage::new(section)).children(action.map(|action| div().pb(px(2.)).child(action))))
+}
+
+fn head_words(title: &'static str, about: &'static str, theme: &Theme) -> impl IntoElement {
+    div()
+        .flex_1()
+        .min_w_0()
+        .flex()
+        .flex_col()
+        .gap(px(6.))
+        .child(div().typography(Type::Title).text_color(theme.text).child(title))
+        .child(div().max_w(px(540.)).typography(Type::Body).text_color(theme.text_soft).child(about))
 }
 
 /// A card: an optional title line (with a badge and a note at its right), then its rows.

@@ -27,7 +27,7 @@ use crate::{
     button::{Button, Kind as ButtonKind},
     icon::Icon,
     settings::{field, text_area, text_input},
-    settings_kit::{card, dispatch, head, pill, segmented},
+    settings_kit::{card, dispatch, head, pill, segmented, staged_head},
     tags::Tag,
     text_field::TextField,
     theme::Theme,
@@ -175,7 +175,7 @@ pub fn page(data: SkillsData, theme: &Theme) -> AnyElement {
         return view_page(viewing, theme).into_any_element();
     }
     let new = pill("skill-new", "New skill", Some(Icon::Plus), true, theme).on_click(dispatch(NewSkill)).tag("skill-new");
-    let mut page = div().flex().flex_col().gap(px(18.)).child(head(
+    let mut page = div().flex().flex_col().gap(px(18.)).child(staged_head(crate::settings::Section::Skills, 
         "Skills",
         "Instructions the agent loads when a task matches its description, or that you run as /name. Changes apply from a chat’s next message.",
         Some(new.into_any_element()),

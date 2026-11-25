@@ -15,7 +15,7 @@ use crate::{
     actions::{ChooseBackdrop, ChooseBlur, ChooseDim, ChooseFocus, ChooseMode, ChooseTexture, ChooseTheme, RemovePicture, ShowPicture},
     backdrop::Picture,
     icon::Icon,
-    settings_kit::{card, dispatch, head, row, segmented, slider},
+    settings_kit::{card, dispatch, row, segmented, slider, staged_head},
     tags::Tag,
     theme::{Theme, ThemeInput},
     typography::{Type, Typography},
@@ -61,7 +61,7 @@ pub fn page(data: AppearanceData, theme: &Theme) -> impl IntoElement {
         .flex()
         .flex_col()
         .gap(px(18.))
-        .child(head("Appearance", "One look, in the theme you choose. Every change shows at once.", None, theme))
+        .child(staged_head(crate::settings::Section::Appearance, "Appearance", "One look, in the theme you choose. Every change shows at once.", None, theme))
         .child(look)
         .child(backdrop(&data, theme))
         .when_some(data.notice.clone(), |page, notice| page.child(div().typography(Type::Ui).text_color(theme.danger).child(notice)))

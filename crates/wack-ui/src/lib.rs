@@ -47,6 +47,7 @@ pub mod slash_menu;
 pub mod slide;
 pub mod shell;
 pub mod sidebar;
+pub mod stage;
 pub mod skills_page;
 pub mod specimen;
 pub mod suggestion;

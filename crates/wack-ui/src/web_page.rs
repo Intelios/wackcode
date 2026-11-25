@@ -29,7 +29,7 @@ use crate::{
     button::{Button, Kind as ButtonKind},
     icon::Icon,
     settings::{field, text_area, text_input},
-    settings_kit::{card, dispatch, head, pill, row, segmented},
+    settings_kit::{card, dispatch, head, pill, row, segmented, staged_head},
     tags::Tag,
     text_field::TextField,
     theme::Theme,
@@ -307,7 +307,7 @@ pub fn page(data: WebData, theme: &Theme) -> AnyElement {
         .flex()
         .flex_col()
         .gap(px(18.))
-        .child(head(
+        .child(staged_head(crate::settings::Section::Web, 
             "Web",
             "Reading public pages and searching the web. Pages are read from this Mac; searches go to the provider you choose. Changes apply from a chat’s next message.",
             None,

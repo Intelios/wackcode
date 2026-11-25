@@ -28,6 +28,9 @@
 //! redraws a second instead of one every frame. The shell takes the steps ([`paddle_on`]) and
 //! puts the duck back at rest ([`paddle_rest`]) when nothing is working.
 //!
+//! The Settings pages' little pictures are their own small kit (`stage.rs`): each plays its story
+//! a few times when its page opens, then holds still.
+//!
 //! Every movement respects the system's Reduce Motion setting: GPUI's `with_animation` draws the
 //! end state of an arrival when [`App::reduce_motion`] is set, the shell takes no paddle steps,
 //! anything that repeats (a sheen, a breath) or follows the clock (the send moment, the bead)

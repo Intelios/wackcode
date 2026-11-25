@@ -39,7 +39,7 @@ use crate::{
     appearance_page::{self, AppearanceData},
     button::{Button, Kind},
     icon::Icon,
-    settings_kit::{PAGE_WIDTH, card, dispatch, head, pill, segmented},
+    settings_kit::{PAGE_WIDTH, card, dispatch, pill, segmented, staged_head},
     tags::Tag,
     text_field::TextField,
     theme::Theme,
@@ -842,7 +842,7 @@ fn overview(data: ProvidersData, theme: &Theme) -> impl IntoElement {
         .flex()
         .flex_col()
         .gap(px(18.))
-        .child(head(
+        .child(staged_head(Section::Providers, 
             "Providers",
             "Connections to model APIs. A key is kept in WackCode’s own secrets file and only ever sent to the address it belongs to.",
             None,

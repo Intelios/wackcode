@@ -25,7 +25,7 @@ use crate::{
     button::{Button, Kind as ButtonKind},
     icon::Icon,
     settings::{field, text_input},
-    settings_kit::{card, dispatch, head, pill, row, segmented},
+    settings_kit::{card, dispatch, head, pill, row, segmented, staged_head},
     tags::Tag,
     text_field::TextField,
     theme::Theme,
@@ -228,7 +228,7 @@ pub fn page(data: MemoryData, theme: &Theme) -> AnyElement {
         .flex()
         .flex_col()
         .gap(px(18.))
-        .child(head(
+        .child(staged_head(crate::settings::Section::Memory, 
             "Memory",
             "Notes the agent keeps for itself: one store per project, and one that every Chat chat shares. Chats carry an index of their titles and read a note only when it looks relevant. Switches apply from a chat’s next message.",
             None,

@@ -10,7 +10,7 @@ use wack_core::{UsageStatus, tasks::elapsed};
 use crate::{
     actions::{RevealUsageFolder, ToggleUsageRecording},
     icon::Icon,
-    settings_kit::{card, dispatch, head, pill, row},
+    settings_kit::{card, dispatch, pill, row, staged_head},
     tags::Tag,
     theme::Theme,
     tools_page::switch,
@@ -34,7 +34,7 @@ pub fn page(data: IntegrationsData, theme: &Theme) -> impl IntoElement {
     div()
         .flex()
         .flex_col()
-        .child(head(
+        .child(staged_head(crate::settings::Section::Integrations, 
             "Integrations",
             "Apps that work alongside WackCode by reading files it writes on this Mac. Nothing is sent anywhere.",
             None,

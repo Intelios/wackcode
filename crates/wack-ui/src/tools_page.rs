@@ -8,7 +8,7 @@ use crate::{
     actions::{CancelUnrestrictedPlanning, ConfirmUnrestrictedPlanning, OpenSettingsSection, ToggleUnrestrictedPlanning, ToggleWebFetch},
     button::{Button, Kind},
     settings::Section,
-    settings_kit::{card, dispatch, head, pill, row},
+    settings_kit::{card, dispatch, pill, row, staged_head},
     tags::Tag,
     theme::Theme,
     typography::{Type, Typography},
@@ -87,7 +87,7 @@ pub fn page(data: ToolsData, theme: &Theme) -> impl IntoElement {
     div()
         .flex()
         .flex_col()
-        .child(head("Tools", "What the agent may do while it plans, and what it may reach beyond this Mac.", None, theme))
+        .child(staged_head(crate::settings::Section::Tools, "Tools", "What the agent may do while it plans, and what it may reach beyond this Mac.", None, theme))
         .child(
             card(Some("Planning"), None, None, theme)
                 .child(

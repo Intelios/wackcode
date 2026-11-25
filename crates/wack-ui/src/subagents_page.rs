@@ -28,7 +28,7 @@ use crate::{
     button::{Button, Kind as ButtonKind},
     icon::Icon,
     settings::{field, text_area, text_input},
-    settings_kit::{card, dispatch, head, pill, row, segmented},
+    settings_kit::{card, dispatch, pill, row, segmented, staged_head},
     tags::Tag,
     text_field::TextField,
     theme::Theme,
@@ -256,7 +256,7 @@ pub fn page(data: SubagentsData, theme: &Theme) -> AnyElement {
         return editor_page(editor, theme).into_any_element();
     }
     let new = pill("agent-new", "New agent", Some(Icon::Plus), true, theme).on_click(dispatch(NewAgent)).tag("agent-new");
-    let mut page = div().flex().flex_col().gap(px(18.)).child(head(
+    let mut page = div().flex().flex_col().gap(px(18.)).child(staged_head(crate::settings::Section::Subagents, 
         "Sub-agents",
         "Agents the agent can hand work to. Each works in its own context and reports back, so the chat keeps the conclusion, not the search. Chat mode chats work alone and never hand work off.",
         Some(new.into_any_element()),

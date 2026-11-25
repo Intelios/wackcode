@@ -14,7 +14,7 @@ use gpui::{SharedString, div, prelude::*, px};
 use crate::{
     actions::{AskComputerAgain, ForgetNeverAllowed, RequestComputerPermission, ToggleComputerUse},
     icon::Icon,
-    settings_kit::{card, dispatch, head, pill, row},
+    settings_kit::{card, dispatch, pill, row, staged_head},
     tags::Tag,
     theme::Theme,
     tools_page::switch,
@@ -101,7 +101,7 @@ pub fn page(data: ComputerData, theme: &Theme) -> impl IntoElement {
     div()
         .flex()
         .flex_col()
-        .child(head("Computer use", "The agent working in your other Mac apps, through Accessibility, while you keep using your Mac. It asks before it uses each one.", None, theme))
+        .child(staged_head(crate::settings::Section::Computer, "Computer use", "The agent working in your other Mac apps, through Accessibility, while you keep using your Mac. It asks before it uses each one.", None, theme))
         .child(main)
         .child(div().pt(px(18.)).child(permissions))
         .child(div().pt(px(18.)).child(always))

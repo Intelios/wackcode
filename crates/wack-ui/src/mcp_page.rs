@@ -30,7 +30,7 @@ use crate::{
     button::{Button, Kind as ButtonKind},
     icon::Icon,
     settings::{field, text_area, text_input},
-    settings_kit::{card, dispatch, head, pill, segmented},
+    settings_kit::{card, dispatch, head, pill, segmented, staged_head},
     tags::Tag,
     text_field::TextField,
     theme::Theme,
@@ -302,7 +302,7 @@ pub fn page(data: McpData, theme: &Theme) -> AnyElement {
         .flex()
         .flex_col()
         .gap(px(18.))
-        .child(head(
+        .child(staged_head(crate::settings::Section::Mcp, 
             "MCP servers",
             "Tools from servers that speak the Model Context Protocol. The agent finds them when it needs them. Changes apply from a chat’s next message.",
             Some(new),

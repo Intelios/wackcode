@@ -7,7 +7,7 @@ use wack_core::WACKCODE_COAUTHOR_EMAIL;
 use crate::{
     actions::ToggleCommitAttribution,
     icon::Icon,
-    settings_kit::{card, dispatch, head, row},
+    settings_kit::{card, dispatch, row, staged_head},
     tags::Tag,
     theme::Theme,
     tools_page::switch,
@@ -167,7 +167,7 @@ pub fn page(data: GitData, theme: &Theme) -> impl IntoElement {
     div()
         .flex()
         .flex_col()
-        .child(head(
+        .child(staged_head(crate::settings::Section::Git, 
             "Git",
             "How WackCode attributes commits it writes for you. Changes apply from a chat’s next message.",
             None,

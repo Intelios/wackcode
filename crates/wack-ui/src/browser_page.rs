@@ -15,7 +15,7 @@ use crate::{
     actions::{AskClearBrowsingData, CancelClearBrowsingData, ChooseDefaultViewport, ConfirmClearBrowsingData, ToggleAgentOpensPane},
     button::{Button, Kind as ButtonKind},
     icon::Icon,
-    settings_kit::{card, dispatch, head, pill, row, segmented},
+    settings_kit::{card, dispatch, pill, row, segmented, staged_head},
     tags::Tag,
     theme::Theme,
     tools_page::switch,
@@ -137,7 +137,7 @@ pub fn page(data: BrowserData, theme: &Theme) -> impl IntoElement {
     div()
         .flex()
         .flex_col()
-        .child(head("Browser", "The browser in the Browser pane, which you and the agent share. Its sign-ins are kept in WackCode’s own data folder, apart from your other browsers.", None, theme))
+        .child(staged_head(crate::settings::Section::Browser, "Browser", "The browser in the Browser pane, which you and the agent share. Its sign-ins are kept in WackCode’s own data folder, apart from your other browsers.", None, theme))
         .child(agent)
         .child(div().pt(px(18.)).child(sizes))
         .child(div().pt(px(18.)).child(data_card))

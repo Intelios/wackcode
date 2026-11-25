@@ -72,7 +72,7 @@ use crate::{
     panes::{
         Axis, ChatPanes, Dock, Layout, PaneId, PaneKind, PaneModel, Rect,
         dock::{self, DraggedTab, Resizing},
-        solve::{self, DOCK_MIN_HEIGHT, DOCK_MIN_WIDTH, STACK_MIN_HEIGHT, STACK_MIN_WIDTH, TRANSCRIPT_MIN_WIDTH, solve},
+        solve::{self, DOCK_MIN_HEIGHT, DOCK_MIN_WIDTH, STACK_MIN_HEIGHT, STACK_MIN_WIDTH, solve},
     },
     run_button::{self, CommandButtonData, CommandEditorData},
     settings::{self, ProvidersData, Section, SettingsData},
@@ -87,24 +87,24 @@ use crate::{
 };
 
 /// Height of the strip across the top that holds the traffic lights and drags the window.
-pub const TITLE_STRIP_HEIGHT: Pixels = px(44.);
-/// The frame kept around the panes, and between the sidebar and the stage.
-pub const FRAME_GUTTER: Pixels = px(8.);
+pub const TITLE_STRIP_HEIGHT: Pixels = px(solve::GAP + solve::STRIP_HEIGHT);
+/// The frame kept around the panes, and between the sidebar, the stage and the side panel.
+pub const FRAME_GUTTER: Pixels = px(solve::GAP);
 /// The panes' corners.
 pub const PANE_RADIUS: f32 = 14.;
 /// Where macOS draws the traffic lights: inside the sidebar pane, centred on the title strip.
 pub const TRAFFIC_LIGHTS: (f32, f32) = (20., 16.);
 
 /// The pane solver's space for a window of `width` × `height`: the window less the frame's
-/// gutters and the title strip. The sidebar and the stage tile it.
+/// gutters. The sidebar, the title strip, the stage and the side panel tile it.
 pub fn solver_space(width: f32, height: f32) -> (f32, f32) {
     let gutter = f32::from(FRAME_GUTTER);
-    (width - 2. * gutter, height - f32::from(TITLE_STRIP_HEIGHT) - gutter)
+    (width - 2. * gutter, height - 2. * gutter)
 }
 
 /// A window position in the solver's space.
 pub fn to_solver(x: f32, y: f32) -> (f32, f32) {
-    (x - f32::from(FRAME_GUTTER), y - f32::from(TITLE_STRIP_HEIGHT))
+    (x - f32::from(FRAME_GUTTER), y - f32::from(FRAME_GUTTER))
 }
 /// Where content starts, measured from the main column's left edge.
 pub const CONTENT_INSET: Pixels = px(64.);
@@ -652,7 +652,7 @@ impl Shell {
                 solve(width, height, true, &panes.layout).sidebar_stepped_aside
             });
         if stepped_aside {
-            let room = width - f32::from(SIDEBAR_WIDTH) - TRANSCRIPT_MIN_WIDTH;
+            let room = solve::room_beside(width, f32::from(SIDEBAR_WIDTH));
             self.change_layout(cx, |layout| {
                 if room >= DOCK_MIN_WIDTH {
                     layout.set_size(Dock::Right, Some(room));
@@ -674,7 +674,8 @@ impl Shell {
         let (x, y) = to_solver(f32::from(event.event.position.x), f32::from(event.event.position.y));
         match resizing {
             Resizing::Dock(Dock::Right) => {
-                let size = (width - x).clamp(DOCK_MIN_WIDTH, solve::widest_dock(width).max(DOCK_MIN_WIDTH));
+                // The handle is the gap before the panel: the panel starts past the gap's middle.
+                let size = (width - x - solve::GAP / 2.).clamp(DOCK_MIN_WIDTH, solve::widest_dock(width).max(DOCK_MIN_WIDTH));
                 self.change_layout(cx, |layout| layout.set_size(Dock::Right, Some(size.round())));
             }
             Resizing::Dock(Dock::Bottom) => {
@@ -920,7 +921,7 @@ impl Render for Shell {
         let (window_width, window_height) = (f32::from(viewport.width), f32::from(viewport.height));
         let (width, height) = solver_space(window_width, window_height);
         let mouse = window.mouse_position();
-        let (solution, dock_elements, words) = {
+        let (solution, docks, words) = {
             let empty = ChatPanes::new(Layout::default(), Default::default());
             let panes = match (&screen, &self.source) {
                 (Screen::Chat { .. }, Source::Live(app)) => match app.read(cx).current_chat() {
@@ -932,11 +933,9 @@ impl Render for Shell {
                 _ => &empty,
             };
             let solution = solve(width, height, !sidebar_hidden, &panes.layout);
-            let left = if solution.sidebar { f32::from(SIDEBAR_WIDTH) } else { 0. };
             let frame = dock::Frame {
                 panes,
                 solution: &solution,
-                left,
                 width,
                 height,
                 dragging: self.dragging.map(|pane| {
@@ -951,7 +950,6 @@ impl Render for Shell {
             };
             (solution, docks, words)
         };
-        let left = if solution.sidebar { SIDEBAR_WIDTH } else { px(0.) };
         let narrow = solution.transcript.width < NARROW_TRANSCRIPT;
         let transcript_height = solution.transcript.height;
         // Build and Run shrink to icons when the chat's header is short of room.
@@ -1012,16 +1010,20 @@ impl Render for Shell {
                 blur,
             })
         });
-        let pane = |child: gpui::AnyElement, stage: bool| -> gpui::AnyElement {
+        // Without a picture the stage is the lit window and the side panel is lit beside it, a step
+        // back; the sidebar lies flat on the frame.
+        let pane = |child: gpui::AnyElement, kind: PaneGround| -> gpui::AnyElement {
             if over_picture {
                 glass(PANE_RADIUS, GLASS_BLUR, Hsla { a: theme.glass, ..theme.glass_tone }, theme.glass_edge, child)
                     .under(under.clone())
                     .lit(Lit::of(&theme, true))
                     .into_any_element()
-            } else if stage {
-                glass(PANE_RADIUS, 0., theme.window, theme.border, child).lit(Lit::of(&theme, false)).into_any_element()
             } else {
-                child
+                match kind {
+                    PaneGround::Stage => glass(PANE_RADIUS, 0., theme.window, theme.border, child).lit(Lit::of(&theme, false)).into_any_element(),
+                    PaneGround::Side => glass(PANE_RADIUS, 0., theme.dock, theme.border, child).lit(Lit::of(&theme, false)).into_any_element(),
+                    PaneGround::Flat => child,
+                }
             }
         };
         let gutter = FRAME_GUTTER;
@@ -1055,7 +1057,7 @@ impl Render for Shell {
                         None => hop_in("hop-sidebar", Sidebar::new(sidebar_data).into_any_element()),
                     })
                     .into_any_element(),
-                false,
+                PaneGround::Flat,
             ))
         });
 
@@ -1136,15 +1138,15 @@ impl Render for Shell {
             .child(
                 div()
                     .absolute()
-                    .left(px(transcript.x) - left)
-                    .top(px(transcript.y))
+                    .left_0()
+                    .top_0()
                     .w(px(transcript.width))
                     .h(px(transcript.height))
                     .overflow_hidden()
                     .child(hop_in("hop-stage", body)),
             )
-            .children(dock_elements);
-        let stage = pane(div().flex_1().min_h_0().w_full().child(content).into_any_element(), true);
+            .children(docks.stage);
+        let stage = pane(div().flex_1().min_h_0().w_full().child(content).into_any_element(), PaneGround::Stage);
         let main = div()
             .relative()
             .flex_1()
@@ -1152,11 +1154,20 @@ impl Render for Shell {
             .h_full()
             .flex()
             .flex_col()
-            .pr(gutter)
             .pb(gutter)
+            .when(solution.right.is_none(), |main| main.pr(gutter))
             .when(!solution.sidebar, |main| main.pl(gutter))
             .child(drag_strip("title-strip", TITLE_STRIP_HEIGHT, strip))
             .child(stage);
+        // The side panel: the right dock, a pane of its own from the frame's top to its foot.
+        let side = solution.right.map(|right| {
+            div().flex_none().w(px(right.width) + gutter * 2.).h_full().p(gutter).flex().flex_col().child(pane(
+                div().flex_1().min_h_0().w_full().relative().children(docks.side).into_any_element(),
+                PaneGround::Side,
+            ))
+        });
+        // Lines, handles and drop zones lie over everything, in the solver's space.
+        let over = div().absolute().left(gutter).top(gutter).w(px(width)).h(px(height)).children(docks.over);
         // The gallery has no window controls: neutral circles stand where macOS draws them.
         let lights = self.traffic_light_stand_ins.then(|| {
             div()
@@ -1928,6 +1939,8 @@ impl Render for Shell {
                 .children(behind)
                 .children(sidebar)
                 .child(main)
+                .children(side)
+                .child(over)
                 .children(lights)
                 .children(lightbox.map(|lightbox| crate::pictures::LightboxView { lightbox }))
                 .child(present_mark(crate::browser::end_frame)),
@@ -2424,6 +2437,17 @@ fn meter(tokens: u64, window: Option<u64>, has_messages: bool) -> Meter {
     }
 }
 
+/// What a pane lies on when there is no picture to frost.
+#[derive(Clone, Copy)]
+enum PaneGround {
+    /// The lit window.
+    Stage,
+    /// Lit, a step back from the stage.
+    Side,
+    /// Nothing: flat on the frame.
+    Flat,
+}
+
 fn drag_strip(name: &'static str, height: Pixels, content: impl IntoElement) -> impl IntoElement {
     div()
         .id(name)
@@ -2841,7 +2865,9 @@ fn tab_strip(strip: &StripData, tray: &Tray, theme: &Theme) -> gpui::Div {
             .group(group.clone())
             .occlude()
             .relative()
-            .flex_none()
+            // When the strip runs short the other tabs give way, down to a stub each; the open one
+            // keeps its title.
+            .map(|tab| if active { tab.flex_none() } else { tab.flex_shrink_1() })
             .min_w(px(64.))
             .max_w(px(220.))
             .h(px(28.))
@@ -3027,9 +3053,11 @@ fn chat_header(
     viewport: Size<Pixels>,
     theme: &Theme,
 ) -> impl IntoElement {
+    // In a narrow header the chips give way before the buttons, their words cut short.
     let chip = |icon: Icon, text: SharedString| {
         div()
-            .flex_none()
+            .flex_shrink_1()
+            .min_w(px(40.))
             .h(px(22.))
             .px(px(9.))
             .rounded_full()
@@ -3039,8 +3067,8 @@ fn chat_header(
             .bg(Hsla { a: 0.6, ..theme.hover })
             .border_1()
             .border_color(theme.glass_edge)
-            .child(icon.view(px(12.), theme.text_dim))
-            .child(div().typography(Type::Small).text_color(theme.text_soft).child(text))
+            .child(div().flex_none().child(icon.view(px(12.), theme.text_dim)))
+            .child(div().min_w_0().truncate().typography(Type::Small).text_color(theme.text_soft).child(text))
     };
     let commands = strip.commands.as_ref().filter(|_| !words.chat_area).map(|commands| {
         div().flex_none().flex().items_center().gap(px(6.)).children(
@@ -3068,6 +3096,8 @@ fn chat_header(
                 .when(!project.name.is_empty(), |text| {
                     text.child(
                         div()
+                            .min_w_0()
+                            .overflow_hidden()
                             .flex()
                             .items_center()
                             .gap(px(6.))

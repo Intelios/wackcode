@@ -1,9 +1,10 @@
 //! The image backdrop, after WackCode 2 and Zeron.
 //!
 //! - **Behind everything** ([`behind`]): on every screen the picture fills the window, blurred
-//!   and dimmed towards the window's colour exactly as the user chose. The sidebar and the stage
-//!   are glass panes over it (`glass.rs`), thick enough that text on them reads; only the window's
-//!   frame around them shows the picture as chosen.
+//!   and dimmed towards the window's colour exactly as the user chose. The sidebar, the stage
+//!   and the side panel are thin glass panes over it (`glass.rs`), painted from the softened copy
+//!   with its colour boosted ([`vibrant`]), just thick enough that text on them reads; only the
+//!   window's frame around them shows the picture as chosen.
 //! - **The hero** ([`hero`]): on the new-chat and welcome screens the whole stage shows the
 //!   picture clear, as it is or through a texture, undimmed and uncut: the owner wants to see it
 //!   there, and a patch of glass behind the heading read as a dim. The screen's smaller words sit
@@ -13,7 +14,7 @@
 //! Invariants:
 //! - Both layers are fitted to the whole window with the same focus ([`cover`]), so the clear
 //!   picture lies exactly over the soft one, and neither moves when the sidebar comes and goes.
-//! - The hero stays inside the stage. The frame, the sidebar and the title strip's pills keep the
+//! - The hero stays inside the stage. The frame, the panes and the title strip's tray keep the
 //!   blurred, dimmed picture the theme's readability sums assume (`Theme::glass`).
 //! - A texture is worked out once per picture, texture, and light or dark, off the UI thread,
 //!   and kept ([`artwork`]). Until it is ready the hero is simply not drawn. The plain picture is

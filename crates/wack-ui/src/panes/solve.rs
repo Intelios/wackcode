@@ -10,9 +10,12 @@
 //!   aside first (only while open, and it comes back once there is room), and only then is the
 //!   dock clamped.
 //! - The user's sizes are read, never written: this is a pure function of its inputs.
-//! - Everything tiles exactly, on whole points: no gaps, no overlaps, nothing outside the window.
+//! - Everything tiles exactly, on whole points: nothing overlaps, nothing is outside the window,
+//!   and the only space between things is the frame's own (the title strip, the gap).
 //!
-//! The bottom dock spans the transcript and the right dock, so a terminal gets the full width.
+//! The right dock is the side panel: a pane of its own that runs the frame's full height, as
+//! version 2's did, a gutter's width from the stage. The title strip with the chat tabs spans only
+//! the main column, and the bottom dock lies under the transcript, inside the stage.
 
 use super::layout::{Axis, Dock, Layout, Node};
 use crate::sidebar::SIDEBAR_WIDTH;
@@ -26,8 +29,13 @@ pub const STACK_MIN_WIDTH: f32 = 180.;
 pub const STACK_MIN_HEIGHT: f32 = 100.;
 /// The smallest window the app allows: the transcript plus a dock with the sidebar aside.
 pub const WINDOW_MIN_WIDTH: f32 = 700.;
-/// Below the title strip.
+/// The stage's least height: the frame below the title strip.
 pub const CONTENT_MIN_HEIGHT: f32 = 440.;
+/// The band across the top of the main column that holds the chat tabs: the title strip, less the
+/// frame's gutter above it. The side panel rises past it to the frame's top.
+pub const STRIP_HEIGHT: f32 = 36.;
+/// The frame between the stage and the side panel.
+pub const GAP: f32 = 8.;
 /// A new bottom dock's share of the height, until the user drags it.
 const BOTTOM_SHARE: f32 = 0.36;
 
@@ -82,7 +90,11 @@ pub struct Solution {
     pub sidebar: bool,
     /// The sidebar is open by choice but hidden to make room.
     pub sidebar_stepped_aside: bool,
+    /// The title strip's band over the main column.
+    pub strip: Rect,
     pub transcript: Rect,
+    /// The frame between the stage and the side panel, while the side panel shows.
+    pub gap: Option<Rect>,
     pub right: Option<Rect>,
     pub bottom: Option<Rect>,
     pub stacks: Vec<StackPlace>,
@@ -91,30 +103,35 @@ pub struct Solution {
 
 /// The right dock's width before the user drags it: half of what the sidebar leaves.
 pub fn balanced_width(width: f32, sidebar: f32) -> f32 {
-    ((width - sidebar) / 2.).max(DOCK_MIN_WIDTH)
+    ((width - sidebar - GAP) / 2.).max(DOCK_MIN_WIDTH)
 }
 
 /// The canvas's width before the user drags it: everything the transcript's minimum leaves beside
 /// the sidebar, so the board gets the room and nothing steps aside for it.
 pub fn canvas_width(width: f32, sidebar: f32) -> f32 {
-    (width - sidebar - TRANSCRIPT_MIN_WIDTH).max(DOCK_MIN_WIDTH)
+    room_beside(width, sidebar).max(DOCK_MIN_WIDTH)
+}
+
+/// What the transcript's minimum leaves the right dock beside a sidebar `sidebar` wide.
+pub fn room_beside(width: f32, sidebar: f32) -> f32 {
+    width - sidebar - TRANSCRIPT_MIN_WIDTH - GAP
 }
 
 /// The widest the right dock can be: what leaves the transcript its minimum with the sidebar
 /// aside. Dragging is clamped to this.
 pub fn widest_dock(width: f32) -> f32 {
-    (width - TRANSCRIPT_MIN_WIDTH).max(DOCK_MIN_WIDTH)
+    room_beside(width, 0.).max(DOCK_MIN_WIDTH)
 }
 
 pub fn tallest_dock(height: f32) -> f32 {
-    (height - TRANSCRIPT_MIN_HEIGHT).max(DOCK_MIN_HEIGHT)
+    (height - STRIP_HEIGHT - TRANSCRIPT_MIN_HEIGHT).max(DOCK_MIN_HEIGHT)
 }
 
-/// `width` × `height` is the window below the title strip.
+/// `width` × `height` is the frame's inner space: the window less its gutters (`shell::solver_space`).
 pub fn solve(width: f32, height: f32, sidebar_open: bool, layout: &Layout) -> Solution {
     let (width, height) = (width.max(0.).round(), height.max(0.).round());
     let mut sidebar = if sidebar_open { f32::from(SIDEBAR_WIDTH) } else { 0. };
-    let room = |sidebar: f32| (width - sidebar - TRANSCRIPT_MIN_WIDTH).max(0.);
+    let room = |sidebar: f32| room_beside(width, sidebar).max(0.);
 
     let right = layout.shown(Dock::Right).map(|_| {
         let wanted = if layout.canvas_in_front() {
@@ -129,11 +146,13 @@ pub fn solve(width: f32, height: f32, sidebar_open: bool, layout: &Layout) -> So
         sidebar = 0.;
     }
     let right_width = right.map(|wanted| wanted.min(room(sidebar)).max(DOCK_MIN_WIDTH.min(room(sidebar))).round());
-    let transcript_width = width - sidebar - right_width.unwrap_or(0.);
+    let main = width - sidebar - right_width.map_or(0., |right| right + GAP);
 
+    let strip = STRIP_HEIGHT.min(height);
+    let stage = height - strip;
     let bottom_height = layout.shown(Dock::Bottom).map(|_| {
-        let wanted = layout.bottom_height.filter(|height| height.is_finite()).unwrap_or(height * BOTTOM_SHARE).max(DOCK_MIN_HEIGHT);
-        let room = (height - TRANSCRIPT_MIN_HEIGHT).max(0.);
+        let wanted = layout.bottom_height.filter(|height| height.is_finite()).unwrap_or(stage * BOTTOM_SHARE).max(DOCK_MIN_HEIGHT);
+        let room = (stage - TRANSCRIPT_MIN_HEIGHT).max(0.);
         wanted.min(room).max(DOCK_MIN_HEIGHT.min(room)).round()
     });
     let upper = height - bottom_height.unwrap_or(0.);
@@ -141,9 +160,11 @@ pub fn solve(width: f32, height: f32, sidebar_open: bool, layout: &Layout) -> So
     let mut solution = Solution {
         sidebar: sidebar > 0.,
         sidebar_stepped_aside: sidebar_open && sidebar == 0.,
-        transcript: Rect { x: sidebar, y: 0., width: transcript_width, height: upper },
-        right: right_width.map(|right| Rect { x: sidebar + transcript_width, y: 0., width: right, height: upper }),
-        bottom: bottom_height.map(|bottom| Rect { x: sidebar, y: upper, width: width - sidebar, height: bottom }),
+        strip: Rect { x: sidebar, y: 0., width: main, height: strip },
+        transcript: Rect { x: sidebar, y: strip, width: main, height: upper - strip },
+        gap: right_width.map(|_| Rect { x: sidebar + main, y: 0., width: GAP, height }),
+        right: right_width.map(|right| Rect { x: sidebar + main + GAP, y: 0., width: right, height }),
+        bottom: bottom_height.map(|bottom| Rect { x: sidebar, y: upper, width: main, height: bottom }),
         stacks: Vec::new(),
         dividers: Vec::new(),
     };
@@ -294,7 +315,7 @@ mod tests {
                 let solved = solve(width, 900., sidebar_open, &layout);
                 let sidebar = if sidebar_open { f32::from(SIDEBAR_WIDTH) } else { 0. };
                 let context = format!("{width}, sidebar {sidebar_open}: {solved:?}");
-                if width - sidebar - TRANSCRIPT_MIN_WIDTH >= DOCK_MIN_WIDTH {
+                if room_beside(width, sidebar) >= DOCK_MIN_WIDTH {
                     assert_eq!(solved.sidebar, sidebar_open, "nothing steps aside for a default canvas: {context}");
                     assert_eq!(solved.transcript.width, TRANSCRIPT_MIN_WIDTH, "{context}");
                 }
@@ -306,7 +327,7 @@ mod tests {
                 let changes = layout.first_of(PaneKind::Changes).unwrap();
                 layout.activate(changes);
                 let solved = solve(width, 900., sidebar_open, &layout);
-                if width - sidebar - TRANSCRIPT_MIN_WIDTH >= 500. {
+                if room_beside(width, sidebar) >= 500. {
                     assert_eq!(solved.right.unwrap().width, 500., "{context}");
                 }
             }
@@ -320,7 +341,7 @@ mod tests {
             let mut layout = random_layout(&mut random);
             with_random_sizes(&mut layout, &mut random);
             let width = random.between(WINDOW_MIN_WIDTH, 2600.).round();
-            let height = random.between(CONTENT_MIN_HEIGHT, 1700.).round();
+            let height = random.between(CONTENT_MIN_HEIGHT + STRIP_HEIGHT, 1700.).round();
             let sidebar_open = random.below(2) == 0;
             let before = layout.clone();
             let solved = solve(width, height, sidebar_open, &layout);
@@ -331,13 +352,25 @@ mod tests {
             assert!(solved.transcript.width >= TRANSCRIPT_MIN_WIDTH, "transcript too narrow: {context}");
             assert!(solved.transcript.height >= TRANSCRIPT_MIN_HEIGHT, "transcript too short: {context}");
 
-            // The window below the title strip, less the sidebar, is the transcript and the docks.
+            // The frame, less the sidebar, is the strip, the transcript, the docks and the gap.
             let sidebar = if solved.sidebar { f32::from(SIDEBAR_WIDTH) } else { 0. };
             let main = Rect { x: sidebar, y: 0., width: width - sidebar, height };
-            let mut parts = vec![solved.transcript];
+            let mut parts = vec![solved.strip, solved.transcript];
+            parts.extend(solved.gap);
             parts.extend(solved.right);
             parts.extend(solved.bottom);
             tiles(&parts, &main).unwrap_or_else(|problem| panic!("{problem}: {context}"));
+            assert_eq!(solved.gap.is_some(), solved.right.is_some(), "a gap only beside the side panel: {context}");
+            // The side panel runs the frame's full height; the strip and the bottom dock span the
+            // transcript's width.
+            if let Some(right) = solved.right {
+                assert_eq!((right.y, right.height), (0., height), "{context}");
+            }
+            assert_eq!((solved.strip.x, solved.strip.width), (solved.transcript.x, solved.transcript.width), "{context}");
+            assert_eq!(solved.strip.height, STRIP_HEIGHT, "{context}");
+            if let Some(bottom) = solved.bottom {
+                assert_eq!((bottom.x, bottom.width), (solved.transcript.x, solved.transcript.width), "{context}");
+            }
 
             for (dock, rect) in [(Dock::Right, solved.right), (Dock::Bottom, solved.bottom)] {
                 assert_eq!(rect.is_some(), layout.shown(dock).is_some(), "{context}");
@@ -375,14 +408,14 @@ mod tests {
         let wide = solve(1600., 800., true, &layout);
         assert!(wide.sidebar);
         assert_eq!(wide.right.unwrap().width, 600.);
-        // 1200 - 252 - 420 leaves 528: the sidebar goes and the dock keeps its 600.
+        // 1200 - 252 - 420 - 8 leaves 520: the sidebar goes and the dock keeps its 600.
         let narrower = solve(1200., 800., true, &layout);
         assert!(!narrower.sidebar && narrower.sidebar_stepped_aside);
         assert_eq!(narrower.right.unwrap().width, 600.);
         // At the window's minimum the dock is clamped, and the transcript still has its width.
         let narrowest = solve(WINDOW_MIN_WIDTH, 800., true, &layout);
         assert_eq!(narrowest.transcript.width, TRANSCRIPT_MIN_WIDTH);
-        assert_eq!(narrowest.right.unwrap().width, WINDOW_MIN_WIDTH - TRANSCRIPT_MIN_WIDTH);
+        assert_eq!(narrowest.right.unwrap().width, WINDOW_MIN_WIDTH - TRANSCRIPT_MIN_WIDTH - GAP);
         // Larger again: the same 600, because the preference was never rewritten.
         assert_eq!(solve(1600., 800., true, &layout), wide);
     }
@@ -410,6 +443,6 @@ mod tests {
         layout.toggle(PaneKind::Terminal);
         let solved = solve(1200., 800., true, &layout);
         assert!(solved.bottom.is_none() && solved.stacks.is_empty());
-        assert_eq!(solved.transcript.height, 800.);
+        assert_eq!(solved.transcript.height, 800. - STRIP_HEIGHT);
     }
 }

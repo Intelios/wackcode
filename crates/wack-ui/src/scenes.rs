@@ -273,6 +273,31 @@ pub fn all() -> Vec<Scene> {
             },
         },
         Scene {
+            name: "chat-panes-backdrop",
+            description: "The side panel over a backdrop: Changes and a terminal as glass beside the stage, the frame's full height.",
+            size: size(px(1512.), px(945.)),
+            build: |_, cx| {
+                let mut layout = Layout::default();
+                let changes = layout.open(PaneKind::Changes);
+                let terminal = layout.add(PaneKind::Terminal);
+                layout.right_width = Some(520.);
+                panes_scene_over(layout, &[changes, terminal], false, Some(fixtures::backdrop(wack_core::Texture::None)), cx)
+            },
+        },
+        Scene {
+            name: "chat-panes-bottom",
+            description: "A terminal dragged under the transcript, inside the stage, beside Changes in the side panel.",
+            size: size(px(1480.), px(940.)),
+            build: |_, cx| {
+                let mut layout = Layout::default();
+                let changes = layout.open(PaneKind::Changes);
+                let terminal = layout.add(PaneKind::Terminal);
+                layout.move_pane(terminal, Target::Dock(crate::panes::Dock::Bottom));
+                layout.right_width = Some(480.);
+                panes_scene(layout, &[changes, terminal], false, cx)
+            },
+        },
+        Scene {
             name: "chat-panes-narrow",
             description: "The smallest window, 716 points: the sidebar steps aside and the transcript keeps its minimum.",
             size: size(px(716.), px(720.)),
@@ -1918,6 +1943,11 @@ fn settings_scene(backdrop: Option<crate::backdrop::Picture>, cx: &mut App) -> A
 
 /// The finished chat with `layout`'s panes showing fixture models.
 fn panes_scene(layout: Layout, ids: &[u32], sidebar_hidden: bool, cx: &mut App) -> AnyView {
+    panes_scene_over(layout, ids, sidebar_hidden, None, cx)
+}
+
+fn panes_scene_over(layout: Layout, ids: &[u32], sidebar_hidden: bool, picture: Option<crate::backdrop::Picture>, cx: &mut App) -> AnyView {
+    let picture = picture.map(|picture| over(picture, cx));
     cx.new(|cx| {
         let mut panes = ChatPanes::new(layout, "/".into());
         for id in ids {
@@ -1932,7 +1962,7 @@ fn panes_scene(layout: Layout, ids: &[u32], sidebar_hidden: bool, cx: &mut App) 
             };
             panes.insert(*id, model, cx);
         }
-        Shell::showing_tabs(
+        let shell = Shell::showing_tabs(
             fixtures::sidebar(Selected::Finished),
             Screen::Chat {
                 title: fixtures::FINISHED_TITLE.into(),
@@ -1942,7 +1972,11 @@ fn panes_scene(layout: Layout, ids: &[u32], sidebar_hidden: bool, cx: &mut App) 
             },
             fixtures::strip(Some(fixtures::FINISHED_TITLE)),
         )
-        .with_panes(panes, sidebar_hidden)
+        .with_panes(panes, sidebar_hidden);
+        match picture {
+            Some(picture) => shell.with_backdrop(picture),
+            None => shell,
+        }
     })
     .into()
 }

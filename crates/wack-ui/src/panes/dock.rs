@@ -6,18 +6,21 @@
 //! (`ActivatePane`, `MovePane`…) and drag values ([`Resizing`], [`DraggedTab`]) that the shell
 //! applies to the chat, so a gallery scene draws the same docks and simply ignores them.
 //!
-//! The docks sit on `theme.dock`, a step back from the window like the sidebar: the transcript
-//! is the lit page between the sidebar and the tools.
+//! The right dock is the side panel, a pane of its own beside the stage that runs the frame's full
+//! height; its top stack's tabs sit on the title strip's centre line, beside the chat tabs. The
+//! bottom dock lies under the transcript inside the stage, on `theme.dock`, a step back from the
+//! lit page. A stack's tabs are pills, the one in front raised with the accent's rim, as the chat
+//! tabs' bead is.
 
 use gpui::{
-    AnyElement, App, Context, CursorStyle, IntoElement, Pixels, Point, SharedString, Window, div, prelude::*, px,
+    AnyElement, App, Context, CursorStyle, Hsla, IntoElement, Pixels, Point, SharedString, Window, div, prelude::*, px,
 };
 
 use super::{
     ChatPanes, Layout, PaneModel, PaneId, Stack, Target,
     changes,
     layout::{Axis, Dock, Edge, PaneKind},
-    solve::{Rect, Solution, StackPlace},
+    solve::{Rect, STRIP_HEIGHT, Solution, StackPlace},
 };
 use crate::{
     actions::{ActivatePane, ClosePaneId, EqualizeSplit, MovePane, NewTerminalWith, ResetDockSize},
@@ -31,6 +34,8 @@ use crate::{
 /// The key context of a stack, where ⌘W closes the pane in front rather than the chat tab.
 pub const PANE_CONTEXT: &str = "Pane";
 pub const HEADER_HEIGHT: f32 = 34.;
+/// A tab's pill.
+const TAB_HEIGHT: f32 = 24.;
 /// How far either side of a line its resize handle reaches.
 const HANDLE_REACH: f32 = 3.;
 /// The share of a stack, from each edge, that drops a tab beside it rather than into it.
@@ -151,42 +156,55 @@ pub fn drop_target(layout: &Layout, solution: &Solution, dragged: PaneId, x: f32
     (moved != *layout).then_some(found)
 }
 
-/// Everything the docks draw, positioned in the stage. The solution is in the solver's space
-/// (`shell::solver_space`), `width` × `height`; `left` is where the stage starts in it.
+/// What the docks draw from. The solution is in the solver's space (`shell::solver_space`),
+/// `width` × `height`.
 pub struct Frame<'a> {
     pub panes: &'a ChatPanes,
     pub solution: &'a Solution,
-    pub left: f32,
     pub width: f32,
     pub height: f32,
     /// The tab being dragged and the mouse in content coordinates, while a tab is dragged.
     pub dragging: Option<(PaneId, Point<Pixels>)>,
 }
 
-pub fn docks(frame: &Frame, theme: &Theme, cx: &App) -> Vec<AnyElement> {
-    let place = |rect: Rect| div().absolute().left(px(rect.x - frame.left)).top(px(rect.y)).w(px(rect.width)).h(px(rect.height));
-    let mut elements = Vec::new();
-    // A dock is a step back from the stage, and rounds the stage's corners it reaches. Over a
-    // picture it is a tint on the stage's glass.
-    let corner = px(crate::shell::PANE_RADIUS);
-    let ground = if theme.veil > 0. { gpui::Hsla { a: 0.5, ..theme.dock } } else { theme.dock };
-    for rect in [frame.solution.right, frame.solution.bottom].into_iter().flatten() {
-        let (right, bottom) = (rect.right() >= frame.width - 0.5, rect.bottom() >= frame.height - 0.5);
-        let (top, left) = (rect.y <= 0.5, rect.x <= frame.left + 0.5);
-        elements.push(
-            place(rect)
-                .bg(ground)
-                .when(top && right, |dock| dock.rounded_tr(corner))
-                .when(bottom && right, |dock| dock.rounded_br(corner))
-                .when(bottom && left, |dock| dock.rounded_bl(corner))
-                .into_any_element(),
-        );
+/// The docks' elements, each group placed absolutely in its own parent.
+#[derive(Default)]
+pub struct Docks {
+    /// The bottom dock, from the stage's top-left corner (the transcript's).
+    pub stage: Vec<AnyElement>,
+    /// The right dock's stacks, from the side panel's top-left corner.
+    pub side: Vec<AnyElement>,
+    /// The lines, the resize handles and the drop zones, over everything, in the solver's space.
+    pub over: Vec<AnyElement>,
+}
+
+pub fn docks(frame: &Frame, theme: &Theme, cx: &App) -> Docks {
+    let at = |origin: (f32, f32), rect: Rect| {
+        div().absolute().left(px(rect.x - origin.0)).top(px(rect.y - origin.1)).w(px(rect.width)).h(px(rect.height))
+    };
+    let solution = frame.solution;
+    let stage = (solution.transcript.x, solution.transcript.y);
+    let side = solution.right.map_or((0., 0.), |right| (right.x, right.y));
+    let mut docks = Docks::default();
+    // The bottom dock is a step back from the stage, and rounds the stage's corners beneath it,
+    // inside the stage's one-point rim. Over a picture it is a tint on the stage's glass.
+    if let Some(bottom) = solution.bottom {
+        let corner = px(crate::shell::PANE_RADIUS - 1.);
+        let ground = if theme.veil > 0. { Hsla { a: 0.5, ..theme.dock } } else { theme.dock };
+        let inside = Rect { x: bottom.x + 1., width: bottom.width - 2., height: bottom.height - 1., ..bottom };
+        docks.stage.push(at(stage, inside).bg(ground).rounded_bl(corner).rounded_br(corner).into_any_element());
     }
-    for stack_place in &frame.solution.stacks {
-        if let Some(stack) = frame.panes.layout.stack(stack_place.dock, &stack_place.path) {
-            elements.push(place(stack_place.rect).child(stack_view(stack_place, stack, frame.panes, theme, cx)).into_any_element());
+    for place in &solution.stacks {
+        if let Some(stack) = frame.panes.layout.stack(place.dock, &place.path) {
+            let view = stack_view(place, stack, frame.panes, theme, cx);
+            match place.dock {
+                Dock::Right => docks.side.push(at(side, place.rect).child(view).into_any_element()),
+                Dock::Bottom => docks.stage.push(at(stage, place.rect).child(view).into_any_element()),
+            }
         }
     }
+    let elements = &mut docks.over;
+    let place = |rect: Rect| at((0., 0.), rect);
     elements.extend(lines(frame, theme));
     if let Some((dragged, mouse)) = frame.dragging
     {
@@ -217,11 +235,22 @@ pub fn docks(frame: &Frame, theme: &Theme, cx: &App) -> Vec<AnyElement> {
                 .into_any_element(),
         );
     }
-    elements
+    docks
 }
 
 fn stack_view(place: &StackPlace, stack: &Stack, panes: &ChatPanes, theme: &Theme, cx: &App) -> AnyElement {
     let active = stack.active_pane();
+    // The side panel's top stack heads the frame beside the title strip: its header is the strip's
+    // band, and its tabs sit on the strip's centre line with the chat tabs.
+    let heads_frame = place.dock == Dock::Right && place.rect.y <= 0.5;
+    let (header_height, tabs_top) = if heads_frame {
+        let line = f32::from(crate::shell::TITLE_STRIP_HEIGHT) / 2. - f32::from(crate::shell::FRAME_GUTTER);
+        (STRIP_HEIGHT, line - TAB_HEIGHT / 2.)
+    } else {
+        (HEADER_HEIGHT, (HEADER_HEIGHT - TAB_HEIGHT) / 2.)
+    };
+    let over_picture = theme.veil > 0.;
+    let raised = if over_picture { Hsla { a: 0.86, ..theme.raised } } else { theme.raised };
     let tabs = stack.panes.iter().map(|pane| {
         let selected = pane.id == active.id;
         let title = panes.title(*pane, cx);
@@ -240,12 +269,27 @@ fn stack_view(place: &StackPlace, stack: &Stack, panes: &ChatPanes, theme: &Them
             .relative()
             .flex_none()
             .max_w(px(200.))
-            .h_full()
-            .pl(px(12.))
-            .pr(px(6.))
+            .h(px(TAB_HEIGHT))
+            .pl(px(11.))
+            .pr(px(4.))
+            .rounded_full()
             .flex()
             .items_center()
             .gap(px(6.))
+            .border_1()
+            .map(|tab| {
+                if selected {
+                    tab.bg(raised).border_color(theme.accent_line).shadow(vec![gpui::BoxShadow {
+                        color: theme.glass_highlight,
+                        offset: gpui::point(px(0.), px(1.)),
+                        blur_radius: px(0.),
+                        spread_radius: px(0.),
+                        inset: true,
+                    }])
+                } else {
+                    tab.border_color(gpui::transparent_black()).hover(|tab| tab.bg(theme.hover))
+                }
+            })
             .on_click(move |_, window, cx| window.dispatch_action(Box::new(ActivatePane { pane: id }), cx))
             .on_drag(dragged, |tab, _, _, cx| cx.new(|_| tab.clone()))
             .when_some(status_dot, |tab, dot| {
@@ -268,7 +312,7 @@ fn stack_view(place: &StackPlace, stack: &Stack, panes: &ChatPanes, theme: &Them
                     .id(("close-pane", pane.id as usize))
                     .flex_none()
                     .size(px(18.))
-                    .rounded(px(5.))
+                    .rounded_full()
                     .flex()
                     .items_center()
                     .justify_center()
@@ -282,10 +326,6 @@ fn stack_view(place: &StackPlace, stack: &Stack, panes: &ChatPanes, theme: &Them
                     .child(Icon::Close.view(px(11.), theme.text_dim))
                     .tag("close-pane"),
             )
-            // The tab in front is marked by a short rule under its words.
-            .when(selected, |tab| {
-                tab.child(div().absolute().bottom_0().left(px(12.)).right(px(24.)).h(px(2.)).rounded(px(1.)).bg(theme.accent_line))
-            })
             .tag(match pane.kind {
                 PaneKind::Changes => "pane-tab-changes",
                 PaneKind::Terminal => "pane-tab-terminal",
@@ -301,9 +341,8 @@ fn stack_view(place: &StackPlace, stack: &Stack, panes: &ChatPanes, theme: &Them
         div()
             .id("new-terminal")
             .flex_none()
-            .size(px(22.))
-            .mr(px(8.))
-            .rounded(px(6.))
+            .size(px(TAB_HEIGHT))
+            .rounded_full()
             .flex()
             .items_center()
             .justify_center()
@@ -314,12 +353,15 @@ fn stack_view(place: &StackPlace, stack: &Stack, panes: &ChatPanes, theme: &Them
     });
     let header = div()
         .flex_none()
-        .h(px(HEADER_HEIGHT))
+        .h(px(header_height))
+        .px(px(8.))
+        .pt(px(tabs_top))
         .flex()
-        .items_center()
+        .items_start()
+        .gap(px(4.))
         .border_b_1()
         .border_color(theme.border)
-        .child(div().flex_1().min_w_0().h_full().flex().overflow_hidden().children(tabs))
+        .child(div().flex_1().min_w_0().flex().gap(px(2.)).overflow_hidden().children(tabs))
         .children(add_terminal);
     let content = match panes.model(active.id) {
         Some(PaneModel::Changes(model)) => changes::view(model, place.rect.width, theme, cx),
@@ -347,37 +389,39 @@ fn stack_view(place: &StackPlace, stack: &Stack, panes: &ChatPanes, theme: &Them
         .into_any_element()
 }
 
-/// The hairlines between the transcript and the docks and between stacks, with their handles.
+/// The hairlines between the transcript and the bottom dock and between stacks, with their
+/// handles, and the handle in the gap before the side panel.
 fn lines(frame: &Frame, theme: &Theme) -> Vec<AnyElement> {
     let mut elements = Vec::new();
-    let left = frame.left;
-    let mut line = |rect: Rect, axis: Axis, resizing: Resizing, reset: Box<dyn gpui::Action>, tag: &'static str| {
+    let mut line = |rect: Rect, axis: Axis, drawn: bool, resizing: Resizing, reset: Box<dyn gpui::Action>, tag: &'static str| {
         let (hairline, handle) = match axis {
             Axis::Row => (
                 Rect { width: 1., ..rect },
-                Rect { x: rect.x - HANDLE_REACH, width: 2. * HANDLE_REACH + 1., ..rect },
+                Rect { x: rect.x - HANDLE_REACH, width: rect.width + 2. * HANDLE_REACH + 1., ..rect },
             ),
             Axis::Column => (
                 Rect { height: 1., ..rect },
-                Rect { y: rect.y - HANDLE_REACH, height: 2. * HANDLE_REACH + 1., ..rect },
+                Rect { y: rect.y - HANDLE_REACH, height: rect.height + 2. * HANDLE_REACH + 1., ..rect },
             ),
         };
-        elements.push(
-            div()
-                .absolute()
-                .left(px(hairline.x - left))
-                .top(px(hairline.y))
-                .w(px(hairline.width))
-                .h(px(hairline.height))
-                .bg(theme.border)
-                .into_any_element(),
-        );
+        if drawn {
+            elements.push(
+                div()
+                    .absolute()
+                    .left(px(hairline.x))
+                    .top(px(hairline.y))
+                    .w(px(hairline.width))
+                    .h(px(hairline.height))
+                    .bg(theme.border)
+                    .into_any_element(),
+            );
+        }
         let reset = std::rc::Rc::new(reset);
         elements.push(
             div()
                 .id(SharedString::from(format!("{tag}-{}-{}", hairline.x, hairline.y)))
                 .absolute()
-                .left(px(handle.x - left))
+                .left(px(handle.x))
                 .top(px(handle.y))
                 .w(px(handle.width))
                 .h(px(handle.height))
@@ -395,11 +439,14 @@ fn lines(frame: &Frame, theme: &Theme) -> Vec<AnyElement> {
                 .into_any_element(),
         );
     };
-    if let Some(right) = frame.solution.right {
-        line(right, Axis::Row, Resizing::Dock(Dock::Right), Box::new(ResetDockSize { dock: Dock::Right }), "right-dock-edge");
+    // The side panel's edge is the frame's gap: the whole gap takes the drag, and nothing is drawn.
+    if let Some(gap) = frame.solution.gap {
+        let edge = Rect { width: gap.width - 1., ..gap };
+        line(edge, Axis::Row, false, Resizing::Dock(Dock::Right), Box::new(ResetDockSize { dock: Dock::Right }), "right-dock-edge");
     }
     if let Some(bottom) = frame.solution.bottom {
-        line(bottom, Axis::Column, Resizing::Dock(Dock::Bottom), Box::new(ResetDockSize { dock: Dock::Bottom }), "bottom-dock-edge");
+        let edge = Rect { height: 0., ..bottom };
+        line(edge, Axis::Column, true, Resizing::Dock(Dock::Bottom), Box::new(ResetDockSize { dock: Dock::Bottom }), "bottom-dock-edge");
     }
     for divider in &frame.solution.dividers {
         let start = match divider.axis {
@@ -415,7 +462,7 @@ fn lines(frame: &Frame, theme: &Theme) -> Vec<AnyElement> {
             total: divider.before + divider.after,
         };
         let reset = EqualizeSplit { dock: divider.dock, path: divider.path.clone(), index: divider.index };
-        line(divider.line, divider.axis, resizing, Box::new(reset), "divider");
+        line(divider.line, divider.axis, true, resizing, Box::new(reset), "divider");
     }
     elements
 }

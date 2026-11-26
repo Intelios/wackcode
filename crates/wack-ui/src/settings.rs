@@ -568,11 +568,15 @@ impl ProvidersData {
                 address: form.address.clone(),
                 key: form.key.clone(),
                 format: form.format,
+                // Each row's summary from its own fields: `values` leaves blank rows out, so
+                // pairing the two lists would shift every summary after a blank row.
                 models: form
                     .models
                     .iter()
-                    .zip(&values.models)
-                    .map(|(row, value)| ModelField { summary: Some((value.id.clone().into(), value.context.clone().into())), ..row.clone() })
+                    .map(|row| {
+                        let text = |field: &Entity<TextField>| SharedString::from(field.read(cx).text().trim().to_string());
+                        ModelField { summary: Some((text(&row.id), text(&row.context))), ..row.clone() }
+                    })
                     .collect(),
                 title,
                 host,

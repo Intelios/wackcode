@@ -2339,6 +2339,7 @@ fn subagents_scene(scene: SubagentsScene, backdrop: Option<crate::backdrop::Pict
         helper: Some(wack_core::ModelChoice { connection: Some(connections[0].id.clone()), model: connections[0].models.last().map(|model| model.id.clone()), effort: None }),
         off: vec!["docs-check".into()],
         tool_folders: vec!["claude".into()],
+        team_default: None,
     };
     let titles = crate::titles_card::TitlesData::new(&wack_core::AutoTitleConfig { enabled: true, connection: Some(connections[0].id.clone()), model: connections[0].models.last().map(|model| model.id.clone()) }, &connections, false, None);
     let form = ProviderForm::new(cx);

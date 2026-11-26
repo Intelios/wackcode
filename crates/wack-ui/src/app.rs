@@ -4713,6 +4713,7 @@ impl AppState {
             prompt: draft.prompt.clone(),
             tools: draft.tool_list(),
             model: draft.model,
+            team: draft.team,
             max_turns: draft.max_turns.trim().parse().unwrap_or(60),
             file: None,
             source: String::new(),

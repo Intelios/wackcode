@@ -12,9 +12,13 @@
 //!   the user; no plan or todo tools; no memory). It runs on its own Tokio task, so a waiting
 //!   call can be dropped without tearing the child down mid-write.
 //! - **The registry** ([`Agents`]) is the chat's, beside its shell tasks, and outlives runs. It
-//!   numbers children, keeps what the UI shows of each (status, steps, tokens, latest activity),
-//!   queues them past [`MAX_RUNNING`], holds the reports of those in the background until the
-//!   model is told ([`AgentsFeature`]), and stops them.
+//!   numbers children, keeps what the UI shows of each (status, steps, tokens, latest activity,
+//!   the files it was given and the ones it changed), queues them past [`MAX_RUNNING`], holds the
+//!   reports of those in the background until the model is told ([`AgentsFeature`]), and stops
+//!   them.
+//! - **Tiers** ([`Tier`]): a child runs on the lead's model (the chat's own) or the crew's (the
+//!   chat's Team crew, else Settings › Sub-agents' helper). A child keeps its tier through every
+//!   round, so a follow-up never moves it to another model.
 //!
 //! Invariants:
 //! - A child's report reaches its parent exactly once. Whether it is the waiting call's result or
@@ -35,6 +39,7 @@ pub mod child;
 pub mod definition;
 mod feature;
 pub mod prompt;
+pub mod team;
 pub mod tools;
 
 #[cfg(test)]
@@ -52,12 +57,14 @@ use std::{
 
 use serde::{Deserialize, Serialize};
 use tokio::sync::{Notify, Semaphore, watch};
+use wack_llm::Usage;
 
 use crate::{agent::Control, session::Note};
 
 pub use child::{COPY_DIRECTIVE, ChildModel, child_tools};
 pub use definition::{AgentDef, Catalog, ModelPref};
 pub use feature::{AGENTS_STATE, AgentsFeature};
+pub use team::{TEAM_MARKER, TeamFeature};
 pub use tools::{AGENT, AGENT_MESSAGE, AgentMessage, AgentTool};
 
 /// The longest report handed back to the parent; the rest is cut.
@@ -84,6 +91,33 @@ pub enum Delegation {
     Off,
 }
 
+/// Which model a child runs on.
+#[derive(Clone, Copy, Debug, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "kebab-case")]
+pub enum Tier {
+    /// The chat's own model: the lead's.
+    Lead,
+    /// The cheaper model beside it: the chat's Team crew, else the helper, else the chat's own.
+    Crew,
+}
+
+impl Tier {
+    pub fn as_str(self) -> &'static str {
+        match self {
+            Tier::Lead => "lead",
+            Tier::Crew => "crew",
+        }
+    }
+
+    pub fn parse(text: &str) -> Option<Self> {
+        match text.trim().to_lowercase().as_str() {
+            "lead" => Some(Tier::Lead),
+            "crew" => Some(Tier::Crew),
+            _ => None,
+        }
+    }
+}
+
 /// Everything a run needs to start sub-agents, resolved by the engine before it starts.
 #[derive(Clone)]
 pub struct AgentsSetup {
@@ -98,6 +132,16 @@ pub struct AgentsSetup {
     pub agents: Agents,
     /// Replaces `CHILD_PROMPT` on fresh sub-agents (Settings › Prompts).
     pub child_prompt: Option<String>,
+    /// The chat's Team crew. Team is on while this is set: crew roles run on it, the lead is
+    /// told the Team contract, and fresh children get a briefing on the team.
+    pub crew: Option<ChildModel>,
+}
+
+impl AgentsSetup {
+    /// Whether the chat's Team is on.
+    pub fn team(&self) -> bool {
+        self.crew.is_some()
+    }
 }
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Serialize, Deserialize)]
@@ -173,6 +217,23 @@ pub struct AgentInfo {
     pub context_tokens: u64,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub activity: Option<Activity>,
+    /// Which model it runs on; `None` for a child saved before tiers existed.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub tier: Option<Tier>,
+    /// The files its brief gave it, relative to the project: what it owns, as the lead said.
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub files: Vec<String>,
+    /// The files it changed through `write` and `edit` in every round, relative to the project.
+    /// Changes made through the shell are not seen.
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub changed: Vec<String>,
+    /// Every token its model calls used, over every round.
+    #[serde(default, skip_serializing_if = "is_unused")]
+    pub spent: Usage,
+}
+
+fn is_unused(usage: &Usage) -> bool {
+    *usage == Usage::default()
 }
 
 /// What a registry tells whoever watches it.
@@ -241,6 +302,8 @@ pub struct Child {
     pub session: PathBuf,
     pub model: String,
     pub edits: bool,
+    pub tier: Option<Tier>,
+    pub files: Vec<String>,
     started: Instant,
     started_at: u64,
     control: Control,
@@ -260,8 +323,34 @@ struct Live {
     tool_calls: u32,
     context_tokens: u64,
     activity: Option<Activity>,
+    /// Every file it changed, earlier rounds' included, in the order first changed.
+    changed: Vec<String>,
+    /// The files it changed in this round, for its report.
+    round_changed: Vec<String>,
+    /// `write` and `edit` calls waiting for their result: call id and the file.
+    writing: Vec<(String, String)>,
+    spent: Usage,
     /// The parent's result, waiting for the call that waits on this child.
     report: Option<Result<String, String>>,
+}
+
+impl Live {
+    fn new(status: Status, background: bool, quiet: bool) -> Self {
+        Self {
+            status,
+            ended_at: None,
+            background,
+            quiet,
+            tool_calls: 0,
+            context_tokens: 0,
+            activity: None,
+            changed: Vec::new(),
+            round_changed: Vec::new(),
+            writing: Vec::new(),
+            spent: Usage::default(),
+            report: None,
+        }
+    }
 }
 
 impl Child {
@@ -284,7 +373,16 @@ impl Child {
             tool_calls: live.tool_calls,
             context_tokens: live.context_tokens,
             activity: live.activity.clone(),
+            tier: self.tier,
+            files: self.files.clone(),
+            changed: live.changed.clone(),
+            spent: live.spent,
         }
+    }
+
+    /// The files it changed in this round.
+    pub fn round_changed(&self) -> Vec<String> {
+        self.live().round_changed.clone()
     }
 
     fn live(&self) -> std::sync::MutexGuard<'_, Live> {
@@ -565,18 +663,7 @@ impl Agents {
     }
 
     /// Adds a queued child with the next free id, whose session goes in `folder`.
-    #[allow(clippy::too_many_arguments)]
-    pub(crate) fn add(
-        &self,
-        folder: &Path,
-        role: &str,
-        description: &str,
-        call_id: &str,
-        model: &str,
-        edits: bool,
-        background: bool,
-        control: Control,
-    ) -> Arc<Child> {
+    pub(crate) fn add(&self, folder: &Path, spec: Spec, background: bool, control: Control) -> Arc<Child> {
         let mut children = self.inner.children.lock().unwrap_or_else(|e| e.into_inner());
         let known = children.iter().filter_map(|child| number(&child.id));
         let on_disk = std::fs::read_dir(folder)
@@ -586,29 +673,23 @@ impl Agents {
             .filter_map(|entry| entry.path().file_stem().and_then(|stem| number(&stem.to_string_lossy())));
         let next = known.chain(on_disk).max().unwrap_or(0) + 1;
         let id = format!("a{next}");
+        let Spec { role, description, call_id, model, edits, tier, files } = spec;
         let child = Arc::new(Child {
             session: folder.join(format!("{id}.jsonl")),
             id,
-            role: role.to_string(),
-            description: description.to_string(),
-            call_id: call_id.to_string(),
+            role,
+            description,
+            call_id,
             round: 1,
             round_call_id: String::new(),
-            model: model.to_string(),
+            model,
             edits,
+            tier: Some(tier),
+            files,
             started: Instant::now(),
             started_at: now_millis(),
             control,
-            live: Mutex::new(Live {
-                status: Status::Queued,
-                ended_at: None,
-                background,
-                quiet: false,
-                tool_calls: 0,
-                context_tokens: 0,
-                activity: None,
-                report: None,
-            }),
+            live: Mutex::new(Live::new(Status::Queued, background, false)),
             ended: watch::channel(false).0,
             detached: Notify::new(),
             registry: Arc::downgrade(&self.inner),
@@ -637,6 +718,13 @@ impl Agents {
             return Err(format!("Agent {id} is still working."));
         }
         let by_user = call_id.is_empty();
+        // What it changed and spent before carries over: the overview counts every round.
+        let mut live = Live::new(Status::Queued, background || by_user, by_user);
+        {
+            let earlier = old.live();
+            live.changed = earlier.changed.clone();
+            live.spent = earlier.spent;
+        }
         let child = Arc::new(Child {
             id: old.id.clone(),
             role: old.role.clone(),
@@ -647,19 +735,12 @@ impl Agents {
             session: old.session.clone(),
             model: model.to_string(),
             edits: old.edits,
+            tier: old.tier,
+            files: old.files.clone(),
             started: Instant::now(),
             started_at: now_millis(),
             control,
-            live: Mutex::new(Live {
-                status: Status::Queued,
-                ended_at: None,
-                background: background || by_user,
-                quiet: by_user,
-                tool_calls: 0,
-                context_tokens: 0,
-                activity: None,
-                report: None,
-            }),
+            live: Mutex::new(live),
             ended: watch::channel(false).0,
             detached: Notify::new(),
             registry: Arc::downgrade(&self.inner),
@@ -695,24 +776,36 @@ impl Child {
             session: info.session,
             model: info.model,
             edits: info.edits,
+            tier: info.tier,
+            files: info.files,
             started: Instant::now(),
             started_at: info.started_at,
             control: Control::new(),
             live: Mutex::new(Live {
-                status: info.status,
                 ended_at: info.ended_at,
-                background: info.background,
-                quiet: false,
                 tool_calls: info.tool_calls,
                 context_tokens: info.context_tokens,
-                activity: None,
-                report: None,
+                changed: info.changed,
+                spent: info.spent,
+                ..Live::new(info.status, info.background, false)
             }),
             ended: watch::channel(true).0,
             detached: Notify::new(),
             registry,
         }
     }
+}
+
+/// What a new child is: its role, its task, and where it runs.
+pub(crate) struct Spec {
+    pub role: String,
+    pub description: String,
+    /// The parent's call that started it.
+    pub call_id: String,
+    pub model: String,
+    pub edits: bool,
+    pub tier: Tier,
+    pub files: Vec<String>,
 }
 
 /// The number in a child's id (`a12` is 12).
@@ -734,7 +827,16 @@ mod tests {
     use super::*;
 
     fn add(agents: &Agents, folder: &Path, background: bool, control: Control) -> Arc<Child> {
-        agents.add(folder, "explore", "Find it", "c1", "m", false, background, control)
+        let spec = Spec {
+            role: "explore".into(),
+            description: "Find it".into(),
+            call_id: "c1".into(),
+            model: "m".into(),
+            edits: false,
+            tier: Tier::Crew,
+            files: Vec::new(),
+        };
+        agents.add(folder, spec, background, control)
     }
 
     #[test]

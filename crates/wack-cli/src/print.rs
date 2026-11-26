@@ -202,6 +202,35 @@ fn summary(name: &str, input: &Value) -> String {
 }
 
 /// Prints each sub-agent's start, steps and end, indented under the call that started it.
+/// The run's agents in a few lines when any started: each one's tier, model, end and spend, then
+/// what the crew and the lead's helpers spent in all.
+pub fn team_summary(agents: &Agents) -> Option<String> {
+    let list = agents.list();
+    if list.is_empty() {
+        return None;
+    }
+    let tokens = |usage: &wack_llm::Usage| usage.input + usage.output + usage.cache_read + usage.cache_write;
+    let mut lines = vec!["agents:".to_string()];
+    let mut totals = [0u64; 2];
+    for child in &list {
+        let spent = tokens(&child.spent);
+        let tier = child.tier.map_or("?", |tier| tier.as_str());
+        totals[usize::from(tier == "crew")] += spent;
+        let status = match &child.status {
+            AgentStatus::Done => "done".to_string(),
+            AgentStatus::Failed { message } => format!("failed ({message})"),
+            AgentStatus::Stopped { .. } => "stopped".to_string(),
+            AgentStatus::Interrupted => "interrupted".to_string(),
+            AgentStatus::Queued => "queued".to_string(),
+            AgentStatus::Running => "running".to_string(),
+        };
+        let changed = if child.changed.is_empty() { String::new() } else { format!(" · changed {}", child.changed.join(", ")) };
+        lines.push(format!("  {} {} [{tier} · {}] {status} · {} tool calls · {spent} tokens{changed}", child.id, child.role, child.model, child.tool_calls));
+    }
+    lines.push(format!("  crew tokens {} · lead-model agents' tokens {}", totals[1], totals[0]));
+    Some(lines.join("\n"))
+}
+
 pub fn watch_agents(agents: &Agents) {
     let seen: Mutex<HashMap<(String, u32), (u32, bool)>> = Mutex::default();
     let listed = agents.clone();
@@ -210,7 +239,8 @@ pub fn watch_agents(agents: &Agents) {
         for child in listed.list() {
             let (steps, ended) = seen.entry((child.id.clone(), child.round)).or_insert_with(|| {
                 let round = if child.round > 1 { format!(" (round {})", child.round) } else { String::new() };
-                println!("  {}", paint("36", &format!("↳ {} {} · {}{round}", child.id, child.role, child.description)));
+                let tier = child.tier.map(|tier| format!(" [{} · {}]", tier.as_str(), child.model)).unwrap_or_default();
+                println!("  {}", paint("36", &format!("↳ {} {} · {}{round}{tier}", child.id, child.role, child.description)));
                 (0, false)
             });
             if child.tool_calls > *steps {

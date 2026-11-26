@@ -277,6 +277,20 @@ impl Session {
         self.noted.iter().any(|tag| tag.starts_with(prefix))
     }
 
+    /// The text of the user's latest message: the newest user message that is neither the app's
+    /// note nor tool results.
+    pub fn latest_request(&self) -> Option<&str> {
+        self.messages.iter().zip(&self.notes).rev().find_map(|(message, note)| {
+            if message.role != Role::User || note.is_some() || message.content.iter().any(|block| matches!(block, Block::ToolResult { .. })) {
+                return None;
+            }
+            message.content.iter().find_map(|block| match block {
+                Block::Text { text } if !text.trim().is_empty() => Some(text.as_str()),
+                _ => None,
+            })
+        })
+    }
+
     /// Whether message `index` is the app's note rather than part of the conversation.
     pub fn is_note(&self, index: usize) -> bool {
         self.notes.get(index).is_some_and(Option::is_some)

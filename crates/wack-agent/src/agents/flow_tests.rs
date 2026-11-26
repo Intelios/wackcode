@@ -83,6 +83,7 @@ fn parent(steps: Vec<Step>, child: ScriptedProvider, mode: AgentMode, recorder: 
         helper: Some(ChildModel { provider: Arc::new(child), settings: settings("helper-model"), recorder: recorder.clone() }),
         agents: agents.clone(),
         child_prompt: None,
+        crew: None,
     };
     let kit = Kit::new(&session, Some(mode), false, None).with_agents(&session, setup);
     let mut tools: Vec<Arc<dyn Tool>> = vec![Arc::new(Look)];
@@ -197,6 +198,7 @@ async fn a_child_that_will_not_stop_is_held_to_its_steps() {
         helper: None,
         agents: parent.agents.clone(),
         child_prompt: None,
+        crew: None,
     };
     let session = Session::open(&parent.folder.path().join("sessions/chat-1.jsonl")).unwrap();
     let kit = Kit::new(&session, Some(AgentMode::Build), false, None).with_agents(&session, setup);
@@ -275,6 +277,7 @@ fn parent_with(steps: Vec<Step>, child: ScriptedProvider, extra: Vec<Arc<dyn Too
         helper: None,
         agents: parent.agents.clone(),
         child_prompt: None,
+        crew: None,
     };
     let session = Session::open(&parent.folder.path().join("sessions/chat-1.jsonl")).unwrap();
     let kit = Kit::new(&session, Some(AgentMode::Build), false, None).with_agents(&session, setup);
@@ -539,6 +542,10 @@ async fn an_agent_whose_role_was_switched_off_cannot_work_another_round() {
         tool_calls: 0,
         context_tokens: 0,
         activity: None,
+        tier: None,
+        files: Vec::new(),
+        changed: Vec::new(),
+        spent: Default::default(),
     }]);
     parent.run("Go", &Control::new()).await.unwrap();
     let (refused, is_error) = &parent.results()[0];
@@ -582,6 +589,10 @@ async fn an_agent_the_app_already_restored_is_still_announced_as_interrupted() {
         tool_calls: 3,
         context_tokens: 0,
         activity: None,
+        tier: None,
+        files: Vec::new(),
+        changed: Vec::new(),
+        spent: Default::default(),
     };
     session.set_state(AGENTS_STATE, serde_json::to_value(vec![working.clone()]).unwrap()).unwrap();
     // The app restores the list as the chat opens, before any run.
@@ -612,6 +623,7 @@ async fn fresh_subagents_omit_commit_attribution_while_conversation_copies_keep_
         helper: None,
         agents: agents.clone(),
         child_prompt: None,
+        crew: None,
     };
     let kit = Kit::new(&session, Some(AgentMode::Build), false, None).with_agents(&session, setup);
     let mut tools: Vec<Arc<dyn Tool>> = vec![Arc::new(Look)];
@@ -654,6 +666,7 @@ async fn custom_child_prompt_reaches_fresh_children_while_conversation_copies_ke
         helper: None,
         agents: agents.clone(),
         child_prompt: Some("Custom sub-agent core rules.".into()),
+        crew: None,
     };
     let kit = Kit::new(&session, Some(AgentMode::Build), false, None).with_agents(&session, setup);
     let mut tools: Vec<Arc<dyn Tool>> = vec![Arc::new(Look)];
@@ -674,4 +687,193 @@ async fn custom_child_prompt_reaches_fresh_children_while_conversation_copies_ke
     let copy_child = &child.requests()[1];
     assert_eq!(copy_child.system, parent_provider.requests()[0].system);
     assert_eq!(copy_child.system[0].text, "Custom parent core.");
+}
+
+/// A tool named `write` that succeeds unless its path says `bad`.
+struct Write;
+
+#[async_trait]
+impl Tool for Write {
+    fn spec(&self) -> ToolSpec {
+        ToolSpec { name: "write".into(), parallel_safe: false, ..Look.spec() }
+    }
+
+    async fn run(&self, input: Value, _context: &ToolContext<'_>) -> Result<ToolOutput, String> {
+        match input["path"].as_str().unwrap_or_default() {
+            path if path.contains("bad") => Err("could not write".into()),
+            path => Ok(format!("wrote {path}").into()),
+        }
+    }
+}
+
+/// A parent with the built-in roles whose chat runs on `chat-model`, helper roles on
+/// `helper-model` and, when `team`, a Team crew on `crew-model`. Children get `write` too.
+fn team_parent(steps: Vec<Step>, child: ScriptedProvider, team: bool) -> Parent {
+    let folder = tempfile::tempdir().unwrap();
+    let session = Session::create(&folder.path().join("sessions/chat-1.jsonl"), folder.path()).unwrap();
+    let agents = Agents::new();
+    let model = |name: &str| ChildModel { provider: Arc::new(child.clone()), settings: settings(name), recorder: None };
+    let setup = AgentsSetup {
+        catalog: definition::builtins(),
+        delegation: Delegation::Auto,
+        chat: model("chat-model"),
+        helper: Some(model("helper-model")),
+        agents: agents.clone(),
+        child_prompt: None,
+        crew: team.then(|| model("crew-model")),
+    };
+    let kit = Kit::new(&session, Some(AgentMode::Build), false, None).with_agents(&session, setup);
+    let mut tools: Vec<Arc<dyn Tool>> = vec![Arc::new(Look), Arc::new(Write)];
+    tools.extend(kit.tools());
+    tools.extend(kit.agent_tools(&tools));
+    let provider = ScriptedProvider::new(steps);
+    let agent = Agent::new(Arc::new(provider.clone()), Arc::new(Registry::new(tools).unwrap()), session, &Profile::code(), settings("chat-model"));
+    Parent { agent: kit.attach(agent), provider, events: Arc::default(), agents, folder }
+}
+
+fn task(id: &str, agent: &str, extra: Value) -> Step {
+    let mut input = json!({ "agent": agent, "description": format!("{agent} task"), "prompt": format!("Do the {agent} part.") });
+    if let (Some(input), Some(extra)) = (input.as_object_mut(), extra.as_object()) {
+        input.extend(extra.clone());
+    }
+    call(&[(id, AGENT, input)])
+}
+
+#[tokio::test]
+async fn in_a_team_roles_run_on_the_crew_and_review_on_the_lead() {
+    let child = ScriptedProvider::new([say("explored"), say("reviewed"), say("built"), say("hard part done")]);
+    let mut parent = team_parent(
+        vec![
+            task("p1", "explore", json!({})),
+            task("p2", "review", json!({})),
+            task("p3", "general", json!({})),
+            task("p4", "general", json!({ "model": "lead" })),
+            say("All done."),
+        ],
+        child.clone(),
+        true,
+    );
+    parent.run("Build it", &Control::new()).await.unwrap();
+    let models: Vec<String> = child.requests().iter().map(|request| request.model.clone()).collect();
+    assert_eq!(models, ["crew-model", "chat-model", "crew-model", "chat-model"]);
+    let tiers: Vec<Option<Tier>> = parent.agents.list().iter().map(|info| info.tier).collect();
+    assert_eq!(tiers, [Some(Tier::Crew), Some(Tier::Lead), Some(Tier::Crew), Some(Tier::Lead)]);
+}
+
+#[tokio::test]
+async fn outside_a_team_the_crew_is_the_helper_and_roles_keep_their_own_models() {
+    let child = ScriptedProvider::new([say("explored"), say("built"), say("built cheaply")]);
+    let mut parent = team_parent(
+        vec![task("p1", "explore", json!({})), task("p2", "general", json!({})), task("p3", "general", json!({ "model": "crew" })), say("ok")],
+        child.clone(),
+        false,
+    );
+    parent.run("Go", &Control::new()).await.unwrap();
+    let models: Vec<String> = child.requests().iter().map(|request| request.model.clone()).collect();
+    assert_eq!(models, ["helper-model", "chat-model", "helper-model"]);
+    // Nothing about a team reached anyone.
+    assert!(!format!("{:?}", parent.provider.requests()).contains(TEAM_MARKER));
+    assert_eq!(child.requests()[1].messages[0].text(), "Do the general part.");
+}
+
+#[tokio::test]
+async fn a_crew_worker_stays_on_the_crew_for_another_round_and_a_copy_refuses_the_crew() {
+    let child = ScriptedProvider::new([say("First round."), say("Second round.")]);
+    let mut parent = team_parent(
+        vec![
+            task("p1", "general", json!({})),
+            call(&[("p2", AGENT_MESSAGE, json!({ "agent_id": "a1", "message": "Fix the edge case." }))]),
+            call(&[("p3", AGENT, json!({ "description": "Side", "prompt": "Do it", "with_conversation": true, "model": "crew" }))]),
+            call(&[("p4", AGENT, json!({ "agent": "general", "description": "Odd", "prompt": "Do it", "model": "boss" }))]),
+            say("ok"),
+        ],
+        child.clone(),
+        true,
+    );
+    parent.run("Go", &Control::new()).await.unwrap();
+    let models: Vec<String> = child.requests().iter().map(|request| request.model.clone()).collect();
+    assert_eq!(models, ["crew-model", "crew-model"]);
+    let results = parent.results();
+    assert!(results[2].1 && results[2].0.contains("A copy of the conversation runs on your own model"), "{:?}", results[2]);
+    assert!(results[3].1 && results[3].0.contains("model must be \"lead\" or \"crew\""), "{:?}", results[3]);
+}
+
+#[tokio::test]
+async fn a_report_names_the_files_the_app_saw_change_and_keeps_its_footer_last() {
+    let child = ScriptedProvider::new([
+        call(&[
+            ("w1", "write", json!({ "path": "src/a.rs", "content": "a" })),
+            ("w2", "write", json!({ "path": "src/bad.rs", "content": "b" })),
+            ("w3", "write", json!({ "path": "docs/notes.md", "content": "c" })),
+        ]),
+        say("Changed a.rs."),
+    ]);
+    let mut parent = team_parent(vec![task("p1", "general", json!({ "files": ["src/a.rs", "./src/b.rs"] })), say("ok")], child, true);
+    parent.run("Go", &Control::new()).await.unwrap();
+    let (report, _) = &parent.results()[0];
+    assert!(report.contains(&format!("{}\n", super::child::CHANGED_HEADING)), "{report}");
+    assert!(report.contains("- src/a.rs\n- docs/notes.md (outside its files)\n"), "{report}");
+    assert!(!report.contains("bad.rs"), "a failed write changed nothing");
+    assert!(report.lines().last().unwrap().starts_with("[agent a1 · general · 3 tool calls · "), "{report}");
+    let info = &parent.agents.list()[0];
+    assert_eq!(info.files, ["src/a.rs", "src/b.rs"]);
+    assert_eq!(info.changed, ["src/a.rs", "docs/notes.md"]);
+    assert!(info.spent.input + info.spent.output > 0 || info.spent == Default::default());
+}
+
+#[tokio::test]
+async fn a_team_worker_is_briefed_and_the_lead_is_told_the_contract_once() {
+    let child = ScriptedProvider::new([say("one"), say("two")]);
+    let mut parent = team_parent(
+        vec![
+            call(&[("t1", crate::todo::TODO, json!({ "action": "create", "subject": "Parse the header" }))]),
+            task("p1", "general", json!({ "files": ["src/retry.rs"], "background": true })),
+            task("p2", "general", json!({ "files": ["src/parse.rs"] })),
+            say("Both started."),
+        ],
+        child.clone(),
+        true,
+    );
+    parent.run("Honour Retry-After everywhere.", &Control::new()).await.unwrap();
+    let briefs: Vec<String> = child.requests().iter().map(|request| request.messages[0].text()).collect();
+    let second = briefs.iter().find(|text| text.contains("src/parse.rs\nStay within them.")).expect("the second worker's briefing");
+    assert!(second.contains("## Working beside you\n- a1 (general · general task): src/retry.rs"), "{second}");
+    assert!(second.contains("## What the user asked the lead\nHonour Retry-After everywhere."), "{second}");
+    assert!(second.contains("## The lead's todo list\n[pending] #1 Parse the header"), "{second}");
+    assert!(second.ends_with("## Your task\nDo the general part."), "{second}");
+    // The lead's every request carries the contract once, as a note after its instructions.
+    for request in parent.provider.requests() {
+        let notes = request.messages.iter().filter(|message| message.text().starts_with(TEAM_MARKER)).count();
+        assert_eq!(notes, 1);
+    }
+    assert!(parent.provider.requests()[0].messages.iter().any(|message| message.text().contains("your crew runs on crew-model")));
+}
+
+#[tokio::test]
+async fn workers_started_in_one_reply_are_told_about_each_other() {
+    let child = ScriptedProvider::new([say("one"), say("two")]);
+    let start = |id: &str, file: &str| (id.to_string(), AGENT.to_string(), json!({ "agent": "general", "description": format!("Own {file}"), "prompt": "Go.", "files": [file] }));
+    let mut parent = team_parent(vec![calls(&[start("p1", "src/a.rs"), start("p2", "src/b.rs")]), say("ok")], child.clone(), true);
+    parent.run("Change both", &Control::new()).await.unwrap();
+    let briefs: Vec<String> = child.requests().iter().map(|request| request.messages[0].text()).collect();
+    for (mine, theirs) in [("src/a.rs", "src/b.rs"), ("src/b.rs", "src/a.rs")] {
+        let brief = briefs.iter().find(|text| text.contains(&format!("## Your files\n{mine}\n"))).unwrap();
+        assert!(brief.contains(&format!("general · Own {theirs}): {theirs}")), "{brief}");
+        assert_eq!(brief.matches(&format!("Own {theirs}")).count(), 1, "named once: {brief}");
+    }
+}
+
+#[tokio::test]
+async fn the_lead_sends_the_same_instructions_and_tools_with_team_on_or_off() {
+    let mut on = team_parent(vec![say("hi")], ScriptedProvider::new([]), true);
+    let mut off = team_parent(vec![say("hi")], ScriptedProvider::new([]), false);
+    on.run("Go", &Control::new()).await.unwrap();
+    off.run("Go", &Control::new()).await.unwrap();
+    // Each parent has a folder of its own; past that, the requests must start the same.
+    let instructions = |parent: &Parent| {
+        let folder = parent.folder.path().display().to_string();
+        parent.provider.requests()[0].system.iter().map(|part| part.text.replace(&folder, "<folder>")).collect::<Vec<_>>()
+    };
+    assert_eq!(instructions(&on), instructions(&off));
+    assert_eq!(on.provider.requests()[0].tools, off.provider.requests()[0].tools);
 }

@@ -145,6 +145,11 @@ impl Store {
         let provider = self.provider(&resolved.connection)?;
         let usage = self.usage_recorder(&resolved.connection, &chat.id, &project.path);
         let children = self.child_model(&resolved, &chat.id, &project.path)?;
+        // A Team whose crew is gone stops the send rather than run on some other model.
+        let crew = match &chat.team {
+            Some(crew) if self.agents_config().delegation != wack_agent::Delegation::Off => Some(self.crew_model(crew, &chat.id, &project.path)?),
+            _ => None,
+        };
         let prompts = self.prompts().agent_overrides();
         Ok(RunSetup {
             kind: ChatKind::Code,
@@ -175,7 +180,7 @@ impl Store {
             web: self.web_setup(),
             mcp_servers: self.mcp_specs_for(&project.path),
             mcp_hub: None,
-            agents: self.agents_setup(children, &chat.id, &project.path, wack_agent::Agents::new()),
+            agents: self.agents_setup(children, crew, &chat.id, &project.path, wack_agent::Agents::new()),
             browser: None,
             canvases: None,
             computer: None,

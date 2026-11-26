@@ -37,6 +37,10 @@ const HELP: &str = "wack: the WackCode agent without the app
       --effort off|minimal|low|medium|high|xhigh|max|ultra
       --mode build|plan|ultraplan   Plan and Ultra Plan only read, ask, and end with a plan.
                                A resumed run keeps its mode unless you give one.
+      --crew <model id>        Turn Team on: this run's model leads, and a crew on this model
+                               does most of the reading and typing.
+      --crew-connection <name> The crew's connection (defaults to the run's).
+      --crew-effort <level>    The crew's reasoning (defaults to the model's own default).
       --cwd <folder>           Work in another folder.
       --chat                   Run the Chat area's assistant instead: no project, a fresh
                                scratchpad of its own, and the Chat area's tools and memory.
@@ -448,9 +452,21 @@ async fn agent(args: &mut Args, folder: &Path) -> Result<ExitCode, String> {
     };
     let cwd = args.value("--cwd")?;
     let resume = args.value("--resume")?;
+    let crew = args.value("--crew")?;
+    let crew_connection = args.value("--crew-connection")?;
+    let crew_effort = match args.value("--crew-effort")? {
+        Some(effort) => Some(Reasoning::parse(&effort).ok_or("The crew's effort must be off, minimal, low, medium, high, xhigh or max.")?),
+        None => None,
+    };
     let chat = args.flag("--chat");
     if chat && (mode.is_some() || cwd.is_some()) {
         return Err("--chat has no project, so it takes neither --mode nor --cwd.".into());
+    }
+    if chat && crew.is_some() {
+        return Err("--chat has no Team, so it takes no --crew.".into());
+    }
+    if crew.is_none() && (crew_connection.is_some() || crew_effort.is_some()) {
+        return Err("--crew-connection and --crew-effort need --crew.".into());
     }
     let mut prompt = args.rest().join(" ");
     let piped = prompt.trim().is_empty() && !terminal::interactive();
@@ -520,7 +536,23 @@ async fn agent(args: &mut Args, folder: &Path) -> Result<ExitCode, String> {
     let agents = Agents::new();
     let stem = session.path().file_stem().map(|stem| stem.to_string_lossy().into_owned()).unwrap_or_default();
     let resolved = Resolved { connection: connection.clone(), effort: model.pick(effort), model: model.clone() };
-    if let Some(setup) = store.agents_setup(store.child_model(&resolved, &stem, session.cwd())?, &stem, session.cwd(), agents.clone()) {
+    // A Team's crew: a model of the run's connection unless another is named.
+    let crew = match &crew {
+        Some(id) => {
+            let named = crew_connection.as_deref().map_or(connection, |name| store.connection(name).unwrap_or(connection));
+            if crew_connection.as_deref().is_some_and(|name| store.connection(name).is_none()) {
+                return Err(format!("There is no connection named {}.", crew_connection.unwrap_or_default()));
+            }
+            let choice = wack_core::ModelChoice { connection: Some(named.id.clone()), model: Some(id.clone()), effort: crew_effort };
+            if let Some(problem) = store.team_problem(Some(&choice)) {
+                return Err(problem);
+            }
+            Some(store.crew_model(&choice, &stem, session.cwd())?)
+        }
+        None => None,
+    };
+    let team = crew.as_ref().map(|crew| crew.settings.model.clone());
+    if let Some(setup) = store.agents_setup(store.child_model(&resolved, &stem, session.cwd())?, crew, &stem, session.cwd(), agents.clone()) {
         kit = kit.with_agents(&session, setup);
         print::watch_agents(&agents);
     }
@@ -608,6 +640,9 @@ async fn agent(args: &mut Args, folder: &Path) -> Result<ExitCode, String> {
     if effort.is_ultra() {
         header.push_str(" · Ultra");
     }
+    if let Some(crew) = &team {
+        header.push_str(&format!(" · Team: crew on {crew}"));
+    }
     eprintln!("{}", print::dim(&header));
 
     if listening {
@@ -666,6 +701,9 @@ async fn agent(args: &mut Args, folder: &Path) -> Result<ExitCode, String> {
     tasks.terminate_all();
     hub.0.terminate_all();
     printer.finish();
+    if let Some(summary) = print::team_summary(&agents) {
+        eprintln!("{}", print::dim(&summary));
+    }
     eprintln!("{}", print::dim(&format!("{}\nsession: {}", printer.usage_line(), agent.session().path().display())));
     // The steering thread is blocked reading the terminal, so the process is ended directly.
     std::process::exit(match outcome {

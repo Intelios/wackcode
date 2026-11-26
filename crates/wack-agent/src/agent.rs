@@ -727,6 +727,7 @@ impl Agent {
             registry: Some(&self.registry),
             loaded: self.session.loaded_tools(),
             settings: Some(&self.settings),
+            request: self.session.latest_request(),
         };
         let run_one = |index: usize| {
             let (id, name, input) = &calls[index];

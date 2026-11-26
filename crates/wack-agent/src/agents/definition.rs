@@ -5,8 +5,10 @@
 //!   then other tools' folders the user switched on), then the built-ins compiled into this crate.
 //!   The first role with a name wins, so a file named `explore.md` in the user's folder replaces
 //!   the built-in Explore. A project's own agent folders are never read, as with skills.
-//! - **A file:** Markdown with frontmatter (`name`, `description`, `tools`, `model`,
-//!   `max_turns`); the body is the role's prompt. Only a root's top-level `.md` files are roles.
+//! - **A file:** Markdown with frontmatter (`name`, `description`, `tools`, `model`, `team`,
+//!   `max_turns`); the body is the role's prompt. `model` is where it runs outside Team (the
+//!   chat's model or the helper); `team` is where it runs while the chat's Team is on (`lead` or
+//!   `crew`, the crew when it says nothing). Only a root's top-level `.md` files are roles.
 //!   A file without a `name` takes its file name's.
 //! - **No edits:** a role that may use neither `write` nor `edit` changes nothing in the project
 //!   through its tools. Its shell is deliberately left unrestricted outside Plan mode: helpers that
@@ -21,6 +23,7 @@ use std::{
     path::{Path, PathBuf},
 };
 
+use super::Tier;
 use crate::skills::{
     Root,
     frontmatter::{Fields, split},
@@ -67,6 +70,8 @@ pub struct AgentDef {
     /// tool a sub-agent can have.
     pub tools: Option<Vec<String>>,
     pub model: ModelPref,
+    /// Where it runs while the chat's Team is on; `None` is the crew.
+    pub team: Option<Tier>,
     pub max_turns: u32,
     /// The file it came from, or `None` for a built-in.
     pub file: Option<PathBuf>,
@@ -214,6 +219,10 @@ pub fn parse(text: &str, file: Option<&Path>, source: &str, fallback_name: Optio
         Some("helper") => ModelPref::Helper,
         _ => ModelPref::Chat,
     };
+    let team = match fields.text("team") {
+        None => None,
+        Some(text) => Some(Tier::parse(&text).ok_or("Its team must be lead or crew.")?),
+    };
     let max_turns = match fields.text("max_turns") {
         None => DEFAULT_MAX_TURNS,
         Some(text) => match text.trim().parse::<u32>() {
@@ -227,6 +236,7 @@ pub fn parse(text: &str, file: Option<&Path>, source: &str, fallback_name: Optio
         prompt: body,
         tools,
         model,
+        team,
         max_turns,
         file: file.map(Path::to_path_buf),
         source: source.to_string(),
@@ -282,6 +292,9 @@ mod tests {
         assert!(explore.allows("bash") && explore.allows("mcp__github__list_issues"));
         assert_eq!(explore.model, ModelPref::Helper);
         assert_eq!(builtins[2].model, ModelPref::Chat);
+        // In a Team, review runs on the lead's model and the others on the crew.
+        let teams: Vec<Option<Tier>> = builtins.iter().map(|agent| agent.team).collect();
+        assert_eq!(teams, [None, Some(Tier::Lead), None]);
         assert!(builtins.iter().all(AgentDef::builtin));
     }
 
@@ -312,6 +325,7 @@ mod tests {
         assert!(problem("---\nname: fine\n---\nbody").contains("no description"));
         assert!(problem("---\ndescription: d\n---\n").contains("no instructions"));
         assert!(problem("---\ndescription: d\nmax_turns: 0\n---\nbody").contains("max_turns"));
+        assert!(problem("---\ndescription: d\nteam: boss\n---\nbody").contains("lead or crew"));
         assert!(problem("---\ndescription: [unclosed\n---\nbody").contains("YAML"));
     }
 

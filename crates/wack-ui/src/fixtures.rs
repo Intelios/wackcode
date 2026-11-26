@@ -972,6 +972,10 @@ fn agent_info(id: &str, role: &str, description: &str, call: &str, status: wack_
         tool_calls: tools,
         context_tokens: tokens,
         activity: activity.map(|(tool, target)| wack_core::agents::Activity { tool: tool.into(), target: target.into() }),
+        tier: Some(if role == "general" { wack_core::agents::Tier::Lead } else { wack_core::agents::Tier::Crew }),
+        files: Vec::new(),
+        changed: Vec::new(),
+        spent: wack_core::Usage { input: tokens * 3, output: tokens / 6, cache_read: 0, cache_write: 0 },
     }
 }
 

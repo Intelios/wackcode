@@ -17,7 +17,7 @@ use std::path::PathBuf;
 use gpui::{AnyElement, App, AppContext, Entity, SharedString, div, prelude::*, px};
 use wack_core::{
     Connection,
-    agents::{AgentDef, AgentDraft, AgentEntry, AgentsConfig, BUILTIN_LABEL, Delegation, ModelPref, Problem, TOOL_FOLDERS},
+    agents::{AgentDef, AgentDraft, AgentEntry, AgentsConfig, BUILTIN_LABEL, Delegation, ModelPref, Problem, TOOL_FOLDERS, Tier},
 };
 
 use crate::{
@@ -48,6 +48,8 @@ pub struct AgentEditor {
     pub steps: Entity<TextField>,
     pub prompt: Entity<TextField>,
     pub model: ModelPref,
+    /// Where it runs while a chat's Team is on; `None` is the crew.
+    pub team: Option<Tier>,
     /// The one opened is the user's own file.
     pub yours: bool,
     /// A built-in shares its name, so trashing the user's file restores it.
@@ -65,6 +67,7 @@ impl AgentEditor {
         let steps = cx.new(|cx| TextField::new(Type::Mono, "60", cx));
         let prompt = cx.new(|cx| TextField::new(Type::Mono, "You are Docs Check. Read the docs the task names, then the code they describe, and report every place they disagree with file:line.", cx).multiline(16));
         let mut model = ModelPref::Chat;
+        let mut team = None;
         if let Some(agent) = agent {
             let mut draft = AgentDraft::of(agent);
             if copy {
@@ -76,6 +79,7 @@ impl AgentEditor {
             steps.update(cx, |field, cx| field.set_text(&draft.max_turns, cx));
             prompt.update(cx, |field, cx| field.set_text_at_start(&draft.prompt, cx));
             model = draft.model;
+            team = draft.team;
         }
         let yours = agent.is_some_and(|agent| !agent.builtin()) && !copy;
         Self {
@@ -86,6 +90,7 @@ impl AgentEditor {
             steps,
             prompt,
             model,
+            team,
             yours,
             over_builtin: over_builtin && !copy,
             error: None,
@@ -104,6 +109,7 @@ impl AgentEditor {
             description: text(&self.description),
             tools: text(&self.tools),
             model: self.model,
+            team: self.team,
             max_turns: text(&self.steps),
             prompt: text(&self.prompt),
         }
@@ -131,6 +137,7 @@ impl AgentEditor {
             prompt: String::new(),
             tools: draft.tool_list(),
             model: draft.model,
+            team: draft.team,
             max_turns: 0,
             file: None,
             source: String::new(),

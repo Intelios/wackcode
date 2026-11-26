@@ -157,6 +157,7 @@ pub fn icon(id: PromptId) -> Icon {
         PromptId::UltraPlan | PromptId::Ultra => Icon::Spark,
         PromptId::Compaction => Icon::Archive,
         PromptId::Subagent => Icon::Duck,
+        PromptId::Team => Icon::Duck,
         PromptId::Title => Icon::Pencil,
     }
 }
@@ -170,6 +171,7 @@ fn row_tag(id: PromptId) -> &'static str {
         PromptId::Ultra => "prompt-row-ultra",
         PromptId::Compaction => "prompt-row-compaction",
         PromptId::Subagent => "prompt-row-subagent",
+        PromptId::Team => "prompt-row-team",
         PromptId::Title => "prompt-row-title",
     }
 }

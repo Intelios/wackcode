@@ -7,7 +7,7 @@
 //!
 //! Dynamic guides and data wrappers stay app-owned around every custom prompt: `# This chat`'s
 //! tool list and untrusted-content rule, the `[WACKCODE PLAN MODE CONTRACT v1: …]` header lines,
-//! compaction's `<conversation>` and `<previous-summary>` framing, and automatic titles'
+//! Team's `[WACKCODE TEAM MODE v1]` line and the models it names, compaction's `<conversation>` and `<previous-summary>` framing, and automatic titles'
 //! `<message>` data tag.
 
 use std::borrow::Cow;
@@ -15,7 +15,7 @@ use std::borrow::Cow;
 use serde::{Deserialize, Serialize};
 use wack_agent::{
     PromptOverrides,
-    agents::prompt::CHILD_PROMPT,
+    agents::{prompt::CHILD_PROMPT, team::TEAM_PROMPT},
     compaction::SUMMARY_FORMAT,
     plan::prompt::{default_plan_prompt, default_ultra_plan_prompt},
     prompt::{CHAT_PROMPT, CODE_PROMPT, ULTRA_PROMPT},
@@ -37,10 +37,11 @@ pub enum PromptId {
     Ultra,
     Compaction,
     Subagent,
+    Team,
     Title,
 }
 
-/// How Settings › Prompts groups the eight prompts into cards.
+/// How Settings › Prompts groups the prompts into cards.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub enum PromptGroup {
     Chats,
@@ -63,13 +64,13 @@ impl PromptGroup {
         match self {
             PromptGroup::Chats => &[PromptId::Code, PromptId::Chat],
             PromptGroup::Planning => &[PromptId::Plan, PromptId::UltraPlan, PromptId::Ultra],
-            PromptGroup::Background => &[PromptId::Compaction, PromptId::Subagent, PromptId::Title],
+            PromptGroup::Background => &[PromptId::Compaction, PromptId::Subagent, PromptId::Team, PromptId::Title],
         }
     }
 }
 
 impl PromptId {
-    pub const ALL: [PromptId; 8] = [
+    pub const ALL: [PromptId; 9] = [
         PromptId::Code,
         PromptId::Chat,
         PromptId::Plan,
@@ -77,6 +78,7 @@ impl PromptId {
         PromptId::Ultra,
         PromptId::Compaction,
         PromptId::Subagent,
+        PromptId::Team,
         PromptId::Title,
     ];
 
@@ -90,6 +92,7 @@ impl PromptId {
             PromptId::Ultra => "ultra",
             PromptId::Compaction => "compaction",
             PromptId::Subagent => "subagent",
+            PromptId::Team => "team",
             PromptId::Title => "title",
         }
     }
@@ -104,6 +107,7 @@ impl PromptId {
             "ultra" => PromptId::Ultra,
             "compaction" | "compact" | "summary" => PromptId::Compaction,
             "subagent" | "sub-agent" | "subagents" | "sub-agents" | "child" => PromptId::Subagent,
+            "team" | "lead" | "crew" | "orchestrator" => PromptId::Team,
             "title" | "titles" | "auto-title" => PromptId::Title,
             _ => return None,
         })
@@ -118,6 +122,7 @@ impl PromptId {
             PromptId::Ultra => "Ultra",
             PromptId::Compaction => "Compaction",
             PromptId::Subagent => "Sub-agent core",
+            PromptId::Team => "Team lead",
             PromptId::Title => "Automatic titles",
         }
     }
@@ -126,7 +131,7 @@ impl PromptId {
         match self {
             PromptId::Code | PromptId::Chat => PromptGroup::Chats,
             PromptId::Plan | PromptId::UltraPlan | PromptId::Ultra => PromptGroup::Planning,
-            PromptId::Compaction | PromptId::Subagent | PromptId::Title => PromptGroup::Background,
+            PromptId::Compaction | PromptId::Subagent | PromptId::Team | PromptId::Title => PromptGroup::Background,
         }
     }
 
@@ -144,6 +149,7 @@ impl PromptId {
             PromptId::Ultra => "Added to the end of a chat’s system prompt while its reasoning effort is set to Ultra, in both Code and Chat.",
             PromptId::Compaction => "The summary headings and rules sent when an older part of a conversation is compacted.",
             PromptId::Subagent => "The shared core instructions every fresh sub-agent starts with before its own role’s prompt.",
+            PromptId::Team => "How a chat’s model leads while its Team is on: when to delegate, how to brief and review the crew, and how to finish.",
             PromptId::Title => "The system prompt that names a new chat in 3 to 7 words from its opening message.",
         }
     }
@@ -158,6 +164,7 @@ impl PromptId {
             PromptId::Ultra => "Ultra also asks the provider for the model’s highest reasoning level; this text is the extra instruction appended at the end of the system prompt.",
             PromptId::Compaction => "WackCode keeps the one-line summariser system role, wraps the transcript in <conversation> and any earlier summary in <previous-summary>, and carries the user’s quoted messages and read/changed file lists in code.",
             PromptId::Subagent => "Prepended before # Your role and the role’s own instructions (Settings › Sub-agents) on fresh sub-agents. Sub-agents started from a copy of the conversation keep their parent’s prompt so the prompt cache holds.",
+            PromptId::Team => "WackCode adds one [WACKCODE TEAM MODE v1] marker line above this text, then a line naming the lead’s and the crew’s models. Chats with Team on pick up edits from their next message; the system prompt never changes.",
             PromptId::Title => "WackCode wraps the first 8,000 characters of the opening message inside <message>…</message> as source data and strips quotes, markdown and emoji from the answer.",
         }
     }
@@ -172,6 +179,7 @@ impl PromptId {
             PromptId::Ultra => Cow::Borrowed(ULTRA_PROMPT),
             PromptId::Compaction => Cow::Borrowed(SUMMARY_FORMAT),
             PromptId::Subagent => Cow::Borrowed(CHILD_PROMPT),
+            PromptId::Team => Cow::Borrowed(TEAM_PROMPT),
             PromptId::Title => Cow::Borrowed(title::SYSTEM),
         }
     }
@@ -196,6 +204,8 @@ pub struct PromptConfig {
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub subagent: Option<String>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub team: Option<String>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
     pub title: Option<String>,
 }
 
@@ -209,6 +219,7 @@ impl PromptConfig {
             PromptId::Ultra => self.ultra.as_deref(),
             PromptId::Compaction => self.compaction.as_deref(),
             PromptId::Subagent => self.subagent.as_deref(),
+            PromptId::Team => self.team.as_deref(),
             PromptId::Title => self.title.as_deref(),
         }
     }
@@ -222,6 +233,7 @@ impl PromptConfig {
             PromptId::Ultra => &mut self.ultra,
             PromptId::Compaction => &mut self.compaction,
             PromptId::Subagent => &mut self.subagent,
+            PromptId::Team => &mut self.team,
             PromptId::Title => &mut self.title,
         }
     }
@@ -256,6 +268,7 @@ impl PromptConfig {
             ultra: self.ultra.clone(),
             compaction: self.compaction.clone(),
             subagent: self.subagent.clone(),
+            team: self.team.clone(),
         }
     }
 }

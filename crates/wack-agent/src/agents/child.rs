@@ -1,8 +1,12 @@
 //! Running one child: its tools, its rules, its model, and turning how it ended into the report
 //! its parent reads.
+//!
+//! The report is the child's last reply, then what the app saw for itself (the files it changed
+//! through `write` and `edit`, as fact rather than the child's claim), then the footer line,
+//! which stays last: the transcript reads the counts back from it.
 
 use std::{
-    path::PathBuf,
+    path::{Path, PathBuf},
     sync::{
         Arc,
         atomic::{AtomicBool, AtomicU32, Ordering},
@@ -176,7 +180,8 @@ async fn run(child: &Arc<Child>, launch: Launch, control: &Control) -> Result<(S
         agent = agent.with_recorder(Arc::new(ForSubagent { inner: recorder, id: ledger_id }));
     }
     let observer = child.clone();
-    let sink = move |event: Event| observe(&observer, event);
+    let root = cwd.clone();
+    let sink = move |event: Event| observe(&observer, &root, event);
     let outcome = match prompt {
         Some(prompt) => agent.run(&prompt, control, &sink).await,
         None => agent.carry_on(control, &sink).await,
@@ -211,15 +216,68 @@ fn answer_open_calls(reply: Option<&Message>, call_id: &str, directive: &str) ->
 const COPY_STARTED: &str = "This call started you. You are a sub-agent working from a copy of the conversation above, not the agent that made the call: that agent carries on separately.";
 pub const COPY_DIRECTIVE: &str = "You are a sub-agent started from a copy of this conversation. Carry out the task below on your own, then end with a report for the agent that started you: it sees only your final message. Don't start other agents, don't ask the user anything, and don't take on work beyond the task.\n\nYour task:";
 
-/// Keeps the child's counters and latest activity up to date for whoever watches.
-fn observe(child: &Child, event: Event) {
+/// The tools whose successful calls change the file named by their `path`.
+const WRITES: [&str; 2] = ["write", "edit"];
+
+/// Keeps the child's counters, latest activity, changed files and spend up to date for whoever
+/// watches. `root` is the project, which changed files are named relative to.
+fn observe(child: &Child, root: &Path, event: Event) {
     match event {
-        Event::ToolCall { name, input, .. } => child.step(|live| {
+        Event::ToolCall { id, name, input } => child.step(|live| {
             live.tool_calls += 1;
+            if WRITES.contains(&name.as_str())
+                && let Some(path) = input["path"].as_str().filter(|path| !path.trim().is_empty())
+            {
+                live.writing.push((id, relative(root, path)));
+            }
             live.activity = Some(super::Activity { target: target(&input), tool: name });
         }),
-        Event::Reply { usage: Some(usage) } => child.step(|live| live.context_tokens = usage.input + usage.cache_read + usage.cache_write + usage.output),
+        Event::ToolResult { id, is_error, .. } => {
+            let Some(index) = child.live().writing.iter().position(|(call, _)| *call == id) else { return };
+            child.step(|live| {
+                let (_, path) = live.writing.remove(index);
+                if is_error {
+                    return;
+                }
+                if !live.round_changed.contains(&path) {
+                    live.round_changed.push(path.clone());
+                }
+                if !live.changed.contains(&path) {
+                    live.changed.push(path);
+                }
+            });
+        }
+        Event::Reply { usage: Some(usage) } => child.step(|live| {
+            live.context_tokens = usage.input + usage.cache_read + usage.cache_write + usage.output;
+            add_usage(&mut live.spent, &usage);
+        }),
+        Event::Compacted { usage: Some(usage) } => child.step(|live| add_usage(&mut live.spent, &usage)),
         _ => {}
+    }
+}
+
+fn add_usage(total: &mut wack_llm::Usage, usage: &wack_llm::Usage) {
+    total.input += usage.input;
+    total.output += usage.output;
+    total.cache_read += usage.cache_read;
+    total.cache_write += usage.cache_write;
+}
+
+/// `path` as the project names it: relative to `root` when it lies inside, as given otherwise.
+pub(crate) fn relative(root: &Path, path: &str) -> String {
+    let path = path.trim();
+    let given = Path::new(path);
+    let inside = if given.is_absolute() { given.strip_prefix(root).ok() } else { Some(given) };
+    match inside {
+        Some(inside) => {
+            let parts: Vec<String> = inside
+                .components()
+                .filter(|part| !matches!(part, std::path::Component::CurDir))
+                .map(|part| part.as_os_str().to_string_lossy().into_owned())
+                .collect();
+            if parts.is_empty() { path.to_string() } else { parts.join("/") }
+        }
+        None => path.to_string(),
     }
 }
 
@@ -264,13 +322,43 @@ fn ending(child: &Child, outcome: Result<Outcome, String>, text: String, limited
         duration(child.elapsed())
     );
     let text = cap(&text);
+    // What the app saw for itself, between the report and the footer, which stays last.
+    let seen = match changed_section(&child.round_changed(), &child.files) {
+        Some(section) => format!("{section}\n\n{footer}"),
+        None => footer,
+    };
     let report = match (why, text.is_empty()) {
-        (None, false) => Ok(format!("{text}\n\n{footer}")),
-        (None, true) => Ok(format!("The agent finished without writing a report.\n\n{footer}")),
-        (Some(why), false) => Ok(format!("{why} What it wrote last:\n\n{text}\n\n{footer}")),
-        (Some(why), true) => Err(format!("{why} It wrote no report.\n\n{footer}")),
+        (None, false) => Ok(format!("{text}\n\n{seen}")),
+        (None, true) => Ok(format!("The agent finished without writing a report.\n\n{seen}")),
+        (Some(why), false) => Ok(format!("{why} What it wrote last:\n\n{text}\n\n{seen}")),
+        (Some(why), true) => Err(format!("{why} It wrote no report.\n\n{seen}")),
     };
     (status, report)
+}
+
+/// The heading of the section the app adds to a report that changed files.
+pub const CHANGED_HEADING: &str = "## Files it changed (seen by WackCode)";
+
+/// The files a round changed, as the app saw them, marking any outside the files its brief gave
+/// it. `None` when it changed none.
+fn changed_section(changed: &[String], owned: &[String]) -> Option<String> {
+    if changed.is_empty() {
+        return None;
+    }
+    let lines: Vec<String> = changed
+        .iter()
+        .map(|path| {
+            let outside = !owned.is_empty() && !owned.iter().any(|own| covers(own, path));
+            format!("- {path}{}", if outside { " (outside its files)" } else { "" })
+        })
+        .collect();
+    Some(format!("{CHANGED_HEADING}\nThrough write and edit; changes made with the shell aren't tracked.\n{}", lines.join("\n")))
+}
+
+/// Whether an owned entry (a file, or a folder) covers `path`.
+fn covers(own: &str, path: &str) -> bool {
+    let own = own.trim_end_matches('/');
+    path == own || path.strip_prefix(own).is_some_and(|rest| rest.starts_with('/'))
 }
 
 fn cap(text: &str) -> String {
@@ -421,6 +509,19 @@ mod tests {
         async fn run(&self, _input: Value, _context: &crate::tool::ToolContext<'_>) -> Result<crate::tool::ToolOutput, String> {
             Ok(String::new().into())
         }
+    }
+
+    #[test]
+    fn changed_files_are_named_from_the_project_and_marked_when_outside_their_files() {
+        let root = Path::new("/work/app");
+        assert_eq!(relative(root, "/work/app/src/./main.rs"), "src/main.rs");
+        assert_eq!(relative(root, "./src/lib.rs"), "src/lib.rs");
+        assert_eq!(relative(root, "/elsewhere/notes.md"), "/elsewhere/notes.md");
+        let section = changed_section(&["src/a.rs".into(), "src/ui/b.rs".into(), "README.md".into()], &["src/a.rs".into(), "src/ui/".into()]).unwrap();
+        assert!(section.starts_with(CHANGED_HEADING));
+        assert!(section.contains("- src/a.rs\n- src/ui/b.rs\n- README.md (outside its files)"), "{section}");
+        assert!(changed_section(&[], &[]).is_none());
+        assert!(!changed_section(&["x.rs".into()], &[]).unwrap().contains("outside"), "no files given, nothing to be outside of");
     }
 
     #[test]

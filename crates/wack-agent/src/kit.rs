@@ -12,7 +12,7 @@ use std::{path::PathBuf, sync::Arc};
 
 use crate::{
     agent::{Agent, Feature},
-    agents::{AgentTool, AgentsFeature, AgentsSetup, Delegation},
+    agents::{AgentTool, AgentsFeature, AgentsSetup, Delegation, TeamFeature},
     ask::AskUserQuestion,
     memory::Memory,
     plan::{AgentMode, Plan},
@@ -38,6 +38,8 @@ pub struct Kit {
     /// Sub-agents, with the session file their sessions go beside, and what the session said of
     /// them.
     agents: Option<(AgentsSetup, PathBuf, AgentsFeature)>,
+    /// Whether the chat's Team is on, and the note that tells the model.
+    team: TeamFeature,
     unrestricted: bool,
     /// The session's working folder.
     cwd: PathBuf,
@@ -61,6 +63,7 @@ impl Kit {
             skills: None,
             tasks: None,
             agents: None,
+            team: TeamFeature::off(),
             unrestricted,
             cwd: session.cwd().to_path_buf(),
         }
@@ -69,6 +72,7 @@ impl Kit {
     /// Replaces the built-in Plan and Ultra Plan prompts (Settings › Prompts).
     pub fn with_prompts(mut self, prompts: &crate::prompt::PromptOverrides) -> Self {
         self.plan = self.plan.with_prompts(prompts.plan.clone(), prompts.ultra_plan.clone());
+        self.team = self.team.clone().with_prompt(prompts.team.clone());
         self
     }
 
@@ -90,6 +94,10 @@ impl Kit {
     /// chat's other tools are assembled.
     pub fn with_agents(mut self, session: &Session, setup: AgentsSetup) -> Self {
         let feature = AgentsFeature::new(session, setup.agents.clone());
+        // Team needs someone to lead: with no roles, or delegation off, there are no agent tools.
+        if let Some(crew) = setup.crew.as_ref().filter(|_| setup.delegation != Delegation::Off && !setup.catalog.is_empty()) {
+            self.team = self.team.clone().on(&setup.chat.settings.model, &crew.settings.model);
+        }
         self.agents = Some((setup, session.path().to_path_buf(), feature));
         self
     }
@@ -101,7 +109,7 @@ impl Kit {
         if setup.delegation == Delegation::Off || setup.catalog.is_empty() {
             return Vec::new();
         }
-        let agent = AgentTool::new(setup.clone(), pool.to_vec(), self.plan.clone(), self.unrestricted, self.skills.clone(), session.clone());
+        let agent = AgentTool::new(setup.clone(), pool.to_vec(), self.plan.clone(), self.todo.clone(), self.unrestricted, self.skills.clone(), session.clone());
         let messages = Arc::new(agent.messages());
         setup.agents.set_messenger(messages.clone(), self.cwd.clone());
         vec![Arc::new(agent), messages]
@@ -124,7 +132,9 @@ impl Kit {
     }
 
     fn features(&self) -> Vec<Box<dyn Feature>> {
-        let mut features: Vec<Box<dyn Feature>> = vec![Box::new(self.plan.clone()), Box::new(self.todo.clone()), Box::new(self.suggestions.clone())];
+        // Team's note always has its place, so switching Team off can still be said.
+        let mut features: Vec<Box<dyn Feature>> =
+            vec![Box::new(self.plan.clone()), Box::new(self.team.clone()), Box::new(self.todo.clone()), Box::new(self.suggestions.clone())];
         if let Some((_, feature)) = &self.tasks {
             features.push(Box::new(feature.clone()));
         }

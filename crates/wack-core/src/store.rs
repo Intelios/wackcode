@@ -305,6 +305,10 @@ pub struct Chat {
     /// what the model has been told so far.
     #[serde(default)]
     pub mode: AgentMode,
+    /// The chat's Team crew: while it is set, the chat's model leads and the crew does most of
+    /// the reading and typing (`wack_agent::agents::team`). Code chats only.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub team: Option<ModelChoice>,
     /// Where the chat's panes are, as the UI wrote it. The engine keeps it without reading it.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub layout: Option<serde_json::Value>,
@@ -1037,6 +1041,7 @@ impl Store {
             updated: now,
             choice,
             mode,
+            team: None,
             layout: None,
             browser_tabs: None,
             dismissed_suggestions: Vec::new(),
@@ -1139,6 +1144,23 @@ impl Store {
             return Ok(());
         }
         chat.mode = mode;
+        self.save()
+    }
+
+    /// Switches a Code chat's Team on with `crew`, or off with `None`. A crew must name a model
+    /// of a connection that is on; a Chat chat never has a Team.
+    pub fn set_team(&mut self, id: &str, crew: Option<ModelChoice>) -> Result<(), String> {
+        if let Some(crew) = &crew
+            && self.resolve_crew(crew).is_none()
+        {
+            return Err("That crew model is no longer available. Choose another.".into());
+        }
+        let chat = self.state.chats.iter_mut().find(|chat| chat.id == id).ok_or("That chat is gone.")?;
+        let crew = if chat.is_chat_area() { None } else { crew };
+        if chat.team == crew {
+            return Ok(());
+        }
+        chat.team = crew;
         self.save()
     }
 

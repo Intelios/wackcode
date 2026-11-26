@@ -6,7 +6,8 @@
 //! switched on, then the built-ins. A project's own agent folders are never read.
 //!
 //! A helper model's key goes the same way as the chat's: [`Store::provider`] builds the provider
-//! for the run, and nothing else sees it.
+//! for the run, and nothing else sees it. So does a Team crew's: each Code chat may name one
+//! (`Chat::team`), and new Teams start with the default crew kept here.
 
 use std::{
     collections::HashSet,
@@ -31,7 +32,7 @@ use crate::store::{ModelChoice, Reasoning, Resolved, Store};
 // What the UI needs of sub-agents, so it depends on the engine alone.
 pub use wack_agent::agents::definition::{BUILTIN_LABEL, Problem, builtins};
 pub use wack_agent::agents::{
-    AGENT, AGENT_MESSAGE, AGENTS_STATE, COPY_DIRECTIVE, Activity, AgentDef, AgentInfo, ModelPref, NOTE_PREFIX, Signal, Status, StoppedBy, children_folder,
+    AGENT, AGENT_MESSAGE, AGENTS_STATE, COPY_DIRECTIVE, Activity, AgentDef, AgentInfo, ModelPref, NOTE_PREFIX, Signal, Status, StoppedBy, Tier, children_folder,
 };
 
 const LIBRARY_LABEL: &str = "Your agents";
@@ -46,6 +47,9 @@ pub struct AgentsConfig {
     /// The model roles marked `model: helper` run on. `None` runs them on the chat's model.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub helper: Option<ModelChoice>,
+    /// The crew a chat's Team starts with, and the last one chosen.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub team_default: Option<ModelChoice>,
     /// Names of roles switched off.
     #[serde(default, skip_serializing_if = "Vec::is_empty")]
     pub off: Vec<String>,
@@ -78,6 +82,8 @@ pub struct AgentDraft {
     /// Tool names separated by commas or spaces; empty is every tool.
     pub tools: String,
     pub model: ModelPref,
+    /// Where it runs while a chat's Team is on; `None` is the crew.
+    pub team: Option<Tier>,
     /// Empty is the default.
     pub max_turns: String,
     pub prompt: String,
@@ -90,6 +96,7 @@ impl AgentDraft {
             description: agent.description.clone(),
             tools: agent.tools.as_ref().map(|tools| tools.join(", ")).unwrap_or_default(),
             model: agent.model,
+            team: agent.team,
             max_turns: if agent.max_turns == DEFAULT_MAX_TURNS { String::new() } else { agent.max_turns.to_string() },
             prompt: agent.prompt.clone(),
         }
@@ -118,6 +125,7 @@ impl AgentDraft {
                 ("description", Some(Value::Text(description))),
                 ("tools", tools.as_deref().map(Value::Raw)),
                 ("model", Some(Value::Text(self.model.as_str()))),
+                ("team", self.team.map(|tier| Value::Text(tier.as_str()))),
                 ("max_turns", (!turns.is_empty()).then_some(Value::Raw(turns))),
             ],
             &self.prompt,
@@ -268,6 +276,54 @@ impl Store {
         self.save_state()
     }
 
+    /// The crew new Teams start with, or `None` to start with the first model available. A
+    /// choice must name a model of a connection that is on.
+    pub fn set_team_default(&mut self, choice: Option<ModelChoice>) -> Result<(), String> {
+        if let Some(choice) = &choice
+            && self.resolve_exact(choice).is_none()
+        {
+            return Err("That model is no longer available. Choose another.".into());
+        }
+        self.agents_state_mut().team_default = choice;
+        self.save_state()
+    }
+
+    /// The crew a Team switched on now starts with: the default when it still resolves, else the
+    /// first model of the first connection that is on. `None` with no connection at all.
+    pub fn crew_to_start(&self) -> Option<ModelChoice> {
+        if let Some(choice) = self.agents_config().team_default.clone().filter(|choice| self.resolve_exact(choice).is_some()) {
+            return Some(choice);
+        }
+        let connection = self.enabled_connections().find(|connection| !connection.models.is_empty())?;
+        Some(ModelChoice { connection: Some(connection.id.clone()), model: Some(connection.models[0].id.clone()), effort: None })
+    }
+
+    /// The connection and model a crew names, only if both still exist and the connection is on.
+    pub fn resolve_crew(&self, choice: &ModelChoice) -> Option<Resolved> {
+        self.resolve_exact(choice)
+    }
+
+    /// Why a chat's Team can't work now, or `None` when it can (or is off). Sub-agents switched
+    /// off leave nobody to lead; a crew whose model is gone is never swapped for another.
+    pub fn team_problem(&self, crew: Option<&ModelChoice>) -> Option<String> {
+        let crew = crew?;
+        if self.agents_config().delegation == Delegation::Off {
+            return Some("Sub-agents are off in Settings › Sub-agents, so this chat's Team can't start any.".to_string());
+        }
+        if self.resolve_exact(crew).is_none() {
+            let name = crew.model.as_deref().unwrap_or("its model");
+            return Some(format!("This chat's crew, {name}, is no longer available. Choose another crew, or switch Team off."));
+        }
+        None
+    }
+
+    /// The model a chat's Team crew runs on, for a run. `Err` when it no longer resolves: a crew
+    /// is never quietly swapped for another model.
+    pub fn crew_model(&self, crew: &ModelChoice, session: &str, workspace: &Path) -> Result<ChildModel, String> {
+        let resolved = self.resolve_exact(crew).ok_or_else(|| self.team_problem(Some(crew)).unwrap_or_default())?;
+        self.child_model(&resolved, session, workspace)
+    }
+
     /// Switches another tool's agent folder (an id from [`TOOL_FOLDERS`]) on or off.
     pub fn set_agent_folder(&mut self, id: &str, on: bool) -> Result<(), String> {
         if !TOOL_FOLDERS.iter().any(|(known, _, _)| *known == id) {
@@ -313,8 +369,8 @@ impl Store {
     }
 
     /// What a run needs to start sub-agents, or `None` when delegation is off. `chat` is the chat's
-    /// own model; `agents` the chat's registry.
-    pub fn agents_setup(&self, chat: ChildModel, session: &str, workspace: &Path, agents: Agents) -> Option<AgentsSetup> {
+    /// own model, `crew` its Team's when the Team is on; `agents` the chat's registry.
+    pub fn agents_setup(&self, chat: ChildModel, crew: Option<ChildModel>, session: &str, workspace: &Path, agents: Agents) -> Option<AgentsSetup> {
         let config = self.agents_config();
         if config.delegation == Delegation::Off {
             return None;
@@ -332,6 +388,7 @@ impl Store {
             helper,
             agents,
             child_prompt: self.prompts().subagent.clone(),
+            crew,
         })
     }
 }
@@ -390,20 +447,56 @@ mod tests {
         assert_eq!(chat.settings.model, "big");
         assert!(!chat.settings.commit_attribution);
 
-        let setup = store.agents_setup(chat.clone(), "chat-1", folder.path(), Agents::new()).unwrap();
+        let setup = store.agents_setup(chat.clone(), None, "chat-1", folder.path(), Agents::new()).unwrap();
         assert!(setup.helper.is_none());
         assert_eq!(setup.catalog.len(), 3);
 
         let mut config = store.agents_config().clone();
         config.helper = Some(ModelChoice { connection: Some(connection), model: Some("small".into()), effort: None });
         store.set_agents_config(config.clone()).unwrap();
-        let setup = store.agents_setup(chat.clone(), "chat-1", folder.path(), Agents::new()).unwrap();
+        let setup = store.agents_setup(chat.clone(), None, "chat-1", folder.path(), Agents::new()).unwrap();
         assert_eq!(setup.helper.unwrap().settings.model, "small");
 
         config.delegation = Delegation::Off;
         store.set_agents_config(config).unwrap();
-        assert!(store.agents_setup(chat, "chat-1", folder.path(), Agents::new()).is_none());
+        assert!(store.agents_setup(chat, None, "chat-1", folder.path(), Agents::new()).is_none());
     }
+
+    #[test]
+    fn a_team_runs_its_crew_and_a_crew_that_is_gone_is_never_swapped() {
+        let folder = tempfile::tempdir().unwrap();
+        let mut store = store(folder.path());
+        let connection = store.connections()[0].id.clone();
+        let small = ModelChoice { connection: Some(connection.clone()), model: Some("small".into()), effort: None };
+        // With no default, a Team starts on the first model there is; the default wins once set.
+        assert_eq!(store.crew_to_start().and_then(|crew| crew.model), Some("big".into()));
+        store.set_team_default(Some(small.clone())).unwrap();
+        assert_eq!(store.crew_to_start(), Some(small.clone()));
+        assert!(store.set_team_default(Some(ModelChoice { model: Some("gone".into()), ..small.clone() })).is_err());
+
+        let project = std::fs::create_dir_all(folder.path().join("app")).map(|_| store.add_project(&folder.path().join("app")).unwrap()).unwrap();
+        let chat = store.create_chat(&project.id, "Team", ModelChoice::default(), wack_agent::AgentMode::Build, None).unwrap();
+        store.set_team(&chat.id, Some(small.clone())).unwrap();
+        let chat = store.chat(&chat.id).unwrap().clone();
+        assert_eq!(chat.team, Some(small.clone()));
+        let setup = store.run_setup(&chat).unwrap();
+        let agents = setup.agents.unwrap();
+        assert_eq!(agents.crew.map(|crew| crew.settings.model), Some("small".into()));
+        assert_eq!(agents.chat.settings.model, "big");
+
+        // A crew whose model left the connection stops the run, saying why.
+        let gone = ModelChoice { model: Some("retired".into()), ..small };
+        assert!(store.set_team(&chat.id, Some(gone.clone())).is_err(), "a crew must exist to be chosen");
+        let mut stale = chat.clone();
+        stale.team = Some(gone.clone());
+        let problem = store.team_problem(stale.team.as_ref()).unwrap();
+        assert!(problem.contains("retired, is no longer available"), "{problem}");
+        assert!(store.run_setup(&stale).is_err_and(|message| message == problem));
+        assert!(store.team_problem(None).is_none());
+        store.set_team(&chat.id, None).unwrap();
+        assert!(store.chat(&chat.id).unwrap().team.is_none());
+    }
+
     #[test]
     fn the_editor_customises_a_builtin_renames_and_restores() {
         let folder = tempfile::tempdir().unwrap();

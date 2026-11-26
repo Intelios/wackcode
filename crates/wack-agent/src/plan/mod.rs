@@ -169,6 +169,8 @@ fn normalize_entry(input: &Value) -> Result<AgentMode, String> {
 #[derive(Clone)]
 pub struct Plan {
     state: Arc<Mutex<PlanState>>,
+    /// The plan a Build run started from: the one the user approved by sending this run.
+    implementing: Arc<Mutex<Option<String>>>,
     /// What the session held when the run began, so a chat that never plans saves nothing.
     saved: bool,
     unrestricted: bool,
@@ -187,6 +189,7 @@ impl Plan {
         }
         Self {
             state: Arc::new(Mutex::new(state)),
+            implementing: Arc::default(),
             saved: saved.is_some(),
             unrestricted,
             cwd: session.cwd().to_path_buf(),
@@ -210,6 +213,11 @@ impl Plan {
         self.state.lock().unwrap().mode
     }
 
+    /// The plan this run is carrying out: the one awaiting review when a Build run began.
+    pub fn implementing(&self) -> Option<String> {
+        self.implementing.lock().unwrap().clone()
+    }
+
     pub fn tools(&self) -> Vec<Arc<dyn Tool>> {
         vec![Arc::new(Enter(self.clone())), Arc::new(Complete(self.clone()))]
     }
@@ -230,7 +238,9 @@ impl Plan {
 
 impl Feature for Plan {
     fn on_run_start(&self) {
-        self.state.lock().unwrap().plan = None;
+        let mut state = self.state.lock().unwrap();
+        let plan = state.plan.take();
+        *self.implementing.lock().unwrap() = plan.filter(|_| state.mode == AgentMode::Build);
     }
 
     fn notes(&self, session: &Session) -> Vec<Note> {

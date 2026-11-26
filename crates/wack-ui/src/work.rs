@@ -1606,6 +1606,10 @@ mod tests {
             tool_calls: 12,
             context_tokens: 31_400,
             activity: Some(wack_core::agents::Activity { tool: "read".into(), target: "/repo/src/theme.rs".into() }),
+            tier: None,
+            files: Vec::new(),
+            changed: Vec::new(),
+            spent: Default::default(),
         }
     }
 

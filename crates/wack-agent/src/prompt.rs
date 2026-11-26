@@ -309,6 +309,8 @@ pub struct PromptOverrides {
     pub ultra: Option<String>,
     pub compaction: Option<String>,
     pub subagent: Option<String>,
+    /// The Team contract's body (`agents::team::TEAM_PROMPT`).
+    pub team: Option<String>,
 }
 
 /// Today's date in the user's time zone. Day precision keeps the prompt stable within a run.

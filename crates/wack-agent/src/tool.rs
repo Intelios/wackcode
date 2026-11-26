@@ -86,6 +86,8 @@ pub struct Seen<'a> {
     /// Deferred tools the conversation has loaded.
     pub loaded: &'a [String],
     pub settings: Option<&'a Settings>,
+    /// The user's latest message, the app's notes and tool results passed over.
+    pub request: Option<&'a str>,
 }
 
 impl ToolContext<'static> {

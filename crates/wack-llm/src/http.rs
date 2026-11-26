@@ -26,6 +26,7 @@ impl HttpProvider {
             .connect_timeout(Duration::from_secs(30))
             // A reply can take many minutes, but silence for this long means the connection died.
             .read_timeout(Duration::from_secs(300))
+            .redirect(same_origin_redirects())
             // The web tools turn on reqwest's decompression for the whole build; provider streams
             // stay uncompressed, as they always were.
             .no_gzip()
@@ -89,6 +90,9 @@ impl Provider for HttpProvider {
         let reply = call.send().await.map_err(|error| self.fail(network(error)))?;
 
         let status = reply.status();
+        if status.is_redirection() {
+            return Err(self.fail(moved(&reply)));
+        }
         if !status.is_success() {
             let retry_after = reply
                 .headers()
@@ -136,6 +140,33 @@ impl Provider for HttpProvider {
     fn native_tool_search(&self) -> bool {
         self.format == WireFormat::AnthropicMessages && self.host_is("api.anthropic.com")
     }
+}
+
+/// Redirects are followed only within the address's own origin, five at most. reqwest strips the
+/// standard credential headers on a hop to another host, but not Anthropic's `x-api-key`, so a
+/// key would otherwise follow a redirect anywhere (docs/security.md).
+pub(crate) fn same_origin_redirects() -> reqwest::redirect::Policy {
+    reqwest::redirect::Policy::custom(|attempt| {
+        let leaves = attempt.previous().first().is_some_and(|first| first.origin() != attempt.url().origin());
+        if leaves || attempt.previous().len() > 5 { attempt.stop() } else { attempt.follow() }
+    })
+}
+
+/// A redirect that was not followed: to another host, or one too many.
+fn moved(reply: &reqwest::Response) -> LlmError {
+    let to = reply
+        .headers()
+        .get("location")
+        .and_then(|value| value.to_str().ok())
+        .and_then(|location| reply.url().join(location).ok())
+        .and_then(|url| url.host_str().map(str::to_string));
+    let message = match to {
+        Some(host) => format!(
+            "The provider redirected the request to {host}. WackCode sends a key only to the address you set, so change the connection's base URL to the final address."
+        ),
+        None => "The provider kept redirecting the request. Change the connection's base URL to the final address.".to_string(),
+    };
+    LlmError::new(ErrorKind::Invalid, message)
 }
 
 fn network(error: reqwest::Error) -> LlmError {
@@ -278,6 +309,30 @@ mod tests {
         let error = stream_with_retry(&provider, &request(), &|_| {}, &|_| {}).await.unwrap_err();
         assert_eq!(error.kind, ErrorKind::ContextOverflow);
         assert_eq!(seen.lock().unwrap().len(), 1);
+    }
+
+    #[tokio::test]
+    async fn a_redirect_to_another_host_is_not_followed() {
+        let (elsewhere, reached) = serve(vec![sse(CHAT_REPLY)]).await;
+        let redirect = format!(
+            "HTTP/1.1 307 Temporary Redirect\r\nlocation: {elsewhere}/v1/messages\r\ncontent-length: 0\r\nconnection: close\r\n\r\n"
+        );
+        let (address, _) = serve(vec![redirect]).await;
+        let provider = HttpProvider::new(WireFormat::AnthropicMessages, &address, "sk-secret").unwrap();
+        let error = provider.stream(&request(), &|_| {}).await.unwrap_err();
+        assert!(error.message.contains("redirected the request to 127.0.0.1"), "{}", error.message);
+        assert!(reached.lock().unwrap().is_empty(), "the key must not follow a redirect to another origin");
+    }
+
+    #[tokio::test]
+    async fn a_redirect_within_the_origin_is_followed() {
+        let redirect = "HTTP/1.1 307 Temporary Redirect\r\nlocation: /v2/chat/completions\r\ncontent-length: 0\r\nconnection: close\r\n\r\n".to_string();
+        let (address, seen) = serve(vec![redirect, sse(CHAT_REPLY)]).await;
+        let provider = HttpProvider::new(WireFormat::OpenaiChat, &address, "sk-secret").unwrap();
+        provider.stream(&request(), &|_| {}).await.unwrap();
+        let seen = seen.lock().unwrap();
+        assert!(seen[1].starts_with("POST /v2/chat/completions "));
+        assert!(seen[1].to_ascii_lowercase().contains("authorization: bearer sk-secret"));
     }
 
     #[test]

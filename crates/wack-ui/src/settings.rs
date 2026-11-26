@@ -161,7 +161,7 @@ fn level_word(level: catalog::Level) -> &'static str {
     }
 }
 
-/// A model row's folded line: its id, context and max output as typed.
+/// A model row's folded line: its id, and its context and max output rounded for reading.
 #[derive(Clone, Default)]
 pub struct ModelSummary {
     pub id: SharedString,
@@ -832,7 +832,12 @@ impl ProvidersData {
                     .iter()
                     .map(|row| {
                         let text = |field: &Entity<TextField>| SharedString::from(field.read(cx).text().trim().to_string());
-                        let summary = ModelSummary { id: text(&row.id), context: text(&row.context), output: text(&row.output) };
+                        // Counts round for reading (131072 → 131.1k); text that isn't one stays as typed.
+                        let count = |field: &Entity<TextField>| {
+                            let typed = text(field);
+                            parse_tokens(&typed).map(|tokens| tokens_about(tokens).into()).unwrap_or(typed)
+                        };
+                        let summary = ModelSummary { id: text(&row.id), context: count(&row.context), output: count(&row.output) };
                         ModelField { summary: Some(summary), ..row.clone() }
                     })
                     .collect(),

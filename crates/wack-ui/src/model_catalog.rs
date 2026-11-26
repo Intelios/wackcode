@@ -13,7 +13,7 @@
 
 use std::sync::Arc;
 
-use gpui::{AnyElement, ElementId, Entity, SharedString, deferred, div, prelude::*, px, relative};
+use gpui::{AnyElement, ElementId, Entity, SharedString, anchored, deferred, div, prelude::*, px};
 use wack_core::catalog::Catalog;
 
 use crate::{
@@ -178,19 +178,27 @@ pub fn suggest_card(view: &SuggestView, theme: &Theme) -> impl IntoElement {
                 .tag(SUGGEST_ROW_TAGS.get(index).copied().unwrap_or("model-suggest-row")),
         );
     }
-    deferred(
-        div().absolute().top(relative(1.)).left_0().right_0().min_w(px(440.)).pt(px(6.)).child(crate::motion::enter(
+    // Anchored at the field's middle, padded by half the field plus the gap on both sides: it
+    // hangs just below the field, or, when the window has no room there, flips to sit just above
+    // it (GPUI flips about the same point), never over the field itself.
+    let pad = FIELD_HEIGHT / 2. + GAP;
+    div().absolute().left_0().top(px(FIELD_HEIGHT / 2.)).child(
+        deferred(anchored().child(div().py(px(pad)).child(crate::motion::enter(
             ElementId::NamedInteger("model-suggest-arrive".into(), view.row as u64),
-            div().w_full().child(
+            div().min_w(px(440.)).max_w(px(640.)).child(
                 picker_card("model-suggest", list, theme)
                     .w_full()
                     .on_mouse_down_out(|_, window, cx| window.dispatch_action(Box::new(CloseModelSuggestions), cx))
                     .tag("model-suggest"),
             ),
-        )),
+        ))))
+        .with_priority(2),
     )
-    .with_priority(2)
 }
+
+/// The model id field's height (`settings::text_input`), and the gap between it and the list.
+const FIELD_HEIGHT: f32 = 34.;
+const GAP: f32 = 6.;
 
 /// The line under a row the catalogue filled: where its facts came from, and anything to check.
 pub fn filled_note(filled: &Filled, theme: &Theme) -> impl IntoElement {

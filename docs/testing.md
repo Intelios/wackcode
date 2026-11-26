@@ -78,6 +78,7 @@ cargo wack run --connection "Name" --model id --effort high --cwd ../scratch "�
 cargo wack run --resume <session file> "carry on"
 cargo wack run --mode plan "…"                 # or ultraplan; build is the default
 cargo wack run --effort ultra "…"
+cargo wack run --model big --crew small "…"   # Team: big leads, small is the crew (--crew-connection, --crew-effort)
 cargo wack --data-dir /tmp/x connect …         # a throwaway data folder, for a local mock server
 ```
 
@@ -92,3 +93,14 @@ Use only the connection named **Testing (AI Agents may use this too)**. The owne
 ```sh
 cargo wack run --connection "Testing (AI Agents may use this too)" --cwd <scratch folder> "…"
 ```
+
+### Does Team pay? An A/B for the owner
+
+The Testing connection has only Flash-class models, so it proves Team's mechanics, not its worth. Whether a strong lead with a cheap crew beats the cheap model alone is for the owner to measure with their own connections:
+
+1. Pick five or so real tasks with a pass/fail check the project already has (a failing test to fix, a feature with its tests), in throwaway checkouts at the same commit.
+2. Run each task three times, each run in a fresh checkout: the cheap model alone (`--model cheap`), the strong model leading the cheap crew (`--model strong --crew cheap`), and the strong model alone (`--model strong`).
+3. Judge each run by the project's own tests, then by reading the diff.
+4. Compare tokens and time: `wack run` ends with the lead's own usage line and, for a Team, each agent with its tier, model and tokens, then the crew's total against the lead-model agents'. The usage ledger has the same calls, the agents' as `purpose: subagent`.
+
+Team earns its place when it passes where the cheap model alone fails, for well under the strong model's tokens. If it doesn't, change the contract (Settings › Prompts › Team lead), not the engine, first.

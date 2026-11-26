@@ -1958,3 +1958,124 @@ pub fn commits_states_turn() -> Vec<Item> {
     );
     items(&conversation, &[], now)
 }
+
+/// Two settled turns showing the per-turn Changes card in its main states: a 5-file mixed
+/// create/edit turn with colliding basenames (`mod.rs`), one file's inline diff expanded (with
+/// two edits), and "Show 2 more", followed by a compact "Created 2 files" turn.
+pub fn turn_changes_turn() -> Vec<Item> {
+    let mut conversation = Conversation::default();
+    conversation.send("Split the retry policy out into its own module and honour Retry-After headers.", START);
+    call(&mut conversation, "tc-r1", "read", json!({ "path": format!("{CWD}/crates/wack-llm/src/http.rs") }), Some(&"x\n".repeat(160)), START + 1_000);
+    call(
+        &mut conversation,
+        "tc-w1",
+        "write",
+        json!({
+            "path": "crates/wack-llm/src/retry/policy.rs",
+            "content": "use std::time::Duration;\n\npub const MAX_RETRY_AFTER: Duration = Duration::from_secs(60);\n\npub fn clamp_wait(header: Option<Duration>, backoff: Duration) -> Duration {\n    header.unwrap_or(backoff).min(MAX_RETRY_AFTER)\n}\n"
+        }),
+        Some("Created crates/wack-llm/src/retry/policy.rs (7 lines)."),
+        START + 3_000,
+    );
+    call(
+        &mut conversation,
+        "tc-e1",
+        "edit",
+        json!({
+            "path": "crates/wack-llm/src/retry/mod.rs",
+            "edits": [{
+                "old_text": "pub fn delay(attempt: u32) -> Duration {\n    Duration::from_secs(1 << attempt.min(5))\n}",
+                "new_text": "pub mod policy;\n\npub fn delay(attempt: u32, retry_after: Option<Duration>) -> Duration {\n    let backoff = Duration::from_secs(1 << attempt.min(5));\n    policy::clamp_wait(retry_after, backoff)\n}"
+            }]
+        }),
+        Some("Edited crates/wack-llm/src/retry/mod.rs (1 change)."),
+        START + 5_000,
+    );
+    call(
+        &mut conversation,
+        "tc-e1b",
+        "edit",
+        json!({
+            "path": format!("{CWD}/crates/wack-llm/src/retry/mod.rs"),
+            "edits": [{
+                "old_text": "pub use backoff::Backoff;",
+                "new_text": "pub use backoff::Backoff;\npub use policy::MAX_RETRY_AFTER;"
+            }]
+        }),
+        Some("Edited crates/wack-llm/src/retry/mod.rs (1 change)."),
+        START + 6_000,
+    );
+    call(
+        &mut conversation,
+        "tc-e2",
+        "edit",
+        json!({
+            "path": "crates/wack-core/src/retry/mod.rs",
+            "edits": [{
+                "old_text": "let wait = retry::delay(attempt);",
+                "new_text": "let wait = retry::delay(attempt, header);"
+            }]
+        }),
+        Some("Edited crates/wack-core/src/retry/mod.rs (1 change)."),
+        START + 7_000,
+    );
+    call(
+        &mut conversation,
+        "tc-e3",
+        "edit",
+        json!({
+            "path": "crates/wack-llm/src/http.rs",
+            "edits": [{
+                "old_text": "retry::delay(attempt)",
+                "new_text": "retry::delay(attempt, parse_retry_after(headers))"
+            }]
+        }),
+        Some("Edited crates/wack-llm/src/http.rs (1 change)."),
+        START + 9_000,
+    );
+    call(
+        &mut conversation,
+        "tc-e4",
+        "edit",
+        json!({
+            "path": "Cargo.toml",
+            "edits": [{
+                "old_text": "httpdate = \"1.0\"",
+                "new_text": "httpdate = \"1.0.3\""
+            }]
+        }),
+        Some("Edited Cargo.toml (1 change)."),
+        START + 10_000,
+    );
+    call(&mut conversation, "tc-b1", "bash", json!({ "command": "cargo test -p wack-llm retry" }), Some("test result: ok. 11 passed; 0 failed"), START + 13_000);
+    conversation.apply(
+        &Event::Text("Moved the retry ceiling into `retry::policy` and wired `Retry-After` parsing into `http.rs` and `wack-core`. All 11 retry tests pass.".into()),
+        START + 16_000,
+    );
+    conversation.apply(&Event::Reply { usage: Some(Usage { input: 2_100, output: 1_450, cache_read: 16_800, cache_write: 0 }) }, START + 16_000);
+    conversation.finish(&Ok(Outcome::Done), START + 17_000);
+
+    let t2 = START + 30_000;
+    conversation.send("Add a focused integration test and a short note in docs.", t2);
+    call(
+        &mut conversation,
+        "tc-w2",
+        "write",
+        json!({ "path": "tests/retry_policy.rs", "content": "#[test]\nfn caps_at_sixty_seconds() {\n    assert_eq!(60, 60);\n}\n" }),
+        Some("Created tests/retry_policy.rs (4 lines)."),
+        t2 + 2_000,
+    );
+    call(
+        &mut conversation,
+        "tc-w3",
+        "write",
+        json!({ "path": "docs/retry.md", "content": "# Retries\n\n`Retry-After` delays are capped at 60 seconds.\n" }),
+        Some("Created docs/retry.md (3 lines)."),
+        t2 + 4_000,
+    );
+    conversation.apply(&Event::Text("Added `tests/retry_policy.rs` and documented the 60s ceiling in `docs/retry.md`.".into()), t2 + 7_000);
+    conversation.apply(&Event::Reply { usage: Some(Usage { input: 840, output: 420, cache_read: 19_200, cache_write: 0 }) }, t2 + 7_000);
+    conversation.finish(&Ok(Outcome::Done), t2 + 8_000);
+
+    items(&conversation, &["turn-1-changes-file-1"], t2 + 12_000)
+}

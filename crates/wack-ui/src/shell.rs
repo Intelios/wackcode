@@ -51,7 +51,7 @@ use crate::{
         CloseModelSuggestions, RefreshCatalog, FetchModels, TickAllFetched, AddFetchedModels, CloseFetchedModels, PickModelSuggestion, ToggleFetchedModel,
         NewChat, NewChatIn, SelectDraft, CloseDraft, NewTerminal, NewTerminalWith, TogglePaneMenu, ClosePaneMenu, HideSidePanel, ToggleSidePanel, RevealProject, OpenPaneKind, NextTab, OpenEffortMenu, OpenModelMenu, OpenSettings,
         OpenSettingsSection, PinProject, PreviousTab, RemoveConnection, RemovePicture, ShowCommandOutput, ShowPicture, ShuffleBackdrop, ToggleBackdropShuffle, RemoveProject, ResetDockSize,
-        PickCommand, RetryWorkspaceFiles, SelectChat, Send, Stop, StopCommand, MoveToBackground, ToggleTasks, ToggleTasksPane, StopTask, ShowTask, ToggleAgentsPane, ShowTeam, ToggleBrowserPane, ToggleCanvasPane, ShowCanvas, WriteInComposer, ShowAgent, StopAgent, ToggleChanges, ToggleProject, ToggleSidebar, ToggleTerminal, TriggerProjectCommand, Unqueue,
+        PickCommand, RetryWorkspaceFiles, SelectChat, Send, Stop, StopCommand, MoveToBackground, ToggleTasks, ToggleTasksPane, StopTask, ShowTask, ToggleAgentsPane, ShowTeam, ToggleBrowserPane, ToggleCanvasPane, ShowCanvas, WriteInComposer, ShowAgent, StopAgent, ShowChanges, ToggleChanges, ToggleProject, ToggleSidebar, ToggleTerminal, TriggerProjectCommand, Unqueue,
         ToggleAutoTitles, ToggleTitleModels, ChooseTitleModel, RenameChat, RenameChatAt, CancelRename, ToggleModelReasoning, ToggleModelRow, ToggleModelVision, AttachPictures, AttachFiles, AttachTerminalSelection, RemoveAttachment, InsertFile, RemoveFile, SteerQueued, RemoveQueued, OpenPicture, ClosePicture, StepPicture, ZoomPicture,
         StartSuggestion, DismissSuggestion, CopySuggestion, OpenChat,
         ArchiveChat, ArchiveCurrentChat, ClearSearch, RevealScratchpadFile, DeleteAllArchived, DeleteArchivedChat, ToggleArchived, UnarchiveChat,
@@ -2191,6 +2191,19 @@ impl Render for Shell {
                 }))
                 .on_action(cx.listener(Self::toggle_sidebar))
                 .on_action(cx.listener(|shell, _: &ToggleChanges, window, cx| shell.toggle_pane(PaneKind::Changes, window, cx)))
+                .on_action(cx.listener(|shell, action: &ShowChanges, _, cx| {
+                    if !shell.pane_allowed(PaneKind::Changes, cx) {
+                        return;
+                    }
+                    let path = action.path.clone();
+                    shell.change_layout(cx, |layout| layout.open(PaneKind::Changes));
+                    shell.with_session(cx, |session, cx| {
+                        if let Some(path) = path.as_deref() {
+                            session.panes.select_change(path, cx);
+                        }
+                        session.panes.refresh_changes(cx);
+                    });
+                }))
                 .on_action(cx.listener(|shell, _: &ToggleTerminal, window, cx| shell.toggle_pane(PaneKind::Terminal, window, cx)))
                 .on_action(cx.listener(|shell, _: &NewTerminal, window, cx| shell.new_terminal(None, window, cx)))
                 .on_action(cx.listener(|shell, action: &NewTerminalWith, window, cx| shell.new_terminal(Some(action.pane), window, cx)))

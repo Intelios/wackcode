@@ -173,9 +173,12 @@ pub fn entry_items(
                         notice: current.then(|| conversation.plan_view.notice.clone().map(Into::into)).flatten(),
                     }));
                 }
-                // The follow-ups a settled turn filed: cards wait for the run, so they never
-                // appear above a reply still being written.
+                // The files a settled turn edited or created, and the follow-ups it filed: cards
+                // wait for the run, so they never appear above a reply still being written.
                 if !turn.live {
+                    if let Some(card) = crate::changes_card::from_turn(turn, &key, cwd, open) {
+                        items.push(Item::Changes(card));
+                    }
                     let view = &conversation.suggestion_view;
                     let cards: Vec<crate::suggestion::Item> = turn
                         .steps
@@ -619,7 +622,7 @@ fn skill_folder(path: &str) -> Option<String> {
 }
 
 /// A path as the user thinks of it: relative to the project when inside it.
-fn shown_path(path: &str, cwd: &Path) -> String {
+pub(crate) fn shown_path(path: &str, cwd: &Path) -> String {
     Path::new(path).strip_prefix(cwd).map(|relative| relative.display().to_string()).unwrap_or_else(|_| path.to_string())
 }
 
@@ -660,7 +663,7 @@ pub fn tool_row(tool: &ToolStep, cwd: &Path, live: bool) -> WorkRow {
         ),
         "write" => {
             let content = text_field(input, "content").unwrap_or("");
-            let lines: Vec<DiffLine> = content.lines().map(|line| DiffLine { kind: LineKind::Added, number: None, text: line.to_string().into() }).collect();
+            let lines = write_lines(content);
             let added = lines.len();
             (
                 "Wrote",
@@ -670,15 +673,7 @@ pub fn tool_row(tool: &ToolStep, cwd: &Path, live: bool) -> WorkRow {
             )
         }
         "edit" => {
-            let mut lines = Vec::new();
-            for (index, change) in input.as_ref().and_then(|input| input.get("edits")).and_then(Value::as_array).into_iter().flatten().enumerate() {
-                if index > 0 {
-                    lines.push(DiffLine { kind: LineKind::Gap, number: None, text: "".into() });
-                }
-                let old = change.get("old_text").and_then(Value::as_str).unwrap_or("");
-                let new = change.get("new_text").and_then(Value::as_str).unwrap_or("");
-                lines.extend(line_diff(old, new));
-            }
+            let lines = edit_lines(input.as_ref());
             let added = lines.iter().filter(|line| line.kind == LineKind::Added).count();
             let removed = lines.iter().filter(|line| line.kind == LineKind::Removed).count();
             (
@@ -1123,7 +1118,28 @@ pub(crate) fn tail(text: &str, lines: usize) -> String {
     format!("… {} earlier lines\n{}", all.len() - lines, all[all.len() - lines..].join("\n"))
 }
 
-fn cap(mut lines: Vec<DiffLine>) -> Vec<DiffLine> {
+pub(crate) fn write_lines(content: &str) -> Vec<DiffLine> {
+    content
+        .lines()
+        .enumerate()
+        .map(|(index, line)| DiffLine { kind: LineKind::Added, number: Some((index + 1) as u32), text: line.to_string().into() })
+        .collect()
+}
+
+pub(crate) fn edit_lines(input: Option<&Value>) -> Vec<DiffLine> {
+    let mut lines = Vec::new();
+    for (index, change) in input.and_then(|input| input.get("edits")).and_then(Value::as_array).into_iter().flatten().enumerate() {
+        if index > 0 {
+            lines.push(DiffLine { kind: LineKind::Gap, number: None, text: "".into() });
+        }
+        let old = change.get("old_text").and_then(Value::as_str).unwrap_or("");
+        let new = change.get("new_text").and_then(Value::as_str).unwrap_or("");
+        lines.extend(line_diff(old, new));
+    }
+    lines
+}
+
+pub(crate) fn cap(mut lines: Vec<DiffLine>) -> Vec<DiffLine> {
     if lines.len() > DETAIL_LINES {
         let more = lines.len() - DETAIL_LINES;
         lines.truncate(DETAIL_LINES);
@@ -1932,5 +1948,44 @@ mod tests {
         let Item::Work(work) = &items[1] else { panic!("expected work group") };
         assert_eq!(work.summary.as_ref(), "Worked for 19s");
         assert!(matches!(&items[2], Item::Commit(_)));
+    }
+
+    #[test]
+    fn settled_turns_with_edits_emit_a_changes_card_before_the_footer() {
+        let mut conversation = Conversation::default();
+        conversation.send("Update sse.rs.", 1_000);
+        conversation.apply(
+            &wack_core::Event::ToolCall {
+                id: "e1".into(),
+                name: "edit".into(),
+                input: json!({ "path": "/repo/src/sse.rs", "edits": [{ "old_text": "a", "new_text": "b\nc" }] }),
+            },
+            2_000,
+        );
+        conversation.apply(
+            &wack_core::Event::ToolResult {
+                id: "e1".into(),
+                name: "edit".into(),
+                content: "Edited src/sse.rs (1 change).".into(),
+                is_error: false,
+                images: Vec::new(),
+            },
+            3_000,
+        );
+        conversation.apply(&wack_core::Event::Text("Done.".into()), 4_000);
+
+        // Still live: no Changes card yet.
+        let live = items(&conversation, Path::new("/repo"), &HashSet::new(), 5_000, &mut ReplyCache::default());
+        assert!(!live.iter().any(|item| matches!(item, Item::Changes(_))));
+
+        conversation.finish(&Ok(wack_core::Outcome::Done), 10_000);
+        let settled = items(&conversation, Path::new("/repo"), &HashSet::new(), 12_000, &mut ReplyCache::default());
+        assert!(matches!(&settled[0], Item::Prompt { .. }));
+        assert!(matches!(&settled[1], Item::Work(_)));
+        assert!(matches!(&settled[2], Item::Reply { live: false, .. }));
+        let Item::Changes(card) = &settled[3] else { panic!("expected changes card: {settled:?}") };
+        assert_eq!(card.heading.as_ref(), "Edited 1 file");
+        assert_eq!((card.added, card.removed), (2, 1));
+        assert!(matches!(&settled[4], Item::Footer(_)));
     }
 }

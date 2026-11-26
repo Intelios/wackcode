@@ -310,6 +310,54 @@ pub fn all() -> Vec<Scene> {
             },
         },
         Scene {
+            name: "chat-turn-changes",
+            description: "Per-turn Changes cards beneath settled turns: mixed create/edit with colliding folder hints, inline diff expanded, Show more toggle, and a Created card.",
+            size: size(px(1180.), px(1080.)),
+            build: |_, cx| {
+                cx.new(|_| {
+                    Shell::showing_tabs(
+                        fixtures::sidebar(Selected::Finished),
+                        Screen::Chat {
+                            title: fixtures::WORKING_TITLE.into(),
+                            project: fixtures::project(),
+                            body: Body::Items(fixtures::turn_changes_turn()),
+                            composer: fixtures::composer_after_turn(Input::Drawn {
+                                text: None,
+                                placeholder: crate::chat::FOLLOW_UP_PLACEHOLDER.into(),
+                            }),
+                        },
+                        fixtures::strip(Some(fixtures::WORKING_TITLE)),
+                    )
+                })
+                .into()
+            },
+        },
+        Scene {
+            name: "chat-turn-changes-backdrop",
+            description: "Per-turn Changes cards over an image backdrop: expanded inline diff and collapsed created-files card on glass.",
+            size: size(px(1180.), px(1080.)),
+            build: |_, cx| {
+                let picture = over(fixtures::backdrop(wack_core::Texture::None), cx);
+                cx.new(|_| {
+                    Shell::showing_tabs(
+                        fixtures::sidebar(Selected::Finished),
+                        Screen::Chat {
+                            title: fixtures::WORKING_TITLE.into(),
+                            project: fixtures::project(),
+                            body: Body::Items(fixtures::turn_changes_turn()),
+                            composer: fixtures::composer_after_turn(Input::Drawn {
+                                text: None,
+                                placeholder: crate::chat::FOLLOW_UP_PLACEHOLDER.into(),
+                            }),
+                        },
+                        fixtures::strip(Some(fixtures::WORKING_TITLE)),
+                    )
+                    .with_backdrop(picture)
+                })
+                .into()
+            },
+        },
+        Scene {
             name: "suggestions",
             description: "The suggested-task tray under a settled turn: open, queued, started, opened-in and dismissed cards.",
             size: size(px(1180.), px(1240.)),

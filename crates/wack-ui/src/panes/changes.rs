@@ -47,6 +47,8 @@ pub struct ChangesPane {
     state: State,
     /// The selected file's path, kept across refreshes while the file is still changed.
     selected: Option<String>,
+    /// A file asked for before the latest refresh landed, applied if Git lists it.
+    pending_select: Option<String>,
     diff: Diff,
     /// The path `diff` belongs to, so a refresh of the same file keeps the reader's place.
     diff_path: Option<String>,
@@ -69,6 +71,7 @@ impl ChangesPane {
             folder,
             state: State::Loading,
             selected: None,
+            pending_select: None,
             diff: Diff::None,
             diff_path: None,
             lines: ListState::new(0, ListAlignment::Top, px(600.)),
@@ -126,6 +129,11 @@ impl ChangesPane {
             State::Ready { files, .. } => files.as_slice(),
             _ => &[],
         };
+        if let Some(wanted) = self.pending_select.take()
+            && files.iter().any(|file| file.path == wanted)
+        {
+            self.selected = Some(wanted);
+        }
         if !self.selected.as_ref().is_some_and(|selected| files.iter().any(|file| &file.path == selected)) {
             self.selected = files.first().map(|file| file.path.clone());
         }
@@ -141,11 +149,24 @@ impl ChangesPane {
     }
 
     pub fn select(&mut self, path: &str, cx: &mut Context<Self>) {
+        self.pending_select = None;
         if self.selected.as_deref() != Some(path) {
             self.selected = Some(path.to_string());
             self.load_diff(path.to_string(), cx);
             cx.notify();
         }
+    }
+
+    /// Selects `path` right away if it is already in Git's list, or remembers it for the next
+    /// refresh without disturbing the current selection if the file is no longer modified.
+    pub fn select_if_present(&mut self, path: &str, cx: &mut Context<Self>) {
+        if let State::Ready { files, .. } = &self.state
+            && files.iter().any(|file| file.path == path)
+        {
+            self.select(path, cx);
+            return;
+        }
+        self.pending_select = Some(path.to_string());
     }
 
     fn load_diff(&mut self, path: String, cx: &mut Context<Self>) {

@@ -370,6 +370,15 @@ impl ChatPanes {
         }
     }
 
+    /// Selects `path` in every Changes pane on screen if Git lists it (or once its next refresh lands).
+    pub fn select_change(&self, path: &str, cx: &mut App) {
+        for pane in self.layout.visible() {
+            if let Some(PaneModel::Changes(changes)) = self.model(pane.id) {
+                changes.update(cx, |changes, cx| changes.select_if_present(path, cx));
+            }
+        }
+    }
+
     /// The words a pane's tab shows: a terminal's own title, numbered when untitled and not alone.
     pub fn title(&self, pane: Pane, cx: &App) -> SharedString {
         match (pane.kind, self.model(pane.id)) {

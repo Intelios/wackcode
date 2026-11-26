@@ -203,6 +203,8 @@ impl AgentsPane {
         let Some((_, conversation)) = self.read.get(&info.id) else { return Vec::new() };
         let cache = self.replies.entry(info.id.clone()).or_default();
         let mut items = work::items(conversation, &self.cwd, &self.open, wack_core::tasks::now_millis(), cache);
+        // Sub-agent views show every work log open; omit the per-turn Changes card.
+        items.retain(|item| !matches!(item, Item::Changes(_)));
         // Its work is the point here: logs show open unless folded.
         for item in &mut items {
             if let Item::Work(log) = item {

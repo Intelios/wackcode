@@ -61,6 +61,8 @@ pub enum Item {
     Compacted,
     /// A proposed plan: the transcript's hero card.
     Plan(crate::plan_card::PlanCard),
+    /// The files a settled turn edited or created, with inline diffs and a link to Changes.
+    Changes(crate::changes_card::ChangesCard),
     /// The follow-ups a settled turn filed, under its answer.
     Suggestions(crate::suggestion::Tray),
     /// What a turn drew on a canvas, under its log.
@@ -211,7 +213,7 @@ pub struct Diff {
     pub removed: usize,
 }
 
-#[derive(Clone, Debug)]
+#[derive(Clone, Debug, PartialEq, Eq)]
 pub struct DiffLine {
     pub kind: LineKind,
     pub number: Option<u32>,
@@ -337,6 +339,7 @@ fn gap_above(item: &Item, previous: Option<&Item>) -> f32 {
         (_, Item::Prompt { steered: true, .. }) => 24.,
         (_, Item::Prompt { .. }) => 44.,
         (_, Item::Footer(_)) => 12.,
+        (_, Item::Changes(_)) => 14.,
         (_, Item::Suggestions(_)) => 14.,
         (_, Item::Canvas(_)) => 12.,
         (Some(Item::Commit(_)), Item::Commit(_)) => 8.,
@@ -423,6 +426,7 @@ pub fn item(item: &Item, previous: Option<&Item>, theme: &Theme, handlers: &Hand
             .children(missing.iter().map(|reference| crate::pictures::missing(reference, theme)))
             .into_any_element(),
         Item::Plan(card) => crate::plan_card::plan_card(card, theme, handlers).into_any_element(),
+        Item::Changes(card) => crate::changes_card::view(card, theme, handlers).into_any_element(),
         Item::Suggestions(tray) => crate::suggestion::tray(tray, theme, handlers).into_any_element(),
         Item::Canvas(card) => crate::canvas_card::view(card, theme).into_any_element(),
         Item::Footer(text) => div().typography(Type::Small).text_color(theme.text_faint).child(text.clone()).into_any_element(),

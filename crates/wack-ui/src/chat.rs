@@ -1131,6 +1131,7 @@ impl ChatSession {
                     command.as_ref().is_some_and(|command| command.key.as_ref() == key)
                         || files.iter().any(|file| file.key.as_ref() == key)
                 }
+                Item::Changes(card) => card.holds(key),
                 Item::Suggestions(tray) => tray.cards.iter().any(|card| card.holds(key)),
                 Item::ChatThought { key: thought, .. } => thought.as_ref() == key,
                 Item::ChatChips(chips) => chips.iter().any(|chip| matches!(chip, crate::chat_transcript::Chip::Fold { key: fold, .. } if fold.as_ref() == key)),

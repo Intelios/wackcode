@@ -797,6 +797,13 @@ pub struct ShowAgent {
     pub id: gpui::SharedString,
 }
 
+/// Opens the chat's Changes pane (never hiding it if already visible), optionally selecting `path`.
+#[derive(Clone, Debug, PartialEq, Action)]
+#[action(namespace = wackcode, no_json)]
+pub struct ShowChanges {
+    pub path: Option<String>,
+}
+
 /// Stops one sub-agent for the user.
 #[derive(Clone, Debug, PartialEq, Action)]
 #[action(namespace = wackcode, no_json)]

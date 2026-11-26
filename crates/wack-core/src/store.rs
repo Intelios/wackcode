@@ -115,8 +115,9 @@ pub struct Connection {
     pub base_url: String,
     pub models: Vec<Model>,
     /// Switched on in Settings › Providers. An off connection keeps its key and models but is
-    /// left out of the model menu and never chosen: a chat that used it falls back to another
-    /// until it is switched on again. Files saved before the switch existed load as on.
+    /// left out of the model menu and never resolved: a chat that chose it cannot run until
+    /// another model is picked or the connection is switched back on. Files saved before the
+    /// switch existed load as on.
     #[serde(default = "on", skip_serializing_if = "is_on")]
     pub enabled: bool,
 }
@@ -450,6 +451,10 @@ fn recording_on() -> bool {
     true
 }
 
+/// Shown wherever the user tries to make a chat whose model is gone do model work.
+pub const MODEL_MISSING_MESSAGE: &str =
+    "This chat's model is no longer configured. Pick another to continue.";
+
 /// A connection and model resolved from a [`ModelChoice`], ready to build a run.
 #[derive(Clone, Debug, PartialEq)]
 pub struct Resolved {
@@ -457,6 +462,18 @@ pub struct Resolved {
     pub model: Model,
     /// Always one of the model's choices ([`Model::pick`]).
     pub effort: Reasoning,
+}
+
+impl Resolved {
+    /// The concrete choice this resolution names, so a chat keeps the exact connection, model
+    /// and effort it started with even if defaults change later.
+    pub fn choice(&self) -> ModelChoice {
+        ModelChoice {
+            connection: Some(self.connection.id.clone()),
+            model: Some(self.model.id.clone()),
+            effort: Some(self.effort),
+        }
+    }
 }
 
 fn now_millis() -> u64 {
@@ -1003,7 +1020,9 @@ impl Store {
     }
 
     /// Lists a new chat. Its session file is created by its first run. `origin` records the
-    /// suggested task it was started from, for the card that sent it here.
+    /// suggested task it was started from, for the card that sent it here. An unset choice pins
+    /// the area's current default so the chat keeps the model it started on if defaults or
+    /// connections change later.
     pub fn create_chat(
         &mut self,
         project: &str,
@@ -1015,6 +1034,7 @@ impl Store {
         if self.project(project).is_none() {
             return Err("That project is gone.".to_string());
         }
+        let choice = self.pin_choice(ChatKind::Code, choice);
         let chat = Self::new_chat(ChatKind::Code, Some(project), title, choice, mode, origin);
         self.state.chats.push(chat.clone());
         self.save()?;
@@ -1024,6 +1044,7 @@ impl Store {
     /// Lists a new chat in the Chat area and makes its scratchpad, before any run can freeze
     /// the session's folder. A Chat chat is always in Build: it has no plan tools.
     pub fn create_area_chat(&mut self, title: &str, choice: ModelChoice) -> Result<Chat, String> {
+        let choice = self.pin_choice(ChatKind::Chat, choice);
         let chat = Self::new_chat(ChatKind::Chat, None, title, choice, AgentMode::Build, None);
         let scratch = self.scratch_folder(&chat);
         fs::create_dir_all(&scratch).map_err(|error| format!("Could not make the chat's scratchpad: {error}"))?;
@@ -1033,6 +1054,22 @@ impl Store {
         self.state.chats.push(chat.clone());
         self.save()?;
         Ok(chat)
+    }
+
+    /// Pins an unset choice (`connection: None, model: None`) to `area`'s current default when
+    /// one resolves, keeping any requested effort.
+    fn pin_choice(&self, area: ChatKind, choice: ModelChoice) -> ModelChoice {
+        if choice.connection.is_some() || choice.model.is_some() {
+            return choice;
+        }
+        let Some(resolved) = self.resolve_default(area) else {
+            return choice;
+        };
+        ModelChoice {
+            connection: Some(resolved.connection.id),
+            effort: Some(choice.effort.map_or(resolved.effort, |wanted| resolved.model.pick(Some(wanted)))),
+            model: Some(resolved.model.id),
+        }
     }
 
     fn new_chat(
@@ -1476,7 +1513,7 @@ impl Store {
         self.save()
     }
 
-    /// The Code area's default model, which `resolve` falls back to.
+    /// The Code area's default model, for new chats.
     pub fn defaults(&self) -> &ModelChoice {
         &self.state.defaults
     }
@@ -1490,31 +1527,108 @@ impl Store {
         }
     }
 
-    /// The connection and model a choice means today. A missing, removed or switched-off
-    /// connection falls back to the default and then to the first one switched on; a missing model
-    /// to the connection's first. With every connection off there is nothing to use.
-    pub fn resolve(&self, choice: &ModelChoice) -> Option<Resolved> {
-        let defaults = &self.state.defaults;
-        let connection = [choice.connection.as_deref(), defaults.connection.as_deref()]
-            .into_iter()
-            .flatten()
-            .find_map(|id| self.enabled_connections().find(|connection| connection.id == id))
-            .or_else(|| self.enabled_connections().next())?;
-        let model = [choice.model.as_deref(), defaults.model.as_deref()]
-            .into_iter()
-            .flatten()
-            .find_map(|id| connection.models.iter().find(|model| model.id == id))
-            .or_else(|| connection.models.first())?;
-        let effort = if choice.connection.is_some() || choice.model.is_some() {
-            choice.effort
+    /// The connection and model a new chat in `area` starts with today: the area's remembered
+    /// choice if it is still configured on an enabled connection, else Code's default (for the
+    /// Chat area), else that connection's first model, else the first enabled connection's first
+    /// model. With every connection off there is nothing to use.
+    pub fn resolve_default(&self, area: ChatKind) -> Option<Resolved> {
+        let preferred = self.defaults_for(area);
+        if let Some(resolved) = self.resolve_configured(preferred) {
+            return Some(resolved);
+        }
+        if area == ChatKind::Chat
+            && self.state.chat_defaults.is_some()
+            && let Some(resolved) = self.resolve_configured(&self.state.defaults)
+        {
+            return Some(resolved);
+        }
+        if let Some(id) = preferred.connection.as_deref()
+            && let Some(connection) = self.enabled_connections().find(|connection| connection.id == id)
+            && let Some(model) = connection.models.first()
+        {
+            return Some(Resolved {
+                connection: connection.clone(),
+                effort: model.pick(None),
+                model: model.clone(),
+            });
+        }
+        let connection = self.enabled_connections().find(|connection| !connection.models.is_empty())?;
+        let model = connection.models.first()?;
+        let effort = if preferred.connection.is_none() && preferred.model.is_none() {
+            preferred.effort
         } else {
-            defaults.effort
+            None
         };
         Some(Resolved {
             connection: connection.clone(),
             effort: model.pick(effort),
             model: model.clone(),
         })
+    }
+
+    /// Matches `choice` only when both its connection (switched on) and model exist.
+    fn resolve_configured(&self, choice: &ModelChoice) -> Option<Resolved> {
+        let connection_id = choice.connection.as_deref()?;
+        let model_id = choice.model.as_deref()?;
+        let connection = self.enabled_connections().find(|connection| connection.id == connection_id)?;
+        let model = connection.models.iter().find(|model| model.id == model_id)?;
+        Some(Resolved {
+            connection: connection.clone(),
+            effort: model.pick(choice.effort),
+            model: model.clone(),
+        })
+    }
+
+    /// The connection and model a choice names today. When a choice names a connection or model,
+    /// only that enabled connection and model resolve: a removed or switched-off connection or
+    /// removed model returns `None` rather than silently falling back to another. An unset choice
+    /// (`connection: None, model: None`, as in a chat saved before concrete choices were
+    /// recorded) resolves through [`Self::resolve_default`].
+    pub fn resolve(&self, choice: &ModelChoice) -> Option<Resolved> {
+        if choice.connection.is_none() && choice.model.is_none() {
+            let resolved = self.resolve_default(ChatKind::Code)?;
+            return Some(Resolved {
+                effort: choice.effort.map_or(resolved.effort, |wanted| resolved.model.pick(Some(wanted))),
+                ..resolved
+            });
+        }
+        let connection = match choice.connection.as_deref() {
+            Some(id) => self.enabled_connections().find(|connection| connection.id == id)?,
+            None => self
+                .state
+                .defaults
+                .connection
+                .as_deref()
+                .and_then(|id| self.enabled_connections().find(|connection| connection.id == id))?,
+        };
+        let model = match choice.model.as_deref() {
+            Some(id) => connection.models.iter().find(|model| model.id == id)?,
+            None => connection.models.first()?,
+        };
+        Some(Resolved {
+            connection: connection.clone(),
+            effort: model.pick(choice.effort),
+            model: model.clone(),
+        })
+    }
+
+    /// Why an existing chat's model cannot run right now, or `None` when it resolves.
+    pub fn chat_model_problem(&self, chat: &Chat) -> Option<&'static str> {
+        if self.resolve(&chat.choice).is_some() {
+            return None;
+        }
+        if chat.choice.connection.is_some() || chat.choice.model.is_some() || !self.state.connections.is_empty() {
+            Some(MODEL_MISSING_MESSAGE)
+        } else {
+            Some("Add a connection in Settings › Providers to start chatting.")
+        }
+    }
+
+    /// Resolves an existing chat's own model, or refuses with a user-facing reason when it is no
+    /// longer configured.
+    pub fn resolve_chat(&self, chat: &Chat) -> Result<Resolved, String> {
+        self.resolve(&chat.choice)
+            .ok_or_else(|| self.chat_model_problem(chat).unwrap_or(MODEL_MISSING_MESSAGE).to_string())
     }
 
     /// The provider that sends this connection's requests. A key comes out of the secret store
@@ -1893,12 +2007,27 @@ mod tests {
             model: Some("zzz".into()),
             effort: None,
         };
-        let resolved = store.resolve(&gone).unwrap();
         assert_eq!(
-            resolved.connection.id, second.id,
-            "a removed connection falls back to the default"
+            store.resolve(&gone),
+            None,
+            "a removed connection never silently falls back to the default"
         );
-        assert_eq!(resolved.model.id, "b");
+        let removed_model = ModelChoice {
+            connection: Some(second.id.clone()),
+            model: Some("zzz".into()),
+            effort: None,
+        };
+        assert_eq!(
+            store.resolve(&removed_model),
+            None,
+            "a removed model never silently falls back to another model on the same connection"
+        );
+
+        // New chats' defaults do fall back when the remembered default is gone.
+        store.set_choice(ChatKind::Code, None, gone).unwrap();
+        let resolved = store.resolve_default(ChatKind::Code).unwrap();
+        assert_eq!(resolved.connection.id, first.id, "a new chat falls back to the first enabled connection");
+        assert_eq!(resolved.model.id, "big-model");
     }
 
     #[test]
@@ -1911,7 +2040,7 @@ mod tests {
         let project = store.add_project(project.path()).unwrap();
         let picked = ModelChoice {
             connection: Some(first.id.clone()),
-            model: None,
+            model: Some("big-model".into()),
             effort: None,
         };
         let chat = store
@@ -1919,7 +2048,14 @@ mod tests {
             .unwrap();
 
         store.set_connection_enabled(&first.id, false).unwrap();
-        assert_eq!(store.resolve(&picked).unwrap().connection.id, second.id, "off falls back");
+        assert_eq!(store.resolve(&picked), None, "an off connection never silently falls back to another");
+        assert_eq!(store.chat_model_problem(&chat), Some(MODEL_MISSING_MESSAGE));
+        assert_eq!(store.resolve_chat(&chat).unwrap_err(), MODEL_MISSING_MESSAGE);
+        assert_eq!(
+            store.resolve_default(ChatKind::Code).unwrap().connection.id,
+            second.id,
+            "a new chat falls back to an enabled connection"
+        );
         assert_eq!(store.enabled_connections().count(), 1);
         assert!(store.has_key(&first.id), "off keeps the key");
         assert_eq!(store.chat(&chat.id).unwrap().choice, picked, "the chat's choice is kept");
@@ -1929,9 +2065,41 @@ mod tests {
 
         store.set_connection_enabled(&second.id, false).unwrap();
         assert_eq!(store.resolve(&picked), None, "with every connection off, nothing to use");
+        assert_eq!(store.resolve_default(ChatKind::Code), None);
 
         store.set_connection_enabled(&first.id, true).unwrap();
         assert_eq!(store.resolve(&picked).unwrap().connection.id, first.id, "on again, chosen again");
+        assert_eq!(store.chat_model_problem(&chat), None);
+    }
+
+    #[test]
+    fn creating_a_chat_with_unset_choice_pins_its_resolved_model() {
+        let folder = tempfile::tempdir().unwrap();
+        let work = tempfile::tempdir().unwrap();
+        let mut store = Store::open(folder.path()).unwrap();
+        let first = store.add_connection(new("First"), "k1").unwrap();
+        let second = store.add_connection(new("Second"), "k2").unwrap();
+        let project = store.add_project(work.path()).unwrap();
+
+        let chat = store
+            .create_chat(&project.id, "Pinned", ModelChoice::default(), AgentMode::Build, None)
+            .unwrap();
+        assert_eq!(chat.choice.connection.as_deref(), Some(first.id.as_str()));
+        assert_eq!(chat.choice.model.as_deref(), Some("big-model"));
+
+        // Changing the default or removing the first connection never silently moves this chat.
+        store
+            .set_choice(
+                ChatKind::Code,
+                None,
+                ModelChoice { connection: Some(second.id.clone()), model: Some("big-model".into()), effort: None },
+            )
+            .unwrap();
+        assert_eq!(store.resolve_chat(&chat).unwrap().connection.id, first.id);
+
+        store.remove_connection(&first.id).unwrap();
+        assert_eq!(store.resolve_chat(&chat).unwrap_err(), MODEL_MISSING_MESSAGE);
+        assert_eq!(store.chat_model_problem(&chat), Some(MODEL_MISSING_MESSAGE));
     }
 
     #[test]

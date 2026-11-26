@@ -639,6 +639,116 @@ pub fn all() -> Vec<Scene> {
             },
         },
         Scene {
+            name: "chat-model-missing",
+            description: "A chat whose model is no longer configured: the transcript stays readable, the composer names why, the model pill invites another pick, and Send waits.",
+            size: WINDOW,
+            build: |_, cx| {
+                cx.new(|_| {
+                    let composer = ComposerData {
+                        model: "Choose model".into(),
+                        connection: "".into(),
+                        effort: None,
+                        model_missing: Some(wack_core::MODEL_MISSING_MESSAGE.into()),
+                        meter: Some(crate::composer::Meter {
+                            tokens: 68_000,
+                            window: None,
+                            high: false,
+                            can_compact: false,
+                            parts: fixtures::context_parts(68_000),
+                        }),
+                        ..fixtures::composer_after_turn(Input::Drawn {
+                            text: Some("Run the retry tests now.".into()),
+                            placeholder: crate::chat::FOLLOW_UP_PLACEHOLDER.into(),
+                        })
+                    };
+                    Shell::showing(
+                        fixtures::sidebar(Selected::Finished),
+                        Screen::Chat {
+                            title: fixtures::FINISHED_TITLE.into(),
+                            project: fixtures::project(),
+                            body: Body::Items(fixtures::finished_turn()),
+                            composer,
+                        },
+                    )
+                })
+                .into()
+            },
+        },
+        Scene {
+            name: "chat-model-missing-backdrop",
+            description: "A chat whose model is no longer configured, over a backdrop.",
+            size: WINDOW,
+            build: |_, cx| {
+                let picture = over(fixtures::backdrop(wack_core::Texture::None), cx);
+                cx.new(|_| {
+                    let composer = ComposerData {
+                        model: "Choose model".into(),
+                        connection: "".into(),
+                        effort: None,
+                        model_missing: Some(wack_core::MODEL_MISSING_MESSAGE.into()),
+                        meter: Some(crate::composer::Meter {
+                            tokens: 68_000,
+                            window: None,
+                            high: false,
+                            can_compact: false,
+                            parts: fixtures::context_parts(68_000),
+                        }),
+                        ..fixtures::composer_after_turn(Input::Drawn {
+                            text: Some("Run the retry tests now.".into()),
+                            placeholder: crate::chat::FOLLOW_UP_PLACEHOLDER.into(),
+                        })
+                    };
+                    Shell::showing_tabs(
+                        fixtures::sidebar(Selected::Finished),
+                        Screen::Chat {
+                            title: fixtures::FINISHED_TITLE.into(),
+                            project: fixtures::project(),
+                            body: Body::Items(fixtures::finished_turn()),
+                            composer,
+                        },
+                        fixtures::strip(Some(fixtures::FINISHED_TITLE)),
+                    )
+                    .with_backdrop(picture)
+                })
+                .into()
+            },
+        },
+        Scene {
+            name: "composer-model-missing",
+            description: "Missing-model composer states: Code composer holding Send, Chat-area composer, and the context popover refusing Compact.",
+            size: size(px(760.), px(900.)),
+            build: |_, cx| {
+                let missing = |chat_area: bool, text: Option<&str>| ComposerData {
+                    chat_area,
+                    model: "Choose model".into(),
+                    connection: "".into(),
+                    effort: None,
+                    model_missing: Some(wack_core::MODEL_MISSING_MESSAGE.into()),
+                    meter: Some(crate::composer::Meter {
+                        tokens: 68_000,
+                        window: None,
+                        high: false,
+                        can_compact: false,
+                        parts: fixtures::context_parts(68_000),
+                    }),
+                    ..fixtures::composer_after_turn(Input::Drawn {
+                        text: text.map(Into::into),
+                        placeholder: if chat_area {
+                            crate::app::CHAT_FOLLOW_UP_PLACEHOLDER.into()
+                        } else {
+                            crate::chat::FOLLOW_UP_PLACEHOLDER.into()
+                        },
+                    })
+                };
+                let rows = vec![
+                    ("Context popover without Compact", ComposerData { context_open: true, ..missing(false, None) }),
+                    ("Code chat holding Send", missing(false, Some("Run the retry tests now."))),
+                    ("Chat area", missing(true, None)),
+                ];
+                cx.new(|_| ComposerSheet { rows }).into()
+            },
+        },
+        Scene {
             name: "effort-slider",
             description: "The effort slider at High, opened from the effort's pill in the smallest window.",
             size: size(px(716.), px(720.)),

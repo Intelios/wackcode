@@ -152,6 +152,7 @@ pub fn composer_empty(roomy: bool) -> ComposerData {
         foreground: false,
         attachments: Vec::new(),
         files: Vec::new(),
+        model_missing: None,
         pictures_refused: None,
         files_refused: None,
         sent_at: None,

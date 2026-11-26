@@ -59,6 +59,8 @@ pub struct Item {
     pub menu_open: bool,
     /// Show more was pressed.
     pub expanded: bool,
+    /// The chat's own model is gone: "Start here" and its Plan variants wait for another model.
+    pub model_missing: bool,
 }
 
 #[derive(Clone, Debug, PartialEq)]
@@ -76,7 +78,7 @@ pub enum State {
 }
 
 impl Item {
-    pub fn new(card: Card, state: State, open: &HashSet<String>) -> Self {
+    pub fn new(card: Card, state: State, open: &HashSet<String>, model_missing: bool) -> Self {
         Self {
             title: card.title.into(),
             kind: card.kind,
@@ -85,6 +87,7 @@ impl Item {
             state,
             menu_open: open.contains(&menu_key(&card.id)),
             expanded: open.contains(&more_key(&card.id)),
+            model_missing,
             id: card.id.into(),
         }
     }
@@ -216,11 +219,16 @@ fn footing(card: &Item, theme: &Theme, handlers: &Handlers) -> gpui::Div {
                 target: SuggestionTarget::New,
                 mode: wack_core::AgentMode::Build,
             }))
-            .child(Button::new(format!("{}-here", card.id), "Start here", ButtonKind::Secondary).action(StartSuggestion {
-                id: card.id.to_string(),
-                target: SuggestionTarget::Here,
-                mode: wack_core::AgentMode::Build,
-            }))
+            .child(
+                Button::new(format!("{}-here", card.id), "Start here", ButtonKind::Secondary)
+                    .enabled(!card.model_missing)
+                    .tooltip(if card.model_missing { "Pick a model for this chat first" } else { "Send it in this chat" })
+                    .action(StartSuggestion {
+                        id: card.id.to_string(),
+                        target: SuggestionTarget::Here,
+                        mode: wack_core::AgentMode::Build,
+                    }),
+            )
             .child(div().flex_1())
             .child(menu_button(card, theme, handlers)),
         State::Queued => row.child(state_line(theme.success, Icon::Check, "Queued for this chat", theme)),
@@ -255,6 +263,7 @@ fn menu_row(
     id: &str,
     label: SharedString,
     icon: Option<gpui::AnyElement>,
+    enabled: bool,
     theme: &Theme,
     on_click: impl Fn(&ClickEvent, &mut Window, &mut App) + 'static,
 ) -> gpui::Stateful<gpui::Div> {
@@ -267,9 +276,8 @@ fn menu_row(
         .flex()
         .items_center()
         .gap(px(8.))
-        .hover(|row| row.bg(theme.hover))
-        .cursor_pointer()
-        .on_click(on_click)
+        .when(enabled, |row| row.hover(|row| row.bg(theme.hover)).cursor_pointer().on_click(on_click))
+        .when(!enabled, |row| row.opacity(0.45).tooltip(crate::tooltip::tip("Pick a model for this chat first")))
         .when_some(icon, |row, icon| row.child(div().w(px(14.)).flex_none().flex().items_center().child(icon)))
         .child(div().flex_1().min_w_0().truncate().typography(Type::Ui).text_color(theme.text).child(label))
 }
@@ -322,6 +330,7 @@ fn menu_button(card: &Item, theme: &Theme, handlers: &Handlers) -> impl IntoElem
             &format!("{}-plan-new", card.id),
             "Plan it in a new chat".into(),
             Some(Icon::Brain.view(px(13.), theme.text_dim).into_any_element()),
+            true,
             theme,
             start(SuggestionTarget::New, wack_core::AgentMode::Plan),
         ))
@@ -329,6 +338,7 @@ fn menu_button(card: &Item, theme: &Theme, handlers: &Handlers) -> impl IntoElem
             &format!("{}-plan-here", card.id),
             "Plan it here".into(),
             Some(Icon::Brain.view(px(13.), theme.text_dim).into_any_element()),
+            !card.model_missing,
             theme,
             start(SuggestionTarget::Here, wack_core::AgentMode::Plan),
         ))
@@ -336,6 +346,7 @@ fn menu_button(card: &Item, theme: &Theme, handlers: &Handlers) -> impl IntoElem
             &format!("{}-ultra-new", card.id),
             "Ultra Plan it in a new chat".into(),
             Some(UltraMark::new(SharedString::from(format!("{}-un", card.id)), px(13.)).into_any_element()),
+            true,
             theme,
             start(SuggestionTarget::New, wack_core::AgentMode::UltraPlan),
         ))
@@ -343,6 +354,7 @@ fn menu_button(card: &Item, theme: &Theme, handlers: &Handlers) -> impl IntoElem
             &format!("{}-ultra-here", card.id),
             "Ultra Plan it here".into(),
             Some(UltraMark::new(SharedString::from(format!("{}-uh", card.id)), px(13.)).into_any_element()),
+            !card.model_missing,
             theme,
             start(SuggestionTarget::Here, wack_core::AgentMode::UltraPlan),
         ))
@@ -351,6 +363,7 @@ fn menu_button(card: &Item, theme: &Theme, handlers: &Handlers) -> impl IntoElem
             &format!("{}-copy", card.id),
             "Copy as prompt".into(),
             Some(Icon::Copy.view(px(13.), theme.text_dim).into_any_element()),
+            true,
             theme,
             copy,
         ));

@@ -139,9 +139,7 @@ impl Store {
             .as_deref()
             .and_then(|id| self.project(id))
             .ok_or("This chat's project is no longer in WackCode.")?;
-        let resolved = self
-            .resolve(&chat.choice)
-            .ok_or("Add a connection in Settings › Providers to start chatting.")?;
+        let resolved = self.resolve_chat(chat)?;
         let provider = self.provider(&resolved.connection)?;
         let usage = self.usage_recorder(&resolved.connection, &chat.id, &project.path);
         let children = self.child_model(&resolved, &chat.id, &project.path)?;
@@ -192,9 +190,7 @@ impl Store {
     /// A Chat chat's run: its scratchpad as the folder (made again if it went missing), the Chat
     /// area's memory and MCP servers, and none of the coding features.
     fn chat_area_setup(&self, chat: &Chat) -> Result<RunSetup, String> {
-        let resolved = self
-            .resolve(&chat.choice)
-            .ok_or("Add a connection in Settings › Providers to start chatting.")?;
+        let resolved = self.resolve_chat(chat)?;
         let provider = self.provider(&resolved.connection)?;
         let scratch = self.scratch_folder(chat);
         std::fs::create_dir_all(&scratch).map_err(|error| format!("Could not make the chat's scratchpad: {error}"))?;
@@ -870,5 +866,74 @@ mod tests {
         assert_eq!(chat_req.system[0].text, "Custom chat persona.");
         assert!(chat_req.system[1].text.starts_with("# This chat") && chat_req.system[1].text.contains("private scratchpad folder"));
         assert_eq!(chat_req.system.last().unwrap().text, "Custom ultra instruction.");
+    }
+
+    #[test]
+    fn run_setup_refuses_code_and_chat_area_chats_whose_model_is_missing() {
+        let folder = tempfile::tempdir().unwrap();
+        let work = tempfile::tempdir().unwrap();
+        let mut store = Store::open(folder.path()).unwrap();
+        let first = store
+            .add_connection(
+                crate::NewConnection {
+                    name: "First".into(),
+                    format: wack_llm::WireFormat::OpenaiChat,
+                    base_url: "https://example.invalid/v1".into(),
+                    models: vec![crate::Model::new("gone-model", None), crate::Model::new("other-model", None)],
+                },
+                "k1",
+            )
+            .unwrap();
+        let second = store
+            .add_connection(
+                crate::NewConnection {
+                    name: "Second".into(),
+                    format: wack_llm::WireFormat::OpenaiChat,
+                    base_url: "https://second.invalid/v1".into(),
+                    models: vec![crate::Model::new("fallback-model", None)],
+                },
+                "k2",
+            )
+            .unwrap();
+        let project = store.add_project(work.path()).unwrap();
+        let choice = crate::ModelChoice {
+            connection: Some(first.id.clone()),
+            model: Some("gone-model".into()),
+            effort: None,
+        };
+        let code = store.create_chat(&project.id, "Code", choice.clone(), AgentMode::Build, None).unwrap();
+        let area = store.create_area_chat("Chat", choice).unwrap();
+
+        // Removing the model from its connection refuses both chats instead of falling back to
+        // `other-model` or `second`.
+        store
+            .update_connection(
+                &first.id,
+                crate::NewConnection {
+                    name: "First".into(),
+                    format: wack_llm::WireFormat::OpenaiChat,
+                    base_url: "https://example.invalid/v1".into(),
+                    models: vec![crate::Model::new("other-model", None)],
+                },
+                None,
+            )
+            .unwrap();
+        assert_eq!(store.run_setup(&code).err().as_deref(), Some(crate::MODEL_MISSING_MESSAGE));
+        assert_eq!(store.run_setup(&area).err().as_deref(), Some(crate::MODEL_MISSING_MESSAGE));
+
+        // Picking another model repairs the chat.
+        store
+            .set_choice(
+                ChatKind::Code,
+                Some(&code.id),
+                crate::ModelChoice { connection: Some(second.id.clone()), model: Some("fallback-model".into()), effort: None },
+            )
+            .unwrap();
+        let repaired = store.chat(&code.id).unwrap().clone();
+        assert!(store.run_setup(&repaired).is_ok());
+
+        // Switching the repaired chat's connection off refuses it again.
+        store.set_connection_enabled(&second.id, false).unwrap();
+        assert_eq!(store.run_setup(&repaired).err().as_deref(), Some(crate::MODEL_MISSING_MESSAGE));
     }
 }

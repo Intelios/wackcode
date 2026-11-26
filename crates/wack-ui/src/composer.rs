@@ -127,6 +127,9 @@ pub struct ComposerData {
     pub attachments: Vec<crate::attachments::Attachment>,
     /// Text files attached to the message (picked, dropped, pasted, terminal).
     pub files: Vec<FileAttachment>,
+    /// Why the chat's own model cannot run (removed or switched off): Send and Compact wait until
+    /// another model is picked.
+    pub model_missing: Option<SharedString>,
     /// Why the message's pictures can't go to this model, when they can't: Send waits on it.
     pub pictures_refused: Option<SharedString>,
     /// Why the message's attached text files can't send (over count or size cap): Send waits on it.
@@ -315,10 +318,11 @@ impl RenderOnce for Composer {
             Input::Field(field) => !field.read(cx).text().trim().is_empty(),
             Input::Drawn { text, .. } => text.is_some(),
         };
-        // Pictures or files alone make a message; pictures this model can't take or overflowing
-        // files hold Send back. So do comments drafted on a canvas. A crew that is gone holds it too.
+        // Pictures or files alone make a message; a missing model, pictures this model can't take,
+        // overflowing files, or a crew that is gone hold Send back. So do comments drafted on a canvas.
         let crew_missing = data.crew.as_ref().filter(|crew| crew.missing).and_then(|crew| crew.problem.clone());
         let has_text = (has_text || !data.attachments.is_empty() || !data.files.is_empty() || data.comments.is_some())
+            && data.model_missing.is_none()
             && data.pictures_refused.is_none()
             && data.files_refused.is_none()
             && crew_missing.is_none();
@@ -361,20 +365,28 @@ impl RenderOnce for Composer {
                     .tag("attach"),
             )
             // In a narrow composer the model's name gives way first; the send button never does.
-            .child(picker(
-                "model",
-                pill("model")
-                    .min_w(px(MODEL_MIN))
-                    .gap(px(6.))
-                    .text_color(theme.text_soft)
-                    .hover(|pill| pill.bg(theme.hover).text_color(theme.text))
-                    .when_some(mark_letter(&data.connection), |pill, letter| pill.child(provider_mark(letter, &theme)))
-                    .child(div().min_w_0().truncate().typography(Type::Ui).child(data.model.clone()))
-                    .child(Icon::ChevronDown.view(px(12.), theme.text_faint)),
-                menu_for(Menu::Model).map(|menu| ModelPicker { menu }.into_any_element()),
-                true,
-                viewport,
-            ));
+            .child({
+                let missing = data.model_missing.clone();
+                picker(
+                    "model",
+                    pill("model")
+                        .min_w(px(MODEL_MIN))
+                        .gap(px(6.))
+                        .text_color(if missing.is_some() { theme.warning } else { theme.text_soft })
+                        .hover(|pill| pill.bg(theme.hover).text_color(if missing.is_some() { theme.warning } else { theme.text }))
+                        .when_some(missing.clone(), |pill, why| {
+                            pill.tooltip(tip(why)).child(Icon::Alert.view(px(12.), theme.warning))
+                        })
+                        .when(missing.is_none(), |pill| {
+                            pill.when_some(mark_letter(&data.connection), |pill, letter| pill.child(provider_mark(letter, &theme)))
+                        })
+                        .child(div().min_w_0().truncate().typography(Type::Ui).child(data.model.clone()))
+                        .child(Icon::ChevronDown.view(px(12.), theme.text_faint)),
+                    menu_for(Menu::Model).map(|menu| ModelPicker { menu }.into_any_element()),
+                    true,
+                    viewport,
+                )
+            });
         if let Some(effort) = data.effort.clone() {
             let ultra = data.ultra_effort;
             let button = pill("effort")
@@ -444,9 +456,22 @@ impl RenderOnce for Composer {
             .bg(theme.surface)
             .when(!ultra_plan, |card| card.border_1().border_color(theme.border))
             .children(status_line(&data, asking, &theme))
-            .when_some(data.comments.clone(), |card, (count, canvas)| card.child(comments_chip(count, canvas, &theme)))
+            .when_some(data.comments.clone(), |card, (count, canvas)| card.child(comments_chip(count, canvas, data.model_missing.is_none(), &theme)))
             .when(!data.attachments.is_empty() || !data.files.is_empty(), |card| card.child(tray(&data.attachments, &data.files, &theme)))
-            .when_some(crew_missing, |card, missing| {
+            .when_some(data.model_missing.clone(), |card, missing| {
+                card.child(
+                    div()
+                        .flex()
+                        .items_center()
+                        .gap(px(6.))
+                        .typography(Type::Small)
+                        .text_color(theme.warning)
+                        .child(Icon::Alert.view(px(12.), theme.warning))
+                        .child(missing)
+                        .tag("model-missing"),
+                )
+            })
+            .when_some(crew_missing.filter(|_| data.model_missing.is_none()), |card, missing| {
                 card.child(
                     div()
                         .flex()
@@ -834,7 +859,7 @@ fn send_ring(data: &ComposerData, has_text: bool, viewport: gpui::Size<Pixels>, 
         .child(button);
     if open {
         let over_card = hover.clone();
-        let card = context_card(&meter, data.working, &parts_open, hover.clone(), theme);
+        let card = context_card(&meter, data.working, data.model_missing.is_some(), &parts_open, hover.clone(), theme);
         // The popover's foot reaches down to the ring, so the pointer never crosses a gap that
         // would close it on the way up.
         let popover = div().absolute().top_0().right_0().child(
@@ -866,7 +891,7 @@ fn send_ring(data: &ComposerData, has_text: bool, viewport: gpui::Size<Pixels>, 
 
 /// The context popover, ported from WackCode 2: how full, how long until the agent compacts on
 /// its own, a bar of every part, and each part with its share, opening to its pieces.
-fn context_card(meter: &Meter, working: bool, open: &[Kind], hover: Entity<ContextHover>, theme: &Theme) -> impl IntoElement + use<> {
+fn context_card(meter: &Meter, working: bool, model_missing: bool, open: &[Kind], hover: Entity<ContextHover>, theme: &Theme) -> impl IntoElement + use<> {
     let count = crate::work::count;
     let window = meter.window.filter(|window| *window > 0);
     let percent = meter.share().map(|share| share * 100.);
@@ -877,6 +902,7 @@ fn context_card(meter: &Meter, working: bool, open: &[Kind], hover: Entity<Conte
         None => format!("{} tokens", count(meter.tokens)),
     };
     let left_words: Option<(String, Hsla)> = match threshold {
+        _ if model_missing => Some(("No model configured".into(), theme.warning)),
         Some(at) if meter.tokens >= at => Some(("Auto-compaction is due".into(), theme.warning)),
         Some(at) => Some((format!("{} until auto-compact", count(at - meter.tokens)), theme.accent_text)),
         None => Some(("This model's window isn't known".into(), theme.text_faint)),
@@ -1002,6 +1028,13 @@ fn context_card(meter: &Meter, working: bool, open: &[Kind], hover: Entity<Conte
             rows = rows.child(pieces);
         }
     }
+    let (foot_words, foot_colour) = if working {
+        ("Compacting waits for the agent to finish.", theme.text_faint)
+    } else if model_missing {
+        ("This chat's model is no longer configured.", theme.warning)
+    } else {
+        ("Compacting summarises older turns to free room.", theme.text_faint)
+    };
     let foot = div()
         .mt(px(10.))
         .pt(px(10.))
@@ -1015,10 +1048,10 @@ fn context_card(meter: &Meter, working: bool, open: &[Kind], hover: Entity<Conte
                 .flex_1()
                 .min_w_0()
                 .typography(Type::Small)
-                .text_color(theme.text_faint)
-                .child(if working { "Compacting waits for the agent to finish." } else { "Compacting summarises older turns to free room." }),
+                .text_color(foot_colour)
+                .child(foot_words),
         )
-        .when(meter.can_compact && !working, |foot| {
+        .when(meter.can_compact && !working && !model_missing, |foot| {
             foot.child(
                 div()
                     .id("compact")
@@ -1103,7 +1136,7 @@ const THUMB: f32 = 56.;
 
 /// Comments drafted on a canvas, waiting for the next message: a click shows them on the
 /// canvas, and Send now sends them alone.
-fn comments_chip(count: usize, canvas: String, theme: &Theme) -> impl IntoElement {
+fn comments_chip(count: usize, canvas: String, can_send: bool, theme: &Theme) -> impl IntoElement {
     let words = if count == 1 { "1 comment on the canvas".to_string() } else { format!("{count} comments on the canvas") };
     div()
         .flex()
@@ -1136,14 +1169,17 @@ fn comments_chip(count: usize, canvas: String, theme: &Theme) -> impl IntoElemen
                 .rounded_full()
                 .flex()
                 .items_center()
-                .cursor_pointer()
                 .border_1()
                 .border_color(theme.border)
-                .hover(|send| send.bg(theme.hover))
                 .typography(Type::Small)
-                .text_color(theme.text_soft)
-                .tooltip(tip("Send the comments with no message"))
-                .on_click(dispatch(crate::actions::Send))
+                .when(can_send, |send| {
+                    send.cursor_pointer()
+                        .hover(|send| send.bg(theme.hover))
+                        .text_color(theme.text_soft)
+                        .tooltip(tip("Send the comments with no message"))
+                        .on_click(dispatch(crate::actions::Send))
+                })
+                .when(!can_send, |send| send.opacity(0.45).text_color(theme.text_dim))
                 .child("Send now")
                 .tag("composer-send-comments"),
         )
@@ -1851,7 +1887,8 @@ impl RenderOnce for ModelPicker {
         let still = cx.reduce_motion();
         let groups = self.menu.groups;
         let current = groups.iter().position(|group| group.items.iter().any(|item| item.selected));
-        let state = window.use_keyed_state("model-picker", cx, move |_, _| PickerView { provider: current.or(Some(0)), slides: 0, forward: true });
+        let initial = current.or_else(|| (groups.len() == 1).then_some(0));
+        let state = window.use_keyed_state("model-picker", cx, move |_, _| PickerView { provider: initial, slides: 0, forward: true });
         let (shown, slides, forward) = {
             let view = state.read(cx);
             (view.provider.filter(|&index| index < groups.len()), view.slides, view.forward)
@@ -1877,6 +1914,16 @@ impl RenderOnce for ModelPicker {
                     .flex()
                     .flex_col()
                     .child(div().px(px(14.)).pt(px(4.)).pb(px(6.)).typography(Type::Label).text_color(theme.text_dim).child("Providers"));
+                if groups.is_empty() {
+                    list = list.child(
+                        div()
+                            .px(px(14.))
+                            .py(px(6.))
+                            .typography(Type::Small)
+                            .text_color(theme.text_dim)
+                            .child("No enabled connections in Settings › Providers."),
+                    );
+                }
                 for (index, group) in groups.iter().enumerate() {
                     let holds_current = current == Some(index);
                     let name = group.title.clone().unwrap_or_else(|| "Models".into());

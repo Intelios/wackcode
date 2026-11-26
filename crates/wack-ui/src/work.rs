@@ -214,7 +214,7 @@ pub fn entry_items(
                             } else {
                                 crate::suggestion::State::Open
                             };
-                            crate::suggestion::Item::new(card, state, open)
+                            crate::suggestion::Item::new(card, state, open, view.model_missing)
                         })
                         .collect();
                     if !cards.is_empty() {

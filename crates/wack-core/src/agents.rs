@@ -351,7 +351,7 @@ impl Store {
     }
 
     /// The connection and model a choice names, only if both still exist and the connection is
-    /// on: unlike the chat's choice, a helper never falls back to some other model.
+    /// on.
     fn resolve_exact(&self, choice: &ModelChoice) -> Option<Resolved> {
         let connection = self.enabled_connections().find(|connection| Some(&connection.id) == choice.connection.as_ref())?;
         let model = connection.models.iter().find(|model| Some(&model.id) == choice.model.as_ref())?;

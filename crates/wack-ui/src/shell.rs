@@ -2503,8 +2503,7 @@ fn live_view(app: &AppState, cx: &App) -> (SidebarData, Screen, StripData) {
             }))
         }
         Selection::NewChatArea => {
-            let choice = store.defaults_for(ChatKind::Chat).clone();
-            let resolved = store.resolve(&choice);
+            let resolved = store.resolve_default(ChatKind::Chat);
             let (model, effort) = model_words(resolved.as_ref());
             let hour = wack_core::clock::local(crate::chat::now_millis()).hour;
             Screen::ChatHero {
@@ -2541,7 +2540,8 @@ fn live_view(app: &AppState, cx: &App) -> (SidebarData, Screen, StripData) {
                     foreground: false,
                     attachments: app.draft_attachments.clone(),
                     files: app.draft_files.clone(),
-                    pictures_refused: app.pictures_refused_for(&choice, app.draft_attachments.len()).map(Into::into),
+                    model_missing: None,
+                    pictures_refused: app.pictures_refused_for(resolved.as_ref(), app.draft_attachments.len()).map(Into::into),
                     files_refused: crate::attachments::files_problem(&app.draft_files).map(Into::into),
                     comments: None,
                     sent_at: app.sent_at,
@@ -2551,8 +2551,7 @@ fn live_view(app: &AppState, cx: &App) -> (SidebarData, Screen, StripData) {
         }
         Selection::NewChat(project) => match info(project) {
             Some(project) => {
-                let choice = store.defaults().clone();
-                let resolved = store.resolve(&choice);
+                let resolved = store.resolve_default(ChatKind::Code);
                 let (model, effort) = model_words(resolved.as_ref());
                 let team = team_parts(app, app.new_chat_team.as_ref(), false);
                 Screen::NewChat {
@@ -2588,7 +2587,8 @@ fn live_view(app: &AppState, cx: &App) -> (SidebarData, Screen, StripData) {
                         foreground: false,
                         attachments: app.draft_attachments.clone(),
                         files: app.draft_files.clone(),
-                        pictures_refused: app.pictures_refused_for(&choice, app.draft_attachments.len()).map(Into::into),
+                        model_missing: None,
+                        pictures_refused: app.pictures_refused_for(resolved.as_ref(), app.draft_attachments.len()).map(Into::into),
                         files_refused: crate::attachments::files_problem(&app.draft_files).map(Into::into),
                         comments: None,
                         sent_at: app.sent_at,
@@ -2604,11 +2604,18 @@ fn live_view(app: &AppState, cx: &App) -> (SidebarData, Screen, StripData) {
             };
             let project = info(chat.project.as_deref().unwrap_or_default()).unwrap_or(ProjectInfo { name: "".into(), path: "".into(), branch: None });
             let resolved = store.resolve(&chat.choice);
-            let (model, effort) = model_words(resolved.as_ref());
+            let model_missing = store.chat_model_problem(chat);
+            let (model, effort) = if model_missing.is_some() {
+                ("Choose model".into(), None)
+            } else {
+                model_words(resolved.as_ref())
+            };
             let state = session.read(cx);
             let team = (!chat.is_chat_area()).then(|| team_parts(app, chat.team.as_ref(), state.running()));
             let window = resolved.as_ref().and_then(|resolved| resolved.model.context_window);
-            let meter = state.context_tokens.map(|tokens| meter(tokens, window, !state.is_empty(), state.context_parts.clone()));
+            let meter = state
+                .context_tokens
+                .map(|tokens| meter(tokens, window, !state.is_empty() && model_missing.is_none(), state.context_parts.clone()));
             let mut waiting: Vec<Waiting> = state.steering.iter().map(|text| waiting_item(text, true)).collect();
             waiting.extend(state.queue.iter().map(|text| waiting_item(text, false)));
             Screen::Chat {
@@ -2657,7 +2664,8 @@ fn live_view(app: &AppState, cx: &App) -> (SidebarData, Screen, StripData) {
                     foreground: state.tasks.has_foreground() || state.agents.active().iter().any(|info| !info.background),
                     attachments: state.attachments.clone(),
                     files: state.files.clone(),
-                    pictures_refused: app.pictures_refused_for(&chat.choice, state.attachments.len()).map(Into::into),
+                    model_missing: model_missing.map(Into::into),
+                    pictures_refused: app.pictures_refused_for(resolved.as_ref(), state.attachments.len()).map(Into::into),
                     files_refused: crate::attachments::files_problem(&state.files).map(Into::into),
                     comments: {
                         let count: usize = state.comment_drafts.iter().map(|(_, n)| n).sum();

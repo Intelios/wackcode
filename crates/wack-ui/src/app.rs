@@ -2171,17 +2171,17 @@ impl AppState {
             }
         };
         let area = if project.is_some() { ChatKind::Code } else { ChatKind::Chat };
-        let choice: ModelChoice = self.store.defaults_for(area).clone();
-        if self.store.resolve(&choice).is_none() {
+        let Some(resolved) = self.store.resolve_default(area) else {
             self.notice = Some("Add a connection in Settings › Providers to start chatting.".into());
             cx.notify();
             return;
-        }
-        if let Some(refused) = self.pictures_refused(&choice, pictures.len()) {
+        };
+        if let Some(refused) = self.pictures_refused(Some(&resolved), pictures.len()) {
             self.notice = Some(refused.into());
             cx.notify();
             return;
         }
+        let choice = resolved.choice();
         let team = if project.is_some() { self.new_chat_team.clone() } else { None };
         if let Some(missing) = self.crew_missing(team.as_ref()) {
             self.notice = Some(missing.into());
@@ -2531,9 +2531,9 @@ impl AppState {
         }
     }
 
-    /// Why `choice`'s model can't take the attached pictures, when it can't.
-    pub fn pictures_refused_for(&self, choice: &ModelChoice, pictures: usize) -> Option<String> {
-        self.pictures_refused(choice, pictures)
+    /// Why `resolved`'s model can't take the attached pictures, when it can't.
+    pub fn pictures_refused_for(&self, resolved: Option<&wack_core::Resolved>, pictures: usize) -> Option<String> {
+        self.pictures_refused(resolved, pictures)
     }
 
     /// Why a Team's crew holds Send: its model is gone, and a crew is never swapped for another.
@@ -2542,8 +2542,8 @@ impl AppState {
         self.store.resolve_crew(crew).is_none().then(|| self.store.team_problem(Some(crew)).unwrap_or_default())
     }
 
-    fn pictures_refused(&self, choice: &ModelChoice, pictures: usize) -> Option<String> {
-        let resolved = self.store.resolve(choice)?;
+    fn pictures_refused(&self, resolved: Option<&wack_core::Resolved>, pictures: usize) -> Option<String> {
+        let resolved = resolved?;
         (pictures > 0 && !resolved.model.accepts_images).then(|| {
             format!("{} doesn't accept pictures. Turn on Vision for it in Settings › Providers, or remove the pictures.", resolved.model.id)
         })
@@ -2678,7 +2678,7 @@ impl AppState {
     fn lead_on_screen(&self) -> ModelChoice {
         match &self.selection {
             Selection::Chat(id) => self.store.chat(id).map(|chat| chat.choice.clone()).unwrap_or_default(),
-            _ => self.store.defaults().clone(),
+            _ => self.store.resolve_default(ChatKind::Code).map(|resolved| resolved.choice()).unwrap_or_default(),
         }
     }
 
@@ -2795,6 +2795,10 @@ impl AppState {
             return;
         };
         if session.read(cx).running() || session.read(cx).awaiting_plan().is_none() {
+            return;
+        }
+        if let Some(problem) = self.store.chat(&id).and_then(|listed| self.store.chat_model_problem(listed)) {
+            session.update(cx, |session, cx| session.plan_notice(problem.into(), cx));
             return;
         }
         self.set_chat_mode(&id, AgentMode::Build, cx);
@@ -3130,14 +3134,6 @@ impl AppState {
         if text.is_empty() && comments {
             text = COMMENTS_ONLY.to_string();
         }
-        if let Some(refused) = self.store.chat(chat).and_then(|listed| self.pictures_refused(&listed.choice, pictures.len())) {
-            session.update(cx, |session, cx| session.note(refused, cx));
-            return;
-        }
-        if let Some(missing) = self.store.chat(chat).and_then(|listed| self.crew_missing(listed.team.as_ref())) {
-            session.update(cx, |session, cx| session.note(missing, cx));
-            return;
-        }
         let cwd = session.read(cx).cwd().to_path_buf();
         let chat_area = self.store.chat(chat).is_some_and(Chat::is_chat_area);
         let outgoing = if chat_area { Ok(self.with_refs(Some(chat), chat_area_outgoing(&text))) } else { self.outgoing(Some(chat), &text, &cwd) };
@@ -3148,6 +3144,26 @@ impl AppState {
                 return;
             }
         };
+        // Non-model builtins (/new, /name, /copy) still work while a chat's model is gone.
+        let model_free_builtin = matches!(&outgoing, Outgoing::Builtin { name, .. } if *name != "compact");
+        if !model_free_builtin {
+            if let Some(problem) = self.store.chat(chat).and_then(|listed| self.store.chat_model_problem(listed)) {
+                session.update(cx, |session, cx| session.note(problem.into(), cx));
+                return;
+            }
+            if let Some(refused) = self
+                .store
+                .chat(chat)
+                .and_then(|listed| self.pictures_refused(self.store.resolve(&listed.choice).as_ref(), pictures.len()))
+            {
+                session.update(cx, |session, cx| session.note(refused, cx));
+                return;
+            }
+            if let Some(missing) = self.store.chat(chat).and_then(|listed| self.crew_missing(listed.team.as_ref())) {
+                session.update(cx, |session, cx| session.note(missing, cx));
+                return;
+            }
+        }
         let (running, compacting) = {
             let session = session.read(cx);
             (session.running(), session.compacting())
@@ -3239,6 +3255,9 @@ impl AppState {
                 if running {
                     return refuse("Wait for the agent to finish before compacting.".into(), cx);
                 }
+                if let Some(problem) = self.store.chat(chat).and_then(|listed| self.store.chat_model_problem(listed)) {
+                    return refuse(problem.into(), cx);
+                }
                 if empty {
                     return refuse("There is nothing to compact yet.".into(), cx);
                 }
@@ -3258,11 +3277,21 @@ impl AppState {
     }
 
     pub fn compact(&mut self, chat: &str, cx: &mut Context<Self>) {
-        let idle = self.sessions.get(chat).is_some_and(|session| {
+        let Some(session) = self.sessions.get(chat).cloned() else {
+            return;
+        };
+        let (running, empty) = {
             let session = session.read(cx);
-            !session.running() && !session.is_empty()
-        });
-        if idle {
+            (session.running(), session.is_empty())
+        };
+        if running {
+            return;
+        }
+        if let Some(problem) = self.store.chat(chat).and_then(|listed| self.store.chat_model_problem(listed)) {
+            session.update(cx, |session, cx| session.note(problem.into(), cx));
+            return;
+        }
+        if !empty {
             self.run(chat, Job::Compact(None), cx);
         }
     }
@@ -3327,6 +3356,17 @@ impl AppState {
             dismissed: chat.dismissed_suggestions.iter().cloned().collect(),
             queued: Default::default(),
             links: crate::suggestions::links(&chats, &chat.id),
+            model_missing: self.store.chat_model_problem(chat).is_some(),
+        }
+    }
+
+    /// Brings every open chat's suggestion cards in line with the store's connections and models.
+    fn sync_suggestion_views(&self, cx: &mut Context<Self>) {
+        for (id, session) in &self.sessions {
+            if let Some(chat) = self.store.chat(id) {
+                let view = self.suggestion_view(chat);
+                session.update(cx, |session, cx| session.sync_suggestion_view(view, cx));
+            }
         }
     }
 
@@ -3348,6 +3388,10 @@ impl AppState {
         match target {
             crate::actions::SuggestionTarget::New => self.start_suggestion_chat(&chat, &card, mode, cx),
             crate::actions::SuggestionTarget::Here => {
+                if let Some(problem) = self.store.chat_model_problem(&chat) {
+                    session.update(cx, |session, cx| session.note(problem.into(), cx));
+                    return;
+                }
                 // "Plan it here" switches the chat to Plan: its mode is its own, and stays that way.
                 if chat.mode != mode {
                     self.set_chat_mode(&chat.id, mode, cx);
@@ -3370,15 +3414,26 @@ impl AppState {
 
     /// A suggested task's new chat: the origin's project, model and effort — it is the same
     /// work — named after the suggestion, with the origin recorded so the card can link back to
-    /// it. It opens in a background tab: the user stays in the chat they were reading.
+    /// it. When the origin's own model is gone, falls back to the Code area's default so starting
+    /// a new chat still works. It opens in a background tab: the user stays in the chat they were
+    /// reading.
     fn start_suggestion_chat(&mut self, origin: &Chat, card: &crate::suggestions::Card, mode: AgentMode, cx: &mut Context<Self>) {
         let origin_of = wack_core::SuggestionOrigin { chat: origin.id.clone(), suggestion: card.id.to_string() };
         let Some(project) = origin.project.clone() else {
             return;
         };
+        let Some(choice) = self
+            .store
+            .resolve(&origin.choice)
+            .or_else(|| self.store.resolve_default(ChatKind::Code))
+            .map(|resolved| resolved.choice())
+        else {
+            self.note(&origin.id, "Add a connection in Settings › Providers to start chatting.", cx);
+            return;
+        };
         let chat = match self
             .store
-            .create_chat(&project, &card.title, origin.choice.clone(), mode, Some(origin_of))
+            .create_chat(&project, &card.title, choice, mode, Some(origin_of))
         {
             Ok(chat) => chat,
             Err(message) => {
@@ -3472,7 +3527,7 @@ impl AppState {
                 } else {
                     Vec::new()
                 };
-                let sees = self.store.resolve(&chat.choice).is_some_and(|resolved| resolved.model.accepts_images);
+                let sees = setup.settings.accepts_images;
                 if armed.is_empty() || !sees {
                     session.update(cx, |session, cx| session.start(setup, job, cx));
                 } else {
@@ -3503,6 +3558,9 @@ impl AppState {
         let Some(session) = self.sessions.get(chat).cloned() else {
             return;
         };
+        if self.store.chat(chat).is_none_or(|listed| self.store.chat_model_problem(listed).is_some()) {
+            return;
+        }
         // A sub-agent's report doesn't count against the cap: each answers an agent the model
         // started, and how many may start between the user's messages is capped instead.
         let (may, counted) = {
@@ -3918,6 +3976,7 @@ impl AppState {
                 })
                 .detach();
                 self.watch_form(cx);
+                self.sync_suggestion_views(cx);
             }
             Err(message) => {
                 self.form.error = Some(message.into());
@@ -4234,10 +4293,14 @@ impl AppState {
         cx.notify();
     }
 
-    /// Switches a connection on or off; chats that used one switched off fall back to another.
+    /// Switches a connection on or off; chats that chose it keep their choice and wait until it
+    /// is back on or another model is picked.
     pub fn set_connection_enabled(&mut self, id: &str, on: bool, cx: &mut Context<Self>) {
         match self.store.set_connection_enabled(id, on) {
-            Ok(()) => self.form.error = None,
+            Ok(()) => {
+                self.form.error = None;
+                self.sync_suggestion_views(cx);
+            }
             Err(message) => self.form.error = Some(message.into()),
         }
         cx.notify();
@@ -4251,6 +4314,7 @@ impl AppState {
                     self.form.close(cx);
                     self.watch_form(cx);
                 }
+                self.sync_suggestion_views(cx);
             }
             Err(message) => self.form.error = Some(message.into()),
         }
@@ -4281,16 +4345,25 @@ impl AppState {
 
     /// Sets the model for the chat on screen (and as the default for new chats).
     pub fn choose(&mut self, connection: Option<String>, model: Option<String>, effort: Option<Option<Reasoning>>, cx: &mut Context<Self>) {
-        let (chat, choice) = self.current_choice();
-        let resolved = self.store.resolve(&choice);
-        let current_effort = resolved.as_ref().map(|resolved| resolved.effort);
+        let (chat, current) = self.current_choice();
+        let resolved = match &chat {
+            Some(_) => self.store.resolve(&current),
+            None => self.store.resolve_default(self.area()),
+        };
+        let current_effort = resolved.as_ref().map(|resolved| resolved.effort).or(current.effort);
         let choice = ModelChoice {
-            connection: connection.or_else(|| resolved.as_ref().map(|resolved| resolved.connection.id.clone())),
-            model: model.or_else(|| resolved.as_ref().map(|resolved| resolved.model.id.clone())),
+            connection: connection.or_else(|| resolved.as_ref().map(|resolved| resolved.connection.id.clone())).or(current.connection),
+            model: model.or_else(|| resolved.as_ref().map(|resolved| resolved.model.id.clone())).or(current.model),
             effort: effort.unwrap_or(current_effort),
         };
         if let Err(message) = self.store.set_choice(self.area(), chat.as_deref(), choice) {
             self.notice = Some(message.into());
+        } else if let Some(id) = chat.as_deref()
+            && let Some(listed) = self.store.chat(id)
+            && let Some(session) = self.sessions.get(id)
+        {
+            let view = self.suggestion_view(listed);
+            session.update(cx, |session, cx| session.sync_suggestion_view(view, cx));
         }
         self.menu = None;
         cx.notify();

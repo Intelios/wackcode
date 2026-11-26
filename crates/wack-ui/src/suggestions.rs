@@ -229,6 +229,8 @@ pub struct View {
     pub queued: HashSet<String>,
     /// Suggestion ids that opened a chat of their own: suggestion → (chat id, chat title).
     pub links: HashMap<String, (String, String)>,
+    /// The chat's own model is gone: "Start here" waits until another is picked.
+    pub model_missing: bool,
 }
 
 /// Every chat in `chats` started from a suggestion in the chat `from`, keyed by suggestion id.

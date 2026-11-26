@@ -36,6 +36,8 @@ actions!(
         CloseSettings,
         /// Send the composer's text, or queue it behind the run.
         Send,
+        /// Retry loading the project's file list for the `@` picker.
+        RetryWorkspaceFiles,
         /// Stop the run in the current chat.
         Stop,
         /// Move the command the agent is waiting on to the background (⌘B).

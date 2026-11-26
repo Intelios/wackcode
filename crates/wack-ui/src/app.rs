@@ -26,6 +26,7 @@ use wack_core::{
     AgentMode, Appearance, Chat, ChatKind, CommandEvent, CommandKind, CommandStatus, Job, ModelChoice, Outcome,
     AutoTitleConfig, Project, Reasoning, Runner, Store, Ui, WireFormat,
     chat_refs::{self, ChatRef},
+    files::{self, WorkspaceFiles},
     skills::{Command, CommandUse, Outgoing, active_slash, find, matching, parse_line, pick, resolve_message},
     title, title_from,
 };
@@ -63,8 +64,10 @@ pub const CHAT_FOLLOW_UP_PLACEHOLDER: &str = "Message WackCode…";
 const CHAT_AREA_PANES: &str = "chat-area";
 /// How long a control clicked once keeps asking.
 const CONFIRM_FOR: Duration = Duration::from_secs(4);
-/// How many chats the `@` picker offers at once.
+/// How many chats the Chat area's `@` picker offers at once.
 const MENTION_LIMIT: usize = 8;
+/// How many files and folders Code's `@` picker offers at once.
+const FILE_MENTION_LIMIT: usize = 20;
 /// The only slash commands a Chat chat has: the app's own. Anything else goes as written.
 const CHAT_AREA_COMMANDS: [&str; 4] = ["new", "name", "copy", "compact"];
 pub const PLAN_PLACEHOLDER: &str = "Describe the work — in Plan mode WackCode inspects and proposes a plan for your approval…";
@@ -295,6 +298,8 @@ pub struct AppState {
     /// chat's), sent as the message's referenced-chats section while their `@"Name"` is still in
     /// the text (`wack_core::chat_refs::surviving`).
     mention_refs: HashMap<Option<String>, Vec<ChatRef>>,
+    /// Workspace file lists cached per project folder for Code's `@` file/folder picker.
+    workspace_files: HashMap<PathBuf, WorkspaceFilesCache>,
     /// The sidebar's search field: what is typed filters the area on screen. Emptied when the
     /// area changes.
     pub search: Entity<TextField>,
@@ -312,6 +317,18 @@ pub struct AppState {
     /// unchanged sends it as written.
     literal: Option<(Option<String>, String)>,
     _subscriptions: Vec<Subscription>,
+}
+
+/// Cached workspace file listing for Code's `@` picker, per project folder.
+#[derive(Default)]
+struct WorkspaceFilesCache {
+    /// The last completed listing, kept visible while a refresh runs.
+    files: Option<WorkspaceFiles>,
+    /// Why the last listing failed, when no listing is held.
+    error: Option<String>,
+    loading: bool,
+    /// Monotonic token so a slower earlier scan never overwrites a newer one.
+    request: u64,
 }
 
 /// A chat's title being edited where it is shown: on its tab or its sidebar row.
@@ -438,6 +455,7 @@ impl AppState {
             slash: None,
             slash_dismissed: None,
             mention_refs: HashMap::new(),
+            workspace_files: HashMap::new(),
             search,
             archived_open: false,
             confirming: None,
@@ -1718,6 +1736,9 @@ impl AppState {
             }
             None => {}
         }
+        if self.selection != selection {
+            self.close_slash(cx);
+        }
         self.notice = None;
         self.menu = None;
         self.command_editor = None;
@@ -1899,6 +1920,7 @@ impl AppState {
         }
         if let Some(path) = project_path {
             self.runs.stop_project(&path);
+            self.workspace_files.remove(&path);
         }
         for chat in chats {
             self.drop_session(&chat);
@@ -5427,8 +5449,135 @@ impl AppState {
         }
     }
 
-    /// The composer's text or caret changed: open, follow or close the menu, and light a typed
-    /// `/command` that exists.
+    /// The project folder `owner`'s composer works in, when it is a Code composer.
+    fn project_folder_for(&self, owner: Option<&str>) -> Option<PathBuf> {
+        let project_id = match owner {
+            None => match &self.selection {
+                Selection::NewChat(project) => Some(project.as_str()),
+                _ => None,
+            },
+            Some(chat) => self.store.chat(chat).and_then(|chat| chat.project.as_deref()),
+        };
+        project_id.and_then(|id| self.store.project(id)).map(|project| project.path.clone())
+    }
+
+    fn close_slash(&mut self, cx: &mut Context<Self>) {
+        if let Some(slash) = self.slash.take()
+            && let Some(field) = self.composer_of(slash.owner.as_deref(), cx)
+        {
+            field.update(cx, |field, cx| field.set_completing(false, cx));
+        }
+    }
+
+    /// Dismisses an open `/` or `@` card for its current word (used when ⎋ reaches the shell
+    /// while a loading, error, or empty card has no rows to borrow the field's keys).
+    pub fn dismiss_slash(&mut self, cx: &mut Context<Self>) {
+        if let Some(slash) = self.slash.take() {
+            self.slash_dismissed = Some((slash.owner.clone(), slash.range.start));
+            if let Some(field) = self.composer_of(slash.owner.as_deref(), cx) {
+                field.update(cx, |field, cx| field.set_completing(false, cx));
+            }
+            cx.notify();
+        }
+    }
+
+    fn file_matches(cache: Option<&WorkspaceFilesCache>, query: &str) -> Matches {
+        match cache {
+            Some(cache) => {
+                let (entries, truncated) = match &cache.files {
+                    Some(listed) => (listed.rank(query, FILE_MENTION_LIMIT), listed.truncated),
+                    None => (Vec::new(), false),
+                };
+                Matches::Files {
+                    entries,
+                    loading: cache.loading,
+                    truncated,
+                    error: if cache.files.is_none() { cache.error.clone() } else { None },
+                }
+            }
+            None => Matches::Files { entries: Vec::new(), loading: false, truncated: false, error: None },
+        }
+    }
+
+    fn refresh_workspace_files(&mut self, folder: PathBuf, cx: &mut Context<Self>) {
+        let cache = self.workspace_files.entry(folder.clone()).or_default();
+        cache.loading = true;
+        cache.error = None;
+        cache.request += 1;
+        let request = cache.request;
+        let lookup = cx.background_spawn({
+            let folder = folder.clone();
+            async move { files::list(&folder) }
+        });
+        cx.spawn(async move |app, cx| {
+            let result = lookup.await;
+            let _ = app.update(cx, |app, cx| {
+                let Some(cache) = app.workspace_files.get_mut(&folder) else {
+                    return;
+                };
+                if cache.request != request {
+                    return;
+                }
+                cache.loading = false;
+                match result {
+                    Ok(listed) => {
+                        cache.files = Some(listed);
+                        cache.error = None;
+                    }
+                    Err(error) => {
+                        cache.files = None;
+                        cache.error = Some(error);
+                    }
+                }
+                if let Some(owner) = app.slash.as_ref().filter(|slash| matches!(slash.matches, Matches::Files { .. })).map(|slash| slash.owner.clone())
+                    && app.project_folder_for(owner.as_deref()).as_deref() == Some(folder.as_path())
+                {
+                    app.update_file_matches(owner, cx);
+                }
+                cx.notify();
+            });
+        })
+        .detach();
+    }
+
+    fn update_file_matches(&mut self, owner: Option<String>, cx: &mut Context<Self>) {
+        let Some(folder) = self.project_folder_for(owner.as_deref()) else {
+            return;
+        };
+        let Some(query) = self
+            .slash
+            .as_ref()
+            .filter(|slash| slash.owner == owner && matches!(slash.matches, Matches::Files { .. }))
+            .map(|slash| slash.query.clone())
+        else {
+            return;
+        };
+        let matches = Self::file_matches(self.workspace_files.get(&folder), &query);
+        let completing = !matches.is_empty();
+        if let Some(slash) = self.slash.as_mut() {
+            slash.selected = slash.selected.min(matches.len().saturating_sub(1));
+            slash.matches = matches;
+        }
+        if let Some(field) = self.composer_of(owner.as_deref(), cx) {
+            field.update(cx, |field, cx| field.set_completing(completing, cx));
+        }
+    }
+
+    /// Retries loading the workspace file list for an open `@` file picker whose scan failed.
+    pub fn retry_workspace_files(&mut self, cx: &mut Context<Self>) {
+        let Some(owner) = self.slash.as_ref().filter(|slash| matches!(slash.matches, Matches::Files { .. })).map(|slash| slash.owner.clone()) else {
+            return;
+        };
+        let Some(folder) = self.project_folder_for(owner.as_deref()) else {
+            return;
+        };
+        self.refresh_workspace_files(folder, cx);
+        self.update_file_matches(owner, cx);
+        cx.notify();
+    }
+
+    /// The composer's text or caret changed: open, follow or close the `/` or `@` menu, and light
+    /// a typed `/command` that exists.
     pub fn composer_changed(&mut self, owner: Option<String>, cx: &mut Context<Self>) {
         let Some(field) = self.composer_of(owner.as_deref(), cx) else {
             return;
@@ -5441,17 +5590,32 @@ impl AppState {
             self.mention_changed(owner, &field, &text, caret, cx);
             return;
         }
-        let word = active_slash(&text, caret);
+        enum Trigger {
+            Slash(std::ops::Range<usize>),
+            File(std::ops::Range<usize>, String),
+        }
+        let mention = files::active_mention(&text, caret);
+        let quoted_mention = mention.as_ref().is_some_and(|(range, _)| text[range.start..].starts_with("@\""));
+        let trigger = if quoted_mention {
+            mention.map(|(range, query)| Trigger::File(range, query))
+        } else if let Some(range) = active_slash(&text, caret) {
+            Some(Trigger::Slash(range))
+        } else {
+            mention.map(|(range, query)| Trigger::File(range, query))
+        };
+        let start = trigger.as_ref().map(|trigger| match trigger {
+            Trigger::Slash(range) | Trigger::File(range, _) => range.start,
+        });
         // ⎋ keeps the menu shut for its word only; another word opens it again.
-        if self.slash_dismissed.as_ref().is_some_and(|(from, start)| *from != owner || word.as_ref().is_none_or(|word| word.start != *start)) {
+        if self.slash_dismissed.as_ref().is_some_and(|(from, at)| *from != owner || start != Some(*at)) {
             self.slash_dismissed = None;
         }
-        let word = word.filter(|word| self.slash_dismissed.as_ref() != Some(&(owner.clone(), word.start)));
+        let trigger = trigger.filter(|_| self.slash_dismissed.as_ref() != Some(&(owner.clone(), start.unwrap())));
         let previous = self.slash.take().filter(|slash| slash.owner == owner);
         let other = previous.is_none() && self.slash.is_some();
-        match word {
-            Some(range) => {
-                let fresh = previous.as_ref().is_none_or(|slash| slash.range.start != range.start);
+        match trigger {
+            Some(Trigger::Slash(range)) => {
+                let fresh = previous.as_ref().is_none_or(|slash| !matches!(slash.matches, Matches::Commands(_)) || slash.range.start != range.start);
                 if fresh || self.commands.is_empty() {
                     self.commands = self.store.command_catalog();
                 }
@@ -5468,6 +5632,28 @@ impl AppState {
                 let completing = !matches.is_empty();
                 self.slash = Some(Slash { owner: owner.clone(), range, query, matches, selected, scroll });
                 field.update(cx, |field, cx| field.set_completing(completing, cx));
+            }
+            Some(Trigger::File(range, query)) => {
+                if let Some(folder) = self.project_folder_for(owner.as_deref()) {
+                    let fresh = previous.as_ref().is_none_or(|slash| !matches!(slash.matches, Matches::Files { .. }) || slash.range.start != range.start);
+                    if fresh {
+                        self.refresh_workspace_files(folder.clone(), cx);
+                    }
+                    let matches = Self::file_matches(self.workspace_files.get(&folder), &query);
+                    let (selected, scroll) = match previous {
+                        Some(slash) if !fresh && slash.query == query => (slash.selected.min(matches.len().saturating_sub(1)), slash.scroll),
+                        Some(slash) => (0, slash.scroll),
+                        None => (0, gpui::ScrollHandle::new()),
+                    };
+                    if selected == 0 {
+                        scroll.scroll_to_item(0);
+                    }
+                    let completing = !matches.is_empty();
+                    self.slash = Some(Slash { owner: owner.clone(), range, query, matches, selected, scroll });
+                    field.update(cx, |field, cx| field.set_completing(completing, cx));
+                } else if !other {
+                    field.update(cx, |field, cx| field.set_completing(false, cx));
+                }
             }
             None if !other => field.update(cx, |field, cx| field.set_completing(false, cx)),
             None => {}
@@ -5523,6 +5709,25 @@ impl AppState {
         };
         let command = match &slash.matches {
             Matches::Commands(commands) => commands.get(index),
+            Matches::Files { entries, .. } => {
+                let Some(entry) = entries.get(index).cloned() else { return };
+                let text = field.read(cx).text().to_string();
+                let Some(range) = Some(slash.range.clone()).filter(|range| range.end <= text.len()) else { return };
+                let (next, caret) = files::pick(&text, range, &entry);
+                if entry.directory {
+                    // Keep the picker attached to this `@` word so `composer_changed` lists the
+                    // folder's children immediately without restarting the workspace scan.
+                    self.slash = Some(slash);
+                }
+                field.update(cx, |field, cx| {
+                    if !entry.directory {
+                        field.set_completing(false, cx);
+                    }
+                    field.replace_text(&next, caret, cx);
+                });
+                cx.notify();
+                return;
+            }
             Matches::Chats(chats) => {
                 let Some((chat, _)) = chats.get(index) else { return };
                 let text = field.read(cx).text().to_string();

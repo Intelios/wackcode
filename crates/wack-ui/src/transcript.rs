@@ -255,8 +255,28 @@ fn command_bubble(bubble: gpui::Div, command: &CommandShown, theme: &Theme, hand
             .tag("command-name"),
     )
     .when(!command.args.is_empty(), |bubble| {
-        bubble.child(div().flex_none().text_color(theme.text_faint).child("·")).child(command.args.clone())
+        bubble.child(div().flex_none().text_color(theme.text_faint).child("·")).child(prompt_text(&command.args, theme))
     })
+}
+
+/// A user message's words, with path-like and quoted `@` mentions tinted in mono.
+fn prompt_text(text: &SharedString, theme: &Theme) -> AnyElement {
+    let segments = wack_core::files::split_mentions(text);
+    if !segments.iter().any(|segment| segment.mention) {
+        return text.clone().into_any_element();
+    }
+    let runs: Vec<TextRun> = segments
+        .into_iter()
+        .map(|segment| TextRun {
+            len: segment.text.len(),
+            font: font(if segment.mention { MONO_FONT } else { UI_FONT }),
+            color: if segment.mention { theme.accent_text } else { theme.text },
+            background_color: None,
+            underline: None,
+            strikethrough: None,
+        })
+        .collect();
+    StyledText::new(text.clone()).with_runs(runs).into_any_element()
 }
 
 /// The prompt a slash command sent, opened beneath its bubble.
@@ -333,7 +353,7 @@ pub fn item(item: &Item, previous: Option<&Item>, theme: &Theme, handlers: &Hand
                 .typography(Type::Body)
                 .text_color(theme.text);
             let bubble = match command {
-                None => bubble.child(text.clone()).into_any_element(),
+                None => bubble.child(prompt_text(text, theme)).into_any_element(),
                 Some(command) => command_bubble(bubble, command, theme, handlers).into_any_element(),
             };
             div()

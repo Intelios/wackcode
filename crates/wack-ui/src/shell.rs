@@ -51,7 +51,7 @@ use crate::{
         CloseModelSuggestions, RefreshCatalog, FetchModels, TickAllFetched, AddFetchedModels, CloseFetchedModels, PickModelSuggestion, ToggleFetchedModel,
         NewChat, NewChatIn, SelectDraft, CloseDraft, NewTerminal, NewTerminalWith, TogglePaneMenu, ClosePaneMenu, HideSidePanel, ToggleSidePanel, RevealProject, OpenPaneKind, NextTab, OpenEffortMenu, OpenModelMenu, OpenSettings,
         OpenSettingsSection, PinProject, PreviousTab, RemoveConnection, RemovePicture, ShowCommandOutput, ShowPicture, RemoveProject, ResetDockSize,
-        PickCommand, SelectChat, Send, Stop, StopCommand, MoveToBackground, ToggleTasks, ToggleTasksPane, StopTask, ShowTask, ToggleAgentsPane, ShowTeam, ToggleBrowserPane, ToggleCanvasPane, ShowCanvas, WriteInComposer, ShowAgent, StopAgent, ToggleChanges, ToggleProject, ToggleSidebar, ToggleTerminal, TriggerProjectCommand, Unqueue,
+        PickCommand, RetryWorkspaceFiles, SelectChat, Send, Stop, StopCommand, MoveToBackground, ToggleTasks, ToggleTasksPane, StopTask, ShowTask, ToggleAgentsPane, ShowTeam, ToggleBrowserPane, ToggleCanvasPane, ShowCanvas, WriteInComposer, ShowAgent, StopAgent, ToggleChanges, ToggleProject, ToggleSidebar, ToggleTerminal, TriggerProjectCommand, Unqueue,
         ToggleAutoTitles, ToggleTitleModels, ChooseTitleModel, RenameChat, RenameChatAt, CancelRename, ToggleModelReasoning, ToggleModelRow, ToggleModelVision, AttachPictures, AttachFiles, RemoveAttachment, InsertPasted, RemovePasted, SteerQueued, RemoveQueued, OpenPicture, ClosePicture, StepPicture, ZoomPicture,
         StartSuggestion, DismissSuggestion, CopySuggestion, OpenChat,
         ArchiveChat, ArchiveCurrentChat, ClearSearch, RevealScratchpadFile, DeleteAllArchived, DeleteArchivedChat, ToggleArchived, UnarchiveChat,
@@ -502,6 +502,10 @@ impl Shell {
         }
         if app.read(cx).menu.is_some() {
             app.update(cx, |app, cx| app.close_menu(cx));
+            return;
+        }
+        if app.read(cx).slash.is_some() {
+            app.update(cx, |app, cx| app.dismiss_slash(cx));
             return;
         }
         if *app.read(cx).selection() == Selection::Settings {
@@ -2088,6 +2092,9 @@ impl Render for Shell {
                 .on_action(cx.listener(|shell, action: &PickCommand, _, cx| {
                     let index = action.index;
                     shell.with_app(cx, |app, cx| app.pick_command(index, cx));
+                }))
+                .on_action(cx.listener(|shell, _: &RetryWorkspaceFiles, _, cx| {
+                    shell.with_app(cx, |app, cx| app.retry_workspace_files(cx));
                 }))
                 .on_action(cx.listener(|shell, action: &Unqueue, _, cx| {
                     if let Some(chat) = shell.selected_chat(cx) {

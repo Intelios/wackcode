@@ -56,6 +56,16 @@ pub fn common_root(folder: &Path) -> Option<PathBuf> {
     common.parent().map(Path::to_path_buf)
 }
 
+/// Tracked and untracked non-ignored files under `folder`, relative to it and `/`-separated.
+pub fn ls_files(folder: &Path) -> Result<Vec<String>, String> {
+    let bytes = git(folder, &["ls-files", "-z", "--cached", "--others", "--exclude-standard", "--deduplicate"])?;
+    Ok(bytes
+        .split(|byte| *byte == 0)
+        .filter(|entry| !entry.is_empty())
+        .map(|entry| String::from_utf8_lossy(entry).into_owned())
+        .collect())
+}
+
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub enum FileStatus {
     Added,

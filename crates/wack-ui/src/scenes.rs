@@ -422,6 +422,24 @@ pub fn all() -> Vec<Scene> {
             build: |_, cx| slash_scene(None, "/pdf", Some("[file]  ·  added after the skill's instructions"), cx),
         },
         Scene {
+            name: "file-mentions",
+            description: "Code's @ workspace file/folder picker over a chat with highlighted @path mentions, and the 20k-file truncation note.",
+            size: WINDOW,
+            build: |_, cx| file_mention_scene(fixtures::file_mention_data(true, None), None, cx),
+        },
+        Scene {
+            name: "file-mentions-backdrop",
+            description: "Code's @ workspace file/folder picker over a backdrop.",
+            size: WINDOW,
+            build: |_, cx| file_mention_scene(fixtures::file_mention_data(false, None), Some(over(fixtures::backdrop(wack_core::Texture::None), cx)), cx),
+        },
+        Scene {
+            name: "file-mentions-error",
+            description: "Code's @ workspace file picker when listing failed, with Retry.",
+            size: WINDOW,
+            build: |_, cx| file_mention_scene(fixtures::file_mention_data(false, Some("File mentions are off for a home folder. Open a project folder instead.")), None, cx),
+        },
+        Scene {
             name: "transcript-pictures",
             description: "Pictures in a chat: two the user sent, the agent's screenshots under their step, and the one its reply shows.",
             size: WINDOW,
@@ -2930,6 +2948,26 @@ fn slash_scene(rows: Option<Vec<crate::slash_menu::SlashRow>>, text: &'static st
             fixtures::sidebar(Selected::Finished),
             Screen::Chat { title: fixtures::FINISHED_TITLE.into(), project: fixtures::project(), body: Body::Items(fixtures::finished_turn()), composer },
         )
+    })
+    .into()
+}
+
+fn file_mention_scene(slash: crate::slash_menu::SlashData, picture: Option<crate::backdrop::Picture>, cx: &mut App) -> AnyView {
+    cx.new(|_| {
+        let composer = ComposerData {
+            chat_area: false,
+            archived: None,
+            slash: Some(slash),
+            ..fixtures::composer_after_turn(Input::Drawn { text: Some("Compare with @slash".into()), placeholder: crate::chat::FOLLOW_UP_PLACEHOLDER.into() })
+        };
+        let shell = Shell::showing(
+            fixtures::sidebar(Selected::Finished),
+            Screen::Chat { title: fixtures::FINISHED_TITLE.into(), project: fixtures::project(), body: Body::Items(fixtures::file_mention_turn()), composer },
+        );
+        match picture {
+            Some(picture) => shell.with_backdrop(picture),
+            None => shell,
+        }
     })
     .into()
 }

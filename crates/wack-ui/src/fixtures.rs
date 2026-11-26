@@ -666,6 +666,8 @@ pub fn slash_rows() -> Vec<crate::slash_menu::SlashRow> {
         description: description.to_string().into(),
         source: source.to_string().into(),
         icon: crate::slash_menu::icon(kind),
+        mono: false,
+        accent_icon: false,
     };
     vec![
         row("/review", Some("<file>"), "Review a file the way the team does, before changing anything", "Your commands", Kind::Template),
@@ -673,6 +675,48 @@ pub fn slash_rows() -> Vec<crate::slash_menu::SlashRow> {
         row("/reverse-engineer-anything", None, "Reverse engineer native, managed, Electron and packaged targets", "Your skills", Kind::Skill),
         row("/compact", Some("[focus]"), "Summarise older conversation context", "WackCode", Kind::Builtin),
     ]
+}
+
+/// The Code `@` file picker's state for `file-mentions` scenes.
+pub fn file_mention_data(truncated: bool, error: Option<&str>) -> crate::slash_menu::SlashData {
+    use crate::slash_menu::{Matches, Slash};
+    use wack_core::files::FileEntry;
+    let entry = |path: &str, directory| FileEntry { path: path.into(), directory };
+    let entries = if error.is_some() {
+        Vec::new()
+    } else {
+        vec![
+            entry("crates/wack-ui/src/text_field/", true),
+            entry("crates/wack-ui/src/slash_menu.rs", false),
+            entry("crates/wack-core/src/files.rs", false),
+            entry("crates/wack-ui/src/composer.rs", false),
+            entry("README.md", false),
+        ]
+    };
+    Slash {
+        owner: Some("chat".into()),
+        range: 13..19,
+        query: "slash".into(),
+        matches: Matches::Files { entries, loading: false, truncated, error: error.map(String::from) },
+        selected: 1,
+        scroll: gpui::ScrollHandle::new(),
+    }
+    .data()
+}
+
+/// A short finished turn whose user prompt contains `@path` and quoted mentions.
+pub fn file_mention_turn() -> Vec<Item> {
+    let mut conversation = Conversation::default();
+    conversation.send("Compare @crates/wack-ui/src/slash_menu.rs with @\"my notes.txt\" and leave @someone alone.", START);
+    conversation.apply(
+        &wack_core::Event::Text(
+            "I read both files. Here is how they line up:\n\n- `slash_menu.rs` renders the picker card above the composer for `/` commands, Code `@` files, and Chat `@` references.\n- `my notes.txt` tracks the edge cases: quoting paths with spaces, keeping the picker open inside a chosen folder, and capping the workspace listing at 20,000 files.\n\nEverything matches the checklist — ready to compare another file when you are."
+                .into(),
+        ),
+        START + 4_000,
+    );
+    conversation.finish(&Ok(Outcome::Done), START + 6_000);
+    items(&conversation, &[], START + 10_000)
 }
 
 /// A planning turn that asked a question and is waiting on the next.

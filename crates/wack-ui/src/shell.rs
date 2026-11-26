@@ -50,7 +50,7 @@ use crate::{
         ClosePaneId, CloseSettings, CloseTab, Compact, DeleteChat, DiscardConnection, EditConnection, ToggleConnectionKey, EqualizeSplit, FocusNext, FocusPrevious, MovePane, AddModelRow, RemoveModelRow, SaveCommandEditor, SaveConnection,
         NewChat, NewChatIn, SelectDraft, CloseDraft, NewTerminal, NewTerminalWith, TogglePaneMenu, ClosePaneMenu, HideSidePanel, ToggleSidePanel, RevealProject, OpenPaneKind, NextTab, OpenEffortMenu, OpenModelMenu, OpenSettings,
         OpenSettingsSection, PinProject, PreviousTab, RemoveConnection, RemovePicture, ShowCommandOutput, ShowPicture, RemoveProject, ResetDockSize,
-        PickCommand, SelectChat, Send, Stop, StopCommand, MoveToBackground, ToggleTasks, ToggleTasksPane, StopTask, ShowTask, ToggleAgentsPane, ToggleBrowserPane, ToggleCanvasPane, ShowCanvas, WriteInComposer, ShowAgent, StopAgent, ToggleChanges, ToggleProject, ToggleSidebar, ToggleTerminal, TriggerProjectCommand, Unqueue,
+        PickCommand, SelectChat, Send, Stop, StopCommand, MoveToBackground, ToggleTasks, ToggleTasksPane, StopTask, ShowTask, ToggleAgentsPane, ShowTeam, ToggleBrowserPane, ToggleCanvasPane, ShowCanvas, WriteInComposer, ShowAgent, StopAgent, ToggleChanges, ToggleProject, ToggleSidebar, ToggleTerminal, TriggerProjectCommand, Unqueue,
         ToggleAutoTitles, ToggleTitleModels, ChooseTitleModel, RenameChat, RenameChatAt, CancelRename, ToggleModelReasoning, ToggleModelRow, ToggleModelVision, AttachPictures, AttachFiles, RemoveAttachment, InsertPasted, RemovePasted, SteerQueued, RemoveQueued, OpenPicture, ClosePicture, StepPicture, ZoomPicture,
         StartSuggestion, DismissSuggestion, CopySuggestion, OpenChat,
         ArchiveChat, ArchiveCurrentChat, ClearSearch, RevealScratchpadFile, DeleteAllArchived, DeleteArchivedChat, ToggleArchived, UnarchiveChat,
@@ -1823,6 +1823,9 @@ impl Render for Shell {
                     shell.change_layout(cx, |layout| layout.open(PaneKind::Canvas));
                     shell.with_session(cx, |session, cx| session.panes.show_canvas(&canvas, &artboards, cx));
                 }))
+                .on_action(cx.listener(|shell, _: &ShowTeam, _, cx| {
+                    shell.change_layout(cx, |layout| layout.open(PaneKind::Agents));
+                }))
                 .on_action(cx.listener(|shell, action: &ShowAgent, _, cx| {
                     let id = action.id.to_string();
                     shell.change_layout(cx, |layout| layout.open(PaneKind::Agents));
@@ -2445,6 +2448,7 @@ fn live_view(app: &AppState, cx: &App) -> (SidebarData, Screen, StripData) {
                     effort,
                     ultra_effort: is_ultra(resolved.as_ref()),
                     crew: None,
+                    crew_at_work: None,
                     mode: AgentMode::Build,
                     key: "chat-area".into(),
                     meter: None,
@@ -2490,6 +2494,7 @@ fn live_view(app: &AppState, cx: &App) -> (SidebarData, Screen, StripData) {
                         effort,
                         ultra_effort: is_ultra(resolved.as_ref()),
                         crew: team.0,
+                        crew_at_work: None,
                         mode: app.new_chat_mode,
                         key: "new-chat".into(),
                         meter: None,
@@ -2547,6 +2552,7 @@ fn live_view(app: &AppState, cx: &App) -> (SidebarData, Screen, StripData) {
                     effort,
                     ultra_effort: is_ultra(resolved.as_ref()),
                     crew: team.as_ref().and_then(|team| team.0.clone()),
+                    crew_at_work: chat.team.is_some().then(|| crew_at_work(&state.agents, state.running())).flatten(),
                     mode: chat.mode,
                     key: chat.id.clone().into(),
                     meter,
@@ -2619,6 +2625,16 @@ fn live_view(app: &AppState, cx: &App) -> (SidebarData, Screen, StripData) {
 
 /// A Code composer's Team: the crew's half of the model's pill while Team is on, and the model
 /// picker's switch. `locked` while a run is going.
+/// How a Team's workers stand on the user's latest message: while any is out, or while the
+/// lead works with some already back.
+fn crew_at_work(agents: &wack_core::agents::Agents, lead_working: bool) -> Option<crate::composer::CrewAtWork> {
+    use wack_core::agents::Status;
+    let active = agents.active();
+    let queued = active.iter().filter(|info| matches!(info.status, Status::Queued)).count();
+    let done = agents.this_message().iter().filter(|info| matches!(info.status, Status::Done)).count();
+    (!active.is_empty() || (lead_working && done > 0)).then_some(crate::composer::CrewAtWork { working: active.len() - queued, queued, done })
+}
+
 fn team_parts(app: &AppState, crew: Option<&wack_core::ModelChoice>, locked: bool) -> (Option<CrewPill>, TeamRow) {
     let store = app.store();
     let unavailable = (store.agents_config().delegation == wack_core::agents::Delegation::Off)

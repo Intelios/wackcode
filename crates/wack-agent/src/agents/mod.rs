@@ -50,7 +50,7 @@ use std::{
     path::{Path, PathBuf},
     sync::{
         Arc, Mutex, Weak,
-        atomic::{AtomicU32, Ordering},
+        atomic::{AtomicU32, AtomicUsize, Ordering},
     },
     time::{Duration, Instant, SystemTime, UNIX_EPOCH},
 };
@@ -264,6 +264,7 @@ impl Default for Agents {
                 observer: Mutex::default(),
                 slots: Arc::new(Semaphore::new(MAX_RUNNING)),
                 started: AtomicU32::new(0),
+                before_message: AtomicUsize::new(0),
             }),
         }
     }
@@ -281,6 +282,8 @@ struct Inner {
     slots: Arc<Semaphore>,
     /// Children started since the user last wrote.
     started: AtomicU32,
+    /// How many children there were when the user last wrote: those after it are this message's.
+    before_message: AtomicUsize,
 }
 
 impl Inner {
@@ -562,6 +565,13 @@ impl Agents {
     /// The user wrote: children may start again.
     pub fn reset_budget(&self) {
         self.inner.started.store(0, Ordering::SeqCst);
+        self.inner.before_message.store(self.children().len(), Ordering::SeqCst);
+    }
+
+    /// The children started since the user last wrote, oldest first: every child until then.
+    pub fn this_message(&self) -> Vec<AgentInfo> {
+        let before = self.inner.before_message.load(Ordering::SeqCst);
+        self.children().iter().skip(before).map(|child| child.info()).collect()
     }
 
     /// Counts one more child against [`MAX_PER_MESSAGE`]. False when none may start.
@@ -921,6 +931,18 @@ mod tests {
         assert!(!agents.spend());
         agents.reset_budget();
         assert!(agents.spend());
+    }
+
+    #[test]
+    fn this_message_holds_the_children_started_since_the_user_wrote() {
+        let folder = tempfile::tempdir().unwrap();
+        let agents = Agents::new();
+        add(&agents, folder.path(), false, Control::new());
+        assert_eq!(agents.this_message().len(), 1, "before any message, every child");
+        agents.reset_budget();
+        assert!(agents.this_message().is_empty());
+        let next = add(&agents, folder.path(), false, Control::new());
+        assert_eq!(agents.this_message().iter().map(|info| info.id.clone()).collect::<Vec<_>>(), vec![next.id.clone()]);
     }
 
     #[test]

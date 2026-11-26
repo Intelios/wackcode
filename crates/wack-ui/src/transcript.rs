@@ -135,6 +135,10 @@ pub struct AgentLine {
     pub words: SharedString,
     /// Rounds after the first: "round 2".
     pub round: u32,
+    /// In a Team, which model it runs on: the lead's or the crew's. `None` outside a Team.
+    pub tier: Option<wack_core::agents::Tier>,
+    /// The files its brief gave it, short: "retry.rs, http.rs +2". Empty when none were named.
+    pub files: SharedString,
 }
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
@@ -728,6 +732,7 @@ fn agent_row(key: &SharedString, agent: &AgentLine, theme: &Theme) -> AnyElement
                         .items_center()
                         .gap(px(8.))
                         .child(div().flex_none().typography(Type::UiStrong).text_color(theme.text).child(agent.role.clone()))
+                        .children(agent.tier.map(|tier| tier_chip(tier, theme)))
                         .child(div().flex_1().min_w_0().truncate().typography(Type::Ui).text_color(theme.text_soft).child(agent.task.clone()))
                         .when(!agent.id.is_empty(), |line| {
                             line.child(div().flex_none().typography(Type::Small).font_family(MONO_FONT).text_color(theme.text_faint).child(agent.id.clone()))
@@ -737,10 +742,47 @@ fn agent_row(key: &SharedString, agent: &AgentLine, theme: &Theme) -> AnyElement
                 )
                 .when(!agent.words.is_empty(), |text| {
                     text.child(div().truncate().typography(Type::Small).text_color(theme.text_faint).child(agent.words.clone()))
+                })
+                .when(!agent.files.is_empty(), |text| {
+                    text.child(
+                        div()
+                            .flex()
+                            .items_center()
+                            .gap(px(5.))
+                            .child(Icon::File.view(px(10.), theme.text_faint))
+                            .child(div().flex_1().min_w_0().truncate().typography(Type::Small).font_family(MONO_FONT).text_color(theme.text_dim).child(agent.files.clone()))
+                            .tag("agent-files"),
+                    )
                 }),
         )
         .tag("agent-row")
         .into_any_element()
+}
+
+/// Which model a Team's worker runs on, as a small pill beside its role: the lead's in the
+/// lead's words, the crew's quieter.
+pub fn tier_chip(tier: wack_core::agents::Tier, theme: &Theme) -> impl IntoElement + use<> {
+    use wack_core::agents::Tier;
+    let (word, text, edge) = match tier {
+        Tier::Lead => ("lead", theme.text_soft, theme.border_strong),
+        Tier::Crew => ("crew", theme.text_dim, theme.border),
+    };
+    div()
+        .flex_none()
+        .h(px(17.))
+        .px(px(7.))
+        .rounded_full()
+        .border_1()
+        .border_color(edge)
+        .flex()
+        .items_center()
+        .typography(Type::Small)
+        .text_color(text)
+        .child(word)
+        .tag(match tier {
+            Tier::Lead => "tier-lead",
+            Tier::Crew => "tier-crew",
+        })
 }
 
 /// How an agent stands, in a word, and its colour: working in the accent, the ends in their

@@ -46,6 +46,8 @@ actions!(
         ToggleTasksPane,
         /// Show the Agents pane: the chat's sub-agents and their work.
         ToggleAgentsPane,
+        /// Open the Agents pane on a Team chat's overview.
+        ShowTeam,
         /// Show the Browser pane: the chat's browser tabs.
         ToggleBrowserPane,
         /// Show the Canvas pane: the chat's canvases.

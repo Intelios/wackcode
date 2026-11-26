@@ -130,6 +130,7 @@ pub fn composer_empty(roomy: bool) -> ComposerData {
         effort: Some("Medium".into()),
         ultra_effort: false,
         crew: None,
+        crew_at_work: None,
         mode: wack_core::AgentMode::Build,
         key: "scene".into(),
         meter: None,
@@ -1111,6 +1112,108 @@ pub fn agent_ends() -> Vec<Item> {
         }
     }
     items
+}
+
+/// A Team's workers on the retry change: Explore back, the shared type settled on the lead's
+/// model, and three crew Generals on their own files: building (one in the background) and one
+/// waiting for a place. With `lead_idle` every one still out works in the background.
+pub fn team_agents(now: u64, lead_idle: bool) -> Vec<wack_core::agents::AgentInfo> {
+    use wack_core::agents::{AgentInfo, Status, Tier};
+    let nowhere = |id: &str| std::path::PathBuf::from(format!("/nowhere/{id}.jsonl"));
+    let team = |mut info: AgentInfo, tier: Tier, files: &[&str], changed: &[&str]| {
+        info.tier = Some(tier);
+        info.model = match tier {
+            Tier::Lead => "claude-opus-5-5".into(),
+            Tier::Crew => "claude-haiku-5-5".into(),
+        };
+        info.files = files.iter().map(|file| file.to_string()).collect();
+        info.changed = changed.iter().map(|file| file.to_string()).collect();
+        info
+    };
+    let parse = ["crates/wack-llm/src/retry/parse.rs"];
+    let cap = ["crates/wack-llm/src/retry/backoff.rs", "crates/wack-llm/src/http.rs", "crates/wack-core/src/title.rs", "crates/wack-agent/src/compact.rs"];
+    vec![
+        team(agent_info("a1", "explore", "Map the retry callers", "agent-1", Status::Done, false, now, 190_000, Some(140_000), 14, 38_400, None, nowhere("a1")), Tier::Crew, &[], &[]),
+        team(
+            agent_info("a2", "general", "Settle the RetryAfter type", "agent-2", Status::Done, false, now, 120_000, Some(72_000), 9, 22_300, None, nowhere("a2")),
+            Tier::Lead,
+            &["crates/wack-llm/src/retry/mod.rs"],
+            &["crates/wack-llm/src/retry/mod.rs"],
+        ),
+        team(
+            agent_info("a3", "general", "Parse both Retry-After forms", "agent-3", Status::Running, lead_idle, now, 64_000, None, 11, 24_100, Some(("edit", parse[0])), nowhere("a3")),
+            Tier::Crew,
+            &parse,
+            &parse,
+        ),
+        team(
+            agent_info("a4", "general", "Cap every wait at MAX_WAIT", "agent-4", Status::Running, true, now, 64_000, None, 8, 19_800, Some(("bash", "cargo test -p wack-llm backoff")), nowhere("a4")),
+            Tier::Crew,
+            &cap,
+            &cap[..2],
+        ),
+        team(
+            agent_info("a5", "general", "Test both header forms", "agent-5", Status::Queued, lead_idle, now, 64_000, None, 0, 0, None, nowhere("a5")),
+            Tier::Crew,
+            &["crates/wack-llm/tests/retry_dates.rs"],
+            &[],
+        ),
+    ]
+}
+
+/// A Team chat's turn on the retry change: the lead's calls and the reports back so far. With
+/// `lead_idle` the lead has said what is out and stopped, waiting for the crew's reports.
+pub fn team_turn(lead_idle: bool) -> Vec<Item> {
+    let mut conversation = Conversation::default();
+    let now = START + 200_000;
+    conversation.send("Make the retry backoff honour Retry-After, capped at the backoff ceiling, with tests for both header forms.", START);
+    conversation.apply(&Event::Thinking("Wide enough to split. Map the callers first, settle the shared type, then the parser, the cap and the tests on separate files.".into()), START + 3_000);
+    let agent = |agent: &str, description: &str, model: &str, files: &[&str], background: bool| {
+        json!({ "agent": agent, "description": description, "prompt": "…", "model": model, "files": files, "background": background })
+    };
+    call(&mut conversation, "agent-1", "agent", agent("explore", "Map the retry callers", "crew", &[], false), Some(MAP_REPORT), START + 10_000);
+    call(
+        &mut conversation,
+        "agent-2",
+        "agent",
+        agent("general", "Settle the RetryAfter type", "lead", &["crates/wack-llm/src/retry/mod.rs"], false),
+        Some("Added `RetryAfter { Seconds(u64), Date(SystemTime) }` and `fn wait(&self, now) -> Duration` beside `Backoff`, with doc comments naming both header forms.\n\n## Files it changed (seen by WackCode)\nThrough write and edit; changes made with the shell aren't tracked.\n- crates/wack-llm/src/retry/mod.rs\n\n[agent a2 · general · 9 tool calls · 22k tokens · 48s]"),
+        START + 80_000,
+    );
+    let in_background = "is working in the background. Its report will arrive as a message when it finishes.";
+    for (id, number, description, files) in [
+        ("agent-3", "a3", "Parse both Retry-After forms", vec!["crates/wack-llm/src/retry/parse.rs"]),
+        ("agent-4", "a4", "Cap every wait at MAX_WAIT", vec!["crates/wack-llm/src/retry/backoff.rs", "crates/wack-llm/src/http.rs", "crates/wack-core/src/title.rs", "crates/wack-agent/src/compact.rs"]),
+        ("agent-5", "a5", "Test both header forms", vec!["crates/wack-llm/tests/retry_dates.rs"]),
+    ] {
+        let background = lead_idle || id == "agent-4";
+        let result = format!("Agent {number} (general) {in_background}");
+        call(&mut conversation, id, "agent", agent("general", description, "crew", &files, background), background.then_some(result.as_str()), START + 136_000);
+    }
+    if lead_idle {
+        conversation.apply(
+            &Event::Text("The type is settled on my model. The parser, the cap and the tests are with the crew on their own files, in the background; I'll review each change as it reports.".into()),
+            START + 140_000,
+        );
+        conversation.finish(&Ok(Outcome::Done), START + 141_000);
+    }
+    conversation.agents = team_agents(now, lead_idle).into_iter().map(|info| (info.call_id.clone(), info)).collect();
+    items(&conversation, &[], now)
+}
+
+/// The composer of a Team chat with its crew out: the lead waiting on them, or idle between
+/// their reports.
+pub fn composer_team(lead_idle: bool) -> ComposerData {
+    let crew_at_work = Some(crate::composer::CrewAtWork { working: 2, queued: 1, done: 2 });
+    if lead_idle {
+        return ComposerData { crew: Some(crew_pill(false)), crew_at_work, ..composer_after_turn(drawn(None, crate::chat::FOLLOW_UP_PLACEHOLDER)) };
+    }
+    ComposerData {
+        crew: Some(crew_pill(false)),
+        crew_at_work,
+        activity: Some(("Working  ·  3m 20s".into(), Some("Waiting on General · Parse both Retry-After forms".into()))),
+        ..composer_agents()
+    }
 }
 
 /// The composer while the chat waits on its agents.

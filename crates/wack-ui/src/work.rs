@@ -121,8 +121,10 @@ pub fn entry_items(
                         .enumerate()
                         .map(|(step, item)| step_row(item, &format!("{key}-{step}"), cwd, turn.live, open, &conversation.agents, now))
                         .collect();
+                    // Agents still out keep it open after the turn ends, as a live turn is.
+                    let agents_out = rows.iter().any(|row| row.agent.as_ref().is_some_and(|agent| agent.state.working()));
                     items.push(Item::Work(Work {
-                        open: turn.live || open.contains(&key),
+                        open: turn.live || agents_out || open.contains(&key),
                         summary: summary(turn, now).into(),
                         tally: tally(&rows).into(),
                         live: turn.live,
@@ -1127,7 +1129,16 @@ fn agent_row(tool: &ToolStep, info: Option<&AgentInfo>, live: bool, now: u64) ->
         meta,
         detail: None,
         open: false,
-        agent: Some(AgentLine { id: id.into(), role: role_name(&role).into(), task: task.into(), state, words: words.into(), round }),
+        agent: Some(AgentLine {
+            id: id.into(),
+            role: role_name(&role).into(),
+            task: task.into(),
+            state,
+            words: words.into(),
+            round,
+            tier: info.and_then(|info| info.tier),
+            files: info.map(|info| owned_files(&info.files)).unwrap_or_default().into(),
+        }),
         pictures: Vec::new(),
     }
 }
@@ -1144,10 +1155,31 @@ fn agent_state(info: &AgentInfo) -> AgentState {
     }
 }
 
+/// The files a worker owns, short: the first two by name, then how many more.
+pub fn owned_files(files: &[String]) -> String {
+    let shown: Vec<String> = files.iter().take(2).map(|path| short_path(path)).collect();
+    match files.len() {
+        0..=2 => shown.join(", "),
+        count => format!("{} +{}", shown.join(", "), count - 2),
+    }
+}
+
+/// A project path by its name, with its folder when the name alone says little (`mod.rs`).
+fn short_path(path: &str) -> String {
+    let mut parts = path.trim_end_matches('/').rsplit('/');
+    let name = parts.next().unwrap_or(path);
+    let stem = name.split('.').next().unwrap_or(name);
+    match parts.next() {
+        Some(folder) if matches!(stem, "mod" | "lib" | "main" | "index" | "__init__") => format!("{folder}/{name}"),
+        _ => name.to_string(),
+    }
+}
+
 /// What an agent's row says under its task, from the registry.
 fn live_words(info: &AgentInfo, now: u64) -> String {
     let took = duration(info.ended_at.unwrap_or(now).saturating_sub(info.started_at));
-    let counts = format!("{} · {}", plural(info.tool_calls as usize, "tool", "tools"), tokens(info.context_tokens));
+    let changed = if info.changed.is_empty() { String::new() } else { format!("{} changed · ", info.changed.len()) };
+    let counts = format!("{changed}{} · {}", plural(info.tool_calls as usize, "tool", "tools"), tokens(info.context_tokens));
     let round = if info.round > 1 { format!("round {} · ", info.round) } else { String::new() };
     match &info.status {
         Status::Queued => format!("{round}Waiting for a free place"),
@@ -1304,6 +1336,25 @@ mod tests {
         let items = items(&conversation, Path::new("/"), &HashSet::new(), 2, &mut ReplyCache::default());
         let rows = items.iter().find_map(|item| if let Item::Work(work) = item { Some(work.rows.clone()) } else { None }).expect("a work log");
         assert_eq!(activity(&rows).as_deref(), Some("Clicking ref_7"));
+    }
+
+    #[test]
+    fn a_workers_files_read_by_name_two_then_a_count() {
+        let files = |list: &[&str]| owned_files(&list.iter().map(|file| file.to_string()).collect::<Vec<_>>());
+        assert_eq!(files(&[]), "");
+        assert_eq!(files(&["crates/wack-llm/src/retry/mod.rs", "crates/wack-llm/src/http.rs"]), "retry/mod.rs, http.rs");
+        assert_eq!(files(&["a.rs", "b.rs", "c.rs", "d.rs"]), "a.rs, b.rs +2");
+    }
+
+    #[test]
+    fn a_finished_turn_stays_open_while_its_agents_work_and_rows_carry_the_team() {
+        let open = |items: Vec<Item>| items.iter().find_map(|item| if let Item::Work(work) = item { Some(work.clone()) } else { None }).unwrap();
+        let work = open(crate::fixtures::team_turn(true));
+        assert!(!work.live && work.open, "the crew is still out");
+        let lines: Vec<&AgentLine> = work.rows.iter().filter_map(|row| row.agent.as_ref()).collect();
+        assert_eq!(lines[1].tier, Some(wack_core::agents::Tier::Lead));
+        assert_eq!(lines[3].files.as_ref(), "backoff.rs, http.rs +2");
+        assert!(lines[3].words.contains("2 changed"));
     }
 
     #[test]

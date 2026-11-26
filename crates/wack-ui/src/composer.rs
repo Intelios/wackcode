@@ -82,6 +82,9 @@ pub struct ComposerData {
     pub ultra_effort: bool,
     /// The chat's Team, while it is on: the crew's half of the model's pill.
     pub crew: Option<CrewPill>,
+    /// A Team's workers on this message, while any of them works: the status line stays up for
+    /// them even while the lead waits.
+    pub crew_at_work: Option<CrewAtWork>,
     /// Build, Plan or Ultra Plan.
     pub mode: AgentMode,
     /// Whose composer this is (a chat's id, or the new chat's), so switching chats never plays
@@ -150,6 +153,22 @@ pub struct MenuData {
     pub groups: Vec<MenuGroup>,
     /// The model picker's foot: the Team switch, for a Code chat's composer.
     pub team: Option<TeamRow>,
+}
+
+/// How a Team's workers stand on the user's latest message.
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
+pub struct CrewAtWork {
+    pub working: usize,
+    pub queued: usize,
+    pub done: usize,
+}
+
+impl CrewAtWork {
+    /// "2 working · 1 queued · 3 done", leaving out what is none.
+    pub fn words(&self) -> String {
+        let parts = [(self.working, "working"), (self.queued, "queued"), (self.done, "done")];
+        parts.iter().filter(|(count, _)| *count > 0).map(|(count, word)| format!("{count} {word}")).collect::<Vec<_>>().join(" · ")
+    }
 }
 
 /// A Team's crew as its half of the model's pill shows it.
@@ -559,10 +578,25 @@ fn provider_mark(letter: SharedString, theme: &Theme) -> impl IntoElement {
 /// opens the list) and ⌘B when there is something to move to the background. Only while there
 /// is something to say.
 fn status_line(data: &ComposerData, asking: bool, theme: &Theme) -> Option<impl IntoElement + use<>> {
-    if data.activity.is_none() && data.todos.is_none() {
+    if data.activity.is_none() && data.todos.is_none() && data.crew_at_work.is_none() {
         return None;
     }
     let mut line = div().h(px(STATUS_HEIGHT)).mr(px(4.)).flex().items_center().gap(px(8.));
+    let lead_idle = data.activity.is_none();
+    if let (true, Some(_)) = (lead_idle, data.crew_at_work) {
+        // The lead's run ended with its crew still out: it wakes as their reports come in.
+        line = line.child(
+            div()
+                .flex_1()
+                .min_w_0()
+                .flex()
+                .items_center()
+                .gap(px(8.))
+                .child(div().flex_none().child(Icon::Duck.view(px(13.), theme.text_dim)))
+                .child(div().flex_1().min_w_0().truncate().typography(Type::Small).text_color(theme.text_dim).child("The lead picks up as reports come in"))
+                .tag("lead-waiting"),
+        );
+    }
     if let Some((time, doing)) = data.activity.clone() {
         line = line.child(
             div()
@@ -575,6 +609,28 @@ fn status_line(data: &ComposerData, asking: bool, theme: &Theme) -> Option<impl 
                 .child(div().flex_none().typography(Type::Small).text_color(theme.text).child(time))
                 .child(div().flex_1().min_w_0().truncate().typography(Type::Small).text_color(theme.text_dim).children(doing))
                 .tag("activity"),
+        );
+    }
+    if let Some(crew) = data.crew_at_work {
+        let duck = Icon::Duck.view(px(11.), if crew.working > 0 { theme.accent_text } else { theme.text_faint });
+        line = line.child(
+            div()
+                .id("crew-pill")
+                .flex_none()
+                .h(px(22.))
+                .px(px(8.))
+                .rounded_full()
+                .flex()
+                .items_center()
+                .gap(px(5.))
+                .cursor_pointer()
+                .hover(|button| button.bg(theme.hover))
+                .tooltip(tip("Show the team (⌘⇧A)"))
+                .on_click(dispatch(crate::actions::ShowTeam))
+                // One duck paddles at a time: the lead's while it works, else the crew's.
+                .child(if lead_idle && crew.working > 0 { crate::motion::paddling(div().child(duck)).into_any_element() } else { duck.into_any_element() })
+                .child(div().typography(Type::Small).text_color(theme.text_soft).child(crew.words()))
+                .tag("crew-pill"),
         );
     }
     if let Some(todos) = &data.todos {
@@ -600,7 +656,7 @@ fn status_line(data: &ComposerData, asking: bool, theme: &Theme) -> Option<impl 
         );
     }
     // Between runs the count leads the line.
-    if data.activity.is_none() {
+    if lead_idle && data.crew_at_work.is_none() {
         line = line.child(div().flex_1());
     }
     if data.working && data.foreground {

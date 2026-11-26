@@ -1626,6 +1626,18 @@ pub fn all() -> Vec<Scene> {
             },
         },
         Scene {
+            name: "chat-team",
+            description: "A Team at work: Explore and the shared type back, crew Generals on their own files (one in the background), one queued; the lead waiting, the crew pill.",
+            size: size(px(1180.), px(1000.)),
+            build: |_, cx| team_chat_scene(false, cx),
+        },
+        Scene {
+            name: "chat-team-idle-lead",
+            description: "A Team whose lead has stopped with its crew still out in the background: the status line stays up for them.",
+            size: size(px(1180.), px(1000.)),
+            build: |_, cx| team_chat_scene(true, cx),
+        },
+        Scene {
             name: "chat-agents-ended",
             description: "Agents that failed, were stopped and were interrupted by a quit, and a background report waking the chat.",
             size: size(px(1180.), px(1000.)),
@@ -2313,6 +2325,25 @@ fn browser_scene(scene: BrowserScene, backdrop: Option<crate::backdrop::Picture>
             Some(picture) => shell.with_backdrop(picture),
             None => shell,
         }
+    })
+    .into()
+}
+
+/// A Team chat at work: the lead waiting on its crew, or idle with the crew in the background.
+/// Either way the chat is working, as the sidebar shows it.
+fn team_chat_scene(lead_idle: bool, cx: &mut App) -> AnyView {
+    let (selected, title) = (Selected::Working, fixtures::WORKING_TITLE);
+    cx.new(|_| {
+        Shell::showing_tabs(
+            fixtures::sidebar(selected),
+            Screen::Chat {
+                title: title.into(),
+                project: fixtures::project(),
+                body: Body::Items(fixtures::team_turn(lead_idle)),
+                composer: fixtures::composer_team(lead_idle),
+            },
+            fixtures::strip(Some(title)),
+        )
     })
     .into()
 }

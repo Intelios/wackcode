@@ -52,7 +52,7 @@ use crate::{
         NewChat, NewChatIn, SelectDraft, CloseDraft, NewTerminal, NewTerminalWith, TogglePaneMenu, ClosePaneMenu, HideSidePanel, ToggleSidePanel, RevealProject, OpenPaneKind, NextTab, OpenEffortMenu, OpenModelMenu, OpenSettings,
         OpenSettingsSection, PinProject, PreviousTab, RemoveConnection, RemovePicture, ShowCommandOutput, ShowPicture, RemoveProject, ResetDockSize,
         PickCommand, RetryWorkspaceFiles, SelectChat, Send, Stop, StopCommand, MoveToBackground, ToggleTasks, ToggleTasksPane, StopTask, ShowTask, ToggleAgentsPane, ShowTeam, ToggleBrowserPane, ToggleCanvasPane, ShowCanvas, WriteInComposer, ShowAgent, StopAgent, ToggleChanges, ToggleProject, ToggleSidebar, ToggleTerminal, TriggerProjectCommand, Unqueue,
-        ToggleAutoTitles, ToggleTitleModels, ChooseTitleModel, RenameChat, RenameChatAt, CancelRename, ToggleModelReasoning, ToggleModelRow, ToggleModelVision, AttachPictures, AttachFiles, RemoveAttachment, InsertPasted, RemovePasted, SteerQueued, RemoveQueued, OpenPicture, ClosePicture, StepPicture, ZoomPicture,
+        ToggleAutoTitles, ToggleTitleModels, ChooseTitleModel, RenameChat, RenameChatAt, CancelRename, ToggleModelReasoning, ToggleModelRow, ToggleModelVision, AttachPictures, AttachFiles, AttachTerminalSelection, RemoveAttachment, InsertFile, RemoveFile, SteerQueued, RemoveQueued, OpenPicture, ClosePicture, StepPicture, ZoomPicture,
         StartSuggestion, DismissSuggestion, CopySuggestion, OpenChat,
         ArchiveChat, ArchiveCurrentChat, ClearSearch, RevealScratchpadFile, DeleteAllArchived, DeleteArchivedChat, ToggleArchived, UnarchiveChat,
         ToggleModelEffort, SwitchSkill, SwitchSkillFolder, RemoveSkillFolder, OpenSkill, CopySkill, ChooseSkillUse, NewSkill, SaveSkill,
@@ -1944,19 +1944,55 @@ impl Render for Shell {
                         }
                     });
                 }))
-                .on_action(cx.listener(|shell, action: &InsertPasted, _, cx| {
+                .on_action(cx.listener(|shell, action: &AttachTerminalSelection, window, cx| {
+                    let pane_id = action.pane;
+                    let text = action.text.clone();
+                    let Some(app) = shell.app() else {
+                        return;
+                    };
+                    let result = app.update(cx, |app, cx| {
+                        let Some(chat) = app.composing_in() else {
+                            return Err("Open a chat to add a terminal selection.".into());
+                        };
+                        app.attach_terminal_selection(chat, text, cx)
+                    });
+                    match result {
+                        Ok(composer) => {
+                            let focus = composer.read(cx).focus_handle(cx);
+                            window.focus(&focus, cx);
+                        }
+                        Err(problem) => {
+                            let terminal = pane_id
+                                .and_then(|id| shell.current_panes(cx).and_then(|panes| panes.model(id)).cloned())
+                                .and_then(|model| match model {
+                                    crate::panes::PaneModel::Terminal(pane) => Some(pane),
+                                    _ => None,
+                                });
+                            if let Some(terminal) = terminal {
+                                terminal.update(cx, |pane, cx| pane.set_notice(Some(problem), cx));
+                            } else {
+                                app.update(cx, |app, cx| {
+                                    if let Some(chat) = app.composing_in() {
+                                        app.attach_problem(chat.as_deref(), problem, cx);
+                                    }
+                                });
+                            }
+                        }
+                    }
+                }))
+                .on_action(cx.listener(|shell, action: &InsertFile, _, cx| {
                     let index = action.index;
                     shell.with_app(cx, |app, cx| {
                         if let Some(chat) = app.composing_in() {
-                            app.insert_pasted(chat, index, cx);
+                            app.insert_file(chat, index, cx);
                         }
                     });
                 }))
-                .on_action(cx.listener(|shell, action: &RemovePasted, _, cx| {
+                .on_action(cx.listener(|shell, action: &RemoveFile, _, cx| {
                     let index = action.index;
                     shell.with_app(cx, |app, cx| {
                         if let Some(chat) = app.composing_in() {
-                            app.remove_pasted(chat, index, cx);
+                            app.remove_file(chat, index, cx);
                         }
                     });
                 }))
@@ -2504,8 +2540,9 @@ fn live_view(app: &AppState, cx: &App) -> (SidebarData, Screen, StripData) {
                     changes: None,
                     foreground: false,
                     attachments: app.draft_attachments.clone(),
-                    pasted: app.draft_pasted.clone(),
+                    files: app.draft_files.clone(),
                     pictures_refused: app.pictures_refused_for(&choice, app.draft_attachments.len()).map(Into::into),
+                    files_refused: crate::attachments::files_problem(&app.draft_files).map(Into::into),
                     comments: None,
                     sent_at: app.sent_at,
                 },
@@ -2550,8 +2587,9 @@ fn live_view(app: &AppState, cx: &App) -> (SidebarData, Screen, StripData) {
                         changes: None,
                         foreground: false,
                         attachments: app.draft_attachments.clone(),
-                        pasted: app.draft_pasted.clone(),
+                        files: app.draft_files.clone(),
                         pictures_refused: app.pictures_refused_for(&choice, app.draft_attachments.len()).map(Into::into),
+                        files_refused: crate::attachments::files_problem(&app.draft_files).map(Into::into),
                         comments: None,
                         sent_at: app.sent_at,
                     },
@@ -2571,9 +2609,8 @@ fn live_view(app: &AppState, cx: &App) -> (SidebarData, Screen, StripData) {
             let team = (!chat.is_chat_area()).then(|| team_parts(app, chat.team.as_ref(), state.running()));
             let window = resolved.as_ref().and_then(|resolved| resolved.model.context_window);
             let meter = state.context_tokens.map(|tokens| meter(tokens, window, !state.is_empty(), state.context_parts.clone()));
-            let mut waiting: Vec<Waiting> =
-                state.steering.iter().map(|text| Waiting { text: first_line(text), steering: true }).collect();
-            waiting.extend(state.queue.iter().map(|text| Waiting { text: first_line(text), steering: false }));
+            let mut waiting: Vec<Waiting> = state.steering.iter().map(|text| waiting_item(text, true)).collect();
+            waiting.extend(state.queue.iter().map(|text| waiting_item(text, false)));
             Screen::Chat {
                 title: chat.title.clone().into(),
                 project,
@@ -2619,8 +2656,9 @@ fn live_view(app: &AppState, cx: &App) -> (SidebarData, Screen, StripData) {
                     changes: state.changes,
                     foreground: state.tasks.has_foreground() || state.agents.active().iter().any(|info| !info.background),
                     attachments: state.attachments.clone(),
-                    pasted: state.pasted.clone(),
+                    files: state.files.clone(),
                     pictures_refused: app.pictures_refused_for(&chat.choice, state.attachments.len()).map(Into::into),
+                    files_refused: crate::attachments::files_problem(&state.files).map(Into::into),
                     comments: {
                         let count: usize = state.comment_drafts.iter().map(|(_, n)| n).sum();
                         state.comment_drafts.first().map(|(canvas, _)| (count, canvas.clone()))
@@ -2815,6 +2853,18 @@ fn first_line(text: &str) -> SharedString {
     text.lines().find(|line| !line.trim().is_empty()).unwrap_or("").trim().to_string().into()
 }
 
+/// A queued or steering message as its waiting bubble shows it: generated tails split off, with
+/// attached filenames listed separately so raw tags never appear.
+fn waiting_item(raw: &str, steering: bool) -> Waiting {
+    let (words, _) = wack_core::chat_refs::split(raw);
+    let (words, files) = crate::attachments::split(&words);
+    Waiting {
+        text: first_line(words),
+        files: files.into_iter().map(|file| file.name).collect(),
+        steering,
+    }
+}
+
 /// The words the composer shows for the model and its effort.
 fn model_words(resolved: Option<&wack_core::Resolved>) -> (SharedString, Option<SharedString>) {
     match resolved {
@@ -2870,7 +2920,7 @@ fn drop_zone(body: gpui::AnyElement, theme: &Theme) -> impl IntoElement {
                         .gap(px(10.))
                         .child(Icon::Paperclip.view(px(26.), theme.accent_text))
                         .child(div().typography(Type::Heading).text_color(theme.text).child("Drop to attach"))
-                        .child(div().typography(Type::Small).text_color(theme.text_dim).child("Pictures go with your next message")),
+                        .child(div().typography(Type::Small).text_color(theme.text_dim).child("Pictures and text files go with your next message")),
                 ),
         )
 }

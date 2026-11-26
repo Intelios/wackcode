@@ -111,6 +111,9 @@ pub struct Snapshot {
     pub cursor: Option<Cursor>,
     /// How far the view is scrolled up into the scrollback, in lines.
     pub scrolled: usize,
+    /// Viewport `(row, column)` of the selection's end when a non-whitespace selection intersects
+    /// the visible screen; `None` when nothing is selected or it scrolled off-screen.
+    pub selection_end: Option<(usize, usize)>,
 }
 
 /// The modes that change what keys and pastes send.
@@ -347,9 +350,26 @@ impl Screen {
         self.term.lock().selection = None;
     }
 
+    /// Selects every line in the terminal, scrollback included.
+    pub fn select_all(&self) {
+        let mut term = self.term.lock();
+        let start = Point::new(term.grid().topmost_line(), Column(0));
+        let end = Point::new(term.grid().bottommost_line(), term.grid().last_column());
+        let mut selection = Selection::new(SelectionType::Lines, start, Side::Left);
+        selection.update(end, Side::Right);
+        term.selection = Some(selection);
+    }
+
     /// The selected text, if anything non-empty is selected.
     pub fn selected_text(&self) -> Option<String> {
         self.term.lock().selection_to_string().filter(|text| !text.is_empty())
+    }
+
+    /// Viewport `(row, column)` of the selection's end when a non-whitespace selection intersects
+    /// the visible screen; `None` when nothing is selected or it scrolled off-screen.
+    pub fn selection_end(&self) -> Option<(usize, usize)> {
+        let term = self.term.lock();
+        selection_end_in_term(&term)
     }
 
     /// What is on screen now.
@@ -466,13 +486,26 @@ impl Terminal {
         self.screen.select_to(row, column, right_half);
     }
 
+    pub fn clear(&self) {
+        self.screen.clear();
+    }
+
     pub fn clear_selection(&self) {
         self.screen.clear_selection();
+    }
+
+    pub fn select_all(&self) {
+        self.screen.select_all();
     }
 
     /// The selected text, if anything non-empty is selected.
     pub fn selected_text(&self) -> Option<String> {
         self.screen.selected_text()
+    }
+
+    /// Viewport `(row, column)` of the visible selection's end, if any.
+    pub fn selection_end(&self) -> Option<(usize, usize)> {
+        self.screen.selection_end()
     }
 
     /// What is on screen now.
@@ -550,7 +583,30 @@ fn snapshot_from_term(term: &Term<Listener>) -> Snapshot {
                 },
             }),
         };
-        Snapshot { columns, rows, lines, cursor, scrolled }
+        let selection_end = selection_end_in_term(term);
+        Snapshot { columns, rows, lines, cursor, scrolled, selection_end }
+}
+
+fn selection_end_in_term(term: &Term<Listener>) -> Option<(usize, usize)> {
+    let range = term.selection.as_ref().and_then(|selection| selection.to_range(term))?;
+    if !term.selection_to_string().is_some_and(|text| !text.trim().is_empty()) {
+        return None;
+    }
+    let scrolled = term.grid().display_offset() as i32;
+    let rows = term.screen_lines();
+    let columns = term.columns();
+    let start_row = range.start.line.0 + scrolled;
+    let end_row = range.end.line.0 + scrolled;
+    if end_row < 0 || start_row >= rows as i32 {
+        return None;
+    }
+    let row = end_row.clamp(0, rows.saturating_sub(1) as i32) as usize;
+    let column = if end_row >= rows as i32 {
+        columns.saturating_sub(1)
+    } else {
+        range.end.column.0.min(columns.saturating_sub(1))
+    };
+    Some((row, column))
 }
 
 impl Drop for Terminal {
@@ -725,5 +781,42 @@ mod tests {
         }
         screen.advance(b"fresh");
         assert_eq!(text(&screen.snapshot(), 0), "fresh");
+    }
+
+    #[test]
+    fn selection_end_tracks_visible_selection_and_clears_offscreen() {
+        let mut bytes = Vec::new();
+        for number in 0..20 {
+            bytes.extend(format!("line {number}\r\n").as_bytes());
+        }
+        let terminal = Terminal::replay(16, 4, &bytes);
+        // Plain click with no drag produces no anchor.
+        terminal.select_from(0, 0, false, SelectionKind::Characters);
+        assert_eq!(terminal.snapshot().selection_end, None);
+
+        // Selecting across rows 0..1 anchors at row 1, col 6.
+        terminal.select_to(1, 6, true);
+        assert_eq!(terminal.snapshot().selection_end, Some((1, 6)));
+
+        // Scrolling the selection completely below the viewport hides the anchor.
+        terminal.scroll(10);
+        assert_eq!(terminal.snapshot().selection_end, None);
+
+        // Returning brings the anchor back.
+        terminal.scroll(-10);
+        assert_eq!(terminal.snapshot().selection_end, Some((1, 6)));
+    }
+
+    #[test]
+    fn select_all_and_clear_work_on_terminal() {
+        let terminal = Terminal::replay(16, 3, b"one\r\ntwo\r\nthree\r\nfour");
+        terminal.select_all();
+        let selected = terminal.selected_text().expect("select_all selects buffer");
+        assert!(selected.contains("one") && selected.contains("four"), "{selected:?}");
+        assert!(terminal.snapshot().selection_end.is_some());
+
+        terminal.clear();
+        assert_eq!(terminal.selected_text(), None);
+        assert_eq!(terminal.snapshot().selection_end, None);
     }
 }

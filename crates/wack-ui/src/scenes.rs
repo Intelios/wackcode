@@ -440,6 +440,43 @@ pub fn all() -> Vec<Scene> {
             build: |_, cx| file_mention_scene(fixtures::file_mention_data(false, Some("File mentions are off for a home folder. Open a project folder instead.")), None, cx),
         },
         Scene {
+            name: "transcript-files",
+            description: "Attached text files on a sent message: one collapsed chip and one expanded to show the exact text sent.",
+            size: WINDOW,
+            build: |_, cx| {
+                cx.new(|_| {
+                    Shell::showing(
+                        fixtures::sidebar(Selected::Finished),
+                        Screen::Chat {
+                            title: "Fix SSE tail test".into(),
+                            project: fixtures::project(),
+                            body: Body::Items(fixtures::files_turn()),
+                            composer: fixtures::composer_after_turn(Input::Drawn { text: None, placeholder: crate::chat::FOLLOW_UP_PLACEHOLDER.into() }),
+                        },
+                    )
+                })
+                .into()
+            },
+        },
+        Scene {
+            name: "terminal-selection",
+            description: "A terminal with selected test output and its floating 'Add to draft' pill above the selection, plus a Terminal output chip in the composer.",
+            size: size(px(1480.), px(940.)),
+            build: |_, cx| terminal_selection_scene(None, None, None, cx),
+        },
+        Scene {
+            name: "terminal-selection-backdrop",
+            description: "Terminal selection and floating 'Add to draft' pill over a backdrop picture.",
+            size: size(px(1512.), px(945.)),
+            build: |_, cx| terminal_selection_scene(None, None, Some(fixtures::backdrop(wack_core::Texture::None)), cx),
+        },
+        Scene {
+            name: "terminal-context-menu",
+            description: "Right-click context menu over a terminal selection, offering Copy, Add selection to draft, Paste, Select all, Clear screen, and Restart shell.",
+            size: size(px(1480.), px(940.)),
+            build: |_, cx| terminal_selection_scene(Some(gpui::point(px(1080.), px(220.))), None, None, cx),
+        },
+        Scene {
             name: "transcript-pictures",
             description: "Pictures in a chat: two the user sent, the agent's screenshots under their step, and the one its reply shows.",
             size: WINDOW,
@@ -500,14 +537,30 @@ pub fn all() -> Vec<Scene> {
         },
         Scene {
             name: "composer-attachments",
-            description: "Pictures attached to a message: three in the tray, words with two, and a model without Vision holding Send.",
-            size: size(px(760.), px(640.)),
+            description: "Pictures, picked text files, terminal output chips, a model without Vision, and attached files past the cap holding Send.",
+            size: size(px(760.), px(960.)),
             build: |_, cx| {
+                use crate::attachments::FileAttachment;
                 let drawn = |text: Option<&str>| Input::Drawn { text: text.map(|text| text.to_string().into()), placeholder: crate::chat::FOLLOW_UP_PLACEHOLDER.into() };
                 let composer = |text, count| ComposerData { attachments: fixtures::attachments(count), ..fixtures::composer_after_turn(drawn(text)) };
+                let mixed_files = vec![
+                    FileAttachment::file("Cargo.toml", "[package]\nname = \"wack-ui\"\nversion = \"3.0.0\"\n"),
+                    FileAttachment::from_terminal("error[E0382]: borrow of moved value: `session`\n  --> src/app.rs:412:14\n", &[]).unwrap(),
+                ];
+                let paste_and_term = {
+                    let paste = FileAttachment::from_paste(&"error: linking with `cc` failed\n".repeat(1_240), &[]).unwrap();
+                    let term = FileAttachment::from_terminal("$ cargo test\ntest attachments ... ok\n", std::slice::from_ref(&paste)).unwrap();
+                    vec![paste, term]
+                };
                 let rows = vec![
-                    ("Three pictures, no words", composer(None, 3)),
-                    ("Words and two pictures", composer(Some("Make the login page match the mockup."), 2)),
+                    (
+                        "Pictures, a text file, and terminal output",
+                        ComposerData { files: mixed_files, ..composer(Some("Why did this test regress?"), 2) },
+                    ),
+                    (
+                        "Long paste and terminal output",
+                        ComposerData { files: paste_and_term, ..fixtures::composer_after_turn(drawn(Some("Compare the linker log with the test output."))) },
+                    ),
                     (
                         "A model without Vision",
                         ComposerData {
@@ -515,6 +568,14 @@ pub fn all() -> Vec<Scene> {
                             archived: None,
                             pictures_refused: Some("GLM-5.3-Flash doesn't accept pictures. Turn on Vision for it in Settings › Providers, or remove the pictures.".into()),
                             ..composer(Some("What's wrong here?"), 1)
+                        },
+                    ),
+                    (
+                        "Attached text over the cap",
+                        ComposerData {
+                            files: vec![FileAttachment::file("build.log", "line\n".repeat(400))],
+                            files_refused: Some("Attached text is larger than 512 KB. Remove some files to send.".into()),
+                            ..fixtures::composer_after_turn(drawn(None))
                         },
                     ),
                 ];
@@ -547,7 +608,7 @@ pub fn all() -> Vec<Scene> {
                 let pasted = ComposerData {
                     chat_area: false,
                     archived: None,
-                    pasted: vec![crate::attachments::PastedText::new(&"error: linking with `cc` failed\n".repeat(1_240), &[])],
+                    files: vec![crate::attachments::FileAttachment::from_paste(&"error: linking with `cc` failed\n".repeat(1_240), &[]).unwrap()],
                     ..fixtures::composer_after_turn(drawn(Some("Why does the release build fail to link?")))
                 };
                 let rows = vec![("Between runs", between), ("Working, with words written", working), ("A long paste", pasted)];
@@ -804,7 +865,7 @@ pub fn all() -> Vec<Scene> {
             build: |_, cx| {
                 cx.new(|_| {
                     let waiting = (1..=6)
-                        .map(|n| crate::composer::Waiting { text: format!("Queued message number {n}, waiting for the run.").into(), steering: n == 1 })
+                        .map(|n| crate::composer::Waiting { text: format!("Queued message number {n}, waiting for the run.").into(), files: Vec::new(), steering: n == 1 })
                         .collect();
                     let composer = ComposerData {
                         chat_area: false,
@@ -2307,6 +2368,57 @@ fn settings_scene(backdrop: Option<crate::backdrop::Picture>, cx: &mut App) -> A
 }
 
 /// The finished chat with `layout`'s panes showing fixture models.
+fn terminal_selection_scene(
+    menu: Option<gpui::Point<Pixels>>,
+    notice: Option<&'static str>,
+    picture: Option<crate::backdrop::Picture>,
+    cx: &mut App,
+) -> AnyView {
+    let picture = picture.map(|picture| over(picture, cx));
+    cx.new(|cx| {
+        let mut layout = Layout::default();
+        let terminal = layout.open(PaneKind::Terminal);
+        layout.right_width = Some(560.);
+        let mut panes = ChatPanes::new(layout, "/".into());
+        let pane = cx.new(|cx| {
+            let mut pane = TerminalPane::fixture(fixtures::TERMINAL_SESSION.as_bytes(), 140, 22, None, cx).with_selection((4, 0), (8, 40));
+            if let Some(position) = menu {
+                pane = pane.with_menu(position);
+            }
+            if let Some(notice) = notice {
+                pane = pane.with_notice(notice);
+            }
+            pane
+        });
+        panes.insert(terminal, PaneModel::Terminal(pane), cx);
+        let chip = crate::attachments::FileAttachment::from_terminal(
+            "running 4 tests\ntest sse::tests::splits_events_across_chunks ... ok\ntest sse::tests::ignores_comments ... ok\ntest sse::tests::keeps_a_tail_without_a_blank_line ... ok",
+            &[],
+        )
+        .unwrap();
+        let composer = ComposerData {
+            files: vec![chip],
+            ..fixtures::composer_after_turn(Input::Drawn { text: Some("All four SSE tests pass now.".into()), placeholder: crate::chat::FOLLOW_UP_PLACEHOLDER.into() })
+        };
+        let shell = Shell::showing_tabs(
+            fixtures::sidebar(Selected::Finished),
+            Screen::Chat {
+                title: fixtures::FINISHED_TITLE.into(),
+                project: fixtures::project(),
+                body: Body::Items(fixtures::finished_turn()),
+                composer,
+            },
+            fixtures::strip(Some(fixtures::FINISHED_TITLE)),
+        )
+        .with_panes(panes, false);
+        match picture {
+            Some(picture) => shell.with_backdrop(picture),
+            None => shell,
+        }
+    })
+    .into()
+}
+
 fn panes_scene(layout: Layout, ids: &[u32], sidebar_hidden: bool, cx: &mut App) -> AnyView {
     panes_scene_over(layout, ids, sidebar_hidden, None, cx)
 }

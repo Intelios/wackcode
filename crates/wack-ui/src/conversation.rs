@@ -38,9 +38,9 @@ pub enum Entry {
     /// `command` what the user typed, which the transcript shows instead. `suggestion` is the
     /// suggested task the message started, its tail already split from `text`.
     /// `pictures` are the ones the user attached.
-    /// `files` are the long pastes that went with it (their names and line counts); `text` is
+    /// `files` are the text files that went with it (picked, dropped, pasted, terminal); `text` is
     /// the message without them.
-    Prompt { text: String, steered: bool, command: Option<CommandUse>, suggestion: Option<Started>, pictures: Vec<Picture>, files: Vec<(String, usize)> },
+    Prompt { text: String, steered: bool, command: Option<CommandUse>, suggestion: Option<Started>, pictures: Vec<Picture>, files: Vec<crate::attachments::FileAttachment> },
     Turn(Turn),
     /// The older conversation was summarised here.
     Compacted,
@@ -997,5 +997,25 @@ mod tests {
         live.apply(&Event::Noted { tag: "mcp:mcp-1:0000000000000003".into(), text: failed.into() }, 3);
         live.apply(&Event::Text("Again.".into()), 4);
         assert_eq!(live.last_turn().unwrap().notices, [failed]);
+    }
+
+    #[test]
+    fn prompt_splits_attached_files_and_chat_refs_cleanly() {
+        let files = vec![
+            crate::attachments::FileAttachment::file("notes.md", "one\ntwo"),
+            crate::attachments::FileAttachment::file("Terminal output.txt", "error: boom"),
+        ];
+        let composed = crate::attachments::compose("Check @\"Earlier chat\" with these", &files);
+        let with_refs = wack_core::chat_refs::encode(
+            &composed,
+            &[wack_core::chat_refs::ChatRef { id: "chat-1".into(), name: "Earlier chat".into() }],
+        );
+        let mut conversation = Conversation::default();
+        conversation.send(&with_refs, 1);
+        assert!(matches!(
+            conversation.entries.first(),
+            Some(Entry::Prompt { text, files: parsed, .. })
+                if text == "Check @\"Earlier chat\" with these" && parsed == &files
+        ));
     }
 }

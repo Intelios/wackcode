@@ -46,8 +46,9 @@ use wack_core::{AgentMode, Reasoning, context::Kind};
 use crate::{
     actions::{
         AttachPictures, ChooseCrew, ChooseCrewEffort, ChooseEffort, ChooseModel, CloseMenu, OpenCrewMenu, SetTeam, RemoveAttachment, Compact, MoveToBackground, OpenEffortMenu, OpenModelMenu, Send, SetAgentMode, ShowTask,
-        SlideEffort, Stop, StopTask, ToggleTasks, ToggleTodos, Unqueue, SteerQueued, RemoveQueued, InsertPasted, RemovePasted,
+        SlideEffort, Stop, StopTask, ToggleTasks, ToggleTodos, Unqueue, SteerQueued, RemoveQueued, InsertFile, RemoveFile,
     },
+    attachments::{FileAttachment, FileSource},
     chat::ChangeCount,
     app::Menu,
     icon::Icon,
@@ -124,10 +125,12 @@ pub struct ComposerData {
     pub foreground: bool,
     /// Pictures attached to the message being written, shown in a tray above the field.
     pub attachments: Vec<crate::attachments::Attachment>,
-    /// Long pastes, attached as text files.
-    pub pasted: Vec<crate::attachments::PastedText>,
+    /// Text files attached to the message (picked, dropped, pasted, terminal).
+    pub files: Vec<FileAttachment>,
     /// Why the message's pictures can't go to this model, when they can't: Send waits on it.
     pub pictures_refused: Option<SharedString>,
+    /// Why the message's attached text files can't send (over count or size cap): Send waits on it.
+    pub files_refused: Option<SharedString>,
     /// Comments drafted on a canvas, which go with the next message: how many, and the canvas
     /// the chip opens.
     pub comments: Option<(usize, String)>,
@@ -242,6 +245,8 @@ impl Meter {
 #[derive(Clone, Debug)]
 pub struct Waiting {
     pub text: SharedString,
+    /// Names of text files attached to the queued or steering message.
+    pub files: Vec<SharedString>,
     /// Sent to the agent mid-run, rather than queued for after it.
     pub steering: bool,
 }
@@ -310,11 +315,12 @@ impl RenderOnce for Composer {
             Input::Field(field) => !field.read(cx).text().trim().is_empty(),
             Input::Drawn { text, .. } => text.is_some(),
         };
-        // Pictures alone make a message; pictures this model can't take hold Send back.
-        // So do comments drafted on a canvas, and pasted text. A crew that is gone holds it too.
+        // Pictures or files alone make a message; pictures this model can't take or overflowing
+        // files hold Send back. So do comments drafted on a canvas. A crew that is gone holds it too.
         let crew_missing = data.crew.as_ref().filter(|crew| crew.missing).and_then(|crew| crew.problem.clone());
-        let has_text = (has_text || !data.attachments.is_empty() || !data.pasted.is_empty() || data.comments.is_some())
+        let has_text = (has_text || !data.attachments.is_empty() || !data.files.is_empty() || data.comments.is_some())
             && data.pictures_refused.is_none()
+            && data.files_refused.is_none()
             && crew_missing.is_none();
 
         let field = match data.input.clone() {
@@ -349,7 +355,7 @@ impl RenderOnce for Composer {
                     .justify_center()
                     .cursor_pointer()
                     .hover(|button| button.bg(theme.hover))
-                    .tooltip(tip("Attach pictures — or paste or drop them anywhere on the chat"))
+                    .tooltip(tip("Attach pictures or text files — or paste or drop them anywhere on the chat"))
                     .on_click(dispatch(AttachPictures))
                     .child(Icon::Paperclip.view(px(15.), theme.text_dim))
                     .tag("attach"),
@@ -439,7 +445,7 @@ impl RenderOnce for Composer {
             .when(!ultra_plan, |card| card.border_1().border_color(theme.border))
             .children(status_line(&data, asking, &theme))
             .when_some(data.comments.clone(), |card, (count, canvas)| card.child(comments_chip(count, canvas, &theme)))
-            .when(!data.attachments.is_empty() || !data.pasted.is_empty(), |card| card.child(tray(&data.attachments, &data.pasted, &theme)))
+            .when(!data.attachments.is_empty() || !data.files.is_empty(), |card| card.child(tray(&data.attachments, &data.files, &theme)))
             .when_some(crew_missing, |card, missing| {
                 card.child(
                     div()
@@ -464,6 +470,19 @@ impl RenderOnce for Composer {
                         .child(Icon::Alert.view(px(12.), theme.warning))
                         .child(refused)
                         .tag("pictures-refused"),
+                )
+            })
+            .when_some(data.files_refused.clone(), |card, refused| {
+                card.child(
+                    div()
+                        .flex()
+                        .items_center()
+                        .gap(px(6.))
+                        .typography(Type::Small)
+                        .text_color(theme.warning)
+                        .child(Icon::Alert.view(px(12.), theme.warning))
+                        .child(refused)
+                        .tag("files-refused"),
                 )
             })
             .child(
@@ -1130,9 +1149,9 @@ fn comments_chip(count: usize, canvas: String, theme: &Theme) -> impl IntoElemen
         )
 }
 
-/// What is attached to the message: each picture with its remove button, and each long paste as
-/// a file, which can go back into the field as text.
-fn tray(attachments: &[crate::attachments::Attachment], pasted: &[crate::attachments::PastedText], theme: &Theme) -> impl IntoElement {
+/// What is attached to the message: each picture with its remove button, and each text file
+/// (picked, dropped, pasted, or from the Terminal) as a chip.
+fn tray(attachments: &[crate::attachments::Attachment], files: &[FileAttachment], theme: &Theme) -> impl IntoElement {
     let thumbs = attachments.iter().enumerate().map(|(index, attachment)| {
         let (width, height) = attachment.size;
         div()
@@ -1151,11 +1170,14 @@ fn tray(attachments: &[crate::attachments::Attachment], pasted: &[crate::attachm
             )
             .child(remove_button(("remove-attachment", index), RemoveAttachment { index }, "remove-attachment", theme))
     });
-    let files = pasted.iter().enumerate().map(|(index, file)| {
+    let file_chips = files.iter().enumerate().map(|(index, file)| {
         let lines = file.lines();
+        let line_words = if lines == 1 { "1 line".to_string() } else { format!("{lines} lines") };
+        let terminal = file.source == FileSource::Terminal;
+        let icon = if terminal { Icon::Terminal.view(px(16.), theme.accent_text) } else { Icon::File.view(px(16.), theme.text_dim) };
         div()
-            .id(("pasted", index))
-            .group("pasted")
+            .id(("attached-file", index))
+            .group("attached-file")
             .relative()
             .flex_none()
             .h(px(THUMB))
@@ -1168,33 +1190,46 @@ fn tray(attachments: &[crate::attachments::Attachment], pasted: &[crate::attachm
             .bg(theme.raised)
             .border_1()
             .border_color(theme.border)
-            .child(Icon::File.view(px(16.), theme.text_dim))
+            .tooltip(tip(format!("{} · {line_words} · {}", file.name, format_bytes(file.bytes()))))
+            .child(icon)
             .child(
                 div()
                     .flex()
                     .flex_col()
-                    .child(div().typography(Type::Mono).text_color(theme.text).child(file.name.clone()))
+                    .min_w_0()
+                    .child(div().max_w(px(220.)).truncate().typography(Type::Mono).text_color(theme.text).child(file.name.clone()))
                     .child(
                         div()
                             .flex()
                             .gap(px(8.))
                             .typography(Type::Small)
-                            .child(div().text_color(theme.text_faint).child(if lines == 1 { "1 line".to_string() } else { format!("{lines} lines") }))
-                            .child(
-                                div()
-                                    .id(("insert-pasted", index))
-                                    .text_color(theme.accent_text)
-                                    .cursor_pointer()
-                                    .hover(|button| button.underline())
-                                    .on_click(dispatch(InsertPasted { index }))
-                                    .child("Insert as text")
-                                    .tag("insert-pasted"),
-                            ),
+                            .child(div().text_color(theme.text_faint).child(line_words))
+                            .when(file.source == FileSource::Paste, |meta| {
+                                meta.child(
+                                    div()
+                                        .id(("insert-file", index))
+                                        .text_color(theme.accent_text)
+                                        .cursor_pointer()
+                                        .hover(|button| button.underline())
+                                        .on_click(dispatch(InsertFile { index }))
+                                        .child("Insert as text")
+                                        .tag("insert-file"),
+                                )
+                            }),
                     ),
             )
-            .child(remove_button(("remove-pasted", index), RemovePasted { index }, "remove-pasted", theme))
+            .child(remove_button(("remove-file", index), RemoveFile { index }, "remove-file", theme))
+            .tag(if terminal { "terminal-file-chip" } else { "file-chip" })
     });
-    div().flex().flex_wrap().gap(px(8.)).pt(px(2.)).children(thumbs).children(files).tag("attachments")
+    div().flex().flex_wrap().gap(px(8.)).pt(px(2.)).children(thumbs).children(file_chips).tag("attachments")
+}
+
+fn format_bytes(bytes: usize) -> String {
+    if bytes < 1024 {
+        format!("{bytes} B")
+    } else {
+        format!("{} KB", (bytes + 512) / 1024)
+    }
 }
 
 /// The small round × on an attachment's corner.
@@ -1276,7 +1311,25 @@ fn waiting_bubble(index: usize, queued: Option<usize>, waiting: Waiting, working
                     )
                     .children(actions),
             )
-            .child(div().typography(Type::Ui).text_color(theme.text_dim).line_clamp(3).child(waiting.text))
+            .when(!waiting.files.is_empty(), |bubble| {
+                bubble.child(div().flex().flex_wrap().gap(px(6.)).children(waiting.files.into_iter().map(|name| {
+                    div()
+                        .h(px(22.))
+                        .px(px(8.))
+                        .rounded(px(7.))
+                        .bg(theme.raised)
+                        .border_1()
+                        .border_color(theme.border)
+                        .flex()
+                        .items_center()
+                        .gap(px(5.))
+                        .child(Icon::File.view(px(11.), theme.text_dim))
+                        .child(div().max_w(px(180.)).truncate().typography(Type::Small).text_color(theme.text_soft).child(name))
+                })))
+            })
+            .when(!waiting.text.is_empty(), |bubble| {
+                bubble.child(div().typography(Type::Ui).text_color(theme.text_dim).line_clamp(3).child(waiting.text))
+            })
             .tag("waiting-bubble"),
     )
 }

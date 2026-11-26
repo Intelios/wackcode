@@ -151,8 +151,9 @@ pub fn composer_empty(roomy: bool) -> ComposerData {
         changes: None,
         foreground: false,
         attachments: Vec::new(),
-        pasted: Vec::new(),
+        files: Vec::new(),
         pictures_refused: None,
+        files_refused: None,
         sent_at: None,
         comments: None,
     }
@@ -172,8 +173,12 @@ pub fn composer_working() -> ComposerData {
         working: true,
         activity: Some(("Working  ·  8s".into(), Some("Running cargo test -p wack-llm retry".into()))),
         waiting: vec![
-            Waiting { text: "Check the date form against RFC 9110 too.".into(), steering: true },
-            Waiting { text: "Also cap the wait at 60 seconds, whatever the server asks for.".into(), steering: false },
+            Waiting { text: "Check the date form against RFC 9110 too.".into(), files: Vec::new(), steering: true },
+            Waiting {
+                text: "Also cap the wait at 60 seconds, whatever the server asks for.".into(),
+                files: vec!["Terminal output.txt".into()],
+                steering: false,
+            },
         ],
         ..composer_empty(false)
     }
@@ -1416,6 +1421,32 @@ pub fn saved_pictures(count: usize, label: &str) -> Vec<wack_core::llm::Image> {
             image
         })
         .collect()
+}
+
+/// A chat where the user attached text files and terminal output: one chip collapsed, one expanded
+/// to show the exact text the model received.
+pub fn files_turn() -> Vec<Item> {
+    use crate::attachments::FileAttachment;
+    let files = vec![
+        FileAttachment::file("notes.md", "Goal: verify SSE parser edge cases.\nCheck empty frames and comments."),
+        FileAttachment::file(
+            "Terminal output.txt",
+            "running 4 tests\ntest sse::tests::splits_events_across_chunks ... ok\ntest sse::tests::keeps_a_tail_without_a_blank_line ... FAILED\n\nassertion `left == right` failed\n  left: 1\n right: 2",
+        ),
+    ];
+    let message = crate::attachments::compose("Why did the tail test fail after the refactor?", &files);
+    let mut conversation = Conversation::default();
+    conversation.send(&message, START);
+    conversation.apply(
+        &Event::Text(
+            "`finish()` drops the buffered line when the stream closes without a trailing blank line. Emit any buffered `data:` lines before returning `None`."
+                .into(),
+        ),
+        START + 3_000,
+    );
+    conversation.finish(&Ok(Outcome::Done), START + 6_000);
+    let open = std::collections::HashSet::from(["prompt-0-file-1".to_string()]);
+    crate::work::items(&conversation, Path::new(CWD), &open, START + 6_000, &mut ReplyCache::default())
 }
 
 /// A chat about pictures: the user sends two with words, the agent takes screenshots, and its

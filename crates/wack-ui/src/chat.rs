@@ -114,8 +114,8 @@ pub struct ChatSession {
     pub queue: Vec<String>,
     /// Pictures attached to the message being written.
     pub attachments: Vec<crate::attachments::Attachment>,
-    /// Long pastes attached to it as text files.
-    pub pasted: Vec<crate::attachments::PastedText>,
+    /// Text files attached to the message (picked, dropped, pasted, terminal).
+    pub files: Vec<crate::attachments::FileAttachment>,
     /// Pictures of queued messages, by the message's text: sent with it, or back in the tray
     /// when it comes back to the composer. A message with pictures always queues, never steers.
     pub queued_pictures: Vec<(String, Vec<crate::attachments::Attachment>)>,
@@ -293,7 +293,7 @@ impl ChatSession {
             panes,
             queue: Vec::new(),
             attachments: Vec::new(),
-            pasted: Vec::new(),
+            files: Vec::new(),
             queued_pictures: Vec::new(),
             steering: Vec::new(),
             run: None,
@@ -1111,7 +1111,10 @@ impl ChatSession {
             let holds = self.items[start..start + span].iter().any(|item| match item {
                 Item::Work(work) => work.key.as_ref() == key || work.rows.iter().any(|row| row.key.as_ref() == key),
                 Item::News(row) => row.key.as_ref() == key,
-                Item::Prompt { command: Some(command), .. } => command.key.as_ref() == key,
+                Item::Prompt { command, files, .. } => {
+                    command.as_ref().is_some_and(|command| command.key.as_ref() == key)
+                        || files.iter().any(|file| file.key.as_ref() == key)
+                }
                 Item::Suggestions(tray) => tray.cards.iter().any(|card| card.holds(key)),
                 Item::ChatThought { key: thought, .. } => thought.as_ref() == key,
                 Item::ChatChips(chips) => chips.iter().any(|chip| matches!(chip, crate::chat_transcript::Chip::Fold { key: fold, .. } if fold.as_ref() == key)),

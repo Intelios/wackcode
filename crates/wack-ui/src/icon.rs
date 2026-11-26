@@ -51,6 +51,8 @@ pub enum Icon {
     /// Hides a secret again.
     EyeOff,
     File,
+    /// Adding content to the draft as a file (Terminal selection).
+    FilePlus,
     Folder,
     /// Build mode.
     Hammer,
@@ -138,6 +140,7 @@ const FILES: &[(&str, &[u8])] = &[
     ("icons/eye.svg", include_bytes!("../assets/icons/eye.svg")),
     ("icons/eye-off.svg", include_bytes!("../assets/icons/eye-off.svg")),
     ("icons/file.svg", include_bytes!("../assets/icons/file.svg")),
+    ("icons/file-plus.svg", include_bytes!("../assets/icons/file-plus.svg")),
     ("icons/folder.svg", include_bytes!("../assets/icons/folder.svg")),
     ("icons/hammer.svg", include_bytes!("../assets/icons/hammer.svg")),
     ("icons/key.svg", include_bytes!("../assets/icons/key.svg")),
@@ -191,6 +194,7 @@ impl Icon {
             Icon::Eye => "icons/eye.svg",
             Icon::EyeOff => "icons/eye-off.svg",
             Icon::File => "icons/file.svg",
+            Icon::FilePlus => "icons/file-plus.svg",
             Icon::Folder => "icons/folder.svg",
             Icon::Hammer => "icons/hammer.svg",
             Icon::Key => "icons/key.svg",
@@ -285,6 +289,7 @@ mod tests {
             Icon::Eye,
             Icon::EyeOff,
             Icon::File,
+            Icon::FilePlus,
             Icon::Folder,
             Icon::Hammer,
             Icon::Key,

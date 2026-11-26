@@ -43,8 +43,8 @@ pub enum Item {
         command: Option<CommandShown>,
         suggestion: Option<SharedString>,
         pictures: Vec<crate::pictures::Picture>,
-        /// Long pastes sent with it: each file's name and line count.
-        files: Vec<(SharedString, usize)>,
+        /// Attached text files sent with it, expandable to show the exact text the model got.
+        files: Vec<AttachedFileShown>,
     },
     Work(Work),
     /// A reply's prose. `live`: still streaming in, so its newest words are fresh ink.
@@ -90,6 +90,16 @@ pub struct CommandShown {
     pub args: SharedString,
     /// Toggles the prompt sent to the agent open beneath the bubble.
     pub key: SharedString,
+    pub open: bool,
+}
+
+/// An attached text file on a user message, expandable to show the exact text the model received.
+#[derive(Clone, Debug)]
+pub struct AttachedFileShown {
+    pub key: SharedString,
+    pub name: SharedString,
+    pub text: SharedString,
+    pub lines: usize,
     pub open: bool,
 }
 
@@ -368,7 +378,15 @@ pub fn item(item: &Item, previous: Option<&Item>, theme: &Theme, handlers: &Hand
                     prompt.child(crate::pictures::Strip { pictures: pictures.clone(), key: format!("prompt-{}", pictures[0].key).into(), align_end: true })
                 })
                 .when(!files.is_empty(), |prompt| {
-                    prompt.child(div().flex().flex_wrap().justify_end().gap(px(6.)).children(files.iter().map(|(name, lines)| pasted_chip(name, *lines, theme))))
+                    prompt.child(
+                        div()
+                            .w_full()
+                            .flex()
+                            .flex_col()
+                            .items_end()
+                            .gap(px(6.))
+                            .children(files.iter().map(|file| file_chip(file, theme, handlers))),
+                    )
                 })
                 .when(!text.is_empty() || command.is_some(), |prompt| prompt.child(bubble))
                 .when_some(suggestion.as_ref(), |prompt, caption| {
@@ -1181,21 +1199,65 @@ impl RenderOnce for Transcript {
     }
 }
 
-/// A long paste that went with a message, as its bubble shows it.
-fn pasted_chip(name: &SharedString, lines: usize, theme: &Theme) -> impl IntoElement {
-    div()
+const ATTACHED_FILE_MAX: f32 = 260.;
+
+/// An attached text file that went with a user message: clicking expands the exact text sent.
+fn file_chip(file: &AttachedFileShown, theme: &Theme, handlers: &Handlers) -> impl IntoElement {
+    let toggle = handlers.toggle.clone();
+    let key = file.key.clone();
+    let line_words = if file.lines == 1 { "1 line".to_string() } else { format!("{} lines", file.lines) };
+    let toggle_head = div()
+        .id(ElementId::Name(format!("{}-head", file.key).into()))
         .h(px(34.))
         .px(px(12.))
-        .rounded(px(10.))
+        .when(file.open, |head| head.flex_1().min_w_0())
         .flex()
         .items_center()
         .gap(px(8.))
-        .bg(theme.hover)
+        .cursor_pointer()
+        .hover(|head| head.bg(theme.hover))
+        .on_click(move |_, window, cx| toggle(key.clone(), window, cx))
+        .child(Icon::File.view(px(13.), theme.text_dim))
+        .child(div().min_w_0().truncate().typography(Type::Mono).text_color(theme.text_soft).child(file.name.clone()))
+        .child(div().flex_none().typography(Type::Small).text_color(theme.text_faint).child(line_words))
+        .child(if file.open { Icon::ChevronDown } else { Icon::ChevronRight }.view(px(10.), theme.text_faint))
+        .tag("attached-file-chip");
+    let header = div()
+        .flex()
+        .items_center()
+        .child(toggle_head)
+        .when(file.open, |row| {
+            let copy = crate::copy::CopyButton::new(format!("{}-copy", file.key), file.text.clone(), "Copy", "copy-attached-file");
+            row.child(div().flex_none().pr(px(10.)).child(copy))
+        });
+    div()
+        .max_w(relative(BUBBLE_SHARE))
+        .when(file.open, |chip| chip.w_full())
+        .rounded(px(10.))
+        .bg(theme.raised)
         .border_1()
         .border_color(theme.border)
-        .child(Icon::File.view(px(13.), theme.text_dim))
-        .child(div().typography(Type::Mono).text_color(theme.text_soft).child(name.clone()))
-        .child(div().typography(Type::Small).text_color(theme.text_faint).child(if lines == 1 { "1 line".to_string() } else { format!("{lines} lines") }))
+        .overflow_hidden()
+        .flex()
+        .flex_col()
+        .child(header)
+        .when(file.open, |chip| {
+            chip.child(
+                div()
+                    .id(ElementId::Name(format!("{}-body", file.key).into()))
+                    .max_h(px(ATTACHED_FILE_MAX))
+                    .overflow_y_scroll()
+                    .border_t_1()
+                    .border_color(theme.border)
+                    .bg(theme.surface)
+                    .px(px(12.))
+                    .py(px(10.))
+                    .typography(Type::Mono)
+                    .text_color(theme.text_soft)
+                    .child(file.text.clone())
+                    .tag("attached-file-content"),
+            )
+        })
 }
 
 #[cfg(test)]

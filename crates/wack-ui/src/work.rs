@@ -14,7 +14,7 @@ use crate::{
     conversation::{Conversation, Entry, News, Step, ToolStep, Turn, TurnEnd},
     markdown,
     suggestions,
-    transcript::{AgentLine, AgentState, CommandShown, Detail, Diff, DiffLine, Item, LineKind, Meta, Target, Work, WorkRow},
+    transcript::{AgentLine, AgentState, AttachedFileShown, CommandShown, Detail, Diff, DiffLine, Item, LineKind, Meta, Target, Work, WorkRow},
 };
 
 /// Diff and output details show at most this many lines.
@@ -102,7 +102,20 @@ pub fn entry_items(
                     }),
                     suggestion: suggestion.as_ref().map(|started| suggestions::sent_label(started.origin.as_ref())),
                     pictures: pictures.clone(),
-                    files: files.iter().map(|(name, lines)| (name.clone().into(), *lines)).collect(),
+                    files: files
+                        .iter()
+                        .enumerate()
+                        .map(|(file_index, file)| {
+                            let file_key = format!("prompt-{index}-file-{file_index}");
+                            AttachedFileShown {
+                                open: open.contains(&file_key),
+                                key: file_key.into(),
+                                name: file.name.clone(),
+                                text: file.text.to_string().into(),
+                                lines: file.lines(),
+                            }
+                        })
+                        .collect(),
                 })
             }
             Entry::Compacted => items.push(Item::Compacted),

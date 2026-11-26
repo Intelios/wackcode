@@ -471,7 +471,20 @@ pub fn entry_items(conversation: &Conversation, index: usize, scratchpad: &Path,
             command: None,
             suggestion: None,
             pictures: pictures.clone(),
-            files: files.iter().map(|(name, lines)| (name.clone().into(), *lines)).collect(),
+            files: files
+                .iter()
+                .enumerate()
+                .map(|(file_index, file)| {
+                    let file_key = format!("prompt-{index}-file-{file_index}");
+                    crate::transcript::AttachedFileShown {
+                        open: open.contains(&file_key),
+                        key: file_key.into(),
+                        name: file.name.clone(),
+                        text: file.text.to_string().into(),
+                        lines: file.lines(),
+                    }
+                })
+                .collect(),
         }),
         Entry::Compacted => items.push(Item::ChatTidied),
         Entry::Notice { text, failed } => items.push(Item::Notice { text: text.clone().into(), failed: *failed }),

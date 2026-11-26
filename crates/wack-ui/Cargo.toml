@@ -38,3 +38,6 @@ async-channel = { version = "2", optional = true }
 base64 = { version = "0.22", optional = true }
 # The automation socket encodes screenshots; the gallery draws its fixture backdrop.
 image.workspace = true
+
+[dev-dependencies]
+tempfile.workspace = true

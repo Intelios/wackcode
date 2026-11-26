@@ -248,7 +248,7 @@ impl ChatPanes {
             let folder = self.folder.clone();
             let model = match pane.kind {
                 PaneKind::Changes => PaneModel::Changes(cx.new(|cx| ChangesPane::new(folder, cx))),
-                PaneKind::Terminal => PaneModel::Terminal(cx.new(|cx| TerminalPane::new(folder, cx))),
+                PaneKind::Terminal => PaneModel::Terminal(cx.new(|cx| TerminalPane::new(Some(pane.id), folder, cx))),
                 PaneKind::Build => {
                     let configured = self.build_command.clone();
                     let runner = self.runner.clone();

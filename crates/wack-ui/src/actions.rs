@@ -506,16 +506,24 @@ pub struct StepPicture {
 #[action(namespace = wackcode, no_json)]
 pub struct ZoomPicture;
 
-/// The composer's attach button: choose pictures to send with the message.
+/// The composer's attach button: choose pictures or text files to send with the message.
 #[derive(Clone, Debug, PartialEq, Action)]
 #[action(namespace = wackcode, no_json)]
 pub struct AttachPictures;
 
-/// Files dropped on the composer, to attach as pictures.
+/// Files dropped on the chat, to attach as pictures or text files.
 #[derive(Clone, Debug, PartialEq, Action)]
 #[action(namespace = wackcode, no_json)]
 pub struct AttachFiles {
     pub paths: Vec<std::path::PathBuf>,
+}
+
+/// Adds the terminal's current selection to the active composer draft as a text file.
+#[derive(Clone, Debug, PartialEq, Action)]
+#[action(namespace = wackcode, no_json)]
+pub struct AttachTerminalSelection {
+    pub pane: Option<PaneId>,
+    pub text: String,
 }
 
 /// Takes one picture back off the message being written.
@@ -816,14 +824,14 @@ pub struct RemoveQueued {
 /// Puts a pasted file's text into the composer's field instead.
 #[derive(Clone, Debug, PartialEq, Action)]
 #[action(namespace = wackcode, no_json)]
-pub struct InsertPasted {
+pub struct InsertFile {
     pub index: usize,
 }
 
-/// Drops a pasted file from the message.
+/// Drops an attached text file from the message.
 #[derive(Clone, Debug, PartialEq, Action)]
 #[action(namespace = wackcode, no_json)]
-pub struct RemovePasted {
+pub struct RemoveFile {
     pub index: usize,
 }
 

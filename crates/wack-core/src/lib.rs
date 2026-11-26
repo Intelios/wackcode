@@ -9,12 +9,14 @@
 //! a chat (`run`), what changed in a project (`git`), terminals (`terminal`), how the app looks
 //! (`appearance`), where each project's memory lives (`memory`), skills and slash commands
 //! (`skills`), sub-agents' settings (`agents`), automatic chat titles (`title`), the usage ledger TokenTrail reads (`usage`), the
-//! web tools' settings (`web`), the MCP servers (`mcp`), and the Chat area's `@` references
-//! (`chat_refs`). A chat is a Code chat (a project's) or a Chat chat (the Chat area's:
+//! web tools' settings (`web`), the MCP servers (`mcp`), the Chat area's `@` references
+//! (`chat_refs`), and the model catalogue that fills Settings › Providers' model rows
+//! (`catalog`). A chat is a Code chat (a project's) or a Chat chat (the Chat area's:
 //! `store::ChatKind`), and `run` builds a different agent for each.
 
 pub mod agents;
 pub mod appearance;
+pub mod catalog;
 pub mod chat_refs;
 pub mod clock;
 pub mod computer;

@@ -1529,6 +1529,40 @@ impl Store {
         })?;
         HttpProvider::new(connection.format, &connection.base_url, key)
     }
+
+    /// Where the refreshed model catalogue is kept (`catalog`).
+    pub fn catalog_path(&self) -> PathBuf {
+        self.folder.join(crate::catalog::FILE)
+    }
+
+    /// A provider for the connection Settings › Providers is editing, to list its models (Fetch
+    /// models) before or without saving. A key typed into the form is used as it is. Otherwise
+    /// the saved connection's own key, through [`Self::provider`], and only while the address is
+    /// still at the saved one's origin, so a key never goes to an address it wasn't saved for. A
+    /// new connection with no key sends none, for a server on this Mac.
+    pub fn draft_provider(
+        &self,
+        editing: Option<&str>,
+        format: WireFormat,
+        base_url: &str,
+        typed_key: Option<&str>,
+    ) -> Result<HttpProvider, String> {
+        let base_url = base_url.trim().trim_end_matches('/');
+        let address = url::Url::parse(base_url)
+            .ok()
+            .filter(|address| matches!(address.scheme(), "http" | "https") && address.host_str().is_some())
+            .ok_or("Enter the address of the API first, starting with https:// or http://.")?;
+        if let Some(key) = typed_key.map(str::trim).filter(|key| !key.is_empty()) {
+            return HttpProvider::new(format, base_url, key);
+        }
+        let Some(saved) = editing.and_then(|id| self.state.connections.iter().find(|connection| connection.id == id)) else {
+            return HttpProvider::new(format, base_url, "");
+        };
+        if !url::Url::parse(&saved.base_url).is_ok_and(|saved| saved.origin() == address.origin()) {
+            return Err("Type the API key to fetch models from a new address, or save the connection first.".to_string());
+        }
+        self.provider(&Connection { format, base_url: base_url.to_string(), ..saved.clone() })
+    }
 }
 
 #[cfg(test)]
@@ -1556,6 +1590,51 @@ mod tests {
         let written = serde_json::to_string(&text_only).unwrap();
         assert_eq!(written, r#"{"id":"m","accepts_images":false}"#);
         assert_eq!(serde_json::from_str::<Model>(&written).unwrap(), text_only);
+    }
+
+    /// Answers one connection with a model list, and reports the request it was sent.
+    async fn model_list_server() -> (String, tokio::sync::oneshot::Receiver<String>) {
+        use tokio::io::{AsyncReadExt, AsyncWriteExt};
+        let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
+        let address = format!("http://{}", listener.local_addr().unwrap());
+        let (sent, seen) = tokio::sync::oneshot::channel();
+        tokio::spawn(async move {
+            let (mut socket, _) = listener.accept().await.unwrap();
+            let mut buffer = [0u8; 4096];
+            let read = socket.read(&mut buffer).await.unwrap();
+            let _ = sent.send(String::from_utf8_lossy(&buffer[..read]).to_lowercase());
+            let body = r#"{"data":[{"id":"m"}]}"#;
+            let reply = format!("HTTP/1.1 200 OK\r\ncontent-length: {}\r\nconnection: close\r\n\r\n{body}", body.len());
+            let _ = socket.write_all(reply.as_bytes()).await;
+        });
+        (address, seen)
+    }
+
+    #[tokio::test]
+    async fn fetching_models_uses_a_saved_key_only_at_its_own_origin() {
+        let folder = tempfile::tempdir().unwrap();
+        let mut store = Store::open(folder.path()).unwrap();
+        let (address, seen) = model_list_server().await;
+        let saved = store.add_connection(NewConnection { base_url: format!("{address}/v1"), ..new("Local") }, "sk-saved").unwrap();
+        let provider = store.draft_provider(Some(&saved.id), WireFormat::OpenaiChat, &format!("{address}/v2/"), None).unwrap();
+        assert_eq!(provider.list_models().await.unwrap(), ["m"]);
+        assert!(seen.await.unwrap().contains("authorization: bearer sk-saved"), "the saved key, at its own origin");
+        let moved = store.draft_provider(Some(&saved.id), WireFormat::OpenaiChat, "https://elsewhere.example/v1", None);
+        assert!(moved.err().unwrap().starts_with("Type the API key"), "never the saved key at another address");
+        assert!(store.draft_provider(Some(&saved.id), WireFormat::OpenaiChat, "https://elsewhere.example/v1", Some("sk-typed")).is_ok());
+        assert!(store.draft_provider(None, WireFormat::OpenaiChat, "ftp://files.example", None).is_err());
+        assert!(store.draft_provider(None, WireFormat::OpenaiChat, "", None).is_err());
+    }
+
+    #[tokio::test]
+    async fn a_new_connection_without_a_key_sends_none() {
+        let folder = tempfile::tempdir().unwrap();
+        let store = Store::open(folder.path()).unwrap();
+        let (address, seen) = model_list_server().await;
+        let provider = store.draft_provider(None, WireFormat::OpenaiChat, &address, None).unwrap();
+        assert_eq!(provider.list_models().await.unwrap(), ["m"]);
+        assert!(!seen.await.unwrap().contains("authorization:"));
+        assert_eq!(store.catalog_path(), folder.path().join(crate::catalog::FILE));
     }
 
     #[test]

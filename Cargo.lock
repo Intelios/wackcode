@@ -7317,6 +7317,7 @@ dependencies = [
  "wack-agent",
  "wack-browser",
  "wack-canvas",
+ "wack-catalog",
  "wack-computer",
  "wack-llm",
  "wack-mcp",

@@ -50,7 +50,7 @@ fn score(listing: &Listing, query: &[String]) -> Option<u8> {
     let ids: Vec<String> = ids.iter().map(|id| words(id).join(" ")).collect();
     let name = words(&listing.name).join(" ");
     let all: Vec<String> = ids.iter().chain(std::iter::once(&name)).flat_map(|text| text.split(' ').map(str::to_string)).collect();
-    if ids.iter().any(|id| *id == needle) {
+    if ids.contains(&needle) {
         Some(0)
     } else if name == needle {
         Some(1)
@@ -80,7 +80,7 @@ fn normalise(id: &str) -> String {
     if let Some((before, _)) = id.split_once('@') {
         id = before.to_string();
     }
-    id = id.replace('.', "-").replace('_', "-");
+    id = id.replace(['.', '_'], "-");
     if let Some(stripped) = id.strip_suffix("-latest") {
         id = stripped.to_string();
     }

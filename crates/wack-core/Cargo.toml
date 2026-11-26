@@ -14,6 +14,7 @@ wack-mcp.workspace = true
 wack-browser.workspace = true
 wack-canvas.workspace = true
 wack-computer.workspace = true
+wack-catalog.workspace = true
 async-trait.workspace = true
 serde.workspace = true
 serde_json.workspace = true

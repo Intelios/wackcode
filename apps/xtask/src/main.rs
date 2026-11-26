@@ -62,6 +62,8 @@ fn sources(profile_dir: &Path, flavour: Flavour) -> Result<Sources, String> {
         app: profile_dir.join("wackcode"),
         helper: profile_dir.join("wackcode-helper"),
         icon: workspace_root().join("apps/wackcode/icons").join(flavour.icon()),
+        // The model catalogue's snapshot is models.dev's data (MIT).
+        notices: vec![workspace_root().join("crates/wack-catalog/data/LICENSE.models.dev")],
         cef,
         version: bundle::plist_version(env!("CARGO_PKG_VERSION")),
     })

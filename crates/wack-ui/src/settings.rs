@@ -7,11 +7,14 @@
 //! Settings › Providers is here, after version 2: an overview of the connections to model APIs,
 //! each with an on / off switch (off keeps the key and models, out of the model menu), and a page
 //! per connection that edits its address, its key and its models. A new connection opens the same
-//! page, and a bar at the foot saves or discards what changed. The model catalog is not here yet,
-//! so a model is its id, its context window if the user knows it, and, as in version 2, a
-//! Reasoning switch with the efforts its endpoint accepts (the chat's effort menu offers only
-//! those). A new model does not reason; switching Reasoning on starts it at Off, Low, Medium and
-//! High, version 2's default.
+//! page, and a bar at the foot saves or discards what changed. A model is its id, its context
+//! window and max output if known, a Vision switch, and, as in version 2, a Reasoning switch with
+//! the efforts its endpoint accepts (the chat's effort menu offers only those). A new model does
+//! not reason; switching Reasoning on starts it at Off, Low, Medium and High, version 2's default.
+//!
+//! The model catalogue fills those (`model_catalog.rs`, `wack_core::catalog`): typing in an id
+//! field offers the catalogue's models under it, and picking one fills the row, which stays
+//! editable. Fetch models lists what the connection's own address offers.
 //!
 //! A key is typed into a masked field, handed to the store once, and the field is cleared: it is
 //! never drawn, copied or kept anywhere else (docs/security.md). Editing a connection with a saved
@@ -20,7 +23,8 @@
 //! plainly; until it is edited it is still the saved key, so saving keeps it rather than replacing
 //! it, and hiding it puts the field back to empty bullets. A key typed into the field can be
 //! looked at the same way. Leaving Settings puts the field away again.
-//! Adding or saving a connection sends nothing over the network.
+//! Adding or saving a connection sends nothing over the network. Only Fetch models (to the address
+//! in the editor) and the catalogue's Refresh (to models.dev) do, and only when pressed.
 //!
 //! The form's fields live in [`ProviderForm`], owned by the app state, so leaving Settings
 //! half-way keeps what was typed. The page itself draws from plain data and dispatches actions.

@@ -7,6 +7,7 @@
 //!   Info.plist
 //!   MacOS/WackCode                                   the app (`wackcode`)
 //!   Resources/AppIcon.icns
+//!   Resources/LICENSE.models.dev                     notices for data built into the app
 //!   Frameworks/Chromium Embedded Framework.framework
 //!   Frameworks/WackCode Helper.app                   five helper bundles, one binary
 //!   Frameworks/WackCode Helper (GPU).app             (`wackcode-helper`)
@@ -81,6 +82,8 @@ pub struct Sources {
     pub app: PathBuf,
     pub helper: PathBuf,
     pub icon: PathBuf,
+    /// Licence notices for data built into the app, copied into `Resources` under their names.
+    pub notices: Vec<PathBuf>,
     /// The CEF distribution's folder (the one holding the framework).
     pub cef: PathBuf,
     /// `CFBundleShortVersionString`: numbers only, as macOS requires.
@@ -217,6 +220,10 @@ pub fn assemble(app_path: &Path, flavour: Flavour, sources: &Sources) -> Result<
 
     write(&contents.join("Info.plist"), &app_plist(flavour, &sources.version))?;
     fs::copy(&sources.icon, resources.join("AppIcon.icns")).map_err(|e| io_error("copy", &sources.icon, e))?;
+    for notice in &sources.notices {
+        let name = notice.file_name().ok_or_else(|| format!("{} has no file name.", notice.display()))?;
+        fs::copy(notice, resources.join(name)).map_err(|e| io_error("copy", notice, e))?;
+    }
     let executable = macos.join(EXECUTABLE);
     copy_executable(&sources.app, &executable)?;
 
@@ -278,13 +285,14 @@ mod tests {
         fs::create_dir_all(framework.join("Versions/A/Resources")).unwrap();
         fs::write(framework.join("Versions/A/Resources/marker"), "one").unwrap();
         symlink("A", framework.join("Versions/Current")).unwrap();
-        for (name, body) in [("app", "app"), ("helper", "helper"), ("icon.icns", "icon")] {
+        for (name, body) in [("app", "app"), ("helper", "helper"), ("icon.icns", "icon"), ("LICENSE.data", "MIT")] {
             fs::write(root.join(name), body).unwrap();
         }
         let sources = Sources {
             app: root.join("app"),
             helper: root.join("helper"),
             icon: root.join("icon.icns"),
+            notices: vec![root.join("LICENSE.data")],
             cef: cef.clone(),
             version: "3.0.0".into(),
         };
@@ -295,6 +303,7 @@ mod tests {
         assert!(stamp_path(&app).ends_with("WackCode Dev.cef-source") && stamp_path(&app).exists());
         assert_eq!(fs::read_dir(app.join("Contents/Frameworks")).unwrap().count(), 1 + HELPERS.len());
         assert_eq!(fs::read_to_string(&executable).unwrap(), "app");
+        assert_eq!(fs::read_to_string(app.join("Contents/Resources/LICENSE.data")).unwrap(), "MIT");
         let copied = app.join("Contents/Frameworks").join(FRAMEWORK);
         assert!(fs::symlink_metadata(copied.join("Versions/Current")).unwrap().file_type().is_symlink());
         for (suffix, _) in HELPERS {

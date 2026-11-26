@@ -288,14 +288,27 @@ impl Store {
         self.save_state()
     }
 
-    /// The crew a Team switched on now starts with: the default when it still resolves, else the
-    /// first model of the first connection that is on. `None` with no connection at all.
-    pub fn crew_to_start(&self) -> Option<ModelChoice> {
-        if let Some(choice) = self.agents_config().team_default.clone().filter(|choice| self.resolve_exact(choice).is_some()) {
-            return Some(choice);
-        }
-        let connection = self.enabled_connections().find(|connection| !connection.models.is_empty())?;
-        Some(ModelChoice { connection: Some(connection.id.clone()), model: Some(connection.models[0].id.clone()), effort: None })
+    /// The crew a Team switched on now starts with, in a chat led by `lead`: the default crew,
+    /// else the helper model, else the first model on a connection that is on; each only when it
+    /// still resolves and isn't the lead's own model, since a crew on the lead's model saves
+    /// nothing. The lead's model when it is the only one there is; `None` with no model at all.
+    pub fn crew_to_start(&self, lead: &ModelChoice) -> Option<ModelChoice> {
+        let config = self.agents_config();
+        let lead = self.resolve(lead).map(|resolved| (resolved.connection.id, resolved.model.id));
+        let usable = |choice: &ModelChoice| {
+            self.resolve_exact(choice).is_some()
+                && lead.as_ref().is_none_or(|(connection, model)| choice.connection.as_ref() != Some(connection) || choice.model.as_ref() != Some(model))
+        };
+        let every: Vec<ModelChoice> = self
+            .enabled_connections()
+            .flat_map(|connection| connection.models.iter().map(|model| ModelChoice { connection: Some(connection.id.clone()), model: Some(model.id.clone()), effort: None }))
+            .collect();
+        [config.team_default.clone(), config.helper.clone()]
+            .into_iter()
+            .flatten()
+            .chain(every.iter().cloned())
+            .find(|choice| usable(choice))
+            .or_else(|| every.first().cloned())
     }
 
     /// The connection and model a crew names, only if both still exist and the connection is on.
@@ -468,10 +481,14 @@ mod tests {
         let mut store = store(folder.path());
         let connection = store.connections()[0].id.clone();
         let small = ModelChoice { connection: Some(connection.clone()), model: Some("small".into()), effort: None };
-        // With no default, a Team starts on the first model there is; the default wins once set.
-        assert_eq!(store.crew_to_start().and_then(|crew| crew.model), Some("big".into()));
+        // With no default, a Team starts on the first model that isn't the lead's; the default
+        // wins once set, unless it is the lead's own model.
+        let big = ModelChoice { connection: Some(connection.clone()), model: Some("big".into()), effort: None };
+        assert_eq!(store.crew_to_start(&small).and_then(|crew| crew.model), Some("big".into()));
+        assert_eq!(store.crew_to_start(&big).and_then(|crew| crew.model), Some("small".into()));
         store.set_team_default(Some(small.clone())).unwrap();
-        assert_eq!(store.crew_to_start(), Some(small.clone()));
+        assert_eq!(store.crew_to_start(&big), Some(small.clone()));
+        assert_eq!(store.crew_to_start(&small).and_then(|crew| crew.model), Some("big".into()));
         assert!(store.set_team_default(Some(ModelChoice { model: Some("gone".into()), ..small.clone() })).is_err());
 
         let project = std::fs::create_dir_all(folder.path().join("app")).map(|_| store.add_project(&folder.path().join("app")).unwrap()).unwrap();

@@ -2598,6 +2598,14 @@ impl AppState {
         }
     }
 
+    /// The model leading the composer on screen: its chat's, or a new chat's default.
+    fn lead_on_screen(&self) -> ModelChoice {
+        match &self.selection {
+            Selection::Chat(id) => self.store.chat(id).map(|chat| chat.choice.clone()).unwrap_or_default(),
+            _ => self.store.defaults().clone(),
+        }
+    }
+
     /// Switches the Team of the composer on screen on, with the default crew, or off. A chat
     /// that is working keeps its Team until the run ends.
     pub fn set_team(&mut self, on: bool, cx: &mut Context<Self>) {
@@ -2606,7 +2614,7 @@ impl AppState {
             return;
         }
         let crew = if on {
-            match self.store.crew_to_start() {
+            match self.store.crew_to_start(&self.lead_on_screen()) {
                 Some(crew) => Some(crew),
                 None => {
                     self.notice = Some("Add a connection in Settings › Providers to give the Team a crew.".into());
@@ -2627,7 +2635,7 @@ impl AppState {
     /// Teams too. `effort` of `None` keeps the crew's effort as it is.
     pub fn choose_crew(&mut self, connection: Option<String>, model: Option<String>, effort: Option<Option<Reasoning>>, cx: &mut Context<Self>) {
         let (team, locked) = self.team_on_screen(cx);
-        let Some(current) = team.or_else(|| self.store.crew_to_start()) else { return };
+        let Some(current) = team.or_else(|| self.store.crew_to_start(&self.lead_on_screen())) else { return };
         if locked {
             return;
         }

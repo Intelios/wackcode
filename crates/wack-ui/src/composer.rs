@@ -1982,7 +1982,8 @@ fn switch(on: bool, enabled: bool, theme: &Theme) -> impl IntoElement {
 }
 
 /// The crew's half of a Team's model pill: the duckling, the crew's model and its effort. It
-/// slides in beside the lead's half when Team goes on.
+/// slides in beside the lead's half when Team goes on. In a narrow composer it gives way before
+/// the lead's, so the model in charge stays the one most readable.
 fn crew_half(crew: CrewPill, popover: Option<gpui::AnyElement>, key: SharedString, viewport: gpui::Size<Pixels>, still: bool, theme: &Theme) -> impl IntoElement {
     let ink = if crew.problem.is_some() { theme.warning } else { theme.text_soft };
     let button = pill("crew")
@@ -1995,7 +1996,6 @@ fn crew_half(crew: CrewPill, popover: Option<gpui::AnyElement>, key: SharedStrin
             None => format!("Team crew: {}. Explore and General run on it; Review runs on the lead's model.", crew.model),
         }))
         .child(Icon::Duck.view(px(11.), if crew.problem.is_some() { theme.warning } else { theme.accent_text }))
-        .child(div().flex_none().typography(Type::Small).text_color(theme.text_faint).child("crew"))
         .child(div().min_w_0().truncate().typography(Type::Ui).child(crew.model.clone()))
         .when_some(crew.effort.clone(), |pill, effort| pill.child(div().flex_none().typography(Type::Small).text_color(theme.text_faint).child(effort)))
         .child(Icon::ChevronDown.view(px(12.), theme.text_faint));
@@ -2003,6 +2003,7 @@ fn crew_half(crew: CrewPill, popover: Option<gpui::AnyElement>, key: SharedStrin
         .flex()
         .items_center()
         .min_w(px(MODEL_MIN))
+        .flex_shrink(2.)
         .child(div().flex_none().w(px(1.)).h(px(16.)).bg(theme.border_strong))
         .child(picker("crew", button, popover, true, viewport));
     if still {

@@ -401,6 +401,9 @@ struct State {
     /// Settings › Git.
     #[serde(default)]
     git: crate::git::GitConfig,
+    /// Settings › Prompts.
+    #[serde(default, skip_serializing_if = "crate::prompts::PromptConfig::is_empty")]
+    pub(crate) prompts: crate::prompts::PromptConfig,
     /// Settings › Browser.
     #[serde(default)]
     browser: BrowserConfig,
@@ -602,6 +605,14 @@ impl Store {
 
     pub(crate) fn agents_state_mut(&mut self) -> &mut crate::agents::AgentsConfig {
         &mut self.state.agents
+    }
+
+    pub(crate) fn prompts_state(&self) -> &crate::prompts::PromptConfig {
+        &self.state.prompts
+    }
+
+    pub(crate) fn prompts_state_mut(&mut self) -> &mut crate::prompts::PromptConfig {
+        &mut self.state.prompts
     }
 
     pub(crate) fn mcp_state(&self) -> &crate::mcp::McpConfig {

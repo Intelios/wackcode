@@ -36,6 +36,7 @@ pub use kit::Kit;
 pub use memory::Memory;
 pub use commands::CommandUse;
 pub use plan::AgentMode;
+pub use prompt::PromptOverrides;
 pub use registry::{Registry, TOOL_SEARCH};
 pub use session::{HistoryEntry, Note, Session, history};
 pub use tasks::{Tasks, SECRET_ENV};

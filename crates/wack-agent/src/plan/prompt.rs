@@ -15,6 +15,7 @@ const ULTRA_PLAN_CONTEXT_MARKER: &str = "[WACKCODE ULTRA PLAN MODE ACTIVE]";
 
 const PLAN_CONTRACT_MARKER: &str = "[WACKCODE PLAN MODE CONTRACT v1: PLAN]";
 const ULTRA_PLAN_CONTRACT_MARKER: &str = "[WACKCODE PLAN MODE CONTRACT v1: ULTRAPLAN]";
+pub const CONTRACT_MARKER_PREFIX: &str = "[WACKCODE PLAN MODE CONTRACT v1:";
 const NORMAL_CONTRACT: &str = "[WACKCODE PLAN MODE CONTRACT v1: NORMAL]
 Plan Mode is no longer active.
 Follow the user's current Normal-mode request and ordinary system instructions.
@@ -111,11 +112,33 @@ You are in Plan Mode, a read-only collaboration mode for producing a decision-co
     [heading.as_str(), MODE_RULES, GROUNDING, chat.as_str(), ENDING, completion_rule(ultra).as_str()].join("\n\n")
 }
 
+/// The default planning body for Plan mode, without the app's contract marker line.
+pub fn default_plan_prompt() -> String {
+    plan_mode_prompt(false)
+}
+
+/// The default planning body for Ultra Plan, without the app's contract marker line.
+pub fn default_ultra_plan_prompt() -> String {
+    plan_mode_prompt(true)
+}
+
 /// The whole text of a contract: its marker line, then its rules.
 pub fn contract(contract: Contract) -> String {
+    contract_with(contract, None, None)
+}
+
+/// [`contract`] with optional user-customised Plan or Ultra Plan bodies (Settings › Prompts).
+/// The marker line stays app-owned so every contract is still identified unambiguously.
+pub fn contract_with(contract: Contract, plan: Option<&str>, ultra_plan: Option<&str>) -> String {
     match contract {
-        Contract::Plan => format!("{PLAN_CONTRACT_MARKER}\n{}", plan_mode_prompt(false)),
-        Contract::UltraPlan => format!("{ULTRA_PLAN_CONTRACT_MARKER}\n{}", plan_mode_prompt(true)),
+        Contract::Plan => match plan {
+            Some(body) => format!("{PLAN_CONTRACT_MARKER}\n{body}"),
+            None => format!("{PLAN_CONTRACT_MARKER}\n{}", plan_mode_prompt(false)),
+        },
+        Contract::UltraPlan => match ultra_plan {
+            Some(body) => format!("{ULTRA_PLAN_CONTRACT_MARKER}\n{body}"),
+            None => format!("{ULTRA_PLAN_CONTRACT_MARKER}\n{}", plan_mode_prompt(true)),
+        },
         Contract::Normal => NORMAL_CONTRACT.to_string(),
     }
 }

@@ -209,7 +209,7 @@ pub fn cut_index(messages: &[Message], start: usize, keep_tokens: u64) -> usize 
 
 const SUMMARY_SYSTEM: &str = "You write the summary that replaces the older part of a coding conversation, so the same assistant can carry on the work without it. Reply with the summary and nothing else.";
 
-const SUMMARY_FORMAT: &str = "Summarise the conversation using exactly these headings, leaving a section out only when it would be empty:
+pub const SUMMARY_FORMAT: &str = "Summarise the conversation using exactly these headings, leaving a section out only when it would be empty:
 
 ## Goal
 ## Constraints and preferences
@@ -236,6 +236,18 @@ pub fn request(
     focus: Option<&str>,
     budget_chars: usize,
 ) -> Request {
+    request_with(model, previous, messages, focus, budget_chars, None)
+}
+
+/// [`request`] with an optional custom summary format instruction (Settings › Prompts).
+pub fn request_with(
+    model: &str,
+    previous: Option<&Summary>,
+    messages: &[Message],
+    focus: Option<&str>,
+    budget_chars: usize,
+    format: Option<&str>,
+) -> Request {
     let mut text = format!("<conversation>\n{}\n</conversation>\n\n", transcript(messages, budget_chars));
     if let Some(previous) = previous {
         text.push_str(&format!(
@@ -243,7 +255,7 @@ pub fn request(
             previous.body.trim()
         ));
     }
-    text.push_str(SUMMARY_FORMAT);
+    text.push_str(format.unwrap_or(SUMMARY_FORMAT));
     if let Some(focus) = focus.map(str::trim).filter(|focus| !focus.is_empty()) {
         text.push_str(&format!("\n\nThe user asked this summary to focus on: {focus}"));
     }

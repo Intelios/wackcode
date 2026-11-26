@@ -71,11 +71,19 @@ pub struct Profile {
 
 impl Profile {
     pub fn code() -> Self {
-        Self { name: "code".to_string(), prompt: prompt::CODE_PROMPT.to_string(), chat: false }
+        Self::code_with(None)
+    }
+
+    pub fn code_with(core: Option<&str>) -> Self {
+        Self { name: "code".to_string(), prompt: core.unwrap_or(prompt::CODE_PROMPT).to_string(), chat: false }
     }
 
     pub fn chat() -> Self {
-        Self { name: "chat".to_string(), prompt: prompt::CHAT_PROMPT.to_string(), chat: true }
+        Self::chat_with(None)
+    }
+
+    pub fn chat_with(core: Option<&str>) -> Self {
+        Self { name: "chat".to_string(), prompt: core.unwrap_or(prompt::CHAT_PROMPT).to_string(), chat: true }
     }
 }
 
@@ -93,6 +101,10 @@ pub struct Settings {
     /// Ultra: the user asked for the most thorough work the model can do. It adds an instruction
     /// to the system prompt; the effort itself is `effort`, which the caller sets to the top.
     pub ultra: bool,
+    /// Replaces `prompt::ULTRA_PROMPT` while `ultra` is on (Settings › Prompts).
+    pub ultra_prompt: Option<String>,
+    /// Replaces `compaction::SUMMARY_FORMAT` when compacting (Settings › Prompts).
+    pub compaction_prompt: Option<String>,
     /// Ask the model to end each commit message it writes with a `Co-authored-by` trailer naming
     /// the active model and WackCode Agent (`prompt::co_author_trailer`).
     pub commit_attribution: bool,
@@ -328,7 +340,8 @@ impl Agent {
             prompt::system(&profile.prompt, &cwd, &prompt::today(), &specs, co_author.as_deref())
         };
         if settings.ultra {
-            system.push(SystemPart { text: prompt::ULTRA_PROMPT.to_string() });
+            let text = settings.ultra_prompt.as_deref().unwrap_or(prompt::ULTRA_PROMPT).to_string();
+            system.push(SystemPart { text });
         }
         let confine = profile.chat.then(|| cwd.clone());
         Self {
@@ -823,7 +836,14 @@ impl Agent {
         // The app's own notes are neither the conversation nor the user's words.
         let conversation: Vec<Message> =
             (start..cut).filter(|index| !self.session.is_note(*index)).map(|index| messages[index].clone()).collect();
-        let request = compaction::request(&self.settings.model, self.session.summary(), &conversation, focus, budget);
+        let request = compaction::request_with(
+            &self.settings.model,
+            self.session.summary(),
+            &conversation,
+            focus,
+            budget,
+            self.settings.compaction_prompt.as_deref(),
+        );
         let retrying = |notice: RetryNotice| events(Event::Retrying(notice));
         let started = Instant::now();
         let response = tokio::select! {
@@ -914,6 +934,8 @@ mod tests {
                 context_window: None,
                 accepts_images: true,
                 ultra,
+                ultra_prompt: None,
+                compaction_prompt: None,
                 commit_attribution: false,
             };
             let registry = Arc::new(Registry::new(kit.tools()).unwrap());
@@ -1042,6 +1064,8 @@ mod tests {
             context_window,
             accepts_images: true,
             ultra: false,
+            ultra_prompt: None,
+            compaction_prompt: None,
             commit_attribution: false,
         };
         let agent = Agent::new(
@@ -1466,6 +1490,8 @@ mod tests {
             context_window: None,
             accepts_images: true,
             ultra: false,
+            ultra_prompt: None,
+            compaction_prompt: None,
             commit_attribution: false,
         };
         let session = Session::open(&path).unwrap();
@@ -1764,6 +1790,8 @@ mod tests {
                 context_window: None,
                 accepts_images: true,
                 ultra: false,
+                ultra_prompt: None,
+                compaction_prompt: None,
                 commit_attribution: false,
             };
             let agent = Agent::new(Arc::new(provider.clone()), Arc::new(Registry::new(tools).unwrap()), session, &Profile::code(), settings);
@@ -1980,6 +2008,8 @@ mod tests {
                 context_window: None,
                 accepts_images: true,
                 ultra: false,
+                ultra_prompt: None,
+                compaction_prompt: None,
                 commit_attribution: attribution,
             };
             let mut agent = Agent::new(

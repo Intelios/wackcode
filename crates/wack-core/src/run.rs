@@ -26,7 +26,7 @@ use std::{
 };
 
 use wack_agent::{
-    Agent, AgentMode, ChatKit, Control, Event, Kit, Outcome, Profile, Registry, Session, Settings, Tasks,
+    Agent, AgentMode, ChatKit, Control, Event, Kit, Outcome, Profile, PromptOverrides, Registry, Session, Settings, Tasks,
     commands::CommandUse,
     plan::{PLAN_STATE, PlanState},
     skills::{self, Root},
@@ -52,6 +52,8 @@ pub struct RunSetup {
     /// folder, or the Chat area's one folder.
     pub mcp_folder: PathBuf,
     pub settings: Settings,
+    /// Settings › Prompts: the user's overrides for the built-in system prompts.
+    pub prompts: PromptOverrides,
     /// Build, Plan or Ultra Plan, as the chat has it now.
     pub mode: AgentMode,
     /// Settings › Tools: planning may change things.
@@ -143,6 +145,7 @@ impl Store {
         let provider = self.provider(&resolved.connection)?;
         let usage = self.usage_recorder(&resolved.connection, &chat.id, &project.path);
         let children = self.child_model(&resolved, &chat.id, &project.path)?;
+        let prompts = self.prompts().agent_overrides();
         Ok(RunSetup {
             kind: ChatKind::Code,
             readable: Vec::new(),
@@ -157,8 +160,11 @@ impl Store {
                 context_window: resolved.model.context_window,
                 accepts_images: resolved.model.accepts_images,
                 ultra: resolved.effort.is_ultra(),
+                ultra_prompt: prompts.ultra.clone(),
+                compaction_prompt: prompts.compaction.clone(),
                 commit_attribution: self.git_config().commit_attribution,
             },
+            prompts,
             mode: chat.mode,
             unrestricted_planning: self.planning_unrestricted(),
             memory: self.memory_for(&project.path),
@@ -188,6 +194,7 @@ impl Store {
         let scratch = self.scratch_folder(chat);
         std::fs::create_dir_all(&scratch).map_err(|error| format!("Could not make the chat's scratchpad: {error}"))?;
         let mcp_folder = self.chat_area_folder()?;
+        let prompts = self.prompts().agent_overrides();
         Ok(RunSetup {
             kind: ChatKind::Chat,
             readable: self.readable_chats(chat),
@@ -203,8 +210,11 @@ impl Store {
                 context_window: resolved.model.context_window,
                 accepts_images: resolved.model.accepts_images,
                 ultra: resolved.effort.is_ultra(),
+                ultra_prompt: prompts.ultra.clone(),
+                compaction_prompt: prompts.compaction.clone(),
                 commit_attribution: false,
             },
+            prompts,
             mode: AgentMode::Build,
             unrestricted_planning: false,
             memory: self.chat_area_memory(),
@@ -231,6 +241,8 @@ pub struct ChatParts {
     /// The chat's session, whose folder is its scratchpad.
     pub session: Session,
     pub settings: Settings,
+    /// Replaces Chat mode's built-in persona (Settings › Prompts).
+    pub chat_prompt: Option<String>,
     /// The Chat area's memory folder, or `None` when memory is off for it.
     pub memory: Option<PathBuf>,
     pub web: wack_web::WebSetup,
@@ -267,7 +279,8 @@ pub fn chat_agent(parts: ChatParts) -> Result<Agent, String> {
     }
     tools.retain(|tool| wack_agent::chat_kit::chat_tool_allowed(&tool.spec().name));
     let registry = Arc::new(Registry::new(tools)?);
-    let mut agent = Agent::new(parts.provider, registry, parts.session, &Profile::chat(), parts.settings);
+    let profile = Profile::chat_with(parts.chat_prompt.as_deref());
+    let mut agent = Agent::new(parts.provider, registry, parts.session, &profile, parts.settings);
     if let Some(usage) = parts.usage {
         agent = agent.with_recorder(usage);
     }
@@ -318,6 +331,7 @@ pub async fn run(
             provider: setup.provider,
             session,
             settings: setup.settings,
+            chat_prompt: setup.prompts.chat,
             memory: setup.memory,
             web: setup.web,
             browser: setup.browser,
@@ -333,7 +347,9 @@ pub async fn run(
         return drive(agent, job, control, events).await;
     }
     let catalog = skills::load(&setup.skill_roots, &setup.disabled_skills);
-    let mut kit = Kit::new(&session, Some(setup.mode), setup.unrestricted_planning, setup.memory).with_skills(&catalog);
+    let mut kit = Kit::new(&session, Some(setup.mode), setup.unrestricted_planning, setup.memory)
+        .with_prompts(&setup.prompts)
+        .with_skills(&catalog);
     if let Some(tasks) = setup.tasks {
         kit = kit.with_tasks(&session, tasks);
     }
@@ -381,11 +397,12 @@ pub async fn run(
         Ok(registry) => Arc::new(registry),
         Err(message) => return finished(Err(message), None),
     };
+    let profile = Profile::code_with(setup.prompts.code.as_deref());
     let agent = Agent::new(
         setup.provider,
         registry,
         session,
-        &Profile::code(),
+        &profile,
         setup.settings,
     );
     let agent = match setup.usage {
@@ -472,8 +489,11 @@ mod tests {
                 context_window: None,
                 accepts_images: true,
                 ultra: false,
+                ultra_prompt: None,
+                compaction_prompt: None,
                 commit_attribution: false,
             },
+            prompts: PromptOverrides::default(),
             mode: AgentMode::Build,
             unrestricted_planning: false,
             memory: None,
@@ -775,5 +795,74 @@ mod tests {
         assert!(store.run_setup(&chat).unwrap().settings.commit_attribution);
         store.set_git_config(crate::GitConfig { commit_attribution: false }).unwrap();
         assert!(!store.run_setup(&chat).unwrap().settings.commit_attribution);
+    }
+
+    #[tokio::test]
+    async fn custom_prompts_replace_cores_and_contracts_while_keeping_guides_and_wrappers() {
+        let folder = tempfile::tempdir().unwrap();
+        let work = tempfile::tempdir().unwrap();
+        std::fs::write(work.path().join("AGENTS.md"), "Workspace rule.").unwrap();
+        let mut store = Store::open(folder.path()).unwrap();
+        store.set_home_override(folder.path().join("home"));
+        let connection = store
+            .add_connection(
+                crate::NewConnection {
+                    name: "Testing".into(),
+                    format: wack_llm::WireFormat::OpenaiChat,
+                    base_url: "https://example.invalid/v1".into(),
+                    models: vec![crate::Model {
+                        id: "zai-org/GLM-5.3-Flash".into(),
+                        context_window: Some(128_000),
+                        efforts: vec![crate::Reasoning::Off, crate::Reasoning::High],
+                        accepts_images: true,
+                    }],
+                },
+                "k",
+            )
+            .unwrap();
+        store.set_prompt(crate::PromptId::Code, Some("Custom coding core.")).unwrap();
+        store.set_prompt(crate::PromptId::Chat, Some("Custom chat persona.")).unwrap();
+        store.set_prompt(crate::PromptId::Plan, Some("Custom plan contract.")).unwrap();
+        store.set_prompt(crate::PromptId::Ultra, Some("Custom ultra instruction.")).unwrap();
+        store.set_prompt(crate::PromptId::Compaction, Some("Custom compaction headings.")).unwrap();
+        store.set_prompt(crate::PromptId::Subagent, Some("Custom sub-agent core.")).unwrap();
+        let skills_folder = folder.path().join("home/.agents/skills/sample");
+        std::fs::create_dir_all(&skills_folder).unwrap();
+        std::fs::write(skills_folder.join("SKILL.md"), "---\nname: sample\ndescription: Sample skill\n---\nBody").unwrap();
+
+        let project = store.add_project(work.path()).unwrap();
+        let choice = crate::ModelChoice {
+            connection: Some(connection.id),
+            model: Some("zai-org/GLM-5.3-Flash".into()),
+            effort: Some(crate::Reasoning::Ultra),
+        };
+        let code_chat = store.create_chat(&project.id, "Plan", choice.clone(), AgentMode::Plan, None).unwrap();
+        let mut code_setup = store.run_setup(&code_chat).unwrap();
+        assert_eq!(code_setup.agents.as_ref().unwrap().child_prompt.as_deref(), Some("Custom sub-agent core."));
+        assert_eq!(code_setup.settings.compaction_prompt.as_deref(), Some("Custom compaction headings."));
+
+        let code_provider = ScriptedProvider::new([say("planned")]);
+        code_setup.provider = Arc::new(code_provider.clone());
+        let (_, sink) = collect();
+        run(code_setup, Job::Prompt("Design it".into()), Control::new(), sink).await;
+        let req = &code_provider.requests()[0];
+        assert_eq!(req.system[0].text, "Custom coding core.");
+        assert!(req.system[1].text.starts_with("# This chat") && req.system[1].text.contains("Untrusted content:"));
+        assert!(req.system[1].text.contains("Co-authored-by: GLM-5.3-Flash (WackCode)"));
+        assert!(req.system[2].text.contains("Workspace rule."));
+        assert!(req.system[3].text.starts_with("# Skills"));
+        assert_eq!(req.system.last().unwrap().text, "Custom ultra instruction.");
+        assert_eq!(req.messages[0].text(), "[WACKCODE PLAN MODE CONTRACT v1: PLAN]\nCustom plan contract.");
+
+        let area_chat = store.create_area_chat("Hello", choice).unwrap();
+        let mut chat_setup = store.run_setup(&area_chat).unwrap();
+        let chat_provider = ScriptedProvider::new([say("hello")]);
+        chat_setup.provider = Arc::new(chat_provider.clone());
+        let (_, sink) = collect();
+        run(chat_setup, Job::Prompt("Hi".into()), Control::new(), sink).await;
+        let chat_req = &chat_provider.requests()[0];
+        assert_eq!(chat_req.system[0].text, "Custom chat persona.");
+        assert!(chat_req.system[1].text.starts_with("# This chat") && chat_req.system[1].text.contains("private scratchpad folder"));
+        assert_eq!(chat_req.system.last().unwrap().text, "Custom ultra instruction.");
     }
 }

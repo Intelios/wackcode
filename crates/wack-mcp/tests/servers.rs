@@ -222,6 +222,8 @@ async fn run(hub: &Hub, specs: &[ServerSpec], folder: &Path, steps: Vec<wack_llm
         context_window: None,
         accepts_images: true,
         ultra: false,
+        ultra_prompt: None,
+        compaction_prompt: None,
         commit_attribution: false,
     };
     let mut agent = Agent::new(Arc::new(provider.clone()), registry, session, &Profile::code(), settings);

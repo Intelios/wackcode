@@ -221,6 +221,9 @@ pub struct AppState {
     template_subscriptions: Vec<Subscription>,
     pub subagents: crate::subagents_page::SubagentsState,
     subagent_subscriptions: Vec<Subscription>,
+    /// Settings › Prompts: the open prompt editor and the restore-all confirmation.
+    pub prompts: crate::prompts_page::PromptsState,
+    prompt_subscriptions: Vec<Subscription>,
     /// Settings › Git's last save failure, if any.
     pub git_error: Option<SharedString>,
     /// Settings › Browser.
@@ -450,6 +453,8 @@ impl AppState {
             template_subscriptions: Vec::new(),
             subagents: Default::default(),
             subagent_subscriptions: Vec::new(),
+            prompts: Default::default(),
+            prompt_subscriptions: Vec::new(),
             git_error: None,
             browser_error: None,
             computer,
@@ -2219,7 +2224,7 @@ impl AppState {
                 return;
             }
         };
-        let request = title::request(&model, opening);
+        let request = title::request_with(&model, opening, self.store.prompts().title.as_deref());
         // The ledger records the request as a run's calls are: against the chat's project, or as
         // the Chat area's.
         let recorder = self.store.chat(chat).and_then(|listed| self.store.chat_recorder(&connection, listed));
@@ -4805,6 +4810,127 @@ impl AppState {
                 TextFieldEvent::Moved | TextFieldEvent::Menu(_) | TextFieldEvent::PastedPictures => {}
             }));
         }
+    }
+
+    // -------------------------------------------------------------------------------------------
+    // Settings › Prompts
+
+    /// Opens one built-in prompt on its page; the editor already open for it is kept, draft and
+    /// all. Returns its text field for focus.
+    pub fn open_prompt(&mut self, id: wack_core::PromptId, cx: &mut Context<Self>) -> Option<Entity<TextField>> {
+        if let Some(editor) = self.prompts.editor.as_ref()
+            && editor.id == id
+        {
+            return Some(editor.body.clone());
+        }
+        let editor = crate::prompts_page::PromptEditor::new(id, self.store.prompts(), cx);
+        let field = editor.body.clone();
+        self.prompts.editor = Some(editor);
+        self.prompts.error = None;
+        self.prompts.confirming_restore_all = false;
+        self.watch_prompt_editor(cx);
+        cx.notify();
+        Some(field)
+    }
+
+    /// Back to the prompts list, forgetting unsaved edits.
+    pub fn close_prompt(&mut self, cx: &mut Context<Self>) {
+        self.prompts.editor = None;
+        self.prompt_subscriptions.clear();
+        cx.notify();
+    }
+
+    /// Saves the editor's text as the prompt's replacement; the built-in text or an over-long one
+    /// never stores.
+    pub fn save_prompt(&mut self, cx: &mut Context<Self>) {
+        let Some(id) = self.prompts.editor.as_ref().map(|editor| editor.id) else {
+            return;
+        };
+        let Some(text) = self.prompts.editor.as_ref().map(|editor| editor.body.read(cx).text().to_string()) else {
+            return;
+        };
+        match self.store.set_prompt(id, Some(&text)) {
+            Ok(()) => self.close_prompt(cx),
+            Err(message) => {
+                if let Some(editor) = self.prompts.editor.as_mut() {
+                    editor.error = Some(message.into());
+                }
+                cx.notify();
+            }
+        }
+    }
+
+    pub fn ask_restore_prompt(&mut self, ask: bool, cx: &mut Context<Self>) {
+        if let Some(editor) = self.prompts.editor.as_mut() {
+            editor.confirming_restore = ask;
+            cx.notify();
+        }
+    }
+
+    /// Drops the prompt's replacement: the editor's text becomes WackCode's, shown straight away.
+    pub fn confirm_restore_prompt(&mut self, cx: &mut Context<Self>) {
+        let Some(id) = self.prompts.editor.as_ref().filter(|editor| editor.confirming_restore).map(|editor| editor.id) else {
+            return;
+        };
+        match self.store.set_prompt(id, None) {
+            Ok(()) => {
+                if let Some(editor) = self.prompts.editor.as_mut() {
+                    editor.confirming_restore = false;
+                    editor.error = None;
+                    editor.show_default = false;
+                    editor.body.update(cx, |field, cx| field.set_text(id.default_text().as_ref(), cx));
+                }
+                cx.notify();
+            }
+            Err(message) => {
+                if let Some(editor) = self.prompts.editor.as_mut() {
+                    editor.confirming_restore = false;
+                    editor.error = Some(message.into());
+                }
+                cx.notify();
+            }
+        }
+    }
+
+    pub fn toggle_prompt_default(&mut self, cx: &mut Context<Self>) {
+        if let Some(editor) = self.prompts.editor.as_mut() {
+            editor.show_default = !editor.show_default;
+            cx.notify();
+        }
+    }
+
+    pub fn ask_restore_all_prompts(&mut self, ask: bool, cx: &mut Context<Self>) {
+        self.prompts.confirming_restore_all = ask;
+        cx.notify();
+    }
+
+    pub fn confirm_restore_all_prompts(&mut self, cx: &mut Context<Self>) {
+        self.prompts.confirming_restore_all = false;
+        match self.store.reset_all_prompts() {
+            Ok(()) => self.prompts.error = None,
+            Err(message) => self.prompts.error = Some(message.into()),
+        }
+        cx.notify();
+    }
+
+    fn watch_prompt_editor(&mut self, cx: &mut Context<Self>) {
+        self.prompt_subscriptions.clear();
+        let Some(editor) = self.prompts.editor.as_ref() else {
+            return;
+        };
+        let field = editor.body.clone();
+        // The prompt takes new lines; ⌘↩ saves from anywhere in it.
+        self.prompt_subscriptions.push(cx.subscribe(&field, move |app, field, event: &TextFieldEvent, cx| match event {
+            TextFieldEvent::Enter => field.update(cx, |field, cx| field.insert_line_break(cx)),
+            TextFieldEvent::SendNow => app.save_prompt(cx),
+            TextFieldEvent::Changed => {
+                if let Some(editor) = app.prompts.editor.as_mut() {
+                    editor.error = None;
+                }
+                cx.notify();
+            }
+            TextFieldEvent::Moved | TextFieldEvent::Menu(_) | TextFieldEvent::PastedPictures => {}
+        }));
     }
 }
 

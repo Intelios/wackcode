@@ -98,7 +98,7 @@ pub fn breakdown(request: &Request, measured: u64) -> Vec<Part> {
         } else if text.starts_with("## Memory") || text.starts_with("## Project memory") {
             let count = text.lines().filter(|line| line.starts_with("- [")).count();
             add(Kind::Memory, plural(count, "note"), text.len());
-        } else if text == ULTRA_PROMPT {
+        } else if text == ULTRA_PROMPT || index > 1 {
             add(Kind::Instructions, "Ultra".into(), text.len());
         } else if index == 0 {
             add(Kind::Instructions, "How WackCode works".into(), text.len());
@@ -251,5 +251,15 @@ mod tests {
         assert_eq!(pieces(Kind::Tools), ["1 built-in tool", "1 MCP tool"]);
         assert_eq!(pieces(Kind::ToolResults), ["read"]);
         assert_eq!(pieces(Kind::Messages), ["You", "Tool calls"]);
+
+        // A customised Ultra instruction at the end of `system` still counts as "Ultra".
+        let mut with_custom_ultra = request();
+        with_custom_ultra.system.push(SystemPart { text: "Custom thorough instructions.".into() });
+        let parts = breakdown(&with_custom_ultra, 0);
+        assert_eq!(pieces_of(&parts, Kind::Instructions), ["How WackCode works", "Guide to this chat", "Ultra"]);
+    }
+
+    fn pieces_of(parts: &[Part], kind: Kind) -> Vec<String> {
+        parts.iter().find(|part| part.kind == kind).unwrap().pieces.iter().map(|(name, _)| name.clone()).collect()
     }
 }

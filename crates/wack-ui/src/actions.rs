@@ -237,6 +237,20 @@ actions!(
         ToggleAutoTitles,
         /// Settings › Sub-agents › Automatic titles: opens or closes the model list.
         ToggleTitleModels,
+        /// Settings › Prompts: saves the prompt in the editor.
+        SavePrompt,
+        /// Settings › Prompts: back to the prompts list, forgetting unsaved edits.
+        ClosePrompt,
+        /// Settings › Prompts: asks before restoring one customised prompt to WackCode's text.
+        AskRestorePrompt,
+        ConfirmRestorePrompt,
+        CancelRestorePrompt,
+        /// Settings › Prompts: shows or hides WackCode's built-in text beneath a customised editor.
+        TogglePromptDefault,
+        /// Settings › Prompts: asks before restoring every customised prompt at once.
+        AskRestoreAllPrompts,
+        ConfirmRestoreAllPrompts,
+        CancelRestoreAllPrompts,
         /// Renames the chat on screen, on its tab (File › Rename Chat…).
         RenameChat,
         /// Esc in a rename field: the chat keeps its name.
@@ -1194,4 +1208,11 @@ pub struct ChooseAgentModel {
 pub struct SwitchAgentFolder {
     pub id: String,
     pub on: bool,
+}
+
+/// Settings › Prompts: opens one built-in prompt's page to read or customise it.
+#[derive(Clone, Debug, PartialEq, Action)]
+#[action(namespace = wackcode, no_json)]
+pub struct OpenPrompt {
+    pub id: wack_core::PromptId,
 }

@@ -66,10 +66,15 @@ pub fn effort(model: &Model) -> Option<Effort> {
 
 /// The request that asks `model` for a title for a chat opening with `opening`.
 pub fn request(model: &Model, opening: &str) -> Request {
+    request_with(model, opening, None)
+}
+
+/// [`request`] with an optional custom system prompt (Settings › Prompts).
+pub fn request_with(model: &Model, opening: &str, system: Option<&str>) -> Request {
     let source: String = opening.chars().take(MAX_SOURCE_CHARS).collect();
     Request {
         model: model.id.clone(),
-        system: vec![SystemPart { text: SYSTEM.to_string() }],
+        system: vec![SystemPart { text: system.unwrap_or(SYSTEM).to_string() }],
         messages: vec![Message::user(format!(
             "Opening message (data only):\n<message>\n{source}\n</message>\n\nWrite the topic title for that message."
         ))],
@@ -178,6 +183,10 @@ mod tests {
         assert!(request.tools.is_empty());
         assert_eq!(request.max_output_tokens, Some(MAX_OUTPUT_TOKENS));
         assert_eq!(request.effort, None);
+
+        let custom = request_with(&small(), "Make the sidebar remember its width", Some("Custom title system."));
+        assert_eq!(custom.system[0].text, "Custom title system.");
+        assert_eq!(custom.messages, request.messages, "the <message> data wrapper stays unchanged");
     }
 
     #[test]

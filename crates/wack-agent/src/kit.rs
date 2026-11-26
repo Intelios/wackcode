@@ -66,6 +66,12 @@ impl Kit {
         }
     }
 
+    /// Replaces the built-in Plan and Ultra Plan prompts (Settings › Prompts).
+    pub fn with_prompts(mut self, prompts: &crate::prompt::PromptOverrides) -> Self {
+        self.plan = self.plan.with_prompts(prompts.plan.clone(), prompts.ultra_plan.clone());
+        self
+    }
+
     /// Lists `catalog`'s skills in the system prompt, for the model to load when a task matches.
     pub fn with_skills(mut self, catalog: &Catalog) -> Self {
         self.skills = skills::index(catalog);

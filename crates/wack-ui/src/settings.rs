@@ -596,6 +596,7 @@ pub enum Section {
     #[default]
     Appearance,
     Providers,
+    Prompts,
     Tools,
     Memory,
     Skills,
@@ -610,9 +611,10 @@ pub enum Section {
 }
 
 impl Section {
-    pub const ALL: [Section; 13] = [
+    pub const ALL: [Section; 14] = [
         Section::Appearance,
         Section::Providers,
+        Section::Prompts,
         Section::Tools,
         Section::Memory,
         Section::Skills,
@@ -631,6 +633,7 @@ impl Section {
         match self {
             Section::Appearance => Icon::Palette,
             Section::Providers => Icon::Key,
+            Section::Prompts => Icon::Pencil,
             Section::Tools => Icon::Hammer,
             Section::Memory => Icon::Brain,
             Section::Skills => Icon::Book,
@@ -649,6 +652,7 @@ impl Section {
         match self {
             Section::Appearance => "Appearance",
             Section::Providers => "Providers",
+            Section::Prompts => "Prompts",
             Section::Tools => "Tools",
             Section::Memory => "Memory",
             Section::Skills => "Skills",
@@ -667,6 +671,7 @@ impl Section {
         match self {
             Section::Appearance => "section-appearance",
             Section::Providers => "section-providers",
+            Section::Prompts => "section-prompts",
             Section::Tools => "section-tools",
             Section::Memory => "section-memory",
             Section::Skills => "section-skills",
@@ -690,7 +695,7 @@ type Entry = (Option<Section>, &'static str);
 
 const GROUPS: [(&str, &[Entry]); 4] = [
     ("Look", &[(Some(Section::Appearance), "Appearance")]),
-    ("Models", &[(Some(Section::Providers), "Providers"), (None, "Prompts")]),
+    ("Models", &[(Some(Section::Providers), "Providers"), (Some(Section::Prompts), "Prompts")]),
     (
         "Agent",
         &[(Some(Section::Tools), "Tools"), (Some(Section::Memory), "Memory"), (Some(Section::Skills), "Skills"), (Some(Section::Commands), "Commands"), (Some(Section::Subagents), "Sub-agents"), (Some(Section::Git), "Git")],
@@ -707,6 +712,7 @@ pub struct SettingsData {
     pub section: Section,
     pub providers: ProvidersData,
     pub appearance: AppearanceData,
+    pub prompts: crate::prompts_page::PromptsData,
     pub tools: crate::tools_page::ToolsData,
     pub memory: crate::memory_page::MemoryData,
     pub skills: crate::skills_page::SkillsData,
@@ -769,7 +775,7 @@ impl NavConnection {
     }
 }
 
-pub fn nav(section: Section, connections: Vec<NavConnection>, theme: &Theme) -> impl IntoElement {
+pub fn nav(section: Section, connections: Vec<NavConnection>, prompt_count: usize, theme: &Theme) -> impl IntoElement {
     let count = connections.len();
     let back = div()
         .id("settings-back")
@@ -810,6 +816,9 @@ pub fn nav(section: Section, connections: Vec<NavConnection>, theme: &Theme) -> 
                         )
                         .when(target == Section::Providers && count > 0, |row| {
                             row.child(div().typography(Type::Small).text_color(theme.text_faint).child(count.to_string()))
+                        })
+                        .when(target == Section::Prompts && prompt_count > 0, |row| {
+                            row.child(div().typography(Type::Small).text_color(theme.text_faint).child(prompt_count.to_string()))
                         })
                         .tag(target.tag())
                         .into_any_element()
@@ -879,9 +888,11 @@ pub fn page(data: SettingsData, inline_nav: bool, narrow: bool, stack_form: bool
         div().pb(px(26.)).flex().child(segmented("section", &choices, section, |section| Box::new(OpenSettingsSection { section }), theme))
     });
     let editor = data.providers.editor.clone();
+    let prompt_editor = data.prompts.editor.clone();
     let content = match section {
         Section::Appearance => appearance_page::page(data.appearance, theme).into_any_element(),
         Section::Providers => providers(data.providers, stack_form, theme).into_any_element(),
+        Section::Prompts => crate::prompts_page::page(data.prompts, theme),
         Section::Tools => crate::tools_page::page(data.tools, theme).into_any_element(),
         Section::Memory => crate::memory_page::page(data.memory, theme),
         Section::Skills => crate::skills_page::page(data.skills, theme),
@@ -896,6 +907,8 @@ pub fn page(data: SettingsData, inline_nav: bool, narrow: bool, stack_form: bool
     };
     let footer = if section == Section::Providers {
         editor.as_ref().and_then(|editor| save_bar(editor, narrow, theme))
+    } else if section == Section::Prompts {
+        prompt_editor.as_ref().and_then(|editor| crate::prompts_page::save_bar(editor, narrow, theme))
     } else {
         None
     };

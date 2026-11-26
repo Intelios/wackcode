@@ -298,6 +298,19 @@ pub fn system(core: &str, cwd: &Path, today: &str, tools: &[&ToolSpec], co_autho
     parts
 }
 
+/// User-customised built-in prompts (Settings › Prompts). `None` leaves the shipped default in
+/// place; dynamic guides and wrappers stay app-owned around them.
+#[derive(Clone, Debug, Default, PartialEq, Eq)]
+pub struct PromptOverrides {
+    pub code: Option<String>,
+    pub chat: Option<String>,
+    pub plan: Option<String>,
+    pub ultra_plan: Option<String>,
+    pub ultra: Option<String>,
+    pub compaction: Option<String>,
+    pub subagent: Option<String>,
+}
+
 /// Today's date in the user's time zone. Day precision keeps the prompt stable within a run.
 pub fn today() -> String {
     let now = std::time::SystemTime::now()

@@ -96,6 +96,8 @@ pub struct AgentsSetup {
     pub helper: Option<ChildModel>,
     /// The chat's registry, which outlives the run.
     pub agents: Agents,
+    /// Replaces `CHILD_PROMPT` on fresh sub-agents (Settings › Prompts).
+    pub child_prompt: Option<String>,
 }
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Serialize, Deserialize)]

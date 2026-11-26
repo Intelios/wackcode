@@ -253,7 +253,23 @@ impl Session {
 
     /// The newest note the model can still see whose tag starts with `prefix`.
     pub fn latest_note(&self, prefix: &str) -> Option<&str> {
-        self.notes.iter().rev().flatten().map(String::as_str).find(|tag| tag.starts_with(prefix))
+        self.latest_note_with_text(prefix).map(|(tag, _)| tag)
+    }
+
+    /// The newest note the model can still see whose tag starts with `prefix`, with its text.
+    pub fn latest_note_with_text(&self, prefix: &str) -> Option<(&str, &str)> {
+        self.notes
+            .iter()
+            .zip(&self.messages)
+            .rev()
+            .find_map(|(note, message)| {
+                let tag = note.as_deref().filter(|tag| tag.starts_with(prefix))?;
+                let text = match message.content.first() {
+                    Some(Block::Text { text }) => text.as_str(),
+                    _ => "",
+                };
+                Some((tag, text))
+            })
     }
 
     /// Whether a note with this prefix was ever written, even if since summarised away.

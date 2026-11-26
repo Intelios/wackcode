@@ -51,6 +51,7 @@ impl RenderOnce for Stage {
         match self.section {
             Section::Appearance => appearance(&mut scene, ink),
             Section::Providers => providers(&mut scene, ink),
+            Section::Prompts => prompts(&mut scene, ink),
             Section::Tools => tools(&mut scene, ink),
             Section::Memory => memory(&mut scene, ink),
             Section::Skills => skills(&mut scene, ink),
@@ -223,6 +224,27 @@ fn providers(scene: &mut Scene, ink: Ink) {
         let start = 0.44 + 0.06 * k as f32;
         scene.act(move |t| block(70., 56. + 10. * k as f32, width * shown(t, start, start + 0.1), 4., 2.).bg(alpha(ink.accent, 0.75)));
     }
+}
+
+/// A page of instructions writes itself line by line, an accent caret leading, then a spark lands.
+fn prompts(scene: &mut Scene, ink: Ink) {
+    const WIDTHS: [f32; 4] = [44., 36., 46., 30.];
+    scene.act(move |t| {
+        let lit = span(t, 0.56, 0.62, 0.86, 0.92);
+        block(42., 8., 66., 80., 9.).bg(ink.card).border_1().border_color(if lit > 0.5 { ink.rim } else { ink.line })
+    });
+    scene.put(block(52., 20., 24., 5., 2.5).bg(ink.accent));
+    for (k, width) in WIDTHS.into_iter().enumerate() {
+        let start = 0.1 + 0.1 * k as f32;
+        scene.act(move |t| block(52., 34. + 11. * k as f32, width * ramp(t, start, start + 0.1), 4., 2.).bg(ink.line).opacity(shown(t, 0., 0.01)));
+    }
+    scene.act(move |t| {
+        let along = ((t - 0.1) / 0.1).clamp(0., 3.999);
+        let (line, part) = (along.floor() as usize, along.fract());
+        let x = 52. + WIDTHS[line] * ramp(part, 0., 1.);
+        block(x + 2., 32. + 11. * line as f32, 2., 8., 1.).bg(ink.accent).opacity(span(t, 0.08, 0.1, 0.52, 0.56))
+    });
+    scene.act(move |t| glyph(Icon::Spark, 98., 22., 12. * motion::pop(ramp(t, 0.52, 0.6)).max(0.01), ink.accent).opacity(shown(t, 0.52, 0.56)));
 }
 
 /// Rows of tools; a tick lands on each in turn.

@@ -173,6 +173,8 @@ pub struct Plan {
     saved: bool,
     unrestricted: bool,
     cwd: PathBuf,
+    plan_prompt: Option<String>,
+    ultra_plan_prompt: Option<String>,
 }
 
 impl Plan {
@@ -183,7 +185,21 @@ impl Plan {
         if let Some(mode) = mode {
             state.mode = mode;
         }
-        Self { state: Arc::new(Mutex::new(state)), saved: saved.is_some(), unrestricted, cwd: session.cwd().to_path_buf() }
+        Self {
+            state: Arc::new(Mutex::new(state)),
+            saved: saved.is_some(),
+            unrestricted,
+            cwd: session.cwd().to_path_buf(),
+            plan_prompt: None,
+            ultra_plan_prompt: None,
+        }
+    }
+
+    /// Replaces the built-in Plan or Ultra Plan contract bodies (Settings › Prompts).
+    pub fn with_prompts(mut self, plan: Option<String>, ultra_plan: Option<String>) -> Self {
+        self.plan_prompt = plan;
+        self.ultra_plan_prompt = ultra_plan;
+        self
     }
 
     pub fn state(&self) -> PlanState {
@@ -206,6 +222,10 @@ impl Plan {
             AgentMode::Build => session.ever_noted(NOTE_PREFIX).then_some(Contract::Normal),
         }
     }
+
+    fn contract_text(&self, contract: Contract) -> String {
+        prompt::contract_with(contract, self.plan_prompt.as_deref(), self.ultra_plan_prompt.as_deref())
+    }
 }
 
 impl Feature for Plan {
@@ -214,11 +234,13 @@ impl Feature for Plan {
     }
 
     fn notes(&self, session: &Session) -> Vec<Note> {
-        match self.expected_contract(session) {
-            Some(contract) if session.latest_note(NOTE_PREFIX) != Some(contract.tag()) => {
-                vec![Note { tag: contract.tag().to_string(), text: prompt::contract(contract) }]
-            }
-            _ => Vec::new(),
+        let Some(contract) = self.expected_contract(session) else {
+            return Vec::new();
+        };
+        let expected = self.contract_text(contract);
+        match session.latest_note_with_text(NOTE_PREFIX) {
+            Some((tag, text)) if tag == contract.tag() && text == expected => Vec::new(),
+            _ => vec![Note { tag: contract.tag().to_string(), text: expected }],
         }
     }
 
@@ -227,11 +249,10 @@ impl Feature for Plan {
             return;
         }
         // After the contract it supersedes, and before the user's request, which stays last.
-        let contracts = [Contract::Plan, Contract::UltraPlan, Contract::Normal].map(prompt::contract);
         let after = request
             .messages
             .iter()
-            .rposition(|message| message.role == Role::User && contracts.contains(&message.text()))
+            .rposition(|message| message.role == Role::User && message.text().starts_with(prompt::CONTRACT_MARKER_PREFIX))
             .map_or(0, |index| index + 1);
         request.messages.insert(after, Message::user(prompt::UNRESTRICTED_ACCESS));
     }
@@ -469,6 +490,18 @@ mod tests {
         assert_eq!(notes[0].text, prompt::contract(Contract::Normal));
         session.push_note(notes[0].clone()).unwrap();
         assert!(build.notes(&session).is_empty());
+
+        // Editing the Plan prompt while a chat is already planning owes the updated contract once.
+        let custom = Plan::new(&session, Some(AgentMode::Plan), false).with_prompts(Some("Custom plan rules.".into()), None);
+        let notes = custom.notes(&session);
+        assert_eq!(notes[0].tag, "contract:plan");
+        assert_eq!(notes[0].text, "[WACKCODE PLAN MODE CONTRACT v1: PLAN]\nCustom plan rules.");
+        session.push_note(notes[0].clone()).unwrap();
+        assert!(custom.notes(&session).is_empty(), "unchanged custom contract is not re-sent");
+        let revised = Plan::new(&session, Some(AgentMode::Plan), false).with_prompts(Some("Updated plan rules.".into()), None);
+        let notes = revised.notes(&session);
+        assert_eq!(notes.len(), 1);
+        assert_eq!(notes[0].text, "[WACKCODE PLAN MODE CONTRACT v1: PLAN]\nUpdated plan rules.");
     }
 
     #[tokio::test]
@@ -548,5 +581,24 @@ mod tests {
         let before = request.clone();
         restricted.before_request(&mut request);
         assert_eq!(request, before);
+
+        // Unrestricted access also sits right after a user-customised Plan contract.
+        let custom = Plan::new(&session, Some(AgentMode::Plan), true).with_prompts(Some("Custom plan rules.".into()), None);
+        let mut custom_request = Request {
+            model: "m".into(),
+            system: Vec::new(),
+            messages: vec![
+                Message::user("earlier"),
+                Message::user("[WACKCODE PLAN MODE CONTRACT v1: PLAN]\nCustom plan rules."),
+                Message::user("Plan the fix"),
+            ],
+            tools: Vec::new(),
+            max_output_tokens: None,
+            effort: None,
+        };
+        custom.before_request(&mut custom_request);
+        let custom_texts: Vec<String> = custom_request.messages.iter().map(Message::text).collect();
+        assert_eq!(custom_texts[2], prompt::UNRESTRICTED_ACCESS);
+        assert_eq!(custom_texts[3], "Plan the fix");
     }
 }

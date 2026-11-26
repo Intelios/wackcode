@@ -57,6 +57,8 @@ fn settings(model: &str) -> Settings {
         context_window: None,
         accepts_images: true,
         ultra: false,
+        ultra_prompt: None,
+        compaction_prompt: None,
         commit_attribution: false,
     }
 }
@@ -80,6 +82,7 @@ fn parent(steps: Vec<Step>, child: ScriptedProvider, mode: AgentMode, recorder: 
         chat: ChildModel { provider: Arc::new(child.clone()), settings: settings("chat-model"), recorder: recorder.clone() },
         helper: Some(ChildModel { provider: Arc::new(child), settings: settings("helper-model"), recorder: recorder.clone() }),
         agents: agents.clone(),
+        child_prompt: None,
     };
     let kit = Kit::new(&session, Some(mode), false, None).with_agents(&session, setup);
     let mut tools: Vec<Arc<dyn Tool>> = vec![Arc::new(Look)];
@@ -193,6 +196,7 @@ async fn a_child_that_will_not_stop_is_held_to_its_steps() {
         chat: ChildModel { provider: Arc::new(child.clone()), settings: settings("m"), recorder: None },
         helper: None,
         agents: parent.agents.clone(),
+        child_prompt: None,
     };
     let session = Session::open(&parent.folder.path().join("sessions/chat-1.jsonl")).unwrap();
     let kit = Kit::new(&session, Some(AgentMode::Build), false, None).with_agents(&session, setup);
@@ -270,6 +274,7 @@ fn parent_with(steps: Vec<Step>, child: ScriptedProvider, extra: Vec<Arc<dyn Too
         chat: ChildModel { provider: Arc::new(child), settings: settings("m"), recorder: None },
         helper: None,
         agents: parent.agents.clone(),
+        child_prompt: None,
     };
     let session = Session::open(&parent.folder.path().join("sessions/chat-1.jsonl")).unwrap();
     let kit = Kit::new(&session, Some(AgentMode::Build), false, None).with_agents(&session, setup);
@@ -606,6 +611,7 @@ async fn fresh_subagents_omit_commit_attribution_while_conversation_copies_keep_
         chat: ChildModel { provider: Arc::new(child.clone()), settings: settings("chat-model"), recorder: None },
         helper: None,
         agents: agents.clone(),
+        child_prompt: None,
     };
     let kit = Kit::new(&session, Some(AgentMode::Build), false, None).with_agents(&session, setup);
     let mut tools: Vec<Arc<dyn Tool>> = vec![Arc::new(Look)];
@@ -628,4 +634,44 @@ async fn fresh_subagents_omit_commit_attribution_while_conversation_copies_keep_
     let copy_child = &child.requests()[1];
     assert_eq!(copy_child.system, parent_provider.requests()[0].system);
     assert!(copy_child.system[1].text.contains("Co-authored-by: parent-model (WackCode)"));
+}
+
+#[tokio::test]
+async fn custom_child_prompt_reaches_fresh_children_while_conversation_copies_keep_the_parents() {
+    let folder = tempfile::tempdir().unwrap();
+    let session = Session::create(&folder.path().join("sessions/chat-1.jsonl"), folder.path()).unwrap();
+    let agents = Agents::new();
+    let child = ScriptedProvider::new([say("Explored."), say("Copied.")]);
+    let parent_provider = ScriptedProvider::new([
+        call(&[("p1", AGENT, json!({ "agent": "explore", "description": "Explore", "prompt": "Look" }))]),
+        call(&[("p2", AGENT, json!({ "description": "Copy", "prompt": "Finish", "with_conversation": true }))]),
+        say("Done."),
+    ]);
+    let setup = AgentsSetup {
+        catalog: definition::builtins(),
+        delegation: Delegation::Auto,
+        chat: ChildModel { provider: Arc::new(child.clone()), settings: settings("chat-model"), recorder: None },
+        helper: None,
+        agents: agents.clone(),
+        child_prompt: Some("Custom sub-agent core rules.".into()),
+    };
+    let kit = Kit::new(&session, Some(AgentMode::Build), false, None).with_agents(&session, setup);
+    let mut tools: Vec<Arc<dyn Tool>> = vec![Arc::new(Look)];
+    tools.extend(kit.tools());
+    tools.extend(kit.agent_tools(&tools));
+    let mut agent = kit.attach(Agent::new(
+        Arc::new(parent_provider.clone()),
+        Arc::new(Registry::new(tools).unwrap()),
+        session,
+        &Profile::code_with(Some("Custom parent core.")),
+        settings("parent-model"),
+    ));
+    assert_eq!(agent.run("Go", &Control::new(), &|_| {}).await, Ok(Outcome::Done));
+
+    let fresh_child = &child.requests()[0];
+    assert!(fresh_child.system[0].text.starts_with("Custom sub-agent core rules.\n\n# Your role\n\nYou are Explore"));
+
+    let copy_child = &child.requests()[1];
+    assert_eq!(copy_child.system, parent_provider.requests()[0].system);
+    assert_eq!(copy_child.system[0].text, "Custom parent core.");
 }

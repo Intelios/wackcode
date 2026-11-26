@@ -19,7 +19,7 @@ use std::{
 use args::Args;
 use wack_agent::{Agent, AgentMode, Agents, Control, Kit, Outcome, Profile, Registry, Session, Settings, Tasks};
 use wack_core::{
-    Connection, Model, NewConnection, Reasoning, Resolved, Store,
+    Connection, Model, NewConnection, PromptId, Reasoning, Resolved, Store,
     skills::{self, Outgoing},
 };
 use wack_llm::WireFormat;
@@ -45,6 +45,7 @@ const HELP: &str = "wack: the WackCode agent without the app
   wack skills                  List the skills a run loads, and any that could not load.
   wack commands                List the slash commands a run understands.
   wack agents                  List the sub-agents a run can start (Settings › Sub-agents).
+  wack prompts [name]          List WackCode's system prompts (Settings › Prompts), or print one.
   wack mcp list                List the MCP servers (Settings › MCP servers) and the projects they reach.
   wack mcp test <name>         Connect to one, list its tools and close. Starts in --cwd, or here.
 
@@ -77,6 +78,7 @@ async fn run(args: &mut Args) -> Result<ExitCode, String> {
         Some("skills") => list_skills(args, &folder),
         Some("commands") => list_commands(args, &folder),
         Some("agents") => list_agents(args, &folder),
+        Some("prompts") => list_prompts(args, &folder),
         Some("mcp") => mcp(args, &folder).await,
         None | Some("help" | "--help" | "-h") => {
             println!("{HELP}");
@@ -225,6 +227,37 @@ fn list_commands(args: &mut Args, folder: &Path) -> Result<ExitCode, String> {
     Ok(ExitCode::SUCCESS)
 }
 
+fn list_prompts(args: &mut Args, folder: &Path) -> Result<ExitCode, String> {
+    let wanted = args.rest().join(" ");
+    let store = Store::open(folder)?;
+    let prompts = store.prompts();
+    let wanted = wanted.trim();
+    if wanted.is_empty() {
+        for id in PromptId::ALL {
+            let text = prompts.effective(id);
+            let chars = text.chars().count();
+            let lines = text.lines().count().max(1);
+            let status = if prompts.is_customised(id) { "customised" } else { "built-in" };
+            println!(
+                "{}  ·  {}  ·  {status}  ·  {chars} chars, {lines} {}\n  {}",
+                id.slug(),
+                id.title(),
+                if lines == 1 { "line" } else { "lines" },
+                id.description()
+            );
+        }
+        return Ok(ExitCode::SUCCESS);
+    }
+    let id = PromptId::from_slug(wanted).ok_or_else(|| {
+        let slugs: Vec<&str> = PromptId::ALL.iter().map(|id| id.slug()).collect();
+        format!("There is no prompt named {wanted}. Choose one of: {}.", slugs.join(", "))
+    })?;
+    let status = if prompts.is_customised(id) { "customised" } else { "built-in" };
+    eprintln!("{}", print::dim(&format!("{} ({}) · {status}", id.title(), id.slug())));
+    println!("{}", prompts.effective(id));
+    Ok(ExitCode::SUCCESS)
+}
+
 async fn mcp(args: &mut Args, folder: &Path) -> Result<ExitCode, String> {
     let action = args.command();
     let cwd = args.value("--cwd")?;
@@ -338,6 +371,7 @@ async fn chat_run(store: &Store, connection: Connection, model: Model, effort: O
     let mcp_folder = store.chat_area_folder()?;
     let mcp = wack_mcp::assemble(&hub.0, &store.mcp_specs_for(&mcp_folder), &mcp_folder, &control.stop_token(), starting).await;
     let effort = model.pick(effort);
+    let prompts = store.prompts().agent_overrides();
     let settings = Settings {
         model: model.id.clone(),
         effort: model.effort_for(effort),
@@ -345,12 +379,15 @@ async fn chat_run(store: &Store, connection: Connection, model: Model, effort: O
         context_window: model.context_window,
         accepts_images: model.accepts_images,
         ultra: effort.is_ultra(),
+        ultra_prompt: prompts.ultra,
+        compaction_prompt: prompts.compaction,
         commit_attribution: false,
     };
     let parts = wack_core::ChatParts {
         provider: Arc::new(store.provider(&connection)?),
         session,
         settings,
+        chat_prompt: prompts.chat,
         memory: store.chat_area_memory(),
         web: store.web_setup(),
         browser: None,
@@ -474,7 +511,9 @@ async fn agent(args: &mut Args, folder: &Path) -> Result<ExitCode, String> {
     let stem = session.path().file_stem().map(|stem| stem.to_string_lossy().into_owned()).unwrap_or_else(|| "run".into());
     let tasks_folder = store.sessions_folder().parent().map(|data| data.join("tasks").join(format!("cli-{stem}"))).unwrap_or_else(|| std::env::temp_dir().join(&stem));
     let tasks = Tasks::new(tasks_folder);
+    let prompts = store.prompts().agent_overrides();
     let mut kit = Kit::new(&session, mode, store.planning_unrestricted(), store.memory_for(session.cwd()))
+        .with_prompts(&prompts)
         .with_skills(&store.skill_catalog())
         .with_tasks(&session, tasks.clone());
     // Sub-agents run on this run's model unless their role asks for the helper.
@@ -547,9 +586,12 @@ async fn agent(args: &mut Args, folder: &Path) -> Result<ExitCode, String> {
         context_window: model.context_window,
         accepts_images: model.accepts_images,
         ultra: effort.is_ultra(),
+        ultra_prompt: prompts.ultra.clone(),
+        compaction_prompt: prompts.compaction.clone(),
         commit_attribution: store.git_config().commit_attribution,
     };
-    let agent = Agent::new(Arc::new(store.provider(connection)?), registry, session, &Profile::code(), settings);
+    let profile = Profile::code_with(prompts.code.as_deref());
+    let agent = Agent::new(Arc::new(store.provider(connection)?), registry, session, &profile, settings);
     let agent = match usage {
         Some(usage) => agent.with_recorder(usage),
         None => agent,

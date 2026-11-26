@@ -59,6 +59,8 @@ use crate::{
         NewSlashCommand, SaveSlashCommand, CloseSlashCommand, AskDeleteSlashCommand, ConfirmSlashCommandDelete, CancelSlashCommandDelete,
         ChooseDelegation, ToggleHelperModels, ChooseHelperModel, SwitchAgent, SwitchAgentFolder, OpenAgent, NewAgent, DuplicateAgent,
         ChooseAgentModel, SaveAgent, CloseAgent, AskDeleteAgent, CancelAgentDelete, ConfirmAgentDelete,
+        OpenPrompt, SavePrompt, ClosePrompt, AskRestorePrompt, CancelRestorePrompt, ConfirmRestorePrompt,
+        TogglePromptDefault, AskRestoreAllPrompts, CancelRestoreAllPrompts, ConfirmRestoreAllPrompts,
         EnterCodeArea, EnterChatArea, UseIdea, RevealScratchpad, CopyScratchpadPath,
     },
     app::{AppState, Menu, RenamePlace, Selection, shown_path},
@@ -502,6 +504,12 @@ impl Shell {
             return;
         }
         if *app.read(cx).selection() == Selection::Settings {
+            // A prompt open on its own page steps back to the prompts first; the page's editor
+            // does not validate, so it simply closes.
+            if app.read(cx).prompts.editor.is_some() {
+                app.update(cx, |app, cx| app.close_prompt(cx));
+                return;
+            }
             app.update(cx, |app, cx| app.close_settings(cx));
             return;
         }
@@ -884,7 +892,13 @@ impl Shell {
 
 /// Whether one of Settings' editors (memory, skill, command, search provider or MCP server) is open.
 fn settings_editor_open(app: &AppState) -> bool {
-    app.memory.editor.is_some() || app.skills.editor.is_some() || app.templates.editor.is_some() || app.subagents.editor.is_some() || app.web.editor.is_some() || app.mcp_settings.editor.is_some()
+    app.memory.editor.is_some()
+        || app.skills.editor.is_some()
+        || app.templates.editor.is_some()
+        || app.subagents.editor.is_some()
+        || app.web.editor.is_some()
+        || app.mcp_settings.editor.is_some()
+        || app.prompts.editor.is_some()
 }
 
 impl Render for Shell {
@@ -1108,7 +1122,7 @@ impl Render for Shell {
         let gutter = FRAME_GUTTER;
         // While Settings is open the sidebar's pane holds its navigation.
         let settings_nav = match &screen {
-            Screen::Settings(data) => Some((data.section, settings::NavConnection::list(&data.providers))),
+            Screen::Settings(data) => Some((data.section, settings::NavConnection::list(&data.providers), data.prompts.config.customised_count())),
             _ => None,
         };
         let sidebar = solution.sidebar.then(|| {
@@ -1140,7 +1154,7 @@ impl Render for Shell {
                         rebuild_step,
                         "rebuild-sidebar-rows",
                         div().w_full().flex_1().min_h_0().flex().flex_col().child(match settings_nav {
-                            Some((section, connections)) => settings::nav(section, connections, &theme).into_any_element(),
+                            Some((section, connections, prompt_count)) => settings::nav(section, connections, prompt_count, &theme).into_any_element(),
                             None => hop_in("hop-sidebar", Sidebar::new(sidebar_data).into_any_element()),
                         }),
                         ms(100),
@@ -1690,6 +1704,29 @@ impl Render for Shell {
                     shell.with_app(cx, |app, cx| app.confirm_agent_delete(cx));
                     shell.refocus_if_closed(window, cx);
                 }))
+                .on_action(cx.listener(|shell, action: &OpenPrompt, window, cx| {
+                    let id = action.id;
+                    let field = shell.app().and_then(|app| app.update(cx, |app, cx| app.open_prompt(id, cx)));
+                    shell.focus_new_field(field, window, cx);
+                }))
+                .on_action(cx.listener(|shell, _: &SavePrompt, window, cx| {
+                    shell.with_app(cx, |app, cx| app.save_prompt(cx));
+                    shell.refocus_if_closed(window, cx);
+                }))
+                .on_action(cx.listener(|shell, _: &ClosePrompt, window, cx| {
+                    shell.with_app(cx, |app, cx| app.close_prompt(cx));
+                    shell.refocus_if_closed(window, cx);
+                }))
+                .on_action(cx.listener(|shell, _: &AskRestorePrompt, _, cx| shell.with_app(cx, |app, cx| app.ask_restore_prompt(true, cx))))
+                .on_action(cx.listener(|shell, _: &CancelRestorePrompt, _, cx| shell.with_app(cx, |app, cx| app.ask_restore_prompt(false, cx))))
+                .on_action(cx.listener(|shell, _: &ConfirmRestorePrompt, window, cx| {
+                    shell.with_app(cx, |app, cx| app.confirm_restore_prompt(cx));
+                    shell.refocus_if_closed(window, cx);
+                }))
+                .on_action(cx.listener(|shell, _: &TogglePromptDefault, _, cx| shell.with_app(cx, |app, cx| app.toggle_prompt_default(cx))))
+                .on_action(cx.listener(|shell, _: &AskRestoreAllPrompts, _, cx| shell.with_app(cx, |app, cx| app.ask_restore_all_prompts(true, cx))))
+                .on_action(cx.listener(|shell, _: &CancelRestoreAllPrompts, _, cx| shell.with_app(cx, |app, cx| app.ask_restore_all_prompts(false, cx))))
+                .on_action(cx.listener(|shell, _: &ConfirmRestoreAllPrompts, _, cx| shell.with_app(cx, |app, cx| app.confirm_restore_all_prompts(cx))))
                 .on_action(cx.listener(|shell, _: &AskDeleteSkill, _, cx| shell.with_app(cx, |app, cx| app.ask_delete_skill(true, cx))))
                 .on_action(cx.listener(|shell, _: &CancelSkillDelete, _, cx| shell.with_app(cx, |app, cx| app.ask_delete_skill(false, cx))))
                 .on_action(cx.listener(|shell, _: &ConfirmSkillDelete, window, cx| {
@@ -2348,6 +2385,7 @@ fn live_view(app: &AppState, cx: &App) -> (SidebarData, Screen, StripData) {
                     confirming: app.confirming_unrestricted,
                     web_fetch: store.web_fetch_enabled(),
                 },
+                prompts: app.prompts.data(store.prompts(), store.planning_unrestricted(), cx),
                 memory: app.memory.data(cx),
                 skills: app.skills.data(cx),
                 commands: app.templates.data(cx),

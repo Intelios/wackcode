@@ -205,6 +205,7 @@ impl Tool for AgentTool {
             skills: shared.skills.clone(),
             planning: shared.planning(),
             ledger_id: shared.ledger_id(&child.id),
+            child_prompt: shared.setup.child_prompt.clone(),
         };
         shared.launch(child, launch, control, background).await.map(ToolOutput::from)
     }
@@ -299,6 +300,7 @@ impl Tool for AgentMessage {
             skills: shared.skills.clone(),
             planning: shared.planning(),
             ledger_id: shared.ledger_id(id),
+            child_prompt: shared.setup.child_prompt.clone(),
         };
         shared.launch(child, launch, control, background).await.map(ToolOutput::from)
     }

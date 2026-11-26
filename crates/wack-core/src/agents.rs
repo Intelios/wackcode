@@ -304,6 +304,8 @@ impl Store {
                 context_window: resolved.model.context_window,
                 accepts_images: resolved.model.accepts_images,
                 ultra: false,
+                ultra_prompt: None,
+                compaction_prompt: self.prompts().compaction.clone(),
                 commit_attribution: false,
             },
             recorder: Some(self.usage_recorder(&resolved.connection, session, workspace)),
@@ -323,7 +325,14 @@ impl Store {
             .as_ref()
             .and_then(|choice| self.resolve_exact(choice))
             .and_then(|resolved| self.child_model(&resolved, session, workspace).ok());
-        Some(AgentsSetup { catalog: self.agent_catalog().agents, delegation: config.delegation, chat, helper, agents })
+        Some(AgentsSetup {
+            catalog: self.agent_catalog().agents,
+            delegation: config.delegation,
+            chat,
+            helper,
+            agents,
+            child_prompt: self.prompts().subagent.clone(),
+        })
     }
 }
 

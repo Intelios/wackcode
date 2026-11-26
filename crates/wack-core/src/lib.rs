@@ -22,6 +22,7 @@ pub mod git;
 pub mod mcp;
 pub mod memory;
 pub mod preview;
+pub mod prompts;
 pub mod run;
 pub mod runner;
 pub mod secrets;
@@ -35,6 +36,7 @@ pub mod web_usage;
 
 pub use appearance::{Appearance, Backdrop, Mode, Texture, ThemeName};
 pub use git::GitConfig;
+pub use prompts::{MAX_PROMPT_CHARS, PromptConfig, PromptGroup, PromptId};
 pub use run::{ChatParts, Job, RunEvent, RunSetup, chat_agent, discard_plan, run, save_plan};
 pub use title::AutoTitleConfig;
 pub use runner::{CommandEvent, CommandInfo, CommandSession, CommandStatus, Runner};

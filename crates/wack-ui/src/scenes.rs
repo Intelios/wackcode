@@ -874,6 +874,7 @@ pub fn all() -> Vec<Scene> {
                     section: Section::Tools,
                     providers: ProvidersData::new(&fixtures::connections(), |_| true, &form, cx),
                     appearance: fixtures::appearance(None, cx),
+                    prompts: Default::default(),
                     tools: crate::tools_page::ToolsData { unrestricted_planning: false, confirming: true, web_fetch: true },
                     memory: Default::default(),
         skills: Default::default(),
@@ -918,6 +919,30 @@ pub fn all() -> Vec<Scene> {
             description: "Settings › Skills: a skill from Claude Code's folder, open read-only.",
             size: size(px(1180.), px(1000.)),
             build: |_, cx| skills_scene(SkillsScene::View, false, cx),
+        },
+        Scene {
+            name: "settings-prompts",
+            description: "Settings › Prompts: three groups, Ultra Plan and Automatic titles customised, the restore-all row at the top.",
+            size: size(px(1180.), px(1200.)),
+            build: |_, cx| prompts_scene(PromptsScene::Overview, false, cx),
+        },
+        Scene {
+            name: "settings-prompts-backdrop",
+            description: "Settings › Prompts over a backdrop.",
+            size: size(px(1180.), px(1200.)),
+            build: |_, cx| prompts_scene(PromptsScene::Overview, true, cx),
+        },
+        Scene {
+            name: "settings-prompts-editor",
+            description: "Settings › Prompts: Ultra Plan's editor customised, the built-in text open beneath it for reference.",
+            size: size(px(1180.), px(1400.)),
+            build: |_, cx| prompts_scene(PromptsScene::Editor, false, cx),
+        },
+        Scene {
+            name: "settings-prompts-restore",
+            description: "Settings › Prompts: restoring a customised prompt asks before the replacement is dropped.",
+            size: size(px(1180.), px(1200.)),
+            build: |_, cx| prompts_scene(PromptsScene::Restore, false, cx),
         },
         Scene {
             name: "settings-commands",
@@ -1881,6 +1906,7 @@ fn computer_settings_scene(on: bool, backdrop: Option<crate::backdrop::Picture>,
         section: Section::Computer,
         providers: ProvidersData::new(&fixtures::connections(), |_| true, &form, cx),
         appearance: fixtures::appearance(backdrop.clone(), cx),
+        prompts: Default::default(),
         tools: Default::default(),
         memory: Default::default(),
         skills: Default::default(),
@@ -1948,6 +1974,7 @@ fn providers_scene(state: Providers, sidebar_hidden: bool, cx: &mut App) -> AnyV
         section: Section::Providers,
         providers: ProvidersData::new(&connections, |id| id != "c2", &form, cx),
         appearance: fixtures::appearance(None, cx),
+        prompts: Default::default(),
         tools: Default::default(),
         memory: Default::default(),
         skills: Default::default(),
@@ -1974,6 +2001,7 @@ fn settings_scene(backdrop: Option<crate::backdrop::Picture>, cx: &mut App) -> A
         section: Section::Appearance,
         providers: ProvidersData::new(&fixtures::connections(), |_| true, &form, cx),
         appearance: fixtures::appearance(backdrop.clone(), cx),
+        prompts: Default::default(),
         tools: Default::default(),
         memory: Default::default(),
         skills: Default::default(),
@@ -2318,6 +2346,7 @@ fn subagents_scene(scene: SubagentsScene, backdrop: Option<crate::backdrop::Pict
         section: Section::Subagents,
         providers: ProvidersData::new(&connections, |_| true, &form, cx),
         appearance: fixtures::appearance(None, cx),
+        prompts: Default::default(),
         tools: Default::default(),
         memory: Default::default(),
         skills: Default::default(),
@@ -2477,6 +2506,7 @@ fn memory_scene(scene: MemoryScene, backdrop: Option<crate::backdrop::Picture>, 
         section: Section::Memory,
         providers: ProvidersData::new(&fixtures::connections(), |_| true, &form, cx),
         appearance: fixtures::appearance(backdrop.clone(), cx),
+        prompts: Default::default(),
         tools: Default::default(),
         memory: state.data(cx),
         skills: Default::default(),
@@ -2704,9 +2734,66 @@ fn skills_scene(scene: SkillsScene, backdrop: bool, cx: &mut App) -> AnyView {
         section: Section::Skills,
         providers: ProvidersData::new(&fixtures::connections(), |_| true, &form, cx),
         appearance: fixtures::appearance(picture.clone(), cx),
+        prompts: Default::default(),
         tools: Default::default(),
         memory: Default::default(),
         skills: state.data(cx),
+        commands: Default::default(),
+        subagents: Default::default(),
+        git: Default::default(),
+        integrations: Default::default(),
+        web: Default::default(),
+        mcp: Default::default(),
+        browser: Default::default(),
+        computer: Default::default(),
+    };
+    cx.new(|_| {
+        let shell = Shell::showing(fixtures::sidebar(Selected::None), Screen::Settings(Box::new(data)));
+        match picture {
+            Some(picture) => shell.with_backdrop(picture),
+            None => shell,
+        }
+    })
+    .into()
+}
+
+#[derive(PartialEq)]
+enum PromptsScene {
+    Overview,
+    Editor,
+    Restore,
+}
+
+/// Settings › Prompts: Ultra Plan and Automatic titles carry the user's own words; the editor
+/// opens Ultra Plan with its built-in text beneath for reference.
+fn prompts_scene(scene: PromptsScene, backdrop: bool, cx: &mut App) -> AnyView {
+    let custom_plan = "You are planning WackCode itself: favour small, reversible steps, and ask me before anything that touches my other apps.\n\nInterview me one question at a time. Never more than three questions in a plan.";
+    let custom_title = "Name this chat like a release note: short, in the project's own words, never a question.";
+    let config = wack_core::PromptConfig {
+        ultra_plan: Some(custom_plan.into()),
+        title: Some(custom_title.into()),
+        ..Default::default()
+    };
+    let mut state = crate::prompts_page::PromptsState::default();
+    if scene != PromptsScene::Overview {
+        let mut editor = crate::prompts_page::PromptEditor::new(wack_core::PromptId::UltraPlan, &config, cx);
+        if scene == PromptsScene::Editor {
+            editor.show_default = true;
+        } else {
+            editor.confirming_restore = true;
+        }
+        state.editor = Some(editor);
+    }
+    let picture = backdrop.then(|| over(fixtures::backdrop(wack_core::Texture::None), cx));
+    let form = ProviderForm::new(cx);
+    let data = SettingsData {
+        section: Section::Prompts,
+        providers: ProvidersData::new(&fixtures::connections(), |_| true, &form, cx),
+        appearance: fixtures::appearance(picture.clone(), cx),
+        prompts: state.data(&config, scene == PromptsScene::Overview, cx),
+        tools: Default::default(),
+        memory: Default::default(),
+        skills: Default::default(),
         commands: Default::default(),
         subagents: Default::default(),
         git: Default::default(),
@@ -2761,6 +2848,7 @@ fn commands_scene(editing: bool, cx: &mut App) -> AnyView {
         section: Section::Commands,
         providers: ProvidersData::new(&fixtures::connections(), |_| true, &form, cx),
         appearance: fixtures::appearance(None, cx),
+        prompts: Default::default(),
         tools: Default::default(),
         memory: Default::default(),
         skills: Default::default(),
@@ -2887,6 +2975,7 @@ fn mcp_scene(scene: McpScene, backdrop: Option<crate::backdrop::Picture>, cx: &m
         section: Section::Mcp,
         providers: ProvidersData::new(&fixtures::connections(), |_| true, &form, cx),
         appearance: fixtures::appearance(backdrop.clone(), cx),
+        prompts: Default::default(),
         tools: Default::default(),
         memory: Default::default(),
         skills: Default::default(),
@@ -3012,6 +3101,7 @@ fn web_scene(scene: WebScene, backdrop: Option<crate::backdrop::Picture>, cx: &m
         section: Section::Web,
         providers: ProvidersData::new(&fixtures::connections(), |_| true, &form, cx),
         appearance: fixtures::appearance(backdrop.clone(), cx),
+        prompts: Default::default(),
         tools: Default::default(),
         memory: Default::default(),
         skills: Default::default(),
@@ -3070,6 +3160,7 @@ fn integrations_scene(scene: UsageScene, backdrop: Option<crate::backdrop::Pictu
         section: Section::Integrations,
         providers: ProvidersData::new(&fixtures::connections(), |_| true, &form, cx),
         appearance: fixtures::appearance(backdrop.clone(), cx),
+        prompts: Default::default(),
         tools: Default::default(),
         memory: Default::default(),
         skills: Default::default(),
@@ -3099,6 +3190,7 @@ fn git_scene(commit_attribution: bool, backdrop: Option<crate::backdrop::Picture
         section: Section::Git,
         providers: ProvidersData::new(&fixtures::connections(), |_| true, &form, cx),
         appearance: fixtures::appearance(backdrop.clone(), cx),
+        prompts: Default::default(),
         tools: Default::default(),
         memory: Default::default(),
         skills: Default::default(),
@@ -3127,6 +3219,7 @@ fn browser_settings_scene(clearing: crate::browser_page::Clearing, backdrop: Opt
         section: Section::Browser,
         providers: ProvidersData::new(&fixtures::connections(), |_| true, &form, cx),
         appearance: fixtures::appearance(backdrop.clone(), cx),
+        prompts: Default::default(),
         tools: Default::default(),
         memory: Default::default(),
         skills: Default::default(),

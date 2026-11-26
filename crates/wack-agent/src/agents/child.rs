@@ -91,6 +91,8 @@ pub(crate) struct Launch {
     pub planning: bool,
     /// The ledger's name for the child: its chat and its id.
     pub ledger_id: String,
+    /// Replaces `CHILD_PROMPT` on fresh sub-agents (Settings › Prompts).
+    pub child_prompt: Option<String>,
 }
 
 /// Starts `child`'s run on its own task once one of the chat's places is free. Its end is
@@ -111,7 +113,7 @@ pub(crate) fn start(child: Arc<Child>, agents: Agents, launch: Launch, control: 
 }
 
 async fn run(child: &Arc<Child>, launch: Launch, control: &Control) -> Result<(Status, Result<String, String>), String> {
-    let Launch { def, start, model, cwd, skills, planning, ledger_id } = launch;
+    let Launch { def, start, model, cwd, skills, planning, ledger_id, child_prompt } = launch;
     let limited = Arc::new(AtomicBool::new(false));
     let copy = matches!(start, Start::Copy { .. });
     let rules = Rules {
@@ -124,10 +126,11 @@ async fn run(child: &Arc<Child>, launch: Launch, control: &Control) -> Result<(S
         limited: limited.clone(),
     };
     let tasks = Tasks::scratch();
-    let profile = Profile { name: def.name.clone(), prompt: format!("{CHILD_PROMPT}\n\n# Your role\n\n{}", def.prompt), chat: false };
+    let core = child_prompt.as_deref().unwrap_or(CHILD_PROMPT);
+    let profile = Profile { name: def.name.clone(), prompt: format!("{core}\n\n# Your role\n\n{}", def.prompt), chat: false };
     // Ultra and commit attribution are the main chat's own settings: a fresh child role never runs
     // with either, except a conversation copy, which sends exactly what its parent does.
-    let settings = Settings { ultra: false, commit_attribution: false, ..model.settings.clone() };
+    let settings = Settings { ultra: false, ultra_prompt: None, commit_attribution: false, ..model.settings.clone() };
     let (mut agent, prompt) = match start {
         Start::Fresh { brief, tools } => {
             let session = Session::create(&child.session, &cwd)?;

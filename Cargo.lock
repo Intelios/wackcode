@@ -7250,6 +7250,17 @@ dependencies = [
 ]
 
 [[package]]
+name = "wack-catalog"
+version = "3.0.0-dev.0"
+dependencies = [
+ "reqwest",
+ "serde",
+ "serde_json",
+ "tokio",
+ "url",
+]
+
+[[package]]
 name = "wack-cli"
 version = "3.0.0-dev.0"
 dependencies = [

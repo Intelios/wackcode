@@ -18,6 +18,7 @@ wack-mcp = { path = "crates/wack-mcp" }
 wack-browser = { path = "crates/wack-browser" }
 wack-canvas = { path = "crates/wack-canvas" }
 wack-computer = { path = "crates/wack-computer" }
+wack-catalog = { path = "crates/wack-catalog" }
 
 # GPUI comes from one pinned revision of zeronsh/zui, a standalone extraction of Zed's GPUI that
 # adds backdrop blur, edge fade and transparent-window support. All three crates must share the

@@ -34,6 +34,7 @@ pub mod integrations_page;
 pub mod markdown;
 pub mod mcp_page;
 pub mod memory_page;
+pub mod model_catalog;
 pub mod motion;
 pub mod panes;
 pub mod pictures;

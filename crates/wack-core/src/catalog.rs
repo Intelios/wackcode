@@ -15,7 +15,7 @@ use std::{
     time::{SystemTime, UNIX_EPOCH},
 };
 
-pub use wack_catalog::{Catalog, Level, Limits, Listing, Match, SOURCE, SUGGESTIONS, Suggestion};
+pub use wack_catalog::{Catalog, Level, Limits, Listing, Match, Provider, SOURCE, SUGGESTIONS, Suggestion};
 
 use crate::{
     clock::{MONTHS, local},

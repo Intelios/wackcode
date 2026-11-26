@@ -83,6 +83,18 @@ actions!(
         CloseConnectionForm,
         /// Settings › Providers: adds a blank model row to the connection editor.
         AddModelRow,
+        /// Settings › Providers: closes the model catalogue's suggestions (a click elsewhere).
+        CloseModelSuggestions,
+        /// Settings › Providers: reads models.dev's model list again.
+        RefreshCatalog,
+        /// Settings › Providers: asks the connection's provider which models it has.
+        FetchModels,
+        /// Settings › Providers: ticks every fetched model the connection doesn't have yet.
+        TickAllFetched,
+        /// Settings › Providers: adds the ticked fetched models as rows, filled from the catalogue.
+        AddFetchedModels,
+        /// Settings › Providers: puts the fetched list away.
+        CloseFetchedModels,
         /// Settings › Providers: shows the key in the editor's key field, or hides it again.
         ToggleConnectionKey,
         OpenModelMenu,
@@ -509,6 +521,20 @@ pub struct AttachFiles {
 #[action(namespace = wackcode, no_json)]
 pub struct RemoveAttachment {
     pub index: usize,
+}
+
+/// Settings › Providers: fills a model row from the catalogue's `index`th suggestion.
+#[derive(Clone, Debug, PartialEq, Action)]
+#[action(namespace = wackcode, no_json)]
+pub struct PickModelSuggestion {
+    pub index: usize,
+}
+
+/// Settings › Providers: ticks or unticks one fetched model.
+#[derive(Clone, Debug, PartialEq, Action)]
+#[action(namespace = wackcode, no_json)]
+pub struct ToggleFetchedModel {
+    pub id: String,
 }
 
 /// Settings › Providers: opens or folds one model's row in the connection editor.

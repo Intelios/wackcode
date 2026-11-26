@@ -1726,3 +1726,47 @@ pub fn screen_card() -> crate::computer_card::CardData {
 pub fn clipboard_card() -> crate::computer_card::CardData {
     crate::computer_card::CardData { id: 2, app: "the clipboard".into(), path: None, look_only: false, launching: false, icon: None, error: None, clipboard: Some(false), screen: None }
 }
+
+/// A small model catalogue for Settings › Providers' scenes, so their pictures don't change when
+/// the bundled snapshot does: OpenRouter's and Anthropic's listings, and a few makers' records.
+pub fn catalog() -> wack_core::catalog::Catalog {
+    use wack_core::catalog::{Catalog, Level, Level::*, Listing, Provider, SOURCE};
+    let listing = |id: &str, name: &str, context: u64, output: u64, efforts: Option<Vec<Level>>, vision: bool| Listing {
+        id: id.into(),
+        name: name.into(),
+        context: Some(context),
+        output: Some(output),
+        reasons: Some(efforts.is_some()),
+        efforts,
+        vision: Some(vision),
+        ..Listing::default()
+    };
+    let maker = |id: &str, name: &str| Listing { canonical: Some(format!("anthropic/{}", id.replace('.', "-"))), ..listing(id, name, 1_000_000, 128_000, Some(vec![Low, Medium, High, Xhigh, Max]), true) };
+    Catalog {
+        version: 1,
+        source: SOURCE.into(),
+        captured: 1_795_694_400_000,
+        providers: vec![
+            Provider {
+                id: "openrouter".into(),
+                name: "OpenRouter".into(),
+                api: Some("https://openrouter.ai/api/v1".into()),
+                models: vec![
+                    Listing { id: "anthropic/claude-opus-5.5".into(), name: "Claude Opus 5.5".into(), released: Some("2026-11-09".into()), ..maker("claude-opus-5.5", "") },
+                    Listing { deprecated: true, released: Some("2026-06-02".into()), ..listing("anthropic/claude-opus-5", "Claude Opus 5", 1_000_000, 128_000, Some(vec![Off, Low, Medium, High, Xhigh, Max]), true) },
+                    Listing { released: Some("2026-03-04".into()), ..listing("anthropic/claude-opus-4.8", "Claude Opus 4.8", 1_000_000, 64_000, Some(vec![Low, Medium, High, Xhigh, Max]), true) },
+                    listing("deepseek/deepseek-v4.1-flash", "DeepSeek V4.1 Flash", 1_048_576, 393_216, Some(vec![Off, Low, High, Max]), true),
+                    Listing { reasons: Some(true), efforts: None, ..listing("z-ai/glm-5.3", "GLM-5.3", 204_800, 131_072, None, false) },
+                    listing("openai/gpt-5.6-sol", "GPT-5.6 Sol", 1_050_000, 128_000, Some(vec![Off, Low, Medium, High, Xhigh, Max]), true),
+                ],
+            },
+            Provider { id: "anthropic".into(), name: "Anthropic".into(), api: None, models: vec![maker("claude-opus-5-5", "Claude Opus 5.5")] },
+        ],
+        models: vec![
+            Listing { guessed: true, ..listing("anthropic/claude-opus-5-5", "Claude Opus 5.5", 1_000_000, 128_000, Some(vec![Low, Medium, High, Xhigh, Max]), true) },
+            Listing { reasons: Some(true), efforts: None, ..listing("qwen/qwen3-coder", "Qwen3 Coder", 262_144, 65_536, None, false) },
+            listing("qwen/qwen3-coder-flash", "Qwen3 Coder Flash", 1_000_000, 65_536, None, false),
+            Listing { guessed: true, ..listing("qwen/qwen3.5-coder", "Qwen3.5 Coder", 1_000_000, 65_536, Some(vec![Off, High]), true) },
+        ],
+    }
+}

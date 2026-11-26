@@ -102,6 +102,9 @@ pub struct Listing {
     /// Its provider marks it deprecated; it ranks below the others.
     #[serde(default, skip_serializing_if = "is_false")]
     pub deprecated: bool,
+    /// When it came out ("2026-11-09"): among equally good matches, the newest comes first.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub released: Option<String>,
 }
 
 fn is_false(value: &bool) -> bool {

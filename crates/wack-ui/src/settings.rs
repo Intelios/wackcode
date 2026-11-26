@@ -27,8 +27,11 @@
 
 use std::{collections::HashSet, f32::consts::PI};
 
-use gpui::{AnyElement, App, AppContext, Entity, Pixels, SharedString, Transformation, div, prelude::*, px, radians};
-use wack_core::{Connection, DEFAULT_EFFORTS, Model, NewConnection, Reasoning, WireFormat};
+use gpui::{AnyElement, App, AppContext, Entity, EntityId, Pixels, SharedString, Transformation, div, prelude::*, px, radians};
+use wack_core::{
+    Connection, DEFAULT_EFFORTS, Model, NewConnection, Reasoning, WireFormat,
+    catalog::{self, Match, Suggestion},
+};
 
 use crate::{
     actions::{
@@ -37,6 +40,8 @@ use crate::{
         ToggleModelEffort, ToggleModelReasoning, ToggleModelRow, ToggleModelVision,
     },
     appearance_page::{self, AppearanceData},
+    actions::FetchModels as FetchModelsAction,
+    model_catalog::{CatalogLine, FETCH_SHOWN, FetchView, SuggestRow, SuggestView, catalog_card, fetch_picker, filled_note, suggest_card},
     button::{Button, Kind},
     icon::Icon,
     settings_kit::{PAGE_WIDTH, card, dispatch, pill, segmented, staged_head},
@@ -65,6 +70,91 @@ pub struct ModelField {
     pub open: bool,
     /// The model as last read, for the folded line.
     pub summary: Option<ModelSummary>,
+    /// Where the row's facts came from, while its id is still the one they were filled for.
+    pub filled: Option<Filled>,
+}
+
+/// A row the model catalogue filled.
+#[derive(Clone, Debug, PartialEq)]
+pub struct Filled {
+    /// The id the facts belong to: the note goes once the id is changed.
+    pub id: String,
+    /// "OpenRouter", or the maker's record.
+    pub source: SharedString,
+    /// Something to check, such as efforts nobody listed.
+    pub note: Option<&'static str>,
+}
+
+/// The catalogue's suggestions under one model id field, while there are any.
+#[derive(Clone)]
+pub struct ModelSuggest {
+    /// The id field they hang under.
+    pub field: EntityId,
+    pub query: String,
+    pub matches: Vec<Suggestion>,
+    pub selected: usize,
+}
+
+/// Fetch models: the provider's own list of models, once asked for.
+#[derive(Clone, Default)]
+pub enum Fetch {
+    #[default]
+    Idle,
+    Loading { host: SharedString },
+    Failed(SharedString),
+    Listed(FetchList),
+}
+
+#[derive(Clone)]
+pub struct FetchList {
+    pub host: SharedString,
+    pub models: Vec<Fetched>,
+    /// Narrows a long list.
+    pub filter: Entity<TextField>,
+}
+
+/// One model a provider listed.
+#[derive(Clone, Debug, PartialEq)]
+pub struct Fetched {
+    pub id: String,
+    pub ticked: bool,
+    /// The connection already has it.
+    pub present: bool,
+    /// What the catalogue knows, if anything: "1M · 128k out · low–max · vision".
+    pub facts: Option<SharedString>,
+}
+
+/// A catalogue listing's facts in a few words, for a suggestion or a fetched model.
+pub fn listing_facts(listing: &catalog::Listing) -> SharedString {
+    let mut facts = Vec::new();
+    if let Some(context) = listing.context {
+        facts.push(tokens_about(context));
+    }
+    if let Some(output) = listing.output {
+        facts.push(format!("{} out", tokens_about(output)));
+    }
+    match (listing.reasons, listing.efforts.as_deref()) {
+        (_, Some([first, .., last])) => facts.push(format!("{}–{}", level_word(*first), level_word(*last))),
+        (_, Some([only])) => facts.push(level_word(*only).to_string()),
+        (Some(true), _) => facts.push("reasoning".to_string()),
+        _ => {}
+    }
+    if listing.vision == Some(true) {
+        facts.push("vision".to_string());
+    }
+    facts.join(" · ").into()
+}
+
+fn level_word(level: catalog::Level) -> &'static str {
+    match level {
+        catalog::Level::Off => "off",
+        catalog::Level::Minimal => "minimal",
+        catalog::Level::Low => "low",
+        catalog::Level::Medium => "medium",
+        catalog::Level::High => "high",
+        catalog::Level::Xhigh => "xhigh",
+        catalog::Level::Max => "max",
+    }
 }
 
 /// A model row's folded line: its id, context and max output as typed.
@@ -101,6 +191,13 @@ pub struct ProviderForm {
     pub notice_serial: u64,
     /// The connection editor is on the page.
     pub open: bool,
+    /// The catalogue's suggestions under the model id field being typed in.
+    pub suggest: Option<ModelSuggest>,
+    /// The field and text ⎋ or a pick closed the suggestions for: shut until either changes.
+    pub suggest_hold: Option<(EntityId, String)>,
+    pub fetch: Fetch,
+    /// Tells a Fetch's answer from a later one's.
+    pub fetch_serial: u64,
 }
 
 impl ProviderForm {
@@ -117,6 +214,10 @@ impl ProviderForm {
             notice: None,
             notice_serial: 0,
             open: false,
+            suggest: None,
+            suggest_hold: None,
+            fetch: Fetch::Idle,
+            fetch_serial: 0,
         }
     }
 
@@ -219,6 +320,7 @@ impl ProviderForm {
         if index < self.models.len() {
             self.models.remove(index);
         }
+        self.suggest = None;
     }
 
     /// The rows the user left empty are not part of the connection.
@@ -244,6 +346,106 @@ impl ProviderForm {
         self.notice = None;
         self.notice_serial = self.notice_serial.wrapping_add(1);
         self.open = false;
+        self.suggest = None;
+        self.suggest_hold = None;
+        self.fetch = Fetch::Idle;
+        self.fetch_serial = self.fetch_serial.wrapping_add(1);
+    }
+
+    /// The row whose model id field is `field`.
+    pub fn row_of(&self, field: EntityId) -> Option<usize> {
+        self.models.iter().position(|row| row.id.entity_id() == field)
+    }
+
+    /// Fills row `index` from the catalogue: its id when one is given, then every fact the
+    /// listing knows. Unknown facts leave the row's own values.
+    pub fn apply(&mut self, index: usize, id: Option<&str>, suggestion: &Suggestion, cx: &mut App) {
+        let fill = catalog::fill(&suggestion.listing);
+        let Some(row) = self.models.get_mut(index) else {
+            return;
+        };
+        if let Some(id) = id {
+            row.id.update(cx, |field, cx| field.set_text(id, cx));
+        }
+        if let Some(context) = fill.context {
+            row.context.update(cx, |field, cx| field.set_text(&tokens_text(context), cx));
+        }
+        if let Some(output) = fill.output {
+            row.output.update(cx, |field, cx| field.set_text(&tokens_text(output), cx));
+        }
+        if let Some(vision) = fill.vision {
+            row.accepts_images = vision;
+        }
+        if let Some(efforts) = fill.efforts {
+            row.reasoning = !saved_efforts(&efforts).is_empty();
+            row.efforts = if row.reasoning { efforts } else { Vec::new() };
+        }
+        let source: SharedString = match suggestion.matched {
+            Match::Provider => suggestion.source.clone().into(),
+            Match::Maker | Match::Normalised => "the maker's record".into(),
+        };
+        let id = row.id.read(cx).text().trim().to_string();
+        row.filled = Some(Filled { id, source, note: fill.note });
+    }
+
+    /// The key a Fetch sends: what was typed, never a saved key shown only for a look (that one
+    /// goes through the store, at its own address only).
+    pub fn typed_key(&self, cx: &App) -> Option<String> {
+        let typed = self.key.read(cx).text().trim().to_string();
+        key_change(&typed, self.revealed_key.as_deref()).map(str::to_string)
+    }
+
+    /// The models already in the editor, for a fetched list to mark.
+    pub fn model_ids(&self, cx: &App) -> HashSet<String> {
+        self.models.iter().map(|row| row.id.read(cx).text().trim().to_string()).filter(|id| !id.is_empty()).collect()
+    }
+
+    /// The suggestions as the page draws them, under the row whose field they belong to.
+    fn suggest_view(&self) -> Option<SuggestView> {
+        let suggest = self.suggest.as_ref()?;
+        let row = self.row_of(suggest.field)?;
+        let rows = suggest
+            .matches
+            .iter()
+            .map(|found| SuggestRow {
+                id: found.id.clone().into(),
+                name: found.listing.name.clone().into(),
+                facts: listing_facts(&found.listing),
+                source: match found.matched {
+                    Match::Provider => found.source.clone().into(),
+                    Match::Maker | Match::Normalised => "models.dev".into(),
+                },
+            })
+            .collect();
+        Some(SuggestView { row, rows, selected: suggest.selected })
+    }
+
+    /// Fetch models as the page draws it: the filter applied, and at most [`FETCH_SHOWN`] rows.
+    fn fetch_view(&self, cx: &App) -> FetchView {
+        match &self.fetch {
+            Fetch::Idle => FetchView::Idle,
+            Fetch::Loading { host } => FetchView::Loading { host: host.clone() },
+            Fetch::Failed(message) => FetchView::Failed(message.clone()),
+            Fetch::Listed(list) => {
+                let filter = list.filter.read(cx).text().trim().to_lowercase();
+                let matching: Vec<&Fetched> =
+                    list.models.iter().filter(|model| filter.is_empty() || model.id.to_lowercase().contains(&filter)).collect();
+                FetchView::Listed {
+                    host: list.host.clone(),
+                    filter: list.filter.clone(),
+                    more: matching.len().saturating_sub(FETCH_SHOWN),
+                    rows: matching.into_iter().take(FETCH_SHOWN).cloned().collect(),
+                    total: list.models.len(),
+                    ticked: list.models.iter().filter(|model| model.ticked).count(),
+                    addable: list.models.iter().filter(|model| !model.present && !model.ticked).count(),
+                }
+            }
+        }
+    }
+
+    /// The only row is blank: a new connection's first, which fetched models replace.
+    pub fn only_blank_row(&self, cx: &App) -> bool {
+        matches!(self.models.as_slice(), [row] if [&row.id, &row.context, &row.output].iter().all(|field| field.read(cx).text().trim().is_empty()))
     }
 
     /// The field holds the saved key, only being looked at: neither a change nor a replacement.
@@ -303,6 +505,7 @@ impl ProviderForm {
             accepts_images: true,
             open: true,
             summary: None,
+            filled: None,
         }
     }
 
@@ -506,17 +709,34 @@ fn format_placeholder(format: WireFormat) -> &'static str {
 }
 
 /// The host a connection talks to, for the overview and the editor's head.
-fn host_of(url: &str) -> String {
+pub(crate) fn host_of(url: &str) -> String {
     let without_scheme = url.trim().split_once("://").map(|(_, rest)| rest).unwrap_or(url.trim());
     without_scheme.split('/').next().unwrap_or(without_scheme).to_string()
 }
 
-/// A context window as the editor shows it, in a form [`parse_tokens`] reads back exactly.
+/// A token count as the editor shows it, as short as it can be while [`parse_tokens`] still
+/// reads it back exactly: 1M, 1.5M, 200k, 204.8k, 131072.
 fn tokens_text(tokens: u64) -> String {
     if tokens >= 1_000_000 && tokens.is_multiple_of(1_000_000) {
         format!("{}M", tokens / 1_000_000)
+    } else if tokens >= 1_000_000 && tokens.is_multiple_of(100_000) {
+        format!("{}.{}M", tokens / 1_000_000, tokens % 1_000_000 / 100_000)
     } else if tokens >= 1_000 && tokens.is_multiple_of(1_000) {
         format!("{}k", tokens / 1_000)
+    } else if tokens >= 1_000 && tokens.is_multiple_of(100) {
+        format!("{}.{}k", tokens / 1_000, tokens % 1_000 / 100)
+    } else {
+        tokens.to_string()
+    }
+}
+
+/// A token count rounded for reading, never for saving: 1.05M, 393.2k, 128k.
+fn tokens_about(tokens: u64) -> String {
+    let trim = |text: String| if text.contains('.') { text.trim_end_matches('0').trim_end_matches('.').to_string() } else { text };
+    if tokens >= 1_000_000 {
+        format!("{}M", trim(format!("{:.2}", tokens as f64 / 1_000_000.)))
+    } else if tokens >= 1_000 {
+        format!("{}k", trim(format!("{:.1}", tokens as f64 / 1_000.)))
     } else {
         tokens.to_string()
     }
@@ -558,6 +778,9 @@ pub struct ProviderEditor {
     pub notice: Option<SharedString>,
     pub dirty: bool,
     pub complete: bool,
+    /// The catalogue's suggestions under one row's id field.
+    pub suggest: Option<SuggestView>,
+    pub fetch: FetchView,
 }
 
 /// Everything the page shows.
@@ -567,6 +790,8 @@ pub struct ProvidersData {
     pub editor: Option<ProviderEditor>,
     /// A failure from the overview: switching or removing a connection.
     pub error: Option<SharedString>,
+    /// The model catalogue's card on the overview.
+    pub catalog: Option<CatalogLine>,
 }
 
 impl ProvidersData {
@@ -614,13 +839,22 @@ impl ProvidersData {
                 notice: form.notice.clone(),
                 dirty: form.dirty(cx, saved.as_ref().map(|row| &row.connection)),
                 complete: form.complete(cx, saved.as_ref().is_some_and(|row| row.has_key)),
+                suggest: form.suggest_view(),
+                fetch: form.fetch_view(cx),
             }
         });
         Self {
             connections: rows,
             editor,
             error: form.error.clone().filter(|_| !form.open),
+            catalog: None,
         }
+    }
+
+    /// The page with the model catalogue's card on its overview.
+    pub fn with_catalog(mut self, line: CatalogLine) -> Self {
+        self.catalog = Some(line);
+        self
     }
 }
 
@@ -1000,6 +1234,7 @@ fn overview(data: ProvidersData, theme: &Theme) -> impl IntoElement {
         .when_some(data.error, |page, error| page.child(div().typography(Type::Ui).text_color(theme.danger).child(error)))
         .children(list)
         .child(add_connection(empty, theme))
+        .when_some(data.catalog, |page, line| page.child(catalog_card(&line, theme)))
 }
 
 fn add_connection(empty: bool, theme: &Theme) -> impl IntoElement {
@@ -1327,29 +1562,42 @@ fn connection_card(editor: &ProviderEditor, stack_form: bool, theme: &Theme) -> 
 fn models_card(editor: &ProviderEditor, theme: &Theme) -> impl IntoElement {
     let count = editor.model_count;
     let badge: SharedString = format!("{count} model{}", if count == 1 { "" } else { "s" }).into();
-    let mut card = card(Some("Models"), Some(badge), Some("Context is optional; it decides when chats compact"), theme);
+    let mut card = card(Some("Models"), Some(badge), Some("Type an id to fill it from the model catalogue"), theme);
     if editor.models.is_empty() {
         card = card.child(div().px(px(18.)).pt(px(2.)).pb(px(14.)).typography(Type::Ui).text_color(theme.text_dim).child("No models yet. Add at least one below."));
     } else {
         for (index, row) in editor.models.iter().enumerate() {
-            card = card.child(model_row(index, row, theme));
+            let suggest = editor.suggest.as_ref().filter(|suggest| suggest.row == index);
+            card = card.child(model_row(index, row, suggest, theme));
         }
     }
-    card.child(
+    let fetching = !matches!(editor.fetch, FetchView::Idle);
+    card.children(fetch_picker(&editor.fetch, theme)).child(
         div()
             .px(px(18.))
             .py(px(12.))
             .border_t_1()
             .border_color(theme.border)
             .flex()
-            .child(pill("add-model", "Add model", Some(Icon::Plus), false, theme).on_click(dispatch(AddModelRow)).tag("add-model")),
+            .gap(px(8.))
+            .child(pill("add-model", "Add model", Some(Icon::Plus), false, theme).on_click(dispatch(AddModelRow)).tag("add-model"))
+            .when(!fetching, |foot| {
+                foot.child(
+                    pill("fetch-models", "Fetch models", Some(Icon::Download), false, theme)
+                        .tooltip(crate::tooltip::tip("Ask this address which models it has"))
+                        .on_click(dispatch(FetchModelsAction))
+                        .tag("fetch-models"),
+                )
+            }),
     )
 }
 
-/// The width of a model's context and max output fields.
-const TOKENS_WIDTH: f32 = 112.;
+/// The widths of a model's context and max output fields: room for seven digits beside the
+/// faint unit word.
+const CONTEXT_WIDTH: f32 = 140.;
+const OUTPUT_WIDTH: f32 = 124.;
 
-fn model_row(index: usize, row: &ModelField, theme: &Theme) -> impl IntoElement {
+fn model_row(index: usize, row: &ModelField, suggest: Option<&SuggestView>, theme: &Theme) -> impl IntoElement {
     let ModelSummary { id, context, output } = row.summary.clone().unwrap_or_default();
     let name: SharedString = if id.is_empty() { "New model".into() } else { id };
     let limits: SharedString = match (context.is_empty(), output.is_empty()) {
@@ -1408,7 +1656,14 @@ fn model_row(index: usize, row: &ModelField, theme: &Theme) -> impl IntoElement 
         .when(row.open, |body| {
             body.child(crate::motion::enter(
                 gpui::ElementId::NamedInteger("model-row-open".into(), index as u64),
-                div().flex().flex_col().gap(px(8.)).pl(px(21.)).child(model_fields(index, row, theme)).child(reasoning_line(index, row, theme)),
+                div()
+                    .flex()
+                    .flex_col()
+                    .gap(px(8.))
+                    .pl(px(21.))
+                    .child(model_fields(index, row, suggest, theme))
+                    .child(reasoning_line(index, row, theme))
+                    .children(row.filled.as_ref().filter(|filled| row.summary.as_ref().is_some_and(|summary| summary.id == filled.id)).map(|filled| filled_note(filled, theme))),
             ))
         })
 }
@@ -1486,24 +1741,28 @@ fn reasoning_line(index: usize, row: &ModelField, theme: &Theme) -> impl IntoEle
         })
 }
 
-fn model_fields(index: usize, row: &ModelField, theme: &Theme) -> impl IntoElement {
+fn model_fields(index: usize, row: &ModelField, suggest: Option<&SuggestView>, theme: &Theme) -> impl IntoElement {
     div()
         .flex()
         .items_center()
         .gap(px(10.))
-        .child(div().flex_1().min_w_0().child(text_input(
-            row.id.clone(),
-            MODEL_ID_TAGS.get(index).copied().unwrap_or("model-id"),
-            theme,
-        )))
-        .child(div().w(px(TOKENS_WIDTH)).flex_none().child(tokens_input(
+        // The catalogue's suggestions hang under the id field while it is typed in.
+        .child(
+            div()
+                .relative()
+                .flex_1()
+                .min_w_0()
+                .child(text_input(row.id.clone(), MODEL_ID_TAGS.get(index).copied().unwrap_or("model-id"), theme))
+                .children(suggest.map(|suggest| suggest_card(suggest, theme))),
+        )
+        .child(div().w(px(CONTEXT_WIDTH)).flex_none().child(tokens_input(
             row.context.clone(),
             "context",
             "The model's context window in tokens. It decides when chats compact.",
             MODEL_CONTEXT_TAGS.get(index).copied().unwrap_or("model-context"),
             theme,
         )))
-        .child(div().w(px(TOKENS_WIDTH)).flex_none().child(tokens_input(
+        .child(div().w(px(OUTPUT_WIDTH)).flex_none().child(tokens_input(
             row.output.clone(),
             "out",
             "The most the model writes in one reply. Requests never ask for more.",
@@ -1749,12 +2008,24 @@ mod tests {
     }
 
     #[test]
-    fn context_windows_read_back_exactly() {
-        for tokens in [128_000, 200_000, 1_000_000, 1_048_576, 999, 64_000] {
+    fn token_counts_read_back_exactly() {
+        for tokens in [128_000, 200_000, 1_000_000, 1_048_576, 999, 64_000, 204_800, 1_500_000, 131_072, 1_050_000, 393_216] {
             assert_eq!(parse_tokens(&tokens_text(tokens)), Some(tokens), "{tokens}");
         }
         assert_eq!(tokens_text(1_000_000), "1M");
+        assert_eq!(tokens_text(1_500_000), "1.5M");
         assert_eq!(tokens_text(128_000), "128k");
+        assert_eq!(tokens_text(204_800), "204.8k");
+        assert_eq!(tokens_text(131_072), "131072");
+    }
+
+    #[test]
+    fn facts_round_counts_for_reading() {
+        assert_eq!(tokens_about(1_048_576), "1.05M");
+        assert_eq!(tokens_about(1_000_000), "1M");
+        assert_eq!(tokens_about(393_216), "393.2k");
+        assert_eq!(tokens_about(128_000), "128k");
+        assert_eq!(tokens_about(512), "512");
     }
 
     #[test]

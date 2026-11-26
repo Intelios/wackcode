@@ -924,6 +924,72 @@ pub fn all() -> Vec<Scene> {
             build: |_, cx| providers_scene(Providers::Adding, true, cx),
         },
         Scene {
+            name: "settings-providers-catalog-refreshing",
+            description: "Settings › Providers' model catalogue card while Refresh asks models.dev.",
+            size: size(px(1180.), px(900.)),
+            build: |_, cx| providers_scene(Providers::Catalog(CatalogScene::Refreshing), false, cx),
+        },
+        Scene {
+            name: "settings-providers-catalog-failed",
+            description: "The catalogue card after a Refresh failed: why, and which copy is still in use.",
+            size: size(px(1180.), px(900.)),
+            build: |_, cx| providers_scene(Providers::Catalog(CatalogScene::Failed), false, cx),
+        },
+        Scene {
+            name: "settings-providers-catalog-refreshed",
+            description: "The catalogue card after a Refresh: the new copy's date and what was new.",
+            size: size(px(1180.), px(900.)),
+            build: |_, cx| providers_scene(Providers::Catalog(CatalogScene::Refreshed), false, cx),
+        },
+        Scene {
+            name: "settings-providers-suggest",
+            description: "The catalogue's suggestions under a model id field, from OpenRouter's own listings (\"opus\" typed).",
+            size: size(px(1180.), px(1080.)),
+            build: |_, cx| providers_scene(Providers::Suggest { local: false }, false, cx),
+        },
+        Scene {
+            name: "settings-providers-suggest-local",
+            description: "Suggestions for a server on this Mac: the makers' records, under their bare ids.",
+            size: size(px(1180.), px(1080.)),
+            build: |_, cx| providers_scene(Providers::Suggest { local: true }, false, cx),
+        },
+        Scene {
+            name: "settings-providers-suggest-backdrop",
+            description: "The catalogue's suggestions over a backdrop.",
+            size: size(px(1180.), px(1080.)),
+            build: |_, cx| providers_scene_over(Providers::Suggest { local: false }, false, Some(over(fixtures::backdrop(wack_core::Texture::None), cx)), cx),
+        },
+        Scene {
+            name: "settings-providers-suggest-small",
+            description: "The suggestions in the smallest window: the card keeps to the id field's width.",
+            size: size(px(716.), px(1000.)),
+            build: |_, cx| providers_scene(Providers::Suggest { local: false }, true, cx),
+        },
+        Scene {
+            name: "settings-providers-filled",
+            description: "Two rows the catalogue filled: context, max output, Vision and efforts, one with a note to check its efforts.",
+            size: size(px(1180.), px(1160.)),
+            build: |_, cx| providers_scene(Providers::Filled, false, cx),
+        },
+        Scene {
+            name: "settings-providers-fetch",
+            description: "Fetch models: OpenRouter's list with what the catalogue knows, two ticked, one already added.",
+            size: size(px(1180.), px(1280.)),
+            build: |_, cx| providers_scene(Providers::Fetch(FetchScene::Listed), false, cx),
+        },
+        Scene {
+            name: "settings-providers-fetch-loading",
+            description: "Fetch models while the provider answers.",
+            size: size(px(1180.), px(1000.)),
+            build: |_, cx| providers_scene(Providers::Fetch(FetchScene::Loading), false, cx),
+        },
+        Scene {
+            name: "settings-providers-fetch-failed",
+            description: "Fetch models when the provider refused the key.",
+            size: size(px(1180.), px(1000.)),
+            build: |_, cx| providers_scene(Providers::Fetch(FetchScene::Failed), false, cx),
+        },
+        Scene {
             name: "settings-tools",
             description: "Settings › Tools, asking before planning loses its read-only restrictions.",
             size: size(px(1180.), px(760.)),
@@ -2030,13 +2096,55 @@ enum Providers {
     /// A saved key shown plainly by the eye.
     Revealed,
     Empty,
+    /// The model catalogue's card on the overview.
+    Catalog(CatalogScene),
+    /// The catalogue's suggestions under a new row's id field: OpenRouter's own, or the makers'
+    /// records for a server on this Mac.
+    Suggest { local: bool },
+    /// Rows the catalogue filled: one exactly, one whose efforts nobody lists.
+    Filled,
+    Fetch(FetchScene),
+}
+
+/// The catalogue card's states after Refresh; `settings-providers` shows it as built in.
+#[derive(Clone, Copy, PartialEq)]
+enum CatalogScene {
+    Refreshing,
+    Failed,
+    Refreshed,
+}
+
+#[derive(Clone, Copy, PartialEq)]
+enum FetchScene {
+    Listed,
+    Loading,
+    Failed,
 }
 
 /// Settings › Providers in one of its states.
 fn providers_scene(state: Providers, sidebar_hidden: bool, cx: &mut App) -> AnyView {
+    providers_scene_over(state, sidebar_hidden, None, cx)
+}
+
+/// A new OpenRouter connection's editor, for the catalogue's scenes.
+fn openrouter_form(form: &mut ProviderForm, cx: &mut App) {
+    form.open_new(cx);
+    form.name.update(cx, |field, cx| field.set_text("OpenRouter", cx));
+    form.address.update(cx, |field, cx| field.set_text("https://openrouter.ai/api/v1", cx));
+    form.key.update(cx, |field, cx| field.set_text("not-a-real-key", cx));
+}
+
+/// [`providers_scene`], drawn over `backdrop` when there is one.
+fn providers_scene_over(state: Providers, sidebar_hidden: bool, backdrop: Option<crate::backdrop::Picture>, cx: &mut App) -> AnyView {
+    use crate::{
+        model_catalog::CatalogLine,
+        settings::{Fetch, FetchList, Fetched, ModelSuggest, listing_facts},
+    };
     let mut form = ProviderForm::new(cx);
     let mut connections = fixtures::connections();
     connections[1].enabled = false;
+    let catalog = fixtures::catalog();
+    let mut line = CatalogLine { date: Some("26 Nov 2026".into()), built_in: true, models: 1_266, refreshing: false, outcome: None };
     match state {
         Providers::Listed => {}
         Providers::Adding => {
@@ -2055,10 +2163,76 @@ fn providers_scene(state: Providers, sidebar_hidden: bool, cx: &mut App) -> AnyV
             form.show_saved_key("sk-ant-api03-fixture-key-only-not-real-7f3a9c2e5b", cx);
         }
         Providers::Empty => connections.clear(),
+        Providers::Catalog(kind) => match kind {
+            CatalogScene::Refreshing => line.refreshing = true,
+            CatalogScene::Failed => {
+                line.outcome = Some(Err("Couldn't reach models.dev. Check the connection to the internet. The catalogue from 26 Nov 2026 is still in use.".into()))
+            }
+            CatalogScene::Refreshed => {
+                line.built_in = false;
+                line.models = 1_284;
+                line.outcome = Some(Ok("Refreshed: 1,284 models, 18 new.".into()));
+            }
+        },
+        Providers::Suggest { local } => {
+            openrouter_form(&mut form, cx);
+            let (address, typed) = if local { ("http://localhost:1234/v1", "qwen3 coder") } else { ("https://openrouter.ai/api/v1", "opus") };
+            if local {
+                form.name.update(cx, |field, cx| field.set_text("LM Studio", cx));
+                form.address.update(cx, |field, cx| field.set_text(address, cx));
+            }
+            form.models[0].id.update(cx, |field, cx| field.set_text(typed, cx));
+            let matches = catalog.search(typed, address, wack_core::catalog::SUGGESTIONS);
+            form.suggest = Some(ModelSuggest { field: form.models[0].id.entity_id(), query: typed.into(), matches, selected: 0 });
+        }
+        Providers::Filled => {
+            openrouter_form(&mut form, cx);
+            form.add_model("", None, cx);
+            for (index, id) in ["anthropic/claude-opus-5.5", "z-ai/glm-5.3"].into_iter().enumerate() {
+                if let Some(found) = catalog.lookup(id, "https://openrouter.ai/api/v1") {
+                    form.apply(index, Some(id), &found, cx);
+                }
+            }
+        }
+        Providers::Fetch(kind) => {
+            openrouter_form(&mut form, cx);
+            let address = "https://openrouter.ai/api/v1";
+            if let Some(found) = catalog.lookup("anthropic/claude-opus-5.5", address) {
+                form.apply(0, Some("anthropic/claude-opus-5.5"), &found, cx);
+                form.models[0].open = false;
+            }
+            form.fetch = match kind {
+                FetchScene::Loading => Fetch::Loading { host: "openrouter.ai".into() },
+                FetchScene::Failed => Fetch::Failed("openrouter.ai did not accept the API key (401): No auth credentials found".into()),
+                FetchScene::Listed => {
+                    let ids = [
+                        "anthropic/claude-opus-5.5",
+                        "anthropic/claude-opus-4.8",
+                        "deepseek/deepseek-v4.1-flash",
+                        "openai/gpt-5.6-sol",
+                        "z-ai/glm-5.3",
+                        "mistralai/devstral-3",
+                        "moonshotai/kimi-k3.1",
+                    ];
+                    let models = ids
+                        .into_iter()
+                        .enumerate()
+                        .map(|(index, id)| Fetched {
+                            id: id.into(),
+                            ticked: matches!(index, 2 | 3),
+                            present: index == 0,
+                            facts: catalog.lookup(id, address).map(|found| listing_facts(&found.listing)),
+                        })
+                        .collect();
+                    let filter = cx.new(|cx| crate::text_field::TextField::new(crate::typography::Type::Ui, "Filter", cx));
+                    Fetch::Listed(FetchList { host: "openrouter.ai".into(), models, filter })
+                }
+            };
+        }
     }
     let data = SettingsData {
         section: Section::Providers,
-        providers: ProvidersData::new(&connections, |id| id != "c2", &form, cx),
+        providers: ProvidersData::new(&connections, |id| id != "c2", &form, cx).with_catalog(line),
         appearance: fixtures::appearance(None, cx),
         prompts: Default::default(),
         tools: Default::default(),
@@ -2075,7 +2249,11 @@ fn providers_scene(state: Providers, sidebar_hidden: bool, cx: &mut App) -> AnyV
     };
     cx.new(|_| {
         let shell = Shell::showing(fixtures::sidebar(Selected::None), Screen::Settings(Box::new(data)));
-        if sidebar_hidden { shell.without_sidebar() } else { shell }
+        let shell = if sidebar_hidden { shell.without_sidebar() } else { shell };
+        match backdrop {
+            Some(picture) => shell.with_backdrop(picture),
+            None => shell,
+        }
     })
     .into()
 }

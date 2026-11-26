@@ -208,10 +208,15 @@ pub fn menu(data: SlashData, theme: &Theme) -> impl IntoElement {
                 .child(div().flex_none().typography(Type::Small).text_color(theme.text_faint).child(row.source)),
         );
     }
+    picker_card("slash-menu", list, theme).w_full().tag("slash-menu")
+}
+
+/// A picker's card: raised, round, the list inside it and the keys that drive it at its foot.
+/// The `/` menu and the model catalogue's suggestions (`model_catalog.rs`) share it.
+pub(crate) fn picker_card(id: &'static str, list: impl IntoElement, theme: &Theme) -> gpui::Stateful<gpui::Div> {
     div()
-        .id("slash-menu")
+        .id(id)
         .occlude()
-        .w_full()
         .rounded(px(16.))
         .bg(theme.raised)
         .border_1()
@@ -235,5 +240,4 @@ pub fn menu(data: SlashData, theme: &Theme) -> impl IntoElement {
                 .child("↩ pick")
                 .child("⎋ close"),
         )
-        .tag("slash-menu")
 }

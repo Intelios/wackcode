@@ -48,6 +48,7 @@ use crate::{
         self, ActivatePane, AddFolder, Back, ChooseBackdrop, ChooseEffort, SlideEffort, ToggleTodos, PreviewCrop, CommitCrop, ChooseZoom, ResetCrop, ClearCommandOutput, CloseCommandEditor, CycleAgentMode, SetAgentMode, PickOption, ShowQuestion, NextQuestion, PreviousQuestion, SubmitAnswers, CancelQuestion, WrapUpQuestion, ShowDoneTodos, DiscardPlan, KeepPlan, ConfirmDiscardPlan, ApprovePlan, SavePlan, CopyPlan, ToggleUnrestrictedPlanning, ToggleWebFetch, ToggleWebSearch, ToggleRouteFetch, CloseSearchEditor, SaveSearchProvider, TestSearchProvider, AskDeleteSearchProvider, ConfirmDeleteSearchProvider, CancelDeleteSearchProvider, ResetWebUsage, ChooseSearchProvider, AddSearchProvider, EditSearchProvider, ChooseSearchKey, ChooseSearchMethod, AddMcpServer, EditMcpServer, ToggleMcpServer, ToggleMcpTool, ExpandMcpServer, TestMcpServer, AskDeleteMcpServer, RemoveMcpEntry, ChooseMcpTransport, ChooseMcpScope, ToggleMcpProject, CloseMcpEditor, SaveMcpServer, TestMcpDraft, AddMcpEntry, ConfirmDeleteMcpServer, CancelDeleteMcpServer, ConfirmUnrestrictedPlanning, CancelUnrestrictedPlanning, ToggleMemory, SwitchProjectMemory, NewMemory, EditMemory, ChooseMemoryKind, SaveMemory, CloseMemoryEditor, AskDeleteMemory, AskRemoveMemoryFolder, ConfirmMemoryDelete, CancelMemoryDelete, RevealMemory, ToggleCommitAttribution, ToggleUsageRecording, RevealUsageFolder,
         ChooseBlur, ChooseDim, ChooseFormat, OpenCommandEditor, OpenConnectionForm, CloseConnectionForm, SwitchConnection, ChooseMode, ChooseModel, ChooseTexture, ChooseTheme, CloseChatTab, CloseMenu, ClosePane,
         ClosePaneId, CloseSettings, CloseTab, Compact, DeleteChat, DiscardConnection, EditConnection, ToggleConnectionKey, EqualizeSplit, FocusNext, FocusPrevious, MovePane, AddModelRow, RemoveModelRow, SaveCommandEditor, SaveConnection,
+        CloseModelSuggestions, RefreshCatalog, FetchModels, TickAllFetched, AddFetchedModels, CloseFetchedModels, PickModelSuggestion, ToggleFetchedModel,
         NewChat, NewChatIn, SelectDraft, CloseDraft, NewTerminal, NewTerminalWith, TogglePaneMenu, ClosePaneMenu, HideSidePanel, ToggleSidePanel, RevealProject, OpenPaneKind, NextTab, OpenEffortMenu, OpenModelMenu, OpenSettings,
         OpenSettingsSection, PinProject, PreviousTab, RemoveConnection, RemovePicture, ShowCommandOutput, ShowPicture, RemoveProject, ResetDockSize,
         PickCommand, SelectChat, Send, Stop, StopCommand, MoveToBackground, ToggleTasks, ToggleTasksPane, StopTask, ShowTask, ToggleAgentsPane, ShowTeam, ToggleBrowserPane, ToggleCanvasPane, ShowCanvas, WriteInComposer, ShowAgent, StopAgent, ToggleChanges, ToggleProject, ToggleSidebar, ToggleTerminal, TriggerProjectCommand, Unqueue,
@@ -1982,6 +1983,32 @@ impl Render for Shell {
                         cx.notify();
                     });
                 }))
+                .on_action(cx.listener(|shell, _: &CloseModelSuggestions, _, cx| {
+                    shell.with_app(cx, |app, cx| app.close_model_suggestions(cx));
+                }))
+                .on_action(cx.listener(|shell, action: &PickModelSuggestion, _, cx| {
+                    let index = action.index;
+                    shell.with_app(cx, |app, cx| app.pick_model_suggestion(index, cx));
+                }))
+                .on_action(cx.listener(|shell, _: &RefreshCatalog, _, cx| {
+                    shell.with_app(cx, |app, cx| app.refresh_catalog(cx));
+                }))
+                .on_action(cx.listener(|shell, _: &FetchModels, _, cx| {
+                    shell.with_app(cx, |app, cx| app.fetch_models(cx));
+                }))
+                .on_action(cx.listener(|shell, action: &ToggleFetchedModel, _, cx| {
+                    let id = action.id.clone();
+                    shell.with_app(cx, |app, cx| app.toggle_fetched(&id, cx));
+                }))
+                .on_action(cx.listener(|shell, _: &TickAllFetched, _, cx| {
+                    shell.with_app(cx, |app, cx| app.tick_all_fetched(cx));
+                }))
+                .on_action(cx.listener(|shell, _: &AddFetchedModels, _, cx| {
+                    shell.with_app(cx, |app, cx| app.add_fetched_models(cx));
+                }))
+                .on_action(cx.listener(|shell, _: &CloseFetchedModels, _, cx| {
+                    shell.with_app(cx, |app, cx| app.close_fetched_models(cx));
+                }))
                 .on_action(cx.listener(|shell, action: &ToggleModelVision, _, cx| {
                     let index = action.index;
                     shell.with_app(cx, |app, cx| app.toggle_model_vision(index, cx));
@@ -2397,7 +2424,7 @@ fn live_view(app: &AppState, cx: &App) -> (SidebarData, Screen, StripData) {
             let appearance = store.appearance();
             Screen::Settings(Box::new(SettingsData {
                 section: app.settings_section,
-                providers: ProvidersData::new(store.connections(), |id| store.has_key(id), &app.form, cx),
+                providers: ProvidersData::new(store.connections(), |id| store.has_key(id), &app.form, cx).with_catalog(app.catalog.line()),
                 appearance: AppearanceData {
                     mode: appearance.mode,
                     theme: appearance.theme,

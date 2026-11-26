@@ -199,6 +199,10 @@ pub struct AppState {
     pub notice: Option<SharedString>,
     /// Settings › Providers' connection editor.
     pub form: ProviderForm,
+    /// The model catalogue that fills the editor's model rows.
+    pub catalog: crate::model_catalog::CatalogState,
+    /// Fetch models' filter field, watched while the list is open.
+    fetch_subscription: Option<Subscription>,
     pub menu: Option<Menu>,
     /// The section Settings shows.
     pub settings_section: Section,
@@ -486,6 +490,8 @@ impl AppState {
             unsaved_layouts: HashSet::new(),
             saving_layouts: None,
             form_subscriptions: Vec::new(),
+            catalog: Default::default(),
+            fetch_subscription: None,
             titling: HashMap::new(),
             title_attempts: 0,
             title_swaps: HashMap::new(),
@@ -1669,6 +1675,9 @@ impl AppState {
                 if self.selection != Selection::Settings {
                     self.before_settings = self.selection.clone();
                 }
+                if self.settings_section == Section::Providers {
+                    self.ensure_catalog(cx);
+                }
                 if self.settings_section == Section::Memory {
                     self.refresh_memory();
                 }
@@ -1818,6 +1827,7 @@ impl AppState {
     pub fn close_settings(&mut self, cx: &mut Context<Self>) {
         if self.selection == Selection::Settings {
             self.form.put_key_away(cx);
+            self.close_model_suggestions(cx);
             let back = self.before_settings.clone();
             self.selection = Selection::Welcome;
             self.select(back, cx);
@@ -2782,6 +2792,9 @@ impl AppState {
     /// saved a note since.
     pub fn open_settings_section(&mut self, section: Section, cx: &mut Context<Self>) {
         self.settings_section = section;
+        if section == Section::Providers {
+            self.ensure_catalog(cx);
+        }
         if section == Section::Memory {
             self.refresh_memory();
         }
@@ -3844,16 +3857,304 @@ impl AppState {
         cx.notify();
     }
 
-    /// Watches every field of the connection editor, so saving knows as soon as it can.
+    /// Watches every field of the connection editor, so saving knows as soon as it can. A model
+    /// id field also drives the catalogue's suggestions under it; any other field closes them.
     fn watch_form(&mut self, cx: &mut Context<Self>) {
         self.form_subscriptions.clear();
+        let ids: HashSet<gpui::EntityId> = self.form.models.iter().map(|row| row.id.entity_id()).collect();
         for field in self.form.all_fields() {
-            self.form_subscriptions.push(cx.subscribe(&field, |app, _, event: &TextFieldEvent, cx| match event {
+            let suggests = ids.contains(&field.entity_id());
+            self.form_subscriptions.push(cx.subscribe(&field, move |app, field, event: &TextFieldEvent, cx| match event {
                 TextFieldEvent::Enter | TextFieldEvent::SendNow => app.save_connection(cx),
-                TextFieldEvent::Changed => app.form_changed(cx),
-                TextFieldEvent::Moved | TextFieldEvent::Menu(_) | TextFieldEvent::PastedPictures => {}
+                TextFieldEvent::Changed => {
+                    app.form_changed(cx);
+                    if suggests {
+                        app.suggest_models(field, cx);
+                    } else {
+                        app.close_model_suggestions(cx);
+                    }
+                }
+                TextFieldEvent::Moved if suggests => app.suggest_models(field, cx),
+                TextFieldEvent::Moved => app.close_model_suggestions(cx),
+                TextFieldEvent::Menu(key) if suggests => app.suggest_key(field, *key, cx),
+                TextFieldEvent::Menu(_) | TextFieldEvent::PastedPictures => {}
             }));
         }
+    }
+
+    /// The model catalogue, read off the main thread the first time Settings › Providers needs it.
+    pub fn ensure_catalog(&mut self, cx: &mut Context<Self>) {
+        if self.catalog.current.is_some() || self.catalog.loading {
+            return;
+        }
+        self.catalog.loading = true;
+        let path = self.store.catalog_path();
+        let load = cx.background_spawn(async move { wack_core::catalog::load(&path) });
+        cx.spawn(async move |app, cx| {
+            let catalog = load.await;
+            let _ = app.update(cx, |app, cx| {
+                app.catalog.loading = false;
+                app.catalog.current.get_or_insert(catalog);
+                cx.notify();
+            });
+        })
+        .detach();
+    }
+
+    /// Reads models.dev's list again: the only time it is contacted. Whatever happens, the copy in
+    /// use stays until a new one is saved, and the overview says how it went.
+    pub fn refresh_catalog(&mut self, cx: &mut Context<Self>) {
+        if self.catalog.refreshing {
+            return;
+        }
+        let path = self.store.catalog_path();
+        let current = self.catalog.current.clone().unwrap_or_else(|| wack_core::catalog::load(&path));
+        self.catalog.current = Some(current.clone());
+        self.catalog.refreshing = true;
+        self.catalog.outcome = None;
+        self.catalog.serial += 1;
+        let serial = self.catalog.serial;
+        let work = Tokio::spawn(cx, wack_core::catalog::refresh(path, current));
+        cx.spawn(async move |app, cx| {
+            let result = work.await.unwrap_or_else(|_| Err("The refresh stopped.".to_string()));
+            let _ = app.update(cx, |app, cx| {
+                if app.catalog.serial != serial {
+                    return;
+                }
+                app.catalog.refreshing = false;
+                app.catalog.outcome = Some(match result {
+                    Ok(refreshed) => {
+                        let new = match refreshed.new {
+                            0 => "nothing new".to_string(),
+                            1 => "1 new".to_string(),
+                            count => format!("{count} new"),
+                        };
+                        app.catalog.current = Some(refreshed.catalog);
+                        Ok(format!("Refreshed: {} models, {new}.", crate::model_catalog::thousands(refreshed.models)).into())
+                    }
+                    Err(message) => Err(message.into()),
+                });
+                cx.notify();
+            });
+        })
+        .detach();
+        cx.notify();
+    }
+
+    /// Follows what is typed in a model id field with the catalogue's suggestions under it.
+    fn suggest_models(&mut self, field: Entity<TextField>, cx: &mut Context<Self>) {
+        let id = field.entity_id();
+        let text = field.read(cx).text().trim().to_string();
+        if self.form.suggest_hold.as_ref().is_some_and(|(held, _)| *held != id) {
+            self.form.suggest_hold = None;
+        }
+        // ⎋ or a pick keeps them shut for that text; a change opens them again.
+        let held = self.form.suggest_hold.as_ref().is_some_and(|(_, at)| *at == text);
+        if !held {
+            self.form.suggest_hold = None;
+        }
+        let Some(catalog) = self.catalog.current.clone().filter(|_| !held) else {
+            self.ensure_catalog(cx);
+            self.close_model_suggestions(cx);
+            return;
+        };
+        let address = self.form.address.read(cx).text().to_string();
+        let matches = catalog.search(&text, &address, wack_core::catalog::SUGGESTIONS);
+        if matches.is_empty() {
+            self.close_model_suggestions(cx);
+            return;
+        }
+        let previous = self.form.suggest.take();
+        if let Some(other) = previous.as_ref().filter(|previous| previous.field != id).and_then(|previous| self.form_field(previous.field)) {
+            other.update(cx, |field, cx| field.set_completing(false, cx));
+        }
+        let selected = previous
+            .filter(|previous| previous.field == id && previous.query == text)
+            .map_or(0, |previous| previous.selected.min(matches.len() - 1));
+        self.form.suggest = Some(crate::settings::ModelSuggest { field: id, query: text, matches, selected });
+        field.update(cx, |field, cx| field.set_completing(true, cx));
+        cx.notify();
+    }
+
+    /// The model id field with this entity id.
+    fn form_field(&self, id: gpui::EntityId) -> Option<Entity<TextField>> {
+        self.form.models.iter().map(|row| row.id.clone()).find(|field| field.entity_id() == id)
+    }
+
+    /// A key the suggestions borrowed from their field.
+    fn suggest_key(&mut self, field: Entity<TextField>, key: MenuKey, cx: &mut Context<Self>) {
+        let Some(suggest) = self.form.suggest.as_mut().filter(|suggest| suggest.field == field.entity_id()) else {
+            field.update(cx, |field, cx| field.set_completing(false, cx));
+            return;
+        };
+        let count = suggest.matches.len();
+        match key {
+            MenuKey::Up | MenuKey::Down if count > 0 => {
+                suggest.selected = match key {
+                    MenuKey::Up => (suggest.selected + count - 1) % count,
+                    _ => (suggest.selected + 1) % count,
+                };
+                cx.notify();
+            }
+            MenuKey::Pick => {
+                let index = suggest.selected;
+                self.pick_model_suggestion(index, cx);
+            }
+            MenuKey::Dismiss => {
+                self.form.suggest_hold = Some((field.entity_id(), suggest.query.clone()));
+                self.close_model_suggestions(cx);
+            }
+            _ => {}
+        }
+    }
+
+    /// Fills the row under the suggestions from the `index`th one: its id, then every fact the
+    /// catalogue knows. Everything stays editable.
+    pub fn pick_model_suggestion(&mut self, index: usize, cx: &mut Context<Self>) {
+        let Some(suggest) = self.form.suggest.take() else {
+            return;
+        };
+        let (Some(row), Some(found)) = (self.form.row_of(suggest.field), suggest.matches.get(index)) else {
+            return;
+        };
+        self.form.suggest_hold = Some((suggest.field, found.id.clone()));
+        if let Some(field) = self.form_field(suggest.field) {
+            field.update(cx, |field, cx| field.set_completing(false, cx));
+        }
+        self.form.apply(row, Some(&found.id), found, cx);
+        self.form_changed(cx);
+    }
+
+    /// Puts the suggestions away (a click elsewhere, another field, ⎋).
+    pub fn close_model_suggestions(&mut self, cx: &mut Context<Self>) {
+        if let Some(suggest) = self.form.suggest.take() {
+            if let Some(field) = self.form_field(suggest.field) {
+                field.update(cx, |field, cx| field.set_completing(false, cx));
+            }
+            cx.notify();
+        }
+    }
+
+    /// Fetch models: asks the address in the editor which models it has, with the key typed there
+    /// or, at the saved address, the saved one (`Store::draft_provider`).
+    pub fn fetch_models(&mut self, cx: &mut Context<Self>) {
+        self.ensure_catalog(cx);
+        self.close_model_suggestions(cx);
+        let typed = self.form.typed_key(cx);
+        let address = self.form.address.read(cx).text().trim().to_string();
+        let provider = self.store.draft_provider(self.form.editing.as_deref(), self.form.format, &address, typed.as_deref());
+        self.form.fetch_serial = self.form.fetch_serial.wrapping_add(1);
+        self.fetch_subscription = None;
+        let provider = match provider {
+            Ok(provider) => provider,
+            Err(message) => {
+                self.form.fetch = crate::settings::Fetch::Failed(message.into());
+                cx.notify();
+                return;
+            }
+        };
+        let host: SharedString = crate::settings::host_of(&address).into();
+        self.form.fetch = crate::settings::Fetch::Loading { host: host.clone() };
+        let serial = self.form.fetch_serial;
+        let work = Tokio::spawn(cx, async move { provider.list_models().await });
+        cx.spawn(async move |app, cx| {
+            let result = work.await.unwrap_or_else(|_| Err("Fetching the models stopped.".to_string()));
+            let _ = app.update(cx, |app, cx| {
+                if app.form.fetch_serial != serial {
+                    return;
+                }
+                app.show_fetched(host, result, &address, cx);
+            });
+        })
+        .detach();
+        cx.notify();
+    }
+
+    fn show_fetched(&mut self, host: SharedString, result: Result<Vec<String>, String>, address: &str, cx: &mut Context<Self>) {
+        let ids = match result {
+            Ok(ids) => ids,
+            Err(message) => {
+                self.form.fetch = crate::settings::Fetch::Failed(message.into());
+                cx.notify();
+                return;
+            }
+        };
+        let present = self.form.model_ids(cx);
+        let catalog = self.catalog.current.clone();
+        let models = ids
+            .into_iter()
+            .map(|id| crate::settings::Fetched {
+                facts: catalog.as_ref().and_then(|catalog| catalog.lookup(&id, address)).map(|found| crate::settings::listing_facts(&found.listing)),
+                present: present.contains(&id),
+                ticked: false,
+                id,
+            })
+            .collect();
+        let filter = cx.new(|cx| TextField::new(Type::Ui, "Filter", cx));
+        self.fetch_subscription = Some(cx.subscribe(&filter, |app, _, event: &TextFieldEvent, cx| match event {
+            TextFieldEvent::Changed => cx.notify(),
+            TextFieldEvent::Enter => app.add_fetched_models(cx),
+            _ => {}
+        }));
+        self.form.fetch = crate::settings::Fetch::Listed(crate::settings::FetchList { host, models, filter });
+        cx.notify();
+    }
+
+    pub fn toggle_fetched(&mut self, id: &str, cx: &mut Context<Self>) {
+        if let crate::settings::Fetch::Listed(list) = &mut self.form.fetch
+            && let Some(model) = list.models.iter_mut().find(|model| model.id == id && !model.present)
+        {
+            model.ticked = !model.ticked;
+            cx.notify();
+        }
+    }
+
+    /// Ticks every fetched model the connection doesn't have, that the filter leaves.
+    pub fn tick_all_fetched(&mut self, cx: &mut Context<Self>) {
+        if let crate::settings::Fetch::Listed(list) = &mut self.form.fetch {
+            let filter = list.filter.read(cx).text().trim().to_lowercase();
+            for model in list.models.iter_mut().filter(|model| !model.present && (filter.is_empty() || model.id.to_lowercase().contains(&filter))) {
+                model.ticked = true;
+            }
+            cx.notify();
+        }
+    }
+
+    /// Adds the ticked models as folded rows, each filled from the catalogue where it knows the
+    /// model; a new connection's lone blank row gives way to them.
+    pub fn add_fetched_models(&mut self, cx: &mut Context<Self>) {
+        let crate::settings::Fetch::Listed(list) = &self.form.fetch else {
+            return;
+        };
+        let ticked: Vec<String> = list.models.iter().filter(|model| model.ticked).map(|model| model.id.clone()).collect();
+        if ticked.is_empty() {
+            return;
+        }
+        if self.form.only_blank_row(cx) {
+            self.form.models.clear();
+        }
+        let address = self.form.address.read(cx).text().to_string();
+        let catalog = self.catalog.current.clone();
+        for id in ticked {
+            self.form.add_model(&id, None, cx);
+            let index = self.form.models.len() - 1;
+            if let Some(found) = catalog.as_ref().and_then(|catalog| catalog.lookup(&id, &address)) {
+                self.form.apply(index, None, &found, cx);
+            }
+            if let Some(row) = self.form.models.last_mut() {
+                row.open = false;
+            }
+        }
+        self.close_fetched_models(cx);
+        self.watch_form(cx);
+        self.form_changed(cx);
+    }
+
+    pub fn close_fetched_models(&mut self, cx: &mut Context<Self>) {
+        self.form.fetch = crate::settings::Fetch::Idle;
+        self.form.fetch_serial = self.form.fetch_serial.wrapping_add(1);
+        self.fetch_subscription = None;
+        cx.notify();
     }
 
     fn form_changed(&mut self, cx: &mut Context<Self>) {

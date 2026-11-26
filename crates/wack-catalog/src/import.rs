@@ -137,6 +137,12 @@ fn read(id: &str, model: &Value) -> Read {
             .and_then(Value::as_array)
             .map(|kinds| kinds.iter().filter_map(Value::as_str).any(|kind| kind == "image" || kind.starts_with("image/"))),
         deprecated: model.get("status").and_then(Value::as_str) == Some("deprecated"),
+        released: model
+            .get("release_date")
+            .and_then(Value::as_str)
+            .map(str::trim)
+            .filter(|date| (4..=10).contains(&date.len()) && date.chars().all(|c| c.is_ascii_digit() || c == '-'))
+            .map(str::to_string),
     })
 }
 
@@ -248,7 +254,7 @@ mod tests {
                     "name": "Anthropic",
                     "models": {
                         "claude-opus-5-5": {
-                            "name": "Claude Opus 5.5", "tool_call": true, "reasoning": true,
+                            "name": "Claude Opus 5.5", "tool_call": true, "reasoning": true, "release_date": "2026-11-09",
                             "reasoning_options": [{ "type": "effort", "values": ["low", "medium", "high", "xhigh", "max", "turbo"] }],
                             "modalities": { "input": ["text", "image", "pdf"], "output": ["text"] },
                             "limit": { "context": 1000000, "output": 128000 },
@@ -326,6 +332,7 @@ mod tests {
         let opus = listing(&catalog, "anthropic", "claude-opus-5-5");
         assert_eq!(opus.efforts, Some(vec![Level::Low, Level::Medium, Level::High, Level::Xhigh, Level::Max]));
         assert!(!opus.guessed);
+        assert_eq!(opus.released.as_deref(), Some("2026-11-09"));
         let old = listing(&catalog, "anthropic", "claude-old");
         assert_eq!(old.efforts, Some(vec![Level::Off, Level::High]), "a toggle adds Off");
         assert!(old.deprecated);

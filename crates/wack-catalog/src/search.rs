@@ -122,8 +122,10 @@ impl Catalog {
                 }
             }
         }
+        // Equally good matches: current before deprecated, then newest first.
         found.sort_by(|a, b| {
-            (a.0, a.1, &a.2.listing.name, &a.2.id).cmp(&(b.0, b.1, &b.2.listing.name, &b.2.id))
+            let key = |entry: &(u8, bool, Suggestion)| (entry.0, entry.1, std::cmp::Reverse(entry.2.listing.released.clone()));
+            key(a).cmp(&key(b)).then_with(|| (&a.2.listing.name, &a.2.id).cmp(&(&b.2.listing.name, &b.2.id)))
         });
         found.dedup_by(|a, b| a.2.id == b.2.id);
         found.into_iter().take(limit).map(|(_, _, suggestion)| suggestion).collect()
@@ -200,7 +202,8 @@ mod tests {
                     name: "OpenRouter".into(),
                     api: Some("https://openrouter.ai/api/v1".into()),
                     models: vec![
-                        Listing { canonical: Some("anthropic/claude-opus-5-5".into()), context: Some(1_000_000), ..listing("anthropic/claude-opus-5.5", "Anthropic: Claude Opus 5.5") },
+                        Listing { canonical: Some("anthropic/claude-opus-5-5".into()), context: Some(1_000_000), released: Some("2026-11-09".into()), ..listing("anthropic/claude-opus-5.5", "Anthropic: Claude Opus 5.5") },
+                        Listing { released: Some("2026-03-01".into()), ..listing("anthropic/claude-opus-4.8", "Anthropic: Claude Opus 4.8") },
                         Listing { canonical: Some("anthropic/claude-opus-5".into()), deprecated: true, ..listing("anthropic/claude-opus-5", "Anthropic: Claude Opus 5") },
                         listing("anthropic/claude-sonnet-5.5", "Anthropic: Claude Sonnet 5.5"),
                         listing("openai/gpt-5.6-sol", "OpenAI: GPT-5.6 Sol"),
@@ -233,7 +236,11 @@ mod tests {
     fn a_matched_provider_answers_with_its_own_ids_best_first() {
         let catalog = catalog();
         let found = catalog.search("opus", "https://openrouter.ai/api/v1", SUGGESTIONS);
-        assert_eq!(ids(found.clone()), ["anthropic/claude-opus-5.5", "anthropic/claude-opus-5"], "deprecated ranks after");
+        assert_eq!(
+            ids(found.clone()),
+            ["anthropic/claude-opus-5.5", "anthropic/claude-opus-4.8", "anthropic/claude-opus-5"],
+            "newest first, deprecated after"
+        );
         assert_eq!((found[0].source.as_str(), found[0].matched), ("OpenRouter", Match::Provider));
         assert_eq!(found[0].listing.context, Some(1_000_000));
         assert_eq!(ids(catalog.search("claude opus 5.5", "https://openrouter.ai/api/v1", 8))[0], "anthropic/claude-opus-5.5");

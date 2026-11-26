@@ -1039,6 +1039,7 @@ pub fn appearance(backdrop: Option<crate::backdrop::Picture>, cx: &mut gpui::App
         mode: wack_core::Mode::System,
         theme,
         pictures: pictures.collect(),
+        shuffle: backdrop.is_some(),
         backdrop,
         importing: false,
         notice: None,

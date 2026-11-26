@@ -102,6 +102,8 @@ pub enum Icon {
     Window,
     /// The canvas's hand tool, which pans.
     Hand,
+    /// Shuffling backdrop pictures.
+    Shuffle,
 }
 
 /// Every icon file, by asset path. One list, so a missing file fails the test below.
@@ -164,6 +166,7 @@ const FILES: &[(&str, &[u8])] = &[
     ("icons/comment.svg", include_bytes!("../assets/icons/comment.svg")),
     ("icons/sliders.svg", include_bytes!("../assets/icons/sliders.svg")),
     ("icons/hand.svg", include_bytes!("../assets/icons/hand.svg")),
+    ("icons/shuffle.svg", include_bytes!("../assets/icons/shuffle.svg")),
 ];
 
 impl Icon {
@@ -227,6 +230,7 @@ impl Icon {
             Icon::Plug => "icons/plug.svg",
             Icon::Window => "icons/window.svg",
             Icon::Hand => "icons/hand.svg",
+            Icon::Shuffle => "icons/shuffle.svg",
         }
     }
 
@@ -311,6 +315,7 @@ mod tests {
             Icon::Archive,
             Icon::Unarchive,
             Icon::Comment,
+            Icon::Shuffle,
         ] {
             let bytes = Assets.load(icon.path()).unwrap();
             assert!(bytes.is_some_and(|bytes| bytes.starts_with(b"<svg")), "{icon:?}");

@@ -133,6 +133,7 @@ fn mark(label: &str) -> Option<Icon> {
         "Theme" => Icon::Palette,
         "Light or dark" => Icon::Eye,
         "Pictures" => Icon::Board,
+        "Shuffle" => Icon::Shuffle,
         "Texture" => Icon::Sliders,
         "Blur" | "Dim" => Icon::Sliders,
         "Keep in view" => Icon::Pin,

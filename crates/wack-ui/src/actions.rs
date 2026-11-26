@@ -201,6 +201,10 @@ actions!(
         ConfirmClearBrowsingData,
         /// Adds a picture to the backdrop's library, and shows it.
         ChooseBackdrop,
+        /// Settings › Appearance: turns shuffle-on-open for backdrop pictures on or off.
+        ToggleBackdropShuffle,
+        /// Settings › Appearance: shows a different picture from the library at random.
+        ShuffleBackdrop,
         /// Settings › Memory: the master switch.
         ToggleMemory,
         /// Settings › Memory: saves the note the editor describes.

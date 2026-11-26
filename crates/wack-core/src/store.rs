@@ -1466,6 +1466,18 @@ impl Store {
         Ok(())
     }
 
+    /// Shuffle-on-open for the desktop app: rotates to another saved picture (and its remembered
+    /// theme) only when shuffle is on, a picture is showing, and the library has another one.
+    /// Returns whether the shown picture changed; writes nothing when it did not.
+    pub fn shuffle_backdrop_on_open(&mut self) -> Result<bool, String> {
+        let mut appearance = self.state.appearance.clone();
+        if !appearance.shuffle_on_open() {
+            return Ok(false);
+        }
+        self.set_appearance(appearance)?;
+        Ok(true)
+    }
+
     /// The small sharp copy Settings shows a picture as.
     pub fn backdrop_thumb_path(&self, backdrop: &Backdrop) -> PathBuf {
         self.backgrounds_folder().join(crate::appearance::thumb_name(&backdrop.file))
@@ -2364,6 +2376,66 @@ mod tests {
         assert!(dark.abs_diff(119) <= 2 && light.abs_diff(119) <= 2, "{dark} to {light}");
         let again = Store::open(folder.path()).unwrap();
         assert!(again.appearance().backdrop().unwrap().shade.is_some(), "and the measure is saved");
+    }
+
+    #[test]
+    fn shuffle_backdrop_on_open_persists_rotation_and_theme() {
+        let folder = tempfile::tempdir().unwrap();
+        let mut store = Store::open(folder.path()).unwrap();
+        let import = |name: &str, rgb: [u8; 3]| {
+            let source = folder.path().join(name);
+            image::RgbImage::from_pixel(40, 20, image::Rgb(rgb)).save(&source).unwrap();
+            crate::appearance::import_backdrop(&source, &store.backgrounds_folder()).unwrap()
+        };
+        let first = import("first.png", [40, 80, 120]);
+        let second = import("second.png", [120, 40, 80]);
+        let third = import("third.png", [80, 120, 40]);
+
+        let mut appearance = Appearance::default();
+        appearance.add(first.clone());
+        appearance.choose_theme(crate::ThemeName::Lagoon);
+        appearance.add(second.clone());
+        appearance.choose_theme(crate::ThemeName::Solar);
+        appearance.add(third.clone());
+        appearance.choose_theme(crate::ThemeName::Rose);
+        appearance.show(Some(&first.file));
+        store.set_appearance(appearance).unwrap();
+
+        // Off: nothing rotates.
+        assert!(!store.shuffle_backdrop_on_open().unwrap());
+        assert_eq!(store.appearance().shown.as_deref(), Some(first.file.as_str()));
+
+        // On, but no picture showing: nothing rotates.
+        let mut hidden = store.appearance().clone();
+        hidden.shuffle = true;
+        hidden.show(None);
+        store.set_appearance(hidden).unwrap();
+        assert!(!store.shuffle_backdrop_on_open().unwrap());
+        assert_eq!(store.appearance().shown, None);
+
+        // On with a picture showing: rotates to another picture, brings back its theme, and saves.
+        let mut shown = store.appearance().clone();
+        shown.show(Some(&first.file));
+        store.set_appearance(shown).unwrap();
+        assert!(store.shuffle_backdrop_on_open().unwrap());
+        let picked = store.appearance().shown.as_deref().unwrap().to_string();
+        assert!(picked == second.file || picked == third.file, "got {picked}");
+        let expected = if picked == second.file { crate::ThemeName::Solar } else { crate::ThemeName::Rose };
+        assert_eq!(store.appearance().theme, expected);
+
+        let reopened = Store::open(folder.path()).unwrap();
+        assert_eq!(reopened.appearance().shown.as_deref(), Some(picked.as_str()));
+        assert_eq!(reopened.appearance().theme, expected);
+        assert!(reopened.appearance().shuffle);
+
+        // Down to one picture: nothing to switch to.
+        let mut one = store.appearance().clone();
+        one.remove(&second.file);
+        one.remove(&third.file);
+        one.show(Some(&first.file));
+        store.set_appearance(one).unwrap();
+        assert!(!store.shuffle_backdrop_on_open().unwrap());
+        assert_eq!(store.appearance().shown.as_deref(), Some(first.file.as_str()));
     }
 
     #[test]

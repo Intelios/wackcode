@@ -1540,8 +1540,8 @@ pub fn all() -> Vec<Scene> {
         },
         Scene {
             name: "settings-appearance-backdrop",
-            description: "Settings › Appearance over a backdrop: a library of two pictures, each captioned with its theme.",
-            size: size(px(1440.), px(900.)),
+            description: "Settings › Appearance over a backdrop: a library of two pictures, each captioned with its theme, with Shuffle on.",
+            size: size(px(1440.), px(1200.)),
             build: |_, cx| settings_scene(Some(over(fixtures::backdrop(wack_core::Texture::None), cx)), cx),
         },
         Scene {

@@ -50,7 +50,7 @@ use crate::{
         ClosePaneId, CloseSettings, CloseTab, Compact, DeleteChat, DiscardConnection, EditConnection, ToggleConnectionKey, EqualizeSplit, FocusNext, FocusPrevious, MovePane, AddModelRow, RemoveModelRow, SaveCommandEditor, SaveConnection,
         CloseModelSuggestions, RefreshCatalog, FetchModels, TickAllFetched, AddFetchedModels, CloseFetchedModels, PickModelSuggestion, ToggleFetchedModel,
         NewChat, NewChatIn, SelectDraft, CloseDraft, NewTerminal, NewTerminalWith, TogglePaneMenu, ClosePaneMenu, HideSidePanel, ToggleSidePanel, RevealProject, OpenPaneKind, NextTab, OpenEffortMenu, OpenModelMenu, OpenSettings,
-        OpenSettingsSection, PinProject, PreviousTab, RemoveConnection, RemovePicture, ShowCommandOutput, ShowPicture, RemoveProject, ResetDockSize,
+        OpenSettingsSection, PinProject, PreviousTab, RemoveConnection, RemovePicture, ShowCommandOutput, ShowPicture, ShuffleBackdrop, ToggleBackdropShuffle, RemoveProject, ResetDockSize,
         PickCommand, RetryWorkspaceFiles, SelectChat, Send, Stop, StopCommand, MoveToBackground, ToggleTasks, ToggleTasksPane, StopTask, ShowTask, ToggleAgentsPane, ShowTeam, ToggleBrowserPane, ToggleCanvasPane, ShowCanvas, WriteInComposer, ShowAgent, StopAgent, ToggleChanges, ToggleProject, ToggleSidebar, ToggleTerminal, TriggerProjectCommand, Unqueue,
         ToggleAutoTitles, ToggleTitleModels, ChooseTitleModel, RenameChat, RenameChatAt, CancelRename, ToggleModelReasoning, ToggleModelRow, ToggleModelVision, AttachPictures, AttachFiles, AttachTerminalSelection, RemoveAttachment, InsertFile, RemoveFile, SteerQueued, RemoveQueued, OpenPicture, ClosePicture, StepPicture, ZoomPicture,
         StartSuggestion, DismissSuggestion, CopySuggestion, OpenChat,
@@ -2118,11 +2118,26 @@ impl Render for Shell {
                 .on_action(cx.listener(Self::choose_backdrop))
                 .on_action(cx.listener(|shell, action: &ShowPicture, _, cx| {
                     let file = action.file.clone();
-                    shell.with_app(cx, |app, cx| app.set_appearance(|appearance| appearance.show(file.as_deref()), cx));
+                    shell.with_app(cx, |app, cx| {
+                        app.crop_preview = None;
+                        app.set_appearance(|appearance| appearance.show(file.as_deref()), cx);
+                    });
                 }))
                 .on_action(cx.listener(|shell, action: &RemovePicture, _, cx| {
                     let file = action.file.clone();
-                    shell.with_app(cx, |app, cx| app.set_appearance(|appearance| appearance.remove(&file), cx));
+                    shell.with_app(cx, |app, cx| {
+                        app.crop_preview = None;
+                        app.set_appearance(|appearance| appearance.remove(&file), cx);
+                    });
+                }))
+                .on_action(cx.listener(|shell, _: &ToggleBackdropShuffle, _, cx| {
+                    shell.with_app(cx, |app, cx| app.set_appearance(|appearance| appearance.shuffle = !appearance.shuffle, cx));
+                }))
+                .on_action(cx.listener(|shell, _: &ShuffleBackdrop, _, cx| {
+                    shell.with_app(cx, |app, cx| {
+                        app.crop_preview = None;
+                        app.set_appearance(|appearance| { appearance.shuffle_now(); }, cx);
+                    });
                 }))
                 .on_action(cx.listener(|shell, action: &ChooseDim, _, cx| {
                     let dim = action.dim;
@@ -2509,6 +2524,7 @@ fn live_view(app: &AppState, cx: &App) -> (SidebarData, Screen, StripData) {
                     theme: appearance.theme,
                     backdrop: app.backdrop(),
                     pictures: app.pictures(),
+                    shuffle: appearance.shuffle,
                     importing: app.importing,
                     notice: app.appearance_notice.clone(),
                 },

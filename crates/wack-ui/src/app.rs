@@ -374,7 +374,10 @@ impl AppState {
         Store::open(&Store::default_folder()?)
     }
 
-    pub fn new(store: Store, cx: &mut Context<Self>) -> Self {
+    pub fn new(mut store: Store, cx: &mut Context<Self>) -> Self {
+        // Shuffle-on-open: rotate the backdrop before applying the theme so the window's first
+        // frame already wears the picture and theme this launch picked.
+        let appearance_notice = store.shuffle_backdrop_on_open().err().map(Into::into);
         let draft = cx.new(|cx| TextField::new(Type::Body, NEW_CHAT_PLACEHOLDER, cx).multiline(COMPOSER_ROWS).takes_pictures());
         let draft_subscription = cx.subscribe(&draft, |app, _, event, cx| match event {
             TextFieldEvent::Enter | TextFieldEvent::SendNow => app.start_chat(cx),
@@ -504,7 +507,7 @@ impl AppState {
             new_chat_panes: HashMap::new(),
             handed_tabs: HashMap::new(),
             command_editor: None,
-            appearance_notice: None,
+            appearance_notice,
             importing: false,
             tabs,
             parked: HashMap::new(),

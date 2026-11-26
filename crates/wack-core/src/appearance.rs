@@ -19,8 +19,9 @@
 //! - Pictures are a library ([`Appearance::pictures`]), at most one of them shown. Each picture
 //!   remembers the theme last used with it: showing a picture brings
 //!   its theme back, and choosing a theme while it shows is remembered on it. Change both only
-//!   through [`Appearance::show`], [`Appearance::choose_theme`], [`Appearance::add`] and
-//!   [`Appearance::remove`], which keep that promise. A theme never shows a picture.
+//!   through [`Appearance::show`], [`Appearance::choose_theme`], [`Appearance::add`],
+//!   [`Appearance::remove`], [`Appearance::shuffle_now`] and [`Appearance::shuffle_on_open`],
+//!   which keep that promise. A theme never shows a picture.
 //! - A settings file from before the library (one `backdrop`) opens as a library of that one,
 //!   shown.
 //! - Copies no picture in the library refers to are deleted when the setting changes.
@@ -240,6 +241,9 @@ pub struct Appearance {
     /// The file of the picture behind the window; `None` for none.
     #[serde(skip_serializing_if = "Option::is_none")]
     pub shown: Option<String>,
+    /// Show a different picture from the library each time WackCode opens.
+    #[serde(default, skip_serializing_if = "std::ops::Not::not")]
+    pub shuffle: bool,
 }
 
 /// `Appearance` as written, including the single `backdrop` of the files before the library.
@@ -254,12 +258,20 @@ struct Stored {
     #[serde(default)]
     shown: Option<String>,
     #[serde(default)]
+    shuffle: bool,
+    #[serde(default)]
     backdrop: Option<Backdrop>,
 }
 
 impl From<Stored> for Appearance {
     fn from(stored: Stored) -> Self {
-        let mut appearance = Appearance { mode: stored.mode, theme: stored.theme, pictures: stored.pictures, shown: stored.shown };
+        let mut appearance = Appearance {
+            mode: stored.mode,
+            theme: stored.theme,
+            pictures: stored.pictures,
+            shown: stored.shown,
+            shuffle: stored.shuffle,
+        };
         if let Some(backdrop) = stored.backdrop
             && appearance.pictures.is_empty()
         {
@@ -323,6 +335,45 @@ impl Appearance {
         if self.shown.as_deref() == Some(file) {
             self.shown = None;
         }
+    }
+
+    /// Picks a saved picture other than the one currently shown, so a shuffle always brings a
+    /// change. `None` when there is no other picture to switch to.
+    fn pick_next(&self) -> Option<String> {
+        let current = self.shown.as_deref();
+        let candidates: Vec<&str> = self
+            .pictures
+            .iter()
+            .map(|picture| picture.file.as_str())
+            .filter(|file| Some(*file) != current)
+            .collect();
+        if candidates.is_empty() {
+            return None;
+        }
+        // UUID v4 carries 122 random bits; a fresh one is enough entropy for choosing a picture,
+        // without pulling a random-number crate in for one call.
+        let index = (uuid::Uuid::new_v4().as_u128() % candidates.len() as u128) as usize;
+        Some(candidates[index].to_string())
+    }
+
+    /// Shows a different picture from the library at random, bringing back the theme it remembers.
+    /// Returns whether the shown picture changed (`false` when there is no other picture to show).
+    pub fn shuffle_now(&mut self) -> bool {
+        let Some(next) = self.pick_next() else {
+            return false;
+        };
+        self.show(Some(&next));
+        true
+    }
+
+    /// Shuffle-on-open: rotates to another saved picture (and its remembered theme) only when
+    /// [`Appearance::shuffle`] is on, a picture is showing, and the library has another one to
+    /// switch to. Returns whether the shown picture changed.
+    pub fn shuffle_on_open(&mut self) -> bool {
+        if !self.shuffle || self.backdrop().is_none() {
+            return false;
+        }
+        self.shuffle_now()
     }
 
     /// The same choices, checked: each picture's focus, dim and blur are kept in range, and a
@@ -661,5 +712,96 @@ mod tests {
         fs::write(&source, "not a picture").unwrap();
         let problem = import_backdrop(&source, folder.path()).unwrap_err();
         assert!(problem.contains("notes.txt"), "{problem}");
+    }
+
+    #[test]
+    fn shuffle_picks_another_picture_and_brings_back_its_theme() {
+        let mut empty = Appearance::default();
+        assert!(!empty.shuffle_now());
+
+        let mut single = Appearance { theme: ThemeName::Lagoon, ..Appearance::default() };
+        single.add(picture("only.jpg"));
+        assert!(!single.shuffle_now(), "one picture cannot shuffle to another");
+        assert_eq!(single.shown.as_deref(), Some("only.jpg"));
+
+        let mut appearance = Appearance { theme: ThemeName::Lagoon, ..Appearance::default() };
+        appearance.add(picture("a.jpg"));
+        appearance.choose_theme(ThemeName::Lagoon);
+        appearance.add(picture("b.jpg"));
+        appearance.choose_theme(ThemeName::Solar);
+        appearance.add(picture("c.jpg"));
+        appearance.choose_theme(ThemeName::Nebula);
+
+        let expected_theme = |file: &str| match file {
+            "a.jpg" => ThemeName::Lagoon,
+            "b.jpg" => ThemeName::Solar,
+            "c.jpg" => ThemeName::Nebula,
+            other => panic!("unexpected file {other}"),
+        };
+
+        let mut seen = std::collections::HashSet::new();
+        for _ in 0..64 {
+            let before = appearance.shown.clone();
+            assert!(appearance.shuffle_now());
+            let after = appearance.shown.as_deref().unwrap();
+            assert_ne!(Some(after), before.as_deref(), "shuffle always picks a different picture");
+            assert_eq!(appearance.theme, expected_theme(after), "shuffle restores the picture's theme");
+            seen.insert(after.to_string());
+        }
+        assert!(seen.len() > 1, "shuffle varied across the library: {seen:?}");
+
+        // With none showing, shuffle_now can pick any picture in the library.
+        appearance.show(None);
+        appearance.choose_theme(ThemeName::Grape);
+        assert!(appearance.shuffle_now());
+        let picked = appearance.shown.as_deref().unwrap();
+        assert_eq!(appearance.theme, expected_theme(picked));
+    }
+
+    #[test]
+    fn shuffle_on_open_rotates_only_when_enabled_showing_and_another_exists() {
+        let mut appearance = Appearance { theme: ThemeName::Lagoon, ..Appearance::default() };
+        appearance.add(picture("a.jpg"));
+        appearance.choose_theme(ThemeName::Lagoon);
+        appearance.add(picture("b.jpg"));
+        appearance.choose_theme(ThemeName::Solar);
+        appearance.add(picture("c.jpg"));
+        appearance.choose_theme(ThemeName::Nebula);
+
+        // Off: never rotates.
+        appearance.show(Some("a.jpg"));
+        assert!(!appearance.shuffle);
+        assert!(!appearance.shuffle_on_open());
+        assert_eq!((appearance.shown.as_deref(), appearance.theme), (Some("a.jpg"), ThemeName::Lagoon));
+
+        // On, but no picture showing: respects "No picture" and keeps the theme.
+        appearance.shuffle = true;
+        appearance.show(None);
+        appearance.choose_theme(ThemeName::Grape);
+        assert!(!appearance.shuffle_on_open());
+        assert_eq!((appearance.shown.as_deref(), appearance.theme), (None, ThemeName::Grape));
+
+        // On, with a picture showing and choices available: rotates and restores theme.
+        for _ in 0..16 {
+            appearance.show(Some("a.jpg"));
+            assert!(appearance.shuffle_on_open());
+            let shown = appearance.shown.as_deref().unwrap();
+            assert!(shown == "b.jpg" || shown == "c.jpg", "got {shown}");
+            assert_eq!(appearance.theme, if shown == "b.jpg" { ThemeName::Solar } else { ThemeName::Nebula });
+        }
+
+        // On, with only one picture left: nothing to switch to.
+        appearance.remove("b.jpg");
+        appearance.remove("c.jpg");
+        appearance.show(Some("a.jpg"));
+        assert!(!appearance.shuffle_on_open());
+        assert_eq!(appearance.shown.as_deref(), Some("a.jpg"));
+
+        // Serialization: omitted when false, persisted when true.
+        let off = serde_json::to_string(&Appearance::default()).unwrap();
+        assert!(!off.contains("shuffle"), "{off}");
+        let on = serde_json::to_string(&appearance).unwrap();
+        assert!(on.contains(r#""shuffle":true"#), "{on}");
+        assert_eq!(serde_json::from_str::<Appearance>(&on).unwrap(), appearance);
     }
 }

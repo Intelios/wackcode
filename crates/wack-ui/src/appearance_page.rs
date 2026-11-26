@@ -8,7 +8,8 @@
 //! each tile is a small window drawn in that theme's own tokens, in the
 //! appearance showing now, so it shows what choosing it gives. Pictures are a library shown as a
 //! strip, each captioned with the theme it remembers: choosing one
-//! brings that theme back. The page draws from plain data and dispatches actions, like every page.
+//! brings that theme back. With two or more pictures, Shuffle switches to another picture (and its
+//! theme) on open or on demand. The page draws from plain data and dispatches actions, like every page.
 
 use std::cell::Cell;
 
@@ -16,12 +17,13 @@ use gpui::{CursorStyle, DispatchPhase, Hsla, MouseButton, MouseMoveEvent, MouseU
 use wack_core::{Mode, ThemeName};
 
 use crate::{
-    actions::{ChooseBackdrop, ChooseBlur, ChooseDim, ChooseMode, ChooseTexture, ChooseTheme, ChooseZoom, CommitCrop, PreviewCrop, RemovePicture, ResetCrop, ShowPicture},
+    actions::{ChooseBackdrop, ChooseBlur, ChooseDim, ChooseMode, ChooseTexture, ChooseTheme, ChooseZoom, CommitCrop, PreviewCrop, RemovePicture, ResetCrop, ShowPicture, ShuffleBackdrop, ToggleBackdropShuffle},
     backdrop::Picture,
     icon::Icon,
-    settings_kit::{card, dispatch, labelled_slider, row, segmented, slider, staged_head},
+    settings_kit::{card, dispatch, labelled_slider, pill, row, segmented, slider, staged_head},
     tags::Tag,
     theme::{Theme, ThemeInput},
+    tools_page::switch,
     typography::{Type, Typography},
 };
 
@@ -38,6 +40,8 @@ pub struct AppearanceData {
     pub backdrop: Option<Picture>,
     /// Every picture in the library, in order.
     pub pictures: Vec<Thumbnail>,
+    /// Show a different picture each time WackCode opens.
+    pub shuffle: bool,
     /// A picture is being read.
     pub importing: bool,
     pub notice: Option<SharedString>,
@@ -180,6 +184,23 @@ fn backdrop(data: &AppearanceData, theme: &Theme) -> gpui::Div {
     let Some(picture) = data.backdrop.clone() else {
         return card;
     };
+    let shuffle = (data.pictures.len() > 1).then(|| {
+        let shuffle_now = pill("shuffle-now", "Shuffle now", Some(Icon::Shuffle), false, theme)
+            .on_click(dispatch(ShuffleBackdrop))
+            .tag("shuffle-now");
+        let toggle = div()
+            .id("backdrop-shuffle")
+            .cursor_pointer()
+            .on_click(dispatch(ToggleBackdropShuffle))
+            .child(switch(data.shuffle, theme))
+            .tag("backdrop-shuffle");
+        row(
+            "Shuffle",
+            Some("Show a different picture each time you open WackCode. Shuffle now switches to another one straight away."),
+        )
+        .control(div().flex().items_center().gap(px(12.)).child(shuffle_now).child(toggle))
+        .view(theme)
+    });
     let textures: Vec<(wack_core::Texture, &'static str)> = wack_core::Texture::ALL.iter().map(|texture| (*texture, texture.name())).collect();
     let textures = segmented("texture", &textures, picture.texture, |texture| Box::new(ChooseTexture { texture }), theme);
     let blur = slider("blur-slider", picture.blur.round() as u8, MOST_BLUR, 2, " pt", |blur| Box::new(ChooseBlur { blur }), theme);
@@ -209,7 +230,8 @@ fn backdrop(data: &AppearanceData, theme: &Theme) -> gpui::Div {
         .gap(px(12.))
         .child(Position { picture: picture.clone(), thumb })
         .child(div().flex().items_center().gap(px(12.)).child(zoom).child(reset));
-    card.child(row("Texture", Some("How the picture is drawn behind a new chat.")).control(textures).view(theme))
+    card.children(shuffle)
+        .child(row("Texture", Some("How the picture is drawn behind a new chat.")).control(textures).view(theme))
         .child(row("Blur", Some("How soft the picture is behind a chat.")).control(blur).view(theme))
         .child(row("Dim", Some("How far the picture fades toward the window behind a chat.")).control(dim).view(theme))
         .child(

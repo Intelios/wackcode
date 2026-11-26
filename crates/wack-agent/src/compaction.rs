@@ -265,6 +265,7 @@ pub fn request_with(
         messages: vec![Message::user(text)],
         tools: Vec::new(),
         max_output_tokens: Some(8_000),
+        output_limit: None,
         effort: None,
     }
 }

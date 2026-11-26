@@ -91,7 +91,9 @@ impl Profile {
 pub struct Settings {
     pub model: String,
     pub effort: Option<Effort>,
-    pub max_output_tokens: Option<u32>,
+    /// The most the model may write in one reply, when known (Settings › Providers' Max output).
+    /// It caps whatever a request asks for and is never sent on its own.
+    pub output_limit: Option<u32>,
     /// The model's context size in tokens, when known. Without it compaction still happens, but
     /// only once the provider refuses a request as too long.
     pub context_window: Option<u64>,
@@ -655,7 +657,8 @@ impl Agent {
             system: self.system.clone(),
             messages: self.session.messages().to_vec(),
             tools: self.registry.defs(self.session.loaded_tools(), self.provider.native_tool_search()),
-            max_output_tokens: self.settings.max_output_tokens,
+            max_output_tokens: None,
+            output_limit: self.settings.output_limit,
             effort: self.settings.effort,
         };
         images::prepare(&mut request.messages, self.settings.accepts_images);
@@ -674,6 +677,7 @@ impl Agent {
             messages: self.session.messages().to_vec(),
             tools: self.registry.defs(self.session.loaded_tools(), self.provider.native_tool_search()),
             max_output_tokens: None,
+            output_limit: None,
             effort: None,
         };
         for feature in &self.features {
@@ -837,7 +841,7 @@ impl Agent {
         // The app's own notes are neither the conversation nor the user's words.
         let conversation: Vec<Message> =
             (start..cut).filter(|index| !self.session.is_note(*index)).map(|index| messages[index].clone()).collect();
-        let request = compaction::request_with(
+        let mut request = compaction::request_with(
             &self.settings.model,
             self.session.summary(),
             &conversation,
@@ -845,6 +849,8 @@ impl Agent {
             budget,
             self.settings.compaction_prompt.as_deref(),
         );
+        // The summary's own cap never asks for more than the model can write.
+        request.output_limit = self.settings.output_limit;
         let retrying = |notice: RetryNotice| events(Event::Retrying(notice));
         let started = Instant::now();
         let response = tokio::select! {
@@ -931,7 +937,7 @@ mod tests {
             let settings = Settings {
                 model: "m".into(),
                 effort: None,
-                max_output_tokens: None,
+                output_limit: None,
                 context_window: None,
                 accepts_images: true,
                 ultra,
@@ -1061,7 +1067,7 @@ mod tests {
         let settings = Settings {
             model: "test-model".into(),
             effort: None,
-            max_output_tokens: None,
+            output_limit: None,
             context_window,
             accepts_images: true,
             ultra: false,
@@ -1291,6 +1297,17 @@ mod tests {
     }
 
     #[tokio::test]
+    async fn the_models_output_limit_rides_on_turns_and_compactions() {
+        let mut rig = rig(vec![say("hello"), say("summary")], vec![]);
+        rig.agent.settings.output_limit = Some(4_096);
+        assert_eq!(rig.run("go", &Control::new()).await, Ok(Outcome::Done));
+        rig.agent.compact(None, true, &Control::new(), &|_| {}).await.unwrap();
+        let requests = rig.provider.requests();
+        assert_eq!((requests[0].max_output_tokens, requests[0].output_limit), (None, Some(4_096)));
+        assert_eq!((requests[1].max_output_tokens, requests[1].output_limit), (Some(8_000), Some(4_096)));
+    }
+
+    #[tokio::test]
     async fn a_compaction_stopped_mid_request_is_reported_cancelled() {
         let calls = Arc::new(Calls::default());
         let mut rig = rig_recording(vec![say("hello"), Step::Hang { text: "sum".into() }], calls.clone());
@@ -1487,7 +1504,7 @@ mod tests {
         let settings = Settings {
             model: "test-model".into(),
             effort: None,
-            max_output_tokens: None,
+            output_limit: None,
             context_window: None,
             accepts_images: true,
             ultra: false,
@@ -1787,7 +1804,7 @@ mod tests {
             let settings = Settings {
                 model: "m".into(),
                 effort: None,
-                max_output_tokens: None,
+                output_limit: None,
                 context_window: None,
                 accepts_images: true,
                 ultra: false,
@@ -2005,7 +2022,7 @@ mod tests {
             let settings = Settings {
                 model: model.into(),
                 effort: None,
-                max_output_tokens: None,
+                output_limit: None,
                 context_window: None,
                 accepts_images: true,
                 ultra: false,

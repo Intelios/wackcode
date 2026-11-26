@@ -229,6 +229,7 @@ mod tests {
                 ToolDef { name: "mcp__notes__find".into(), description: "Finds".into(), input_schema: json!({}), deferred: false },
             ],
             max_output_tokens: None,
+            output_limit: None,
             effort: None,
         }
     }

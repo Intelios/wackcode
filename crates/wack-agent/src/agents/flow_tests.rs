@@ -53,7 +53,7 @@ fn settings(model: &str) -> Settings {
     Settings {
         model: model.into(),
         effort: None,
-        max_output_tokens: None,
+        output_limit: None,
         context_window: None,
         accepts_images: true,
         ultra: false,

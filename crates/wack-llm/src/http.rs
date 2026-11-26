@@ -1,6 +1,7 @@
-//! The one HTTP client behind all three wire formats.
+//! The one HTTP client behind all three wire formats, and the provider's own model list
+//! (Settings › Providers' Fetch models).
 
-use std::time::Duration;
+use std::{collections::HashSet, time::Duration};
 
 use async_trait::async_trait;
 use futures::StreamExt;
@@ -63,6 +64,132 @@ impl HttpProvider {
     fn fail(&self, mut error: LlmError) -> LlmError {
         error.message = self.redact(&error.message);
         error
+    }
+}
+
+/// The most a model list may be: a long gateway's is a few hundred kilobytes.
+const LIST_CAP: usize = 8 * 1024 * 1024;
+/// Anthropic pages its list; this many pages is far past any real one.
+const LIST_PAGES: usize = 20;
+
+impl HttpProvider {
+    /// Where the provider lists its models, beside the address chat requests go to. Anthropic's
+    /// sits behind `/v1`, which its base address leaves out, as [`Self::url`] does.
+    fn models_url(&self) -> String {
+        match self.format {
+            WireFormat::AnthropicMessages if self.base_url.ends_with("/v1") => format!("{}/models", self.base_url),
+            WireFormat::AnthropicMessages => format!("{}/v1/models", self.base_url),
+            WireFormat::OpenaiResponses | WireFormat::OpenaiChat => format!("{}/models", self.base_url),
+        }
+    }
+
+    /// The ids of the models the provider offers, in its own order, for Settings › Providers'
+    /// Fetch models. Sent only when the user asks, to the address they set and its own origin;
+    /// without a key (a server on this Mac) no credential header is sent at all. The error is
+    /// the user's sentence, with any echoed key removed.
+    pub async fn list_models(&self) -> Result<Vec<String>, String> {
+        let host = reqwest::Url::parse(&self.base_url)
+            .ok()
+            .and_then(|url| url.host_str().map(str::to_string))
+            .unwrap_or_else(|| self.base_url.clone());
+        let mut ids = Vec::new();
+        let mut seen = HashSet::new();
+        let mut after: Option<String> = None;
+        for _ in 0..LIST_PAGES {
+            let mut url = reqwest::Url::parse(&self.models_url())
+                .map_err(|_| "Enter a valid base URL, such as https://api.example.com/v1.".to_string())?;
+            let paged = self.format == WireFormat::AnthropicMessages;
+            if paged {
+                url.query_pairs_mut().append_pair("limit", "1000");
+                if let Some(after) = &after {
+                    url.query_pairs_mut().append_pair("after_id", after);
+                }
+            }
+            let mut call = self.client.get(url.clone()).timeout(Duration::from_secs(30)).header("accept", "application/json");
+            if !self.api_key.is_empty() {
+                call = match self.format {
+                    WireFormat::AnthropicMessages => {
+                        call.header("x-api-key", &self.api_key).header("anthropic-version", anthropic::VERSION)
+                    }
+                    _ => call.bearer_auth(&self.api_key),
+                };
+            }
+            let reply = call.send().await.map_err(|error| self.redact(&unreachable(&host, error)))?;
+            let status = reply.status();
+            if status.is_redirection() {
+                return Err(self.redact(&moved(&reply).message));
+            }
+            let body = read_capped(reply, LIST_CAP, &host).await.map_err(|error| self.redact(&error))?;
+            if !status.is_success() {
+                let detail = error_detail(&String::from_utf8_lossy(&body));
+                let detail = if detail.trim().is_empty() { String::new() } else { format!(": {}", detail.trim()) };
+                let code = status.as_u16();
+                return Err(self.redact(&match code {
+                    401 | 403 => format!("{host} did not accept the API key ({code}){detail}"),
+                    404 => format!("{host} has no model list at {}. Add the models by hand.", url.path()),
+                    _ => format!("{host} answered with HTTP {code}{detail}"),
+                }));
+            }
+            let json: Value = serde_json::from_slice(&body)
+                .map_err(|_| format!("{host} answered, but not with a model list WackCode can read."))?;
+            let before = ids.len();
+            for id in model_ids(&json) {
+                if seen.insert(id.clone()) {
+                    ids.push(id);
+                }
+            }
+            let next = json["last_id"].as_str().map(str::to_string).or_else(|| ids.last().cloned());
+            if !paged || json["has_more"].as_bool() != Some(true) || ids.len() == before || next == after {
+                break;
+            }
+            after = next;
+        }
+        if ids.is_empty() {
+            return Err(format!("{host} listed no models. Add them by hand."));
+        }
+        Ok(ids)
+    }
+}
+
+/// The ids in a model list, whichever shape it came in: OpenAI's `data[].id`, a `models[]` list
+/// of ids or names (Google's `models/` prefix taken off), or a bare array.
+fn model_ids(json: &Value) -> Vec<String> {
+    let items = json["data"].as_array().or(json["models"].as_array()).or(json.as_array());
+    items
+        .into_iter()
+        .flatten()
+        .filter_map(|item| {
+            let id = item.as_str().or(item["id"].as_str()).or(item["name"].as_str())?.trim();
+            let id = id.strip_prefix("models/").unwrap_or(id);
+            (!id.is_empty()).then(|| id.to_string())
+        })
+        .collect()
+}
+
+/// A reply's body, refused past `cap` bytes (by its stated length, and again while reading).
+async fn read_capped(mut reply: reqwest::Response, cap: usize, host: &str) -> Result<Vec<u8>, String> {
+    let too_big = || format!("{host} sent a model list too large to read.");
+    if reply.content_length().is_some_and(|length| length as usize > cap) {
+        return Err(too_big());
+    }
+    let mut body = Vec::new();
+    while let Some(chunk) = reply.chunk().await.map_err(|error| format!("The answer from {host} broke off: {}", error.without_url()))? {
+        body.extend_from_slice(&chunk);
+        if body.len() > cap {
+            return Err(too_big());
+        }
+    }
+    Ok(body)
+}
+
+/// A request that never got an answer, as a sentence naming the host.
+fn unreachable(host: &str, error: reqwest::Error) -> String {
+    if error.is_timeout() {
+        format!("{host} didn't answer in time.")
+    } else if error.is_connect() {
+        format!("Couldn't connect to {host}.")
+    } else {
+        format!("The request to {host} failed: {}", error.without_url())
     }
 }
 
@@ -258,6 +385,7 @@ mod tests {
             messages: vec![Message::user("hi")],
             tools: vec![],
             max_output_tokens: None,
+            output_limit: None,
             effort: None,
         }
     }
@@ -333,6 +461,93 @@ mod tests {
         let seen = seen.lock().unwrap();
         assert!(seen[1].starts_with("POST /v2/chat/completions "));
         assert!(seen[1].to_ascii_lowercase().contains("authorization: bearer sk-secret"));
+    }
+
+    fn json_reply(status: &str, body: &str) -> String {
+        format!(
+            "HTTP/1.1 {status}\r\ncontent-type: application/json\r\ncontent-length: {}\r\nconnection: close\r\n\r\n{body}",
+            body.len()
+        )
+    }
+
+    #[test]
+    fn the_model_list_sits_beside_the_requests() {
+        let at = |format, base| HttpProvider::new(format, base, "k").unwrap().models_url();
+        assert_eq!(at(WireFormat::OpenaiChat, "https://openrouter.ai/api/v1/"), "https://openrouter.ai/api/v1/models");
+        assert_eq!(at(WireFormat::OpenaiResponses, "https://api.openai.com/v1"), "https://api.openai.com/v1/models");
+        assert_eq!(at(WireFormat::AnthropicMessages, "https://api.anthropic.com"), "https://api.anthropic.com/v1/models");
+        assert_eq!(at(WireFormat::AnthropicMessages, "https://proxy.example/v1"), "https://proxy.example/v1/models");
+    }
+
+    #[test]
+    fn model_ids_come_from_every_common_shape() {
+        assert_eq!(model_ids(&serde_json::json!({"data": [{"id": "a"}, {"id": " "}, {"name": "b"}]})), ["a", "b"]);
+        assert_eq!(model_ids(&serde_json::json!({"models": [{"name": "models/gemini-3-pro"}, "c"]})), ["gemini-3-pro", "c"]);
+        assert_eq!(model_ids(&serde_json::json!(["x", {"id": "y"}, 3])), ["x", "y"]);
+        assert!(model_ids(&serde_json::json!({"object": "list"})).is_empty());
+    }
+
+    #[tokio::test]
+    async fn lists_models_with_the_bearer_key_in_the_servers_order() {
+        let (address, seen) = serve(vec![json_reply("200 OK", r#"{"data":[{"id":"zeta"},{"id":"alpha"},{"id":"zeta"}]}"#)]).await;
+        let provider = HttpProvider::new(WireFormat::OpenaiChat, &format!("{address}/v1"), "sk-secret").unwrap();
+        assert_eq!(provider.list_models().await.unwrap(), ["zeta", "alpha"]);
+        let sent = seen.lock().unwrap()[0].to_ascii_lowercase();
+        assert!(sent.starts_with("get /v1/models "));
+        assert!(sent.contains("authorization: bearer sk-secret"));
+    }
+
+    #[tokio::test]
+    async fn anthropic_lists_page_by_page_with_its_own_headers() {
+        let (address, seen) = serve(vec![
+            json_reply("200 OK", r#"{"data":[{"id":"claude-a"}],"has_more":true,"last_id":"claude-a"}"#),
+            json_reply("200 OK", r#"{"data":[{"id":"claude-b"}],"has_more":false,"last_id":"claude-b"}"#),
+        ])
+        .await;
+        let provider = HttpProvider::new(WireFormat::AnthropicMessages, &address, "key").unwrap();
+        assert_eq!(provider.list_models().await.unwrap(), ["claude-a", "claude-b"]);
+        let seen = seen.lock().unwrap();
+        assert!(seen[0].starts_with("GET /v1/models?limit=1000 "));
+        assert!(seen[1].starts_with("GET /v1/models?limit=1000&after_id=claude-a "));
+        let sent = seen[0].to_ascii_lowercase();
+        assert!(sent.contains("x-api-key: key") && sent.contains("anthropic-version: "));
+        assert!(!sent.contains("authorization:"));
+    }
+
+    #[tokio::test]
+    async fn a_refused_key_is_said_plainly_and_never_echoed() {
+        let (address, _) = serve(vec![json_reply("401 Unauthorized", r#"{"error":{"message":"Bad key sk-secret"}}"#)]).await;
+        let provider = HttpProvider::new(WireFormat::OpenaiChat, &address, "sk-secret").unwrap();
+        let error = provider.list_models().await.unwrap_err();
+        assert!(error.starts_with("127.0.0.1 did not accept the API key (401)"), "{error}");
+        assert!(!error.contains("sk-secret"));
+    }
+
+    #[tokio::test]
+    async fn a_server_without_a_list_or_without_models_says_so() {
+        let (address, _) = serve(vec![json_reply("404 Not Found", "{}"), json_reply("200 OK", r#"{"data":[]}"#)]).await;
+        let provider = HttpProvider::new(WireFormat::OpenaiChat, &address, "").unwrap();
+        assert_eq!(provider.list_models().await.unwrap_err(), "127.0.0.1 has no model list at /models. Add the models by hand.");
+        assert_eq!(provider.list_models().await.unwrap_err(), "127.0.0.1 listed no models. Add them by hand.");
+    }
+
+    #[tokio::test]
+    async fn without_a_key_no_credential_is_sent() {
+        let (address, seen) = serve(vec![json_reply("200 OK", r#"{"data":[{"id":"local"}]}"#)]).await;
+        let provider = HttpProvider::new(WireFormat::OpenaiChat, &address, "").unwrap();
+        assert_eq!(provider.list_models().await.unwrap(), ["local"]);
+        assert!(!seen.lock().unwrap()[0].to_ascii_lowercase().contains("authorization:"));
+    }
+
+    #[tokio::test]
+    async fn a_model_list_never_follows_a_redirect_to_another_host() {
+        let (elsewhere, reached) = serve(vec![json_reply("200 OK", r#"{"data":[{"id":"x"}]}"#)]).await;
+        let redirect = format!("HTTP/1.1 302 Found\r\nlocation: {elsewhere}/models\r\ncontent-length: 0\r\nconnection: close\r\n\r\n");
+        let (address, _) = serve(vec![redirect]).await;
+        let provider = HttpProvider::new(WireFormat::AnthropicMessages, &address, "sk-secret").unwrap();
+        let error = provider.list_models().await.unwrap_err();
+        assert!(error.contains("redirected the request to 127.0.0.1"), "{error}");
+        assert!(reached.lock().unwrap().is_empty());
     }
 
     #[test]

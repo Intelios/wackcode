@@ -41,12 +41,26 @@ pub struct Model {
     /// sent a line in each result saying its pictures were left out instead.
     #[serde(default = "on", skip_serializing_if = "is_on")]
     pub accepts_images: bool,
+    /// The most the model writes in one reply, in tokens, if known (often from the model
+    /// catalogue). A ceiling on what a request asks for, never asked for on its own: it keeps
+    /// Anthropic's default cap within reach of a model that writes less.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub max_output: Option<u64>,
 }
+
+/// What switching a model's Reasoning on starts it with, as version 2 did; also what the
+/// catalogue gives a model that reasons when it doesn't list the efforts.
+pub const DEFAULT_EFFORTS: [Reasoning; 4] = [Reasoning::Off, Reasoning::Low, Reasoning::Medium, Reasoning::High];
 
 impl Model {
     /// A model that does not reason, as a new model row starts.
     pub fn new(id: impl Into<String>, context_window: Option<u64>) -> Self {
-        Self { id: id.into(), context_window, efforts: Vec::new(), accepts_images: true }
+        Self { id: id.into(), context_window, efforts: Vec::new(), accepts_images: true, max_output: None }
+    }
+
+    /// The model's output ceiling for a request, when known.
+    pub fn output_limit(&self) -> Option<u32> {
+        self.max_output.map(|tokens| u32::try_from(tokens).unwrap_or(u32::MAX))
     }
 
     /// The efforts the model accepts, low to high, never Ultra. Without a list, only Off.
@@ -1542,6 +1556,19 @@ mod tests {
         let written = serde_json::to_string(&text_only).unwrap();
         assert_eq!(written, r#"{"id":"m","accepts_images":false}"#);
         assert_eq!(serde_json::from_str::<Model>(&written).unwrap(), text_only);
+    }
+
+    #[test]
+    fn a_models_max_output_is_optional_and_caps_requests() {
+        let saved: Model = serde_json::from_str(r#"{"id":"m","context_window":200000}"#).unwrap();
+        assert_eq!(saved.max_output, None, "models saved before the field existed have no limit");
+        assert_eq!(saved.output_limit(), None);
+        let limited = Model { max_output: Some(64_000), ..Model::new("m", None) };
+        let written = serde_json::to_string(&limited).unwrap();
+        assert_eq!(written, r#"{"id":"m","max_output":64000}"#);
+        assert_eq!(serde_json::from_str::<Model>(&written).unwrap(), limited);
+        assert_eq!(limited.output_limit(), Some(64_000));
+        assert_eq!(Model { max_output: Some(u64::MAX), ..limited }.output_limit(), Some(u32::MAX));
     }
 
     #[test]

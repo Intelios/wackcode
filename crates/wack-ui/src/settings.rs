@@ -28,7 +28,7 @@
 use std::{collections::HashSet, f32::consts::PI};
 
 use gpui::{AnyElement, App, AppContext, Entity, Pixels, SharedString, Transformation, div, prelude::*, px, radians};
-use wack_core::{Connection, Model, NewConnection, Reasoning, WireFormat};
+use wack_core::{Connection, DEFAULT_EFFORTS, Model, NewConnection, Reasoning, WireFormat};
 
 use crate::{
     actions::{
@@ -47,11 +47,13 @@ use crate::{
     typography::{Type, Typography},
 };
 
-/// One model in the editor: its two fields, and what reasoning its endpoint accepts.
+/// One model in the editor: its fields, and what reasoning its endpoint accepts.
 #[derive(Clone)]
 pub struct ModelField {
     pub id: Entity<TextField>,
     pub context: Entity<TextField>,
+    /// The most it writes in one reply; optional, a ceiling on what requests ask for.
+    pub output: Entity<TextField>,
     /// The Reasoning switch. Off saves no efforts: the model does not reason.
     pub reasoning: bool,
     /// The efforts ticked while Reasoning is on, low to high.
@@ -61,12 +63,17 @@ pub struct ModelField {
     /// The row is open to its fields, as version 2's were. A new row opens; a saved model's
     /// row starts folded to one line.
     pub open: bool,
-    /// The model's id and context as last read, for the folded line.
-    pub summary: Option<(SharedString, SharedString)>,
+    /// The model as last read, for the folded line.
+    pub summary: Option<ModelSummary>,
 }
 
-/// What switching Reasoning on starts a model with, as version 2 did.
-const REASONING_DEFAULT: [Reasoning; 4] = [Reasoning::Off, Reasoning::Low, Reasoning::Medium, Reasoning::High];
+/// A model row's folded line: its id, context and max output as typed.
+#[derive(Clone, Default)]
+pub struct ModelSummary {
+    pub id: SharedString,
+    pub context: SharedString,
+    pub output: SharedString,
+}
 
 /// A list of efforts as saved: sorted, and empty when it reasons at nothing above Off.
 fn saved_efforts(efforts: &[Reasoning]) -> Vec<Reasoning> {
@@ -119,6 +126,7 @@ impl ProviderForm {
         for model in &self.models {
             fields.push(model.id.clone());
             fields.push(model.context.clone());
+            fields.push(model.output.clone());
         }
         fields
     }
@@ -143,6 +151,9 @@ impl ProviderForm {
             let context = model.context_window.map(tokens_text);
             self.add_model(&model.id, context.as_deref(), cx);
             if let Some(row) = self.models.last_mut() {
+                if let Some(output) = model.max_output {
+                    row.output.update(cx, |field, cx| field.set_text(&tokens_text(output), cx));
+                }
                 row.open = false;
                 row.accepts_images = model.accepts_images;
                 if model.reasons() {
@@ -177,7 +188,7 @@ impl ProviderForm {
     pub fn toggle_reasoning(&mut self, index: usize) {
         if let Some(row) = self.models.get_mut(index) {
             row.reasoning = !row.reasoning;
-            row.efforts = if row.reasoning { REASONING_DEFAULT.to_vec() } else { Vec::new() };
+            row.efforts = if row.reasoning { DEFAULT_EFFORTS.to_vec() } else { Vec::new() };
         }
     }
 
@@ -286,6 +297,7 @@ impl ProviderForm {
         ModelField {
             id: cx.new(|cx| TextField::new(Type::Mono, "model-id", cx)),
             context: cx.new(|cx| TextField::new(Type::Ui, "200k", cx)),
+            output: cx.new(|cx| TextField::new(Type::Ui, "32k", cx)),
             reasoning: false,
             efforts: Vec::new(),
             accepts_images: true,
@@ -314,10 +326,11 @@ impl ProviderForm {
                 .map(|row| ModelValue {
                     id: text(&row.id),
                     context: text(&row.context),
+                    output: text(&row.output),
                     efforts: if row.reasoning { saved_efforts(&row.efforts) } else { Vec::new() },
                     accepts_images: row.accepts_images,
                 })
-                .filter(|model| !model.id.is_empty() || !model.context.is_empty())
+                .filter(|model| !model.id.is_empty() || !model.context.is_empty() || !model.output.is_empty())
                 .collect(),
         }
     }
@@ -344,6 +357,13 @@ impl ProviderForm {
                     format!("The context window for {} must be a number of tokens, such as 200000 or 200k.", row.id)
                 })?)
             };
+            let max_output = if row.output.is_empty() {
+                None
+            } else {
+                Some(parse_tokens(&row.output).ok_or_else(|| {
+                    format!("The max output for {} must be a number of tokens, such as 32000 or 32k.", row.id)
+                })?)
+            };
             if !seen.insert(row.id.clone()) {
                 return Err(format!("The model {} is listed twice.", row.id));
             }
@@ -352,6 +372,7 @@ impl ProviderForm {
                 context_window,
                 efforts: row.efforts.clone(),
                 accepts_images: row.accepts_images,
+                max_output,
             });
         }
         if models.is_empty() {
@@ -394,7 +415,7 @@ impl ProviderForm {
         {
             return true;
         }
-        if values.models.iter().any(|model| model.id.is_empty() && !model.context.is_empty()) {
+        if values.models.iter().any(|model| model.id.is_empty() && (!model.context.is_empty() || !model.output.is_empty())) {
             return true;
         }
         let models: Vec<&ModelValue> = values.models.iter().filter(|model| !model.id.is_empty()).collect();
@@ -405,11 +426,8 @@ impl ProviderForm {
             row.id != saved.id
                 || row.efforts != saved_efforts(&saved.efforts)
                 || row.accepts_images != saved.accepts_images
-                || match (row.context.as_str(), saved.context_window) {
-                    ("", None) => false,
-                    (text, Some(window)) => parse_tokens(text) != Some(window),
-                    _ => true,
-                }
+                || tokens_changed(&row.context, saved.context_window)
+                || tokens_changed(&row.output, saved.max_output)
         })
     }
 }
@@ -427,9 +445,19 @@ fn key_change<'a>(typed: &'a str, shown_saved: Option<&str>) -> Option<&'a str> 
     (!typed.is_empty() && Some(typed) != shown_saved).then_some(typed)
 }
 
+/// A token count as typed differs from the saved one.
+fn tokens_changed(text: &str, saved: Option<u64>) -> bool {
+    match (text, saved) {
+        ("", None) => false,
+        (text, Some(saved)) => parse_tokens(text) != Some(saved),
+        _ => true,
+    }
+}
+
 struct ModelValue {
     id: String,
     context: String,
+    output: String,
     efforts: Vec<Reasoning>,
     accepts_images: bool,
 }
@@ -575,7 +603,8 @@ impl ProvidersData {
                     .iter()
                     .map(|row| {
                         let text = |field: &Entity<TextField>| SharedString::from(field.read(cx).text().trim().to_string());
-                        ModelField { summary: Some((text(&row.id), text(&row.context))), ..row.clone() }
+                        let summary = ModelSummary { id: text(&row.id), context: text(&row.context), output: text(&row.output) };
+                        ModelField { summary: Some(summary), ..row.clone() }
                     })
                     .collect(),
                 title,
@@ -1045,6 +1074,10 @@ const MODEL_CONTEXT_TAGS: [&str; 12] = [
     "model-context-0", "model-context-1", "model-context-2", "model-context-3", "model-context-4", "model-context-5", "model-context-6",
     "model-context-7", "model-context-8", "model-context-9", "model-context-10", "model-context-11",
 ];
+const MODEL_OUTPUT_TAGS: [&str; 12] = [
+    "model-output-0", "model-output-1", "model-output-2", "model-output-3", "model-output-4", "model-output-5", "model-output-6",
+    "model-output-7", "model-output-8", "model-output-9", "model-output-10", "model-output-11",
+];
 
 fn connection_row(index: usize, row: &ConnectionRow, theme: &Theme) -> impl IntoElement {
     let connection = &row.connection;
@@ -1313,11 +1346,18 @@ fn models_card(editor: &ProviderEditor, theme: &Theme) -> impl IntoElement {
     )
 }
 
-const CONTEXT_WIDTH: f32 = 128.;
+/// The width of a model's context and max output fields.
+const TOKENS_WIDTH: f32 = 112.;
 
 fn model_row(index: usize, row: &ModelField, theme: &Theme) -> impl IntoElement {
-    let (id, context) = row.summary.clone().unwrap_or_default();
+    let ModelSummary { id, context, output } = row.summary.clone().unwrap_or_default();
     let name: SharedString = if id.is_empty() { "New model".into() } else { id };
+    let limits: SharedString = match (context.is_empty(), output.is_empty()) {
+        (false, false) => format!("{context} context · {output} out").into(),
+        (false, true) => format!("{context} context").into(),
+        (true, false) => format!("{output} out").into(),
+        (true, true) => SharedString::default(),
+    };
     let badge = |word: &'static str| {
         div().flex_none().h(px(18.)).px(px(7.)).rounded_full().flex().items_center().bg(theme.hover).typography(Type::Small).text_color(theme.text_soft).child(word)
     };
@@ -1336,9 +1376,7 @@ fn model_row(index: usize, row: &ModelField, theme: &Theme) -> impl IntoElement 
         )
         .child(div().min_w_0().truncate().typography(Type::Mono).text_color(theme.text).child(name))
         .child(div().flex_1())
-        .when(!context.is_empty(), |head| {
-            head.child(div().flex_none().typography(Type::Small).text_color(theme.text_dim).child(format!("{context} context")))
-        })
+        .when(!limits.is_empty(), |head| head.child(div().flex_none().typography(Type::Small).text_color(theme.text_dim).child(limits)))
         .when(row.reasoning, |head| head.child(badge("Reasoning")))
         .when(row.accepts_images, |head| head.child(badge("Vision")))
         .when(!row.open, |head| head.child(
@@ -1458,9 +1496,18 @@ fn model_fields(index: usize, row: &ModelField, theme: &Theme) -> impl IntoEleme
             MODEL_ID_TAGS.get(index).copied().unwrap_or("model-id"),
             theme,
         )))
-        .child(div().w(px(CONTEXT_WIDTH)).flex_none().child(text_input(
+        .child(div().w(px(TOKENS_WIDTH)).flex_none().child(tokens_input(
             row.context.clone(),
+            "context",
+            "The model's context window in tokens. It decides when chats compact.",
             MODEL_CONTEXT_TAGS.get(index).copied().unwrap_or("model-context"),
+            theme,
+        )))
+        .child(div().w(px(TOKENS_WIDTH)).flex_none().child(tokens_input(
+            row.output.clone(),
+            "out",
+            "The most the model writes in one reply. Requests never ask for more.",
+            MODEL_OUTPUT_TAGS.get(index).copied().unwrap_or("model-output"),
             theme,
         )))
         .child(
@@ -1507,6 +1554,28 @@ pub(crate) fn text_input(field: Entity<TextField>, tag: &'static str, theme: &Th
         .flex()
         .items_center()
         .child(field)
+        .tag(tag)
+}
+
+/// A token count's field: [`text_input`]'s ground with its unit written faintly at the end, so
+/// two numbers side by side can't be mistaken for each other.
+fn tokens_input(field: Entity<TextField>, unit: &'static str, tip: &'static str, tag: &'static str, theme: &Theme) -> impl IntoElement {
+    div()
+        .id(tag)
+        .w_full()
+        .h(px(34.))
+        .pl(px(11.))
+        .pr(px(10.))
+        .rounded(px(9.))
+        .bg(theme.window)
+        .border_1()
+        .border_color(theme.border)
+        .flex()
+        .items_center()
+        .gap(px(6.))
+        .tooltip(crate::tooltip::tip(tip))
+        .child(div().flex_1().min_w_0().child(field))
+        .child(div().flex_none().typography(Type::Small).text_color(theme.text_faint).child(unit))
         .tag(tag)
 }
 

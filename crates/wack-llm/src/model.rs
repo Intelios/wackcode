@@ -198,8 +198,18 @@ pub struct Request {
     pub tools: Vec<ToolDef>,
     /// `None` leaves the provider's default in place.
     pub max_output_tokens: Option<u32>,
+    /// The most the model can write, when known: a ceiling on what is asked for, never sent on
+    /// its own. Anthropic always names a cap, so there it lowers the default too.
+    pub output_limit: Option<u32>,
     /// `None` sends no reasoning settings at all, for models without reasoning.
     pub effort: Option<Effort>,
+}
+
+impl Request {
+    /// The output cap to send for `asked`: never above the model's own limit.
+    pub fn output_cap(&self, asked: Option<u32>) -> Option<u32> {
+        asked.map(|asked| self.output_limit.map_or(asked, |limit| asked.min(limit.max(1))))
+    }
 }
 
 /// What arrives while a response streams. The finished blocks come back in the [`Response`].

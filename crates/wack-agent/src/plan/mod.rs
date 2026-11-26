@@ -580,6 +580,7 @@ mod tests {
             messages: vec![Message::user("earlier"), Message::user(prompt::contract(Contract::Plan)), Message::user("Plan the fix")],
             tools: Vec::new(),
             max_output_tokens: None,
+            output_limit: None,
             effort: None,
         };
         plan.before_request(&mut request);
@@ -604,6 +605,7 @@ mod tests {
             ],
             tools: Vec::new(),
             max_output_tokens: None,
+            output_limit: None,
             effort: None,
         };
         custom.before_request(&mut custom_request);

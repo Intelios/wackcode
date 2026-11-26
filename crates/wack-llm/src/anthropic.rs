@@ -21,7 +21,9 @@ const SEARCH_TOOL: &str = "tool_search_tool_bm25_20251119";
 pub fn body(request: &Request, first_party: bool) -> Value {
     let mut body = Map::new();
     body.insert("model".into(), json!(request.model));
-    body.insert("max_tokens".into(), json!(request.max_output_tokens.unwrap_or(DEFAULT_MAX_TOKENS)));
+    // The API needs a cap; a model that writes less than the default would refuse it.
+    let max_tokens = request.output_cap(Some(request.max_output_tokens.unwrap_or(DEFAULT_MAX_TOKENS)));
+    body.insert("max_tokens".into(), json!(max_tokens));
     body.insert("stream".into(), json!(true));
     let cache = json!({ "type": "ephemeral" });
     if first_party {
@@ -295,8 +297,20 @@ mod tests {
                 ToolDef { name: "browser".into(), description: "Browses".into(), input_schema: json!({"type": "object"}), deferred: true },
             ],
             max_output_tokens: None,
+            output_limit: None,
             effort: Some(Effort::High),
         }
+    }
+
+    #[test]
+    fn the_cap_is_the_default_unless_the_model_writes_less() {
+        assert_eq!(body(&request(), true)["max_tokens"], DEFAULT_MAX_TOKENS);
+        let small = Request { output_limit: Some(8_192), ..request() };
+        assert_eq!(body(&small, true)["max_tokens"], 8_192);
+        let large = Request { output_limit: Some(128_000), ..request() };
+        assert_eq!(body(&large, true)["max_tokens"], DEFAULT_MAX_TOKENS);
+        let compaction = Request { max_output_tokens: Some(8_000), output_limit: Some(4_096), ..request() };
+        assert_eq!(body(&compaction, true)["max_tokens"], 4_096);
     }
 
     #[test]

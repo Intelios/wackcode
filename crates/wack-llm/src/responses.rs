@@ -18,7 +18,7 @@ pub fn body(request: &Request) -> Value {
     body.insert("stream".into(), json!(true));
     body.insert("store".into(), json!(false));
     body.insert("include".into(), json!(["reasoning.encrypted_content"]));
-    if let Some(max) = request.max_output_tokens {
+    if let Some(max) = request.output_cap(request.max_output_tokens) {
         body.insert("max_output_tokens".into(), json!(max));
     }
     if let Some(effort) = request.effort {
@@ -251,6 +251,7 @@ mod tests {
             ],
             tools: vec![],
             max_output_tokens: None,
+            output_limit: None,
             effort: Some(Effort::Max),
         };
         let body = body(&request);
@@ -260,6 +261,11 @@ mod tests {
         assert_eq!(body["store"], false);
         assert_eq!(body["reasoning"]["effort"], "xhigh");
         assert_eq!(body["input"][4]["output"], "a.rs");
+        assert!(body.get("max_output_tokens").is_none());
+        let limit_only = Request { output_limit: Some(4_096), ..request.clone() };
+        assert!(super::body(&limit_only).get("max_output_tokens").is_none(), "a limit alone is never sent");
+        let compaction = Request { max_output_tokens: Some(8_000), ..limit_only };
+        assert_eq!(super::body(&compaction)["max_output_tokens"], 4_096);
     }
 
     #[test]
@@ -274,6 +280,7 @@ mod tests {
             }],
             tools: vec![],
             max_output_tokens: None,
+            output_limit: None,
             effort: None,
         };
         let body = body(&request);

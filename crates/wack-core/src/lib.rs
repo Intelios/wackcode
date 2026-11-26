@@ -42,8 +42,8 @@ pub use title::AutoTitleConfig;
 pub use runner::{CommandEvent, CommandInfo, CommandSession, CommandStatus, Runner};
 pub use usage::{RunRecorder, UsageStatus, UsageWriter};
 pub use store::{
-    BrowserConfig, Chat, ChatKind, CommandKind, Connection, Model, ModelChoice, NewConnection, Project, Reasoning, Resolved, Store, SuggestionOrigin, Ui,
-    title_from,
+    BrowserConfig, Chat, ChatKind, CommandKind, Connection, DEFAULT_EFFORTS, Model, ModelChoice, NewConnection, Project, Reasoning, Resolved, Store,
+    SuggestionOrigin, Ui, title_from,
 };
 
 // What the UI needs from the layers below, so it depends on the engine alone.

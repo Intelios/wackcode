@@ -161,7 +161,7 @@ impl Store {
             settings: Settings {
                 model: resolved.model.id.clone(),
                 effort: resolved.model.effort_for(resolved.effort),
-                max_output_tokens: None,
+                output_limit: resolved.model.output_limit(),
                 context_window: resolved.model.context_window,
                 accepts_images: resolved.model.accepts_images,
                 ultra: resolved.effort.is_ultra(),
@@ -211,7 +211,7 @@ impl Store {
             settings: Settings {
                 model: resolved.model.id.clone(),
                 effort: resolved.model.effort_for(resolved.effort),
-                max_output_tokens: None,
+                output_limit: resolved.model.output_limit(),
                 context_window: resolved.model.context_window,
                 accepts_images: resolved.model.accepts_images,
                 ultra: resolved.effort.is_ultra(),
@@ -490,7 +490,7 @@ mod tests {
             settings: Settings {
                 model: "m".into(),
                 effort: None,
-                max_output_tokens: None,
+                output_limit: None,
                 context_window: None,
                 accepts_images: true,
                 ultra: false,
@@ -820,6 +820,7 @@ mod tests {
                         context_window: Some(128_000),
                         efforts: vec![crate::Reasoning::Off, crate::Reasoning::High],
                         accepts_images: true,
+                        max_output: None,
                     }],
                 },
                 "k",

@@ -369,7 +369,7 @@ impl Store {
             settings: Settings {
                 model: resolved.model.id.clone(),
                 effort: resolved.model.effort_for(level),
-                max_output_tokens: None,
+                output_limit: resolved.model.output_limit(),
                 context_window: resolved.model.context_window,
                 accepts_images: resolved.model.accepts_images,
                 ultra: false,

@@ -17,7 +17,7 @@ pub fn body(request: &Request, is_openai: bool) -> Value {
     body.insert("model".into(), json!(request.model));
     body.insert("stream".into(), json!(true));
     body.insert("stream_options".into(), json!({ "include_usage": true }));
-    if let Some(max) = request.max_output_tokens {
+    if let Some(max) = request.output_cap(request.max_output_tokens) {
         // OpenAI's own reasoning models reject the older name; most other servers know only it.
         let key = if is_openai { "max_completion_tokens" } else { "max_tokens" };
         body.insert(key.into(), json!(max));
@@ -241,6 +241,7 @@ mod tests {
             ],
             tools: vec![ToolDef { name: "ls".into(), description: "Lists".into(), input_schema: json!({}), deferred: false }],
             max_output_tokens: Some(100),
+            output_limit: None,
             effort: None,
         };
         let body = body(&request, false);
@@ -251,6 +252,10 @@ mod tests {
         assert_eq!(messages[4]["content"], "also check b");
         assert_eq!(body["max_tokens"], 100);
         assert!(super::body(&request, true).get("max_completion_tokens").is_some());
+        let capped = Request { output_limit: Some(64), ..request.clone() };
+        assert_eq!(super::body(&capped, false)["max_tokens"], 64);
+        let limit_only = Request { max_output_tokens: None, output_limit: Some(64), ..request };
+        assert!(super::body(&limit_only, false).get("max_tokens").is_none(), "a limit alone is never sent");
     }
 
     #[test]
@@ -278,6 +283,7 @@ mod tests {
             ],
             tools: vec![],
             max_output_tokens: None,
+            output_limit: None,
             effort: None,
         };
         let body = body(&request, true);

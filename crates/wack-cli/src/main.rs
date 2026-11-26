@@ -379,7 +379,7 @@ async fn chat_run(store: &Store, connection: Connection, model: Model, effort: O
     let settings = Settings {
         model: model.id.clone(),
         effort: model.effort_for(effort),
-        max_output_tokens: None,
+        output_limit: None,
         context_window: model.context_window,
         accepts_images: model.accepts_images,
         ultra: effort.is_ultra(),
@@ -614,7 +614,7 @@ async fn agent(args: &mut Args, folder: &Path) -> Result<ExitCode, String> {
     let settings = Settings {
         model: model.id.clone(),
         effort: model.effort_for(effort),
-        max_output_tokens: None,
+        output_limit: None,
         context_window: model.context_window,
         accepts_images: model.accepts_images,
         ultra: effort.is_ultra(),

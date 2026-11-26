@@ -218,7 +218,7 @@ async fn run(hub: &Hub, specs: &[ServerSpec], folder: &Path, steps: Vec<wack_llm
     let settings = Settings {
         model: "m".into(),
         effort: None,
-        max_output_tokens: None,
+        output_limit: None,
         context_window: None,
         accepts_images: true,
         ultra: false,

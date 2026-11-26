@@ -80,6 +80,7 @@ pub fn request_with(model: &Model, opening: &str, system: Option<&str>) -> Reque
         ))],
         tools: Vec::new(),
         max_output_tokens: Some(MAX_OUTPUT_TOKENS),
+        output_limit: model.output_limit(),
         effort: effort(model),
     }
 }
@@ -182,6 +183,9 @@ mod tests {
         assert!(text.ends_with("Write the topic title for that message."));
         assert!(request.tools.is_empty());
         assert_eq!(request.max_output_tokens, Some(MAX_OUTPUT_TOKENS));
+        assert_eq!(request.output_limit, None);
+        let limited = Model { max_output: Some(16), ..small() };
+        assert_eq!(super::request(&limited, "hi").output_limit, Some(16), "a title never asks past the model's limit");
         assert_eq!(request.effort, None);
 
         let custom = request_with(&small(), "Make the sidebar remember its width", Some("Custom title system."));

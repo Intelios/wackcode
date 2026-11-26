@@ -1846,3 +1846,114 @@ pub fn catalog() -> wack_core::catalog::Catalog {
         ],
     }
 }
+
+/// A turn whose work groups are broken by two commits: the first collapsed with file and ± stats,
+/// the second expanded to show the command and git's output.
+pub fn commits_turn() -> Vec<Item> {
+    let mut conversation = Conversation::default();
+    conversation.send("Fix the SSE decoder tail, add a test, and commit each change separately.", START);
+    conversation.apply(
+        &Event::Thinking("Flush any buffered data when the stream ends, then cover it with a unit test.".into()),
+        START + 1_000,
+    );
+    call(&mut conversation, "read-c1", "read", json!({ "path": format!("{CWD}/crates/wack-llm/src/sse.rs") }), Some(&"x\n".repeat(184)), START + 2_000);
+    call(
+        &mut conversation,
+        "edit-c1",
+        "edit",
+        json!({ "path": "crates/wack-llm/src/sse.rs", "edits": [{ "old_text": "pub fn finish(&mut self) {}", "new_text": "pub fn finish(&mut self) -> Option<Event> {\n    self.take_event()\n}" }] }),
+        Some("Edited."),
+        START + 4_000,
+    );
+    call(&mut conversation, "bash-c1", "bash", json!({ "command": "cargo test -p wack-llm sse" }), Some("test result: ok. 5 passed; 0 failed"), START + 6_000);
+    call(
+        &mut conversation,
+        "commit-1",
+        "bash",
+        json!({ "command": "git add crates/wack-llm/src/sse.rs && git commit -m \"Flush buffered SSE events at stream end\"" }),
+        Some("[3.0-Remake a1b2c3d] Flush buffered SSE events at stream end\n 1 file changed, 14 insertions(+), 3 deletions(-)"),
+        START + 8_000,
+    );
+    call(
+        &mut conversation,
+        "edit-c2",
+        "edit",
+        json!({ "path": "crates/wack-llm/src/sse.rs", "edits": [{ "old_text": "// tests", "new_text": "// tests\n#[test]\nfn flushes_tail() {}" }] }),
+        Some("Edited."),
+        START + 11_000,
+    );
+    call(&mut conversation, "bash-c2", "bash", json!({ "command": "cargo test -p wack-llm sse" }), Some("test result: ok. 6 passed; 0 failed"), START + 13_000);
+    call(
+        &mut conversation,
+        "commit-2",
+        "bash",
+        json!({
+            "command": "git add crates/wack-llm/src/sse.rs && git commit -m \"Add unit test for unterminated final SSE event\" -m \"Co-authored-by: GLM-5.3-Flash (WackCode) <345377139+wackcode-agent[bot]@users.noreply.github.com>\""
+        }),
+        Some("[3.0-Remake 9f4e21a] Add unit test for unterminated final SSE event\n 1 file changed, 18 insertions(+)\n"),
+        START + 15_000,
+    );
+    conversation.apply(
+        &Event::Text("Done — the decoder fix landed in `a1b2c3d` and its regression test in `9f4e21a`. All six SSE tests pass.".into()),
+        START + 18_000,
+    );
+    conversation.apply(&Event::Reply { usage: Some(Usage { input: 1_800, output: 1_200, cache_read: 14_200, cache_write: 0 }) }, START + 18_000);
+    conversation.finish(&Ok(Outcome::Done), START + 19_000);
+    items(&conversation, &["commit-2"], START + 25_000)
+}
+
+/// Every commit milestone edge state in one transcript: a refused commit (plain error look), a
+/// landed commit whose chained push failed (keeps the milestone wash + "failed"), and a live turn
+/// currently committing.
+pub fn commits_states_turn() -> Vec<Item> {
+    let mut conversation = Conversation::default();
+    conversation.send("Commit the pending retry changes and push them.", START);
+    conversation.apply(&Event::ToolCall { id: "commit-refused".into(), name: "bash".into(), input: json!({ "command": "git commit -m \"Cap Retry-After wait at 60s\"" }) }, START + 2_000);
+    conversation.apply(
+        &Event::ToolResult {
+            id: "commit-refused".into(),
+            name: "bash".into(),
+            content: "On branch 3.0-Remake\nnothing to commit, working tree clean\n\nExit code 1.".into(),
+            is_error: true,
+            images: Vec::new(),
+        },
+        START + 3_000,
+    );
+    call(&mut conversation, "edit-s1", "edit", json!({ "path": "crates/wack-llm/src/retry.rs", "edits": [{ "old_text": "wait", "new_text": "wait.min(MAX_WAIT)" }] }), Some("Edited."), START + 5_000);
+    conversation.apply(
+        &Event::ToolCall {
+            id: "commit-push-fail".into(),
+            name: "bash".into(),
+            input: json!({ "command": "git add crates/wack-llm/src/retry.rs && git commit -m \"Cap Retry-After wait at 60s\" && git push" }),
+        },
+        START + 7_000,
+    );
+    conversation.apply(
+        &Event::ToolResult {
+            id: "commit-push-fail".into(),
+            name: "bash".into(),
+            content: "[3.0-Remake 4c8d10e] Cap Retry-After wait at 60s\n 2 files changed, 12 insertions(+), 4 deletions(-)\n ! [rejected] 3.0-Remake -> 3.0-Remake (fetch first)\n\nExit code 1.".into(),
+            is_error: true,
+            images: Vec::new(),
+        },
+        START + 9_000,
+    );
+    conversation.apply(
+        &Event::Text("Committed as `4c8d10e`, but `git push` was rejected because the remote branch has newer commits.".into()),
+        START + 11_000,
+    );
+    conversation.finish(&Ok(Outcome::Done), START + 12_000);
+
+    let now = START + 30_000;
+    conversation.send("Rebase and commit the follow-up test too.", now - 6_000);
+    call(&mut conversation, "edit-s2", "edit", json!({ "path": "crates/wack-llm/src/retry.rs", "edits": [{ "old_text": "a", "new_text": "a\nb" }] }), Some("Edited."), now - 3_000);
+    conversation.apply(
+        &Event::ToolCall {
+            id: "commit-live".into(),
+            name: "bash".into(),
+            input: json!({ "command": "git add crates/wack-llm/src/retry.rs && git commit -m \"Add Retry-After ceiling test\"" }),
+        },
+        now - 1_000,
+    );
+    items(&conversation, &[], now)
+}

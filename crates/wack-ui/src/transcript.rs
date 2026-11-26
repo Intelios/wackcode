@@ -47,6 +47,8 @@ pub enum Item {
         files: Vec<AttachedFileShown>,
     },
     Work(Work),
+    /// A `git commit` call, lifted out of the work log as its own milestone row.
+    Commit(crate::commit::CommitRow),
     /// A reply's prose. `live`: still streaming in, so its newest words are fresh ink.
     Reply { blocks: Rc<Vec<markdown::Block>>, live: bool },
     /// The pictures a reply named (`![…](img:…)`), under it, and the references nothing answered.
@@ -337,6 +339,9 @@ fn gap_above(item: &Item, previous: Option<&Item>) -> f32 {
         (_, Item::Footer(_)) => 12.,
         (_, Item::Suggestions(_)) => 14.,
         (_, Item::Canvas(_)) => 12.,
+        (Some(Item::Commit(_)), Item::Commit(_)) => 8.,
+        (Some(Item::Work(_)), Item::Commit(_)) => 10.,
+        (Some(Item::Commit(_)), Item::Work(_)) => 12.,
         (Some(Item::Prompt { .. }), _) => 16.,
         _ => 18.,
     }
@@ -408,6 +413,7 @@ pub fn item(item: &Item, previous: Option<&Item>, theme: &Theme, handlers: &Hand
                 .into_any_element()
         }
         Item::Work(work) => work_log(work, theme, handlers).into_any_element(),
+        Item::Commit(commit) => crate::commit::view(commit, theme, handlers),
         Item::Reply { blocks, live } => reply_inked(blocks, *live && !handlers.still, theme, handlers).into_any_element(),
         Item::ReplyPictures { key, pictures, missing } => div()
             .flex()

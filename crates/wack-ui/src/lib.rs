@@ -17,6 +17,7 @@ pub mod chat_area;
 pub mod chat_transcript;
 pub mod colour;
 pub mod commands_page;
+pub mod commit;
 pub mod subagents_page;
 pub mod composer;
 pub mod computer_card;

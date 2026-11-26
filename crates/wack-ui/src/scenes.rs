@@ -238,6 +238,78 @@ pub fn all() -> Vec<Scene> {
             },
         },
         Scene {
+            name: "chat-commits",
+            description: "Commit milestone rows breaking work groups: a landed commit with hash pill and ±stats, and a second commit expanded to its command and output.",
+            size: size(px(1180.), px(900.)),
+            build: |_, cx| {
+                cx.new(|_| {
+                    Shell::showing_tabs(
+                        fixtures::sidebar(Selected::Finished),
+                        Screen::Chat {
+                            title: fixtures::FINISHED_TITLE.into(),
+                            project: fixtures::project(),
+                            body: Body::Items(fixtures::commits_turn()),
+                            composer: fixtures::composer_after_turn(Input::Drawn {
+                                text: None,
+                                placeholder: crate::chat::FOLLOW_UP_PLACEHOLDER.into(),
+                            }),
+                        },
+                        fixtures::strip(Some(fixtures::FINISHED_TITLE)),
+                    )
+                })
+                .into()
+            },
+        },
+        Scene {
+            name: "chat-commits-states",
+            description: "Commit milestone edge states: a refused commit in the plain error look, a landed commit whose chained push failed, and a live commit running.",
+            size: size(px(1180.), px(820.)),
+            build: |_, cx| {
+                cx.new(|_| {
+                    Shell::showing_tabs(
+                        fixtures::sidebar(Selected::Working),
+                        Screen::Chat {
+                            title: fixtures::WORKING_TITLE.into(),
+                            project: fixtures::project(),
+                            body: Body::Items(fixtures::commits_states_turn()),
+                            composer: ComposerData {
+                                activity: Some(("Working  ·  6s".into(), Some("Committing Add Retry-After ceiling test".into()))),
+                                waiting: Vec::new(),
+                                ..fixtures::composer_working()
+                            },
+                        },
+                        fixtures::strip(Some(fixtures::WORKING_TITLE)),
+                    )
+                })
+                .into()
+            },
+        },
+        Scene {
+            name: "chat-commits-backdrop",
+            description: "Commit milestone rows over an image backdrop: collapsed and expanded milestones breaking work groups on glass.",
+            size: size(px(1180.), px(900.)),
+            build: |_, cx| {
+                let picture = over(fixtures::backdrop(wack_core::Texture::None), cx);
+                cx.new(|_| {
+                    Shell::showing_tabs(
+                        fixtures::sidebar(Selected::Finished),
+                        Screen::Chat {
+                            title: fixtures::FINISHED_TITLE.into(),
+                            project: fixtures::project(),
+                            body: Body::Items(fixtures::commits_turn()),
+                            composer: fixtures::composer_after_turn(Input::Drawn {
+                                text: None,
+                                placeholder: crate::chat::FOLLOW_UP_PLACEHOLDER.into(),
+                            }),
+                        },
+                        fixtures::strip(Some(fixtures::FINISHED_TITLE)),
+                    )
+                    .with_backdrop(picture)
+                })
+                .into()
+            },
+        },
+        Scene {
             name: "suggestions",
             description: "The suggested-task tray under a settled turn: open, queued, started, opened-in and dismissed cards.",
             size: size(px(1180.), px(1240.)),

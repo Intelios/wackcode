@@ -1015,10 +1015,25 @@ impl ChatSession {
         if !self.mcp_starting.is_empty() {
             return Some(("Starting MCP servers…".into(), Some(self.mcp_starting.join(", ").into())));
         }
-        self.items.iter().rev().find_map(|item| match item {
+        if let Some(found) = self.items.iter().rev().find_map(|item| match item {
             Item::Work(work) if work.live => Some((work.summary.clone(), crate::work::activity(&work.rows).map(Into::into))),
             _ => None,
-        })
+        }) {
+            return Some(found);
+        }
+        // A live turn whose work ended on a commit (no trailing work group) still reports its
+        // elapsed time and, while the commit runs, what it is committing.
+        let Entry::Turn(turn) = self.conversation.entries.last()? else {
+            return None;
+        };
+        if !turn.live {
+            return None;
+        }
+        let step = self.items.iter().rev().find_map(|item| match item {
+            Item::Commit(commit) => commit.activity().map(Into::into),
+            _ => None,
+        });
+        Some((crate::work::summary(turn, now_millis()).into(), step))
     }
 
     /// Moves the command or the sub-agents the agent is waiting on to the background (⌘B).
@@ -1110,6 +1125,7 @@ impl ChatSession {
         for (index, span) in self.spans.iter().enumerate() {
             let holds = self.items[start..start + span].iter().any(|item| match item {
                 Item::Work(work) => work.key.as_ref() == key || work.rows.iter().any(|row| row.key.as_ref() == key),
+                Item::Commit(commit) => commit.key.as_ref() == key,
                 Item::News(row) => row.key.as_ref() == key,
                 Item::Prompt { command, files, .. } => {
                     command.as_ref().is_some_and(|command| command.key.as_ref() == key)

@@ -18,7 +18,7 @@ use crate::{
 };
 
 /// Diff and output details show at most this many lines.
-const DETAIL_LINES: usize = 60;
+pub(crate) const DETAIL_LINES: usize = 60;
 /// Unchanged lines kept around an edit's change.
 const CONTEXT_LINES: usize = 2;
 
@@ -127,25 +127,7 @@ pub fn entry_items(
             }
             Entry::Turn(turn) => {
                 let key = format!("turn-{index}");
-                if !turn.steps.is_empty() || turn.live {
-                    let rows: Vec<WorkRow> = turn
-                        .steps
-                        .iter()
-                        .enumerate()
-                        .map(|(step, item)| step_row(item, &format!("{key}-{step}"), cwd, turn.live, open, &conversation.agents, now))
-                        .collect();
-                    // Agents still out keep it open after the turn ends, as a live turn is.
-                    let agents_out = rows.iter().any(|row| row.agent.as_ref().is_some_and(|agent| agent.state.working()));
-                    items.push(Item::Work(Work {
-                        open: turn.live || agents_out || open.contains(&key),
-                        summary: summary(turn, now).into(),
-                        tally: tally(&rows).into(),
-                        live: turn.live,
-                        thinking: turn.live && turn.reply.trim().is_empty() && matches!(turn.steps.last(), Some(Step::Thought(_))),
-                        rows,
-                        key: key.clone().into(),
-                    }));
-                }
+                turn_work_items(turn, &key, cwd, open, &conversation.agents, now, items);
                 let outcomes: Vec<wack_canvas::tools::Outcome> = turn
                     .steps
                     .iter()
@@ -239,6 +221,103 @@ pub fn entry_items(
                 if !turn.live && let Some(footer) = footer(turn) {
                     items.push(Item::Footer(footer.into()));
                 }
+            }
+        }
+    }
+}
+
+/// Emits the work logs and standalone commit milestone rows for `turn`, splitting work groups
+/// wherever a `git commit` call lands so commits always stand visible in chronological order.
+fn turn_work_items(
+    turn: &Turn,
+    key: &str,
+    cwd: &Path,
+    open: &HashSet<String>,
+    agents: &HashMap<String, AgentInfo>,
+    now: u64,
+    items: &mut Vec<Item>,
+) {
+    if turn.steps.is_empty() {
+        if turn.live {
+            items.push(Item::Work(Work {
+                open: true,
+                summary: summary(turn, now).into(),
+                tally: "".into(),
+                live: true,
+                thinking: false,
+                rows: Vec::new(),
+                key: key.to_string().into(),
+            }));
+        }
+        return;
+    }
+
+    enum Chunk<'a> {
+        Work(Vec<(usize, &'a Step)>),
+        Commit(&'a ToolStep),
+    }
+
+    let mut chunks: Vec<Chunk<'_>> = Vec::new();
+    for (step_index, step) in turn.steps.iter().enumerate() {
+        if let Step::Tool(tool) = step
+            && crate::commit::is_commit_tool(tool)
+        {
+            chunks.push(Chunk::Commit(tool));
+        } else if let Some(Chunk::Work(group)) = chunks.last_mut() {
+            group.push((step_index, step));
+        } else {
+            chunks.push(Chunk::Work(vec![(step_index, step)]));
+        }
+    }
+
+    // While a turn is live, its latest step is a finished commit, and no reply has arrived yet,
+    // keep a live trailing work chip below the commit so the paddling duck shows the model is
+    // still working on what comes next.
+    if turn.live && turn.reply.trim().is_empty() && matches!(chunks.last(), Some(Chunk::Commit(tool)) if tool.result.is_some()) {
+        chunks.push(Chunk::Work(Vec::new()));
+    }
+
+    let work_count = chunks.iter().filter(|chunk| matches!(chunk, Chunk::Work(_))).count();
+    let last_chunk = chunks.len().saturating_sub(1);
+    let mut work_index = 0usize;
+
+    for (chunk_index, chunk) in chunks.into_iter().enumerate() {
+        let is_last = chunk_index == last_chunk;
+        match chunk {
+            Chunk::Commit(tool) => {
+                items.push(Item::Commit(crate::commit::from_tool(tool, turn.live, open.contains(&tool.id))));
+            }
+            Chunk::Work(steps) => {
+                // First work group keeps `turn-{index}`; later ones use `turn-{index}.{n}` (no
+                // extra `-`, so `AgentsPane::toggle` still recognises them as work-log keys).
+                let group_key = if work_index == 0 { key.to_string() } else { format!("{key}.{work_index}") };
+                work_index += 1;
+                let group_live = turn.live && is_last;
+                let rows: Vec<WorkRow> = steps
+                    .iter()
+                    .map(|(step_index, step)| step_row(step, &format!("{key}-{step_index}"), cwd, group_live, open, agents, now))
+                    .collect();
+                // Agents still out keep their work group open after it settles, as a live group is.
+                let agents_out = rows.iter().any(|row| row.agent.as_ref().is_some_and(|agent| agent.state.working()));
+                // Only a single work group in a settled turn carries the turn's total duration;
+                // when commits split a turn into several groups, each settled group reads "Worked".
+                let group_summary = if group_live || (work_count == 1 && !turn.live) {
+                    summary(turn, now)
+                } else {
+                    "Worked".to_string()
+                };
+                let thinking = group_live
+                    && turn.reply.trim().is_empty()
+                    && matches!(steps.last().map(|(_, step)| *step), Some(Step::Thought(_)));
+                items.push(Item::Work(Work {
+                    open: group_live || agents_out || open.contains(&group_key),
+                    summary: group_summary.into(),
+                    tally: tally(&rows).into(),
+                    live: group_live,
+                    thinking,
+                    rows,
+                    key: group_key.into(),
+                }));
             }
         }
     }
@@ -463,7 +542,7 @@ fn step_row(step: &Step, key: &str, cwd: &Path, live: bool, open: &HashSet<Strin
 }
 
 /// How a `bash` result says the command carried on in the background, if it did.
-fn background_note(result: &str) -> Option<&'static str> {
+pub(crate) fn background_note(result: &str) -> Option<&'static str> {
     if result.starts_with("Started in the background (ID:") {
         Some("in background")
     } else if result.starts_with("Command did not complete within its") {
@@ -529,7 +608,7 @@ pub fn news_row(news: &News, key: &str) -> WorkRow {
     WorkRow { key: key.to_string().into(), verb: verb.into(), target, meta, detail, open: false, agent: None, pictures: Vec::new() }
 }
 
-fn first_line(text: &str) -> String {
+pub(crate) fn first_line(text: &str) -> String {
     text.trim().lines().next().unwrap_or("").trim().to_string()
 }
 
@@ -553,7 +632,7 @@ fn result_lines(text: &str) -> usize {
     text.lines().filter(|line| !(line.starts_with('[') && line.ends_with(".]"))).filter(|line| !line.is_empty()).count()
 }
 
-fn plural(count: usize, one: &str, many: &str) -> String {
+pub(crate) fn plural(count: usize, one: &str, many: &str) -> String {
     format!("{count} {}", if count == 1 { one } else { many })
 }
 
@@ -1036,7 +1115,7 @@ fn todo_words(input: Option<&Value>) -> String {
     }
 }
 
-fn tail(text: &str, lines: usize) -> String {
+pub(crate) fn tail(text: &str, lines: usize) -> String {
     let all: Vec<&str> = text.lines().collect();
     if all.len() <= lines {
         return text.to_string();
@@ -1261,6 +1340,10 @@ fn doing(tool: &str, target: &str) -> String {
         "read" => format!("Reading {file}"),
         "write" => format!("Writing {file}"),
         "edit" => format!("Editing {file}"),
+        "bash" if crate::commit::is_git_commit(target) => match crate::commit::commit_message_subject(target) {
+            Some(subject) => format!("Committing {subject}"),
+            None => "Committing".into(),
+        },
         "bash" | "watch" => format!("Running {target}"),
         "grep" => format!("Searching {target}"),
         "find" => format!("Finding {target}"),
@@ -1743,5 +1826,111 @@ mod tests {
         assert!(matches!(&row.detail, Some(Detail::Text(text)) if text.starts_with("It's in agent.rs.")));
         let lost = News { tag: "agent:a1:interrupted".into(), text: "Agent a1 (explore · Find the loop) was stopped when WackCode quit, before it reported.".into() };
         assert_eq!(news_row(&lost, "n").verb.as_ref(), "Stopped");
+    }
+
+    #[test]
+    fn git_commits_break_work_groups_and_keep_ordinary_commands_inside() {
+        let mut conversation = Conversation::default();
+        conversation.send("Fix it and commit.", 1_000);
+        let apply = |conversation: &mut Conversation, id: &str, name: &str, input: Value, content: &str, is_error: bool| {
+            conversation.apply(&wack_core::Event::ToolCall { id: id.into(), name: name.into(), input }, 2_000);
+            conversation.apply(
+                &wack_core::Event::ToolResult { id: id.into(), name: name.into(), content: content.into(), is_error, images: Vec::new() },
+                3_000,
+            );
+        };
+        apply(&mut conversation, "r1", "read", json!({ "path": "src/a.rs" }), "line\n", false);
+        apply(&mut conversation, "b1", "bash", json!({ "command": "cargo test" }), "ok", false);
+        apply(
+            &mut conversation,
+            "c1",
+            "bash",
+            json!({ "command": "git add src/a.rs && git commit -m 'Fix a'", "description": "Commit the fix" }),
+            "[main a1b2c3d] Fix a\n 1 file changed, 3 insertions(+), 1 deletion(-)",
+            false,
+        );
+        apply(&mut conversation, "b2", "bash", json!({ "command": "git status" }), "nothing to commit", false);
+        apply(&mut conversation, "b3", "bash", json!({ "command": "git commit --dry-run -m 'Nope'" }), "dry run", false);
+        conversation.apply(&wack_core::Event::Text("All committed.".into()), 4_000);
+        conversation.finish(&Ok(wack_core::Outcome::Done), 12_000);
+
+        let items = items(&conversation, Path::new("/"), &HashSet::new(), 20_000, &mut ReplyCache::default());
+        assert!(matches!(&items[0], Item::Prompt { .. }));
+        let Item::Work(before) = &items[1] else { panic!("expected work group before commit: {items:?}") };
+        assert_eq!(before.key.as_ref(), "turn-1");
+        assert_eq!(before.summary.as_ref(), "Worked");
+        assert_eq!(before.tally.as_ref(), "1 read · 1 command");
+        assert!(!before.open && !before.live);
+
+        let Item::Commit(commit) = &items[2] else { panic!("expected standalone commit row: {items:?}") };
+        assert_eq!(commit.key.as_ref(), "c1");
+        assert_eq!(commit.subject.as_ref(), "Fix a");
+        assert_eq!(commit.state, crate::commit::CommitState::Landed { hash: "a1b2c3d".into(), failed: false });
+        assert_eq!((commit.files, commit.additions, commit.deletions), (Some(1), Some(3), Some(1)));
+
+        let Item::Work(after) = &items[3] else { panic!("expected work group after commit: {items:?}") };
+        assert_eq!(after.key.as_ref(), "turn-1.1");
+        assert_eq!(after.summary.as_ref(), "Worked");
+        assert_eq!(after.tally.as_ref(), "2 commands");
+        assert!(!after.open && !after.live);
+        assert!(matches!(&items[4], Item::Reply { .. }));
+    }
+
+    #[test]
+    fn a_commit_only_turn_and_a_live_committing_turn_emit_no_empty_work_group() {
+        let mut conversation = Conversation::default();
+        conversation.send("Commit now.", 1_000);
+        conversation.apply(
+            &wack_core::Event::ToolCall { id: "c1".into(), name: "bash".into(), input: json!({ "command": "git commit -m 'Ship it'" }) },
+            2_000,
+        );
+        let running = items(&conversation, Path::new("/"), &HashSet::new(), 5_000, &mut ReplyCache::default());
+        assert_eq!(running.len(), 2, "prompt + live commit only: {running:?}");
+        let Item::Commit(live_commit) = &running[1] else { panic!("expected commit") };
+        assert_eq!(live_commit.state, crate::commit::CommitState::Running);
+        assert_eq!(live_commit.activity().as_deref(), Some("Committing Ship it"));
+
+        // Once the commit lands, while the turn is still live with no reply yet, a live working
+        // chip appears below the commit until the reply begins or the turn ends.
+        conversation.apply(
+            &wack_core::Event::ToolResult {
+                id: "c1".into(),
+                name: "bash".into(),
+                content: "[main 9876543] Ship it\n 1 file changed, 2 insertions(+)".into(),
+                is_error: false,
+                images: Vec::new(),
+            },
+            6_000,
+        );
+        let waiting = items(&conversation, Path::new("/"), &HashSet::new(), 7_000, &mut ReplyCache::default());
+        assert!(matches!(&waiting[1], Item::Commit(_)));
+        assert!(matches!(&waiting[2], Item::Work(work) if work.live && work.rows.is_empty()));
+
+        conversation.apply(&wack_core::Event::Text("Shipped.".into()), 8_000);
+        let streaming = items(&conversation, Path::new("/"), &HashSet::new(), 9_000, &mut ReplyCache::default());
+        assert!(matches!(&streaming[1], Item::Commit(_)));
+        assert!(matches!(&streaming[2], Item::Reply { live: true, .. }));
+
+        conversation.finish(&Ok(wack_core::Outcome::Done), 10_000);
+        let settled = items(&conversation, Path::new("/"), &HashSet::new(), 11_000, &mut ReplyCache::default());
+        assert!(matches!(&settled[1], Item::Commit(_)));
+        assert!(matches!(&settled[2], Item::Reply { live: false, .. }));
+        assert!(matches!(&settled[3], Item::Footer(_)));
+    }
+
+    #[test]
+    fn a_single_work_group_before_a_commit_keeps_the_turns_duration_once_settled() {
+        let mut conversation = Conversation::default();
+        conversation.send("Fix and commit.", 1_000);
+        conversation.apply(&wack_core::Event::ToolCall { id: "r1".into(), name: "read".into(), input: json!({ "path": "a.rs" }) }, 2_000);
+        conversation.apply(&wack_core::Event::ToolResult { id: "r1".into(), name: "read".into(), content: "hi".into(), is_error: false, images: Vec::new() }, 3_000);
+        conversation.apply(&wack_core::Event::ToolCall { id: "c1".into(), name: "bash".into(), input: json!({ "command": "git commit -m 'Fix'" }) }, 4_000);
+        conversation.apply(&wack_core::Event::ToolResult { id: "c1".into(), name: "bash".into(), content: "[main 1234567] Fix".into(), is_error: false, images: Vec::new() }, 5_000);
+        conversation.finish(&Ok(wack_core::Outcome::Done), 20_000);
+
+        let items = items(&conversation, Path::new("/"), &HashSet::new(), 25_000, &mut ReplyCache::default());
+        let Item::Work(work) = &items[1] else { panic!("expected work group") };
+        assert_eq!(work.summary.as_ref(), "Worked for 19s");
+        assert!(matches!(&items[2], Item::Commit(_)));
     }
 }

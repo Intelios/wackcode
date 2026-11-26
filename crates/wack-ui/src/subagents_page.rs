@@ -23,7 +23,7 @@ use wack_core::{
 use crate::{
     actions::{
         AskDeleteAgent, CancelAgentDelete, ChooseAgentModel, ChooseDelegation, ChooseHelperModel, CloseAgent, ConfirmAgentDelete, DuplicateAgent,
-        NewAgent, OpenAgent, RevealMemory, SaveAgent, SwitchAgent, SwitchAgentFolder, ToggleHelperModels,
+        NewAgent, OpenAgent, RevealMemory, SaveAgent, SwitchAgent, SwitchAgentFolder, ToggleHelperModels, ChooseAgentTeam, ChooseTeamDefault, ToggleTeamModels,
     },
     button::{Button, Kind as ButtonKind},
     icon::Icon,
@@ -160,6 +160,7 @@ impl AgentEditor {
             steps: self.steps.clone(),
             prompt: self.prompt.clone(),
             model: self.model,
+            team: self.team.unwrap_or(Tier::Crew),
             access,
             restore: self.yours && self.over_builtin,
             delete: self.yours && !self.over_builtin,
@@ -180,6 +181,8 @@ pub struct EditorData {
     pub steps: Entity<TextField>,
     pub prompt: Entity<TextField>,
     pub model: ModelPref,
+    /// Where it runs while a chat's Team is on.
+    pub team: Tier,
     /// What its tools let it do, as the user is choosing them.
     pub access: SharedString,
     /// Trashing the user's file brings back the built-in.
@@ -200,6 +203,7 @@ pub struct SubagentsState {
     pub editor: Option<AgentEditor>,
     pub error: Option<SharedString>,
     pub helper_open: bool,
+    pub team_open: bool,
 }
 
 impl SubagentsState {
@@ -220,7 +224,16 @@ impl SubagentsState {
             models.iter().find(|listed| &listed.connection == connection && listed.model.as_ref() == model).map(|listed| listed.model.clone())
         });
         let helper_gone = picked.is_some() && helper.is_none();
+        let team_picked = config.team_default.as_ref().and_then(|choice| choice.connection.clone().zip(choice.model.clone()));
+        let team_default = team_picked.as_ref().and_then(|(connection, model)| {
+            models.iter().find(|listed| &listed.connection == connection && listed.model.as_ref() == model).map(|listed| listed.model.clone())
+        });
+        let team_gone = team_picked.is_some() && team_default.is_none();
         SubagentsData {
+            team_default,
+            team_gone,
+            team_picked,
+            team_open: self.team_open,
             delegation: config.delegation,
             helper,
             helper_gone,
@@ -248,6 +261,12 @@ pub struct SubagentsData {
     pub picked: Option<(String, String)>,
     pub models: Vec<TitleModel>,
     pub helper_open: bool,
+    /// The crew new Teams start with, when it is still listed.
+    pub team_default: Option<SharedString>,
+    /// The default crew chosen is gone: new Teams start with the first model there is.
+    pub team_gone: bool,
+    pub team_picked: Option<(String, String)>,
+    pub team_open: bool,
     pub titles: TitlesData,
     pub entries: Vec<AgentEntry>,
     pub problems: Vec<Problem>,
@@ -273,6 +292,7 @@ pub fn page(data: SubagentsData, theme: &Theme) -> AnyElement {
         page = page.child(div().typography(Type::Ui).text_color(theme.danger).child(error));
     }
     page.child(delegation_card(&data, theme))
+        .child(team_card(&data, theme))
         .child(agents_card(&data, theme))
         .child(folders_card(&data, theme))
         .child(crate::titles_card::card_view(data.titles, theme))
@@ -310,6 +330,88 @@ fn delegation_card(data: &SubagentsData, theme: &Theme) -> impl IntoElement {
         )
         .child(row("Helper model", Some(helper_about)).control(picker).view(theme))
         .when(data.helper_open, |card| card.child(helper_list(data, theme)))
+}
+
+/// Team: what it is, where it is switched on, and the crew new Teams start with.
+fn team_card(data: &SubagentsData, theme: &Theme) -> impl IntoElement {
+    let off = data.delegation == Delegation::Off;
+    let picker = pill(
+        "team-model",
+        data.team_default.clone().unwrap_or_else(|| "First model available".into()),
+        Some(if data.team_open { Icon::ChevronDown } else { Icon::ChevronRight }),
+        false,
+        theme,
+    )
+    .max_w(px(260.))
+    .on_click(dispatch(ToggleTeamModels))
+    .tag("team-model");
+    let about = if off {
+        "Sub-agents are off, so no chat can have a Team. Choose When it helps or Only when I ask above."
+    } else {
+        "A chat’s model leads: it plans, briefs and reviews, and a cheaper crew does most of the reading and typing. Switch it on from the model’s pill in a chat’s composer."
+    };
+    let crew_about = if data.team_gone {
+        "The crew chosen is gone, so new Teams start with the first model there is. Choose another."
+    } else {
+        "New Teams start with it, and choosing a crew in a chat makes it the default. Explore and General run on the crew; Review runs on the lead’s model."
+    };
+    card(Some("Team"), None, None, theme)
+        .child(
+            div()
+                .px(px(18.))
+                .pb(px(12.))
+                .flex()
+                .items_start()
+                .gap(px(10.))
+                .child(div().flex_none().pt(px(2.)).child(Icon::Duck.view(px(14.), if off { theme.warning } else { theme.accent_text })))
+                .child(div().flex_1().min_w_0().typography(Type::Small).text_color(if off { theme.warning } else { theme.text_dim }).child(about))
+                .tag("team-about"),
+        )
+        .child(row("Default crew", Some(crew_about)).control(picker).view(theme))
+        .when(data.team_open, |card| card.child(team_list(data, theme)))
+}
+
+const TEAM_TAGS: [&str; 6] = ["team-model-0", "team-model-1", "team-model-2", "team-model-3", "team-model-4", "team-model-5"];
+
+fn team_list(data: &SubagentsData, theme: &Theme) -> impl IntoElement {
+    let item = |id: (&'static str, usize), label: SharedString, ticked: bool, action: ChooseTeamDefault, tag: &'static str| {
+        div()
+            .id(id)
+            .px(px(10.))
+            .h(px(30.))
+            .rounded(px(8.))
+            .flex()
+            .items_center()
+            .gap(px(8.))
+            .cursor_pointer()
+            .hover(|row| row.bg(theme.hover))
+            .on_click(dispatch(action))
+            .child(div().flex_1().min_w_0().truncate().typography(Type::Ui).text_color(theme.text).child(label))
+            .when(ticked, |row| row.child(Icon::Check.view(px(14.), theme.accent_text)))
+            .tag(tag)
+    };
+    let mut list = div()
+        .mx(px(18.))
+        .mb(px(14.))
+        .p(px(6.))
+        .rounded(px(12.))
+        .bg(theme.window)
+        .border_1()
+        .border_color(theme.border)
+        .flex()
+        .flex_col()
+        .child(item(("team-model-row", usize::MAX), "First model available".into(), data.team_picked.is_none(), ChooseTeamDefault { connection: None, model: None }, "team-model-first"));
+    let mut last: Option<&str> = None;
+    for (index, listed) in data.models.iter().enumerate() {
+        if last != Some(listed.connection.as_str()) {
+            last = Some(listed.connection.as_str());
+            list = list.child(div().px(px(10.)).pt(px(10.)).pb(px(4.)).typography(Type::Label).text_color(theme.text_faint).child(listed.connection_name.clone()));
+        }
+        let ticked = data.team_picked.as_ref().is_some_and(|(connection, model)| connection == &listed.connection && model == listed.model.as_ref());
+        let action = ChooseTeamDefault { connection: Some(listed.connection.clone()), model: Some(listed.model.to_string()) };
+        list = list.child(item(("team-model-row", index), listed.model.clone(), ticked, action, TEAM_TAGS.get(index).copied().unwrap_or("team-model-more")));
+    }
+    list
 }
 
 /// Tags for the automation socket, which takes only fixed names.
@@ -453,7 +555,8 @@ fn agent_row(entry: &AgentEntry, theme: &Theme) -> impl IntoElement {
                         .child(div().min_w_0().truncate().typography(Type::UiStrong).text_color(theme.text).child(agent.name.clone()))
                         .child(badge(source, theme))
                         .child(badge(if agent.edits() { "Edits" } else { "No edits" }, theme))
-                        .when(agent.model == ModelPref::Helper, |line| line.child(badge("Helper model", theme))),
+                        .when(agent.model == ModelPref::Helper, |line| line.child(badge("Helper model", theme)))
+                        .when(agent.team == Some(Tier::Lead), |line| line.child(badge("Leads in a Team", theme))),
                 )
                 .child(div().typography(Type::Small).text_color(theme.text_dim).child(agent.description.clone())),
         )
@@ -552,6 +655,7 @@ fn editor_page(editor: &EditorData, theme: &Theme) -> impl IntoElement {
             .tag("agent-save"),
     );
     let models = [(ModelPref::Helper, "Helper model"), (ModelPref::Chat, "Chat’s model")];
+    let tiers = [(Tier::Crew, "Crew"), (Tier::Lead, "Lead’s model")];
     let mut form = card(None, None, None, theme)
         .child(
             div()
@@ -580,6 +684,11 @@ fn editor_page(editor: &EditorData, theme: &Theme) -> impl IntoElement {
         .child(
             row("Model", Some("The helper model is chosen on the Sub-agents page; the chat’s is whatever the chat runs on."))
                 .control(div().child(segmented("agent-model", &models, editor.model, |model| Box::new(ChooseAgentModel { helper: model == ModelPref::Helper }), theme)).tag("agent-model"))
+                .view(theme),
+        )
+        .child(
+            row("In a Team", Some("Where it runs while a chat’s Team is on. The crew for well-specified work; the lead’s model for judgment, such as reviews."))
+                .control(div().child(segmented("agent-team", &tiers, editor.team, |tier| Box::new(ChooseAgentTeam { lead: tier == Tier::Lead }), theme)).tag("agent-team"))
                 .view(theme),
         )
         .child(section(

@@ -348,6 +348,62 @@ pub fn all() -> Vec<Scene> {
             },
         },
         Scene {
+            name: "model-menu-team",
+            description: "The model menu with the Team switch at its foot, Team off.",
+            size: WINDOW,
+            build: |_, cx| {
+                cx.new(|_| {
+                    let composer = ComposerData {
+                        model: "claude-opus-5-5".into(),
+                        menu: Some(fixtures::model_menu_with_team(false)),
+                        ..fixtures::composer_after_turn(Input::Drawn { text: None, placeholder: crate::chat::FOLLOW_UP_PLACEHOLDER.into() })
+                    };
+                    Shell::showing(
+                        fixtures::sidebar(Selected::Finished),
+                        Screen::Chat { title: fixtures::FINISHED_TITLE.into(), project: fixtures::project(), body: Body::Items(fixtures::finished_turn()), composer },
+                    )
+                })
+                .into()
+            },
+        },
+        Scene {
+            name: "crew-picker",
+            description: "A Team's crew picker open from the crew's half of the pill: every model, the crew's reasoning, and Switch Team off.",
+            size: WINDOW,
+            build: |_, cx| {
+                cx.new(|_| {
+                    let composer = ComposerData {
+                        model: "claude-opus-5-5".into(),
+                        crew: Some(crate::composer::CrewPill { model: "claude-haiku-5-5".into(), ..fixtures::crew_pill(false) }),
+                        menu: Some(fixtures::crew_menu()),
+                        ..fixtures::composer_after_turn(Input::Drawn { text: None, placeholder: crate::chat::FOLLOW_UP_PLACEHOLDER.into() })
+                    };
+                    Shell::showing(
+                        fixtures::sidebar(Selected::Finished),
+                        Screen::Chat { title: fixtures::FINISHED_TITLE.into(), project: fixtures::project(), body: Body::Items(fixtures::finished_turn()), composer },
+                    )
+                })
+                .into()
+            },
+        },
+        Scene {
+            name: "composer-team",
+            description: "The model's pill split into lead and crew: Team off, on, with the crew's own effort, a crew whose model is gone holding Send, and locked by a run.",
+            size: size(px(760.), px(820.)),
+            build: |_, cx| {
+                let drawn = |text: Option<&str>| Input::Drawn { text: text.map(|text| text.to_string().into()), placeholder: crate::chat::FOLLOW_UP_PLACEHOLDER.into() };
+                let team = |crew| ComposerData { crew: Some(crew), ..fixtures::composer_after_turn(drawn(None)) };
+                let rows = vec![
+                    ("Team off", fixtures::composer_after_turn(drawn(None))),
+                    ("Team on", team(fixtures::crew_pill(false))),
+                    ("A crew with its own effort", team(crate::composer::CrewPill { effort: Some("Low".into()), ..fixtures::crew_pill(false) })),
+                    ("A crew whose model is gone", ComposerData { crew: Some(fixtures::crew_pill(true)), ..fixtures::composer_after_turn(drawn(Some("Split the parser out of retry.rs"))) }),
+                    ("Working", ComposerData { crew: Some(fixtures::crew_pill(false)), ..fixtures::composer_working() }),
+                ];
+                cx.new(|_| ComposerSheet { rows }).into()
+            },
+        },
+        Scene {
             name: "slash-menu",
             description: "The / menu over a chat's composer, following /re.",
             size: WINDOW,
@@ -516,6 +572,7 @@ pub fn all() -> Vec<Scene> {
                         menu: Some(crate::composer::MenuData {
                             kind: crate::app::Menu::Effort,
                             groups: crate::shell::effort_groups(&fixtures::reasoning_model().choices(), wack_core::Reasoning::High),
+                            team: None,
                         }),
                         ..fixtures::composer_after_turn(Input::Drawn { text: None, placeholder: crate::chat::FOLLOW_UP_PLACEHOLDER.into() })
                     };
@@ -545,6 +602,7 @@ pub fn all() -> Vec<Scene> {
                         menu: Some(crate::composer::MenuData {
                             kind: crate::app::Menu::Effort,
                             groups: crate::shell::effort_groups(&fixtures::reasoning_model().choices(), wack_core::Reasoning::Off),
+                            team: None,
                         }),
                         ..fixtures::composer_after_turn(Input::Drawn { text: None, placeholder: crate::chat::FOLLOW_UP_PLACEHOLDER.into() })
                     };
@@ -578,6 +636,7 @@ pub fn all() -> Vec<Scene> {
                         menu: Some(crate::composer::MenuData {
                             kind: crate::app::Menu::Effort,
                             groups: crate::shell::effort_groups(&fixtures::reasoning_model().choices(), wack_core::Reasoning::Ultra),
+                            team: None,
                         }),
                         ..fixtures::composer_after_turn(drawn)
                     };
@@ -2329,6 +2388,7 @@ fn subagents_scene(scene: SubagentsScene, backdrop: Option<crate::backdrop::Pict
         editor: None,
         error: None,
         helper_open: scene == SubagentsScene::List,
+        team_open: false,
     };
     if scene == SubagentsScene::Editor {
         let review = state.entries.iter().find(|entry| entry.agent.name == "review").map(|entry| entry.agent.clone());
@@ -2339,7 +2399,7 @@ fn subagents_scene(scene: SubagentsScene, backdrop: Option<crate::backdrop::Pict
         helper: Some(wack_core::ModelChoice { connection: Some(connections[0].id.clone()), model: connections[0].models.last().map(|model| model.id.clone()), effort: None }),
         off: vec!["docs-check".into()],
         tool_folders: vec!["claude".into()],
-        team_default: None,
+        team_default: Some(wack_core::ModelChoice { connection: Some(connections[0].id.clone()), model: connections[0].models.last().map(|model| model.id.clone()), effort: None }),
     };
     let titles = crate::titles_card::TitlesData::new(&wack_core::AutoTitleConfig { enabled: true, connection: Some(connections[0].id.clone()), model: connections[0].models.last().map(|model| model.id.clone()) }, &connections, false, None);
     let form = ProviderForm::new(cx);

@@ -137,7 +137,7 @@ fn mark(label: &str) -> Option<Icon> {
         "Blur" | "Dim" => Icon::Sliders,
         "Keep in view" => Icon::Pin,
         "Use memory" | "Memory" => Icon::Brain,
-        "Delegation" => Icon::Duck,
+        "Delegation" | "In a Team" | "Default crew" => Icon::Duck,
         "Helper model" | "Title model" | "Model" => Icon::Spark,
         "Automatic titles" => Icon::Pencil,
         "Web Fetch" => Icon::Link,

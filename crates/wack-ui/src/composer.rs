@@ -16,6 +16,11 @@
 //! bubbles, at the foot of the chat, with Steer now, Edit and Remove. An open question comes
 //! first: it stacks above the card, and while it is open the status line and the tab only report.
 //!
+//! A chat with its Team on splits the model's pill: the lead (the chat's model) and, sliding in
+//! beside it, the crew, which opens its own picker. The model picker's foot switches Team on or
+//! off. A crew whose model is gone dims its half and holds Send, saying why: a crew is never
+//! swapped for another model.
+//!
 //! The mode toggle is a recessed track with a pill that slides to the mode in force. Clicking
 //! Plan again switches to Ultra Plan and back; ⇧Tab cycles all three. It is locked while the
 //! agent works: a run keeps the mode it started with, unless the agent itself asks to plan.
@@ -40,7 +45,7 @@ use wack_core::{AgentMode, Reasoning, context::Kind};
 
 use crate::{
     actions::{
-        AttachPictures, ChooseEffort, ChooseModel, CloseMenu, RemoveAttachment, Compact, MoveToBackground, OpenEffortMenu, OpenModelMenu, Send, SetAgentMode, ShowTask,
+        AttachPictures, ChooseCrew, ChooseCrewEffort, ChooseEffort, ChooseModel, CloseMenu, OpenCrewMenu, SetTeam, RemoveAttachment, Compact, MoveToBackground, OpenEffortMenu, OpenModelMenu, Send, SetAgentMode, ShowTask,
         SlideEffort, Stop, StopTask, ToggleTasks, ToggleTodos, Unqueue, SteerQueued, RemoveQueued, InsertPasted, RemovePasted,
     },
     chat::ChangeCount,
@@ -75,6 +80,8 @@ pub struct ComposerData {
     pub effort: Option<SharedString>,
     /// The effort is Ultra: its word is drawn in the prism.
     pub ultra_effort: bool,
+    /// The chat's Team, while it is on: the crew's half of the model's pill.
+    pub crew: Option<CrewPill>,
     /// Build, Plan or Ultra Plan.
     pub mode: AgentMode,
     /// Whose composer this is (a chat's id, or the new chat's), so switching chats never plays
@@ -141,6 +148,31 @@ pub struct TaskLine {
 pub struct MenuData {
     pub kind: Menu,
     pub groups: Vec<MenuGroup>,
+    /// The model picker's foot: the Team switch, for a Code chat's composer.
+    pub team: Option<TeamRow>,
+}
+
+/// A Team's crew as its half of the model's pill shows it.
+#[derive(Clone, Debug)]
+pub struct CrewPill {
+    pub model: SharedString,
+    pub connection: SharedString,
+    /// The crew's effort, when it has one of its own.
+    pub effort: Option<SharedString>,
+    /// Why the Team can't work as it stands: its half dims and says so.
+    pub problem: Option<SharedString>,
+    /// The crew's model is gone: Send waits until another is chosen or Team is off.
+    pub missing: bool,
+}
+
+/// The Team switch at the model picker's foot.
+#[derive(Clone, Debug)]
+pub struct TeamRow {
+    pub on: bool,
+    /// A run is going: the Team stays as it started.
+    pub locked: bool,
+    /// Why Team can't be switched on (sub-agents are off), which disables the switch.
+    pub unavailable: Option<SharedString>,
 }
 
 #[derive(Clone, Debug)]
@@ -161,6 +193,10 @@ pub struct MenuItem {
 pub enum Choice {
     Model { connection: String, model: String },
     Effort(Option<Reasoning>),
+    /// A model for the Team's crew.
+    Crew { connection: String, model: String },
+    /// The crew's effort.
+    CrewEffort(Option<Reasoning>),
 }
 
 #[derive(Clone, Debug)]
@@ -256,9 +292,11 @@ impl RenderOnce for Composer {
             Input::Drawn { text, .. } => text.is_some(),
         };
         // Pictures alone make a message; pictures this model can't take hold Send back.
-        // So do comments drafted on a canvas, and pasted text.
+        // So do comments drafted on a canvas, and pasted text. A crew that is gone holds it too.
+        let crew_missing = data.crew.as_ref().filter(|crew| crew.missing).and_then(|crew| crew.problem.clone());
         let has_text = (has_text || !data.attachments.is_empty() || !data.pasted.is_empty() || data.comments.is_some())
-            && data.pictures_refused.is_none();
+            && data.pictures_refused.is_none()
+            && crew_missing.is_none();
 
         let field = match data.input.clone() {
             Input::Field(field) => div().child(field),
@@ -334,6 +372,11 @@ impl RenderOnce for Composer {
             });
             controls = controls.child(picker("effort", button, slider, false, viewport));
         }
+        // The lead's model and effort, then the crew's half: what each side runs on reads as one.
+        if let Some(crew) = data.crew.clone() {
+            let popover = menu_for(Menu::Crew).map(|menu| CrewPicker { menu, model: crew.model.clone() }.into_any_element());
+            controls = controls.child(crew_half(crew, popover, data.key.clone(), viewport, cx.reduce_motion(), &theme));
+        }
         controls = controls
             .child(div().flex_1())
             .when(!data.chat_area, |controls| {
@@ -378,6 +421,19 @@ impl RenderOnce for Composer {
             .children(status_line(&data, asking, &theme))
             .when_some(data.comments.clone(), |card, (count, canvas)| card.child(comments_chip(count, canvas, &theme)))
             .when(!data.attachments.is_empty() || !data.pasted.is_empty(), |card| card.child(tray(&data.attachments, &data.pasted, &theme)))
+            .when_some(crew_missing, |card, missing| {
+                card.child(
+                    div()
+                        .flex()
+                        .items_center()
+                        .gap(px(6.))
+                        .typography(Type::Small)
+                        .text_color(theme.warning)
+                        .child(Icon::Alert.view(px(12.), theme.warning))
+                        .child(missing)
+                        .tag("crew-missing"),
+                )
+            })
             .when_some(data.pictures_refused.clone(), |card, refused| {
                 card.child(
                     div()
@@ -1265,6 +1321,7 @@ fn picker(
 ) -> impl IntoElement {
     let open = match tag {
         "model" => Box::new(OpenModelMenu) as Box<dyn gpui::Action>,
+        "crew" => Box::new(OpenCrewMenu),
         _ => Box::new(OpenEffortMenu),
     };
     let button = button.on_click(move |_, window, cx| window.dispatch_action(open.boxed_clone(), cx)).tag(tag);
@@ -1432,7 +1489,7 @@ impl RenderOnce for EffortSlider {
             .iter()
             .map(|item| match item.choice {
                 Choice::Effort(effort) => effort,
-                Choice::Model { .. } => None,
+                Choice::Model { .. } | Choice::Crew { .. } | Choice::CrewEffort(_) => None,
             })
             .collect();
         let count = items.len();
@@ -1753,10 +1810,7 @@ impl RenderOnce for ModelPicker {
                     .tag("picker-back");
                 let mut list = div().flex().flex_col().child(back).child(div().mx(px(12.)).mb(px(4.)).h(px(1.)).bg(theme.border));
                 for (number, item) in group.items.iter().enumerate() {
-                    let action: Box<dyn gpui::Action> = match item.choice.clone() {
-                        Choice::Model { connection, model } => Box::new(ChooseModel { connection, model }),
-                        Choice::Effort(effort) => Box::new(ChooseEffort { effort }),
-                    };
+                    let action = item.choice.action();
                     list = list.child(
                         row(("menu-item", index * 1000 + number))
                             .when(item.selected, |row| row.bg(theme.accent_wash))
@@ -1802,6 +1856,231 @@ impl RenderOnce for ModelPicker {
             .border_color(theme.border_strong)
             .shadow_lg()
             .child(panel)
+            .when_some(self.menu.team, |card, team| card.child(team_row(team, &theme)))
+    }
+}
+
+impl Choice {
+    fn action(&self) -> Box<dyn gpui::Action> {
+        match self.clone() {
+            Choice::Model { connection, model } => Box::new(ChooseModel { connection, model }),
+            Choice::Effort(effort) => Box::new(ChooseEffort { effort }),
+            Choice::Crew { connection, model } => Box::new(ChooseCrew { connection, model }),
+            Choice::CrewEffort(effort) => Box::new(ChooseCrewEffort { effort }),
+        }
+    }
+}
+
+/// The model picker's foot: Team's switch, and what it means.
+fn team_row(team: TeamRow, theme: &Theme) -> impl IntoElement {
+    let enabled = !team.locked && (team.on || team.unavailable.is_none());
+    let hint: SharedString = match (&team.unavailable, team.on, team.locked) {
+        (_, _, true) => "The Team stays as it is until the agent finishes.".into(),
+        (Some(why), false, _) => why.clone(),
+        (_, true, _) => "This model leads; the crew does the reading and typing.".into(),
+        (_, false, _) => "Lead with this model; a cheaper crew does the typing.".into(),
+    };
+    div()
+        .id("team-row")
+        .mt(px(6.))
+        .mx(px(6.))
+        .pt(px(8.))
+        .px(px(8.))
+        .pb(px(2.))
+        .border_t_1()
+        .border_color(theme.border)
+        .flex()
+        .items_center()
+        .gap(px(10.))
+        .when(enabled, |row| row.cursor_pointer().on_click(move |_, window, cx| window.dispatch_action(Box::new(SetTeam { on: !team.on }), cx)))
+        .child(crate::motion::paddling(div().flex_none().child(Icon::Duck.view(px(14.), if team.on { theme.accent_text } else { theme.text_dim }))))
+        .child(
+            div()
+                .flex_1()
+                .min_w_0()
+                .flex()
+                .flex_col()
+                .child(div().typography(Type::UiStrong).text_color(theme.text).child("Team"))
+                .child(div().typography(Type::Small).text_color(if team.unavailable.is_some() && !team.on { theme.warning } else { theme.text_dim }).child(hint)),
+        )
+        .child(switch(team.on, enabled, theme))
+        .tag("team-row")
+}
+
+/// A small on/off switch: a capsule whose knob sits right when on.
+fn switch(on: bool, enabled: bool, theme: &Theme) -> impl IntoElement {
+    let track = if on { theme.accent_fill() } else { Background::from(theme.hover) };
+    div()
+        .flex_none()
+        .w(px(30.))
+        .h(px(18.))
+        .p(px(2.))
+        .rounded_full()
+        .bg(track)
+        .border_1()
+        .border_color(if on { theme.accent_line } else { theme.border_strong })
+        .when(!enabled, |track| track.opacity(0.5))
+        .flex()
+        .when(on, |track| track.justify_end())
+        .child(div().size(px(12.)).rounded_full().bg(if on { theme.on_accent } else { theme.text_dim }))
+}
+
+/// The crew's half of a Team's model pill: the duckling, the crew's model and its effort. It
+/// slides in beside the lead's half when Team goes on.
+fn crew_half(crew: CrewPill, popover: Option<gpui::AnyElement>, key: SharedString, viewport: gpui::Size<Pixels>, still: bool, theme: &Theme) -> impl IntoElement {
+    let ink = if crew.problem.is_some() { theme.warning } else { theme.text_soft };
+    let button = pill("crew")
+        .min_w(px(MODEL_MIN))
+        .gap(px(6.))
+        .text_color(ink)
+        .hover(|pill| pill.bg(theme.hover).text_color(if crew.problem.is_some() { theme.warning } else { theme.text }))
+        .tooltip(tip(match &crew.problem {
+            Some(problem) => problem.to_string(),
+            None => format!("Team crew: {}. Explore and General run on it; Review runs on the lead's model.", crew.model),
+        }))
+        .child(Icon::Duck.view(px(11.), if crew.problem.is_some() { theme.warning } else { theme.accent_text }))
+        .child(div().flex_none().typography(Type::Small).text_color(theme.text_faint).child("crew"))
+        .child(div().min_w_0().truncate().typography(Type::Ui).child(crew.model.clone()))
+        .when_some(crew.effort.clone(), |pill, effort| pill.child(div().flex_none().typography(Type::Small).text_color(theme.text_faint).child(effort)))
+        .child(Icon::ChevronDown.view(px(12.), theme.text_faint));
+    let half = div()
+        .flex()
+        .items_center()
+        .min_w(px(MODEL_MIN))
+        .child(div().flex_none().w(px(1.)).h(px(16.)).bg(theme.border_strong))
+        .child(picker("crew", button, popover, true, viewport));
+    if still {
+        half.into_any_element()
+    } else {
+        crate::motion::slide_in(ElementId::Name(format!("crew-arrives-{key}").into()), half, -14., 0.).into_any_element()
+    }
+}
+
+/// The crew's picker: every model of every connection that is on, in one list, then the crew's
+/// effort, then a way to switch the Team off.
+#[derive(IntoElement)]
+struct CrewPicker {
+    menu: MenuData,
+    /// The crew's model, as its pill names it.
+    model: SharedString,
+}
+
+impl RenderOnce for CrewPicker {
+    fn render(self, _window: &mut Window, cx: &mut App) -> impl IntoElement {
+        let theme = Theme::get(cx).clone();
+        let mut list = div()
+            .flex()
+            .flex_col()
+            .child(div().px(px(14.)).pt(px(4.)).typography(Type::Label).text_color(theme.text_dim).child("The crew"))
+            .child(
+                div()
+                    .px(px(14.))
+                    .pb(px(6.))
+                    .typography(Type::Small)
+                    .text_color(theme.text_faint)
+                    .child("Explore and General run on it. Review runs on the lead's model."),
+            );
+        let mut efforts = Vec::new();
+        for (index, group) in self.menu.groups.iter().enumerate() {
+            let crew_models = group.items.iter().any(|item| matches!(item.choice, Choice::Crew { .. }));
+            if !crew_models {
+                efforts.extend(group.items.iter().cloned());
+                continue;
+            }
+            if let Some(title) = &group.title {
+                list = list.child(div().px(px(14.)).pt(px(6.)).pb(px(2.)).typography(Type::Small).text_color(theme.text_faint).child(title.clone()));
+            }
+            for (number, item) in group.items.iter().enumerate() {
+                let action = item.choice.action();
+                list = list.child(
+                    div()
+                        .id(("crew-item", index * 1000 + number))
+                        .mx(px(6.))
+                        .px(px(8.))
+                        .h(px(30.))
+                        .rounded(px(8.))
+                        .flex()
+                        .items_center()
+                        .gap(px(8.))
+                        .cursor_pointer()
+                        .hover(|row| row.bg(theme.hover))
+                        .when(item.selected, |row| row.bg(theme.accent_wash))
+                        .on_click(move |_, window, cx| window.dispatch_action(action.boxed_clone(), cx))
+                        .child(
+                            div()
+                                .flex_1()
+                                .min_w_0()
+                                .truncate()
+                                .typography(if item.selected { Type::UiStrong } else { Type::Ui })
+                                .text_color(if item.selected { theme.accent_text } else { theme.text })
+                                .child(item.label.clone()),
+                        )
+                        .when_some(item.detail.clone(), |row, detail| row.child(div().flex_none().typography(Type::Small).text_color(theme.text_faint).child(detail)))
+                        .when(item.selected, |row| row.child(Icon::Check.view(px(13.), theme.accent_text))),
+                );
+            }
+        }
+        if !efforts.is_empty() {
+            let mut chips = div().px(px(12.)).pt(px(4.)).flex().flex_wrap().gap(px(4.));
+            for (number, item) in efforts.into_iter().enumerate() {
+                let action = item.choice.action();
+                chips = chips.child(
+                    div()
+                        .id(("crew-effort", number))
+                        .h(px(24.))
+                        .px(px(9.))
+                        .rounded_full()
+                        .flex()
+                        .items_center()
+                        .cursor_pointer()
+                        .border_1()
+                        .border_color(if item.selected { theme.accent_line } else { theme.border })
+                        .when(item.selected, |chip| chip.bg(theme.accent_wash))
+                        .hover(|chip| chip.bg(theme.hover))
+                        .typography(Type::Small)
+                        .text_color(if item.selected { theme.accent_text } else { theme.text_soft })
+                        .on_click(move |_, window, cx| window.dispatch_action(action.boxed_clone(), cx))
+                        .child(item.label.clone()),
+                );
+            }
+            list = list
+                .child(div().mx(px(12.)).mt(px(6.)).h(px(1.)).bg(theme.border))
+                .child(div().px(px(14.)).pt(px(8.)).typography(Type::Small).text_color(theme.text_faint).child(format!("{}'s reasoning", self.model)))
+                .child(chips);
+        }
+        list = list.child(
+            div()
+                .id("crew-team-off")
+                .mx(px(6.))
+                .mt(px(8.))
+                .px(px(8.))
+                .h(px(30.))
+                .rounded(px(8.))
+                .flex()
+                .items_center()
+                .gap(px(8.))
+                .cursor_pointer()
+                .hover(|row| row.bg(theme.hover))
+                .on_click(|_, window, cx| window.dispatch_action(Box::new(SetTeam { on: false }), cx))
+                .child(Icon::Close.view(px(12.), theme.text_dim))
+                .child(div().typography(Type::Ui).text_color(theme.text_soft).child("Switch Team off"))
+                .tag("crew-team-off"),
+        );
+        div()
+            .id("crew-menu")
+            .occlude()
+            .w(px(PICKER_WIDTH))
+            .max_h(px(440.))
+            .overflow_y_scroll()
+            .overflow_x_hidden()
+            .py(px(6.))
+            .rounded(px(14.))
+            .bg(theme.raised)
+            .border_1()
+            .border_color(theme.border_strong)
+            .shadow_lg()
+            .child(list)
+            .tag("crew-menu")
     }
 }
 

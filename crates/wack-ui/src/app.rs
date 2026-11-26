@@ -103,6 +103,8 @@ pub fn chat_area_outgoing(text: &str) -> Outgoing {
 pub enum Menu {
     Model,
     Effort,
+    /// The crew of the chat's Team: its model and effort.
+    Crew,
 }
 
 /// A new chat being written, kept as a tab while another is on screen.
@@ -189,6 +191,8 @@ pub struct AppState {
     pub lightbox: Option<crate::pictures::Lightbox>,
     /// The mode the new chat starts in.
     pub new_chat_mode: AgentMode,
+    /// The new chat's Team crew, carried into the chat its first message makes.
+    pub new_chat_team: Option<ModelChoice>,
     /// Why the last chat could not start, shown under the new-chat composer.
     pub notice: Option<SharedString>,
     /// Settings › Providers' connection editor.
@@ -435,6 +439,7 @@ impl AppState {
             commands: Vec::new(),
             literal: None,
             new_chat_mode: AgentMode::Build,
+            new_chat_team: None,
             notice: None,
             form,
             menu: None,
@@ -2137,6 +2142,12 @@ impl AppState {
             cx.notify();
             return;
         }
+        let team = if project.is_some() { self.new_chat_team.clone() } else { None };
+        if let Some(missing) = self.crew_missing(team.as_ref()) {
+            self.notice = Some(missing.into());
+            cx.notify();
+            return;
+        }
         let job = with_pictures(job, &pictures);
         self.sent_at = Some(std::time::Instant::now());
         let opening = if opening.is_empty() { pictures.iter().map(|picture| picture.name.to_string()).collect::<Vec<_>>().join(", ") } else { opening };
@@ -2156,6 +2167,11 @@ impl AppState {
                 return;
             }
         };
+        if team.is_some()
+            && let Err(message) = self.store.set_team(&chat.id, team)
+        {
+            self.notice = Some(message.into());
+        }
         // Preserve any Build/Run output panes opened on NewChat into the new chat's layout so
         // live command output stays visible seamlessly after the first message sends.
         let draft_panes = self.new_chat_panes.remove(project.as_deref().unwrap_or(CHAT_AREA_PANES));
@@ -2173,9 +2189,10 @@ impl AppState {
             }
             self.handed_tabs.insert(chat.id.clone(), tabs.clone());
         }
-        // The next new chat starts in Build again: a chat's mode is its own.
+        // The next new chat starts in Build again, without a Team: a chat's mode is its own.
         if project.is_some() {
             self.new_chat_mode = AgentMode::Build;
+            self.new_chat_team = None;
         }
         self.draft.update(cx, |draft, cx| draft.set_text("", cx));
         self.draft_attachments.clear();
@@ -2440,6 +2457,12 @@ impl AppState {
         self.pictures_refused(choice, pictures)
     }
 
+    /// Why a Team's crew holds Send: its model is gone, and a crew is never swapped for another.
+    pub fn crew_missing(&self, crew: Option<&ModelChoice>) -> Option<String> {
+        let crew = crew?;
+        self.store.resolve_crew(crew).is_none().then(|| self.store.team_problem(Some(crew)).unwrap_or_default())
+    }
+
     fn pictures_refused(&self, choice: &ModelChoice, pictures: usize) -> Option<String> {
         let resolved = self.store.resolve(choice)?;
         (pictures > 0 && !resolved.model.accepts_images).then(|| {
@@ -2554,6 +2577,86 @@ impl AppState {
             }
             _ => (self.new_chat_mode, false),
         }
+    }
+
+    /// The Team crew of the composer on screen (`None`: Team is off), and whether a run locks it.
+    pub fn team_on_screen(&self, cx: &App) -> (Option<ModelChoice>, bool) {
+        if self.area() == ChatKind::Chat {
+            return (None, true);
+        }
+        match &self.selection {
+            Selection::Chat(id) => {
+                let team = self.store.chat(id).and_then(|chat| chat.team.clone());
+                let locked = self.sessions.get(id).is_some_and(|session| session.read(cx).running());
+                (team, locked)
+            }
+            Selection::NewChat(_) => (self.new_chat_team.clone(), false),
+            _ => (None, true),
+        }
+    }
+
+    /// Switches the Team of the composer on screen on, with the default crew, or off. A chat
+    /// that is working keeps its Team until the run ends.
+    pub fn set_team(&mut self, on: bool, cx: &mut Context<Self>) {
+        let (team, locked) = self.team_on_screen(cx);
+        if locked || team.is_some() == on {
+            return;
+        }
+        let crew = if on {
+            match self.store.crew_to_start() {
+                Some(crew) => Some(crew),
+                None => {
+                    self.notice = Some("Add a connection in Settings › Providers to give the Team a crew.".into());
+                    cx.notify();
+                    return;
+                }
+            }
+        } else {
+            None
+        };
+        self.put_team(crew, cx);
+        // Turning it on opens the crew's menu, so the crew is chosen as well as switched on.
+        self.menu = on.then_some(Menu::Crew);
+        cx.notify();
+    }
+
+    /// The crew of the composer on screen's Team. A crew chosen becomes the default for new
+    /// Teams too. `effort` of `None` keeps the crew's effort as it is.
+    pub fn choose_crew(&mut self, connection: Option<String>, model: Option<String>, effort: Option<Option<Reasoning>>, cx: &mut Context<Self>) {
+        let (team, locked) = self.team_on_screen(cx);
+        let Some(current) = team.or_else(|| self.store.crew_to_start()) else { return };
+        if locked {
+            return;
+        }
+        let model_changed = model.is_some() && model != current.model;
+        let crew = ModelChoice {
+            connection: connection.or(current.connection),
+            model: model.or(current.model),
+            // A new model starts from its own default effort, unless one is chosen with it.
+            effort: effort.unwrap_or(if model_changed { None } else { current.effort }),
+        };
+        if let Err(message) = self.store.set_team_default(Some(crew.clone())) {
+            self.notice = Some(message.into());
+        }
+        self.put_team(Some(crew), cx);
+        if model_changed {
+            self.menu = None;
+        }
+        cx.notify();
+    }
+
+    /// Records the Team of the composer on screen.
+    fn put_team(&mut self, crew: Option<ModelChoice>, cx: &mut Context<Self>) {
+        match self.selection.clone() {
+            Selection::NewChat(_) => self.new_chat_team = crew,
+            Selection::Chat(id) => {
+                if let Err(message) = self.store.set_team(&id, crew) {
+                    self.notice = Some(message.into());
+                }
+            }
+            _ => {}
+        }
+        cx.notify();
     }
 
     /// Switches the composer on screen to `mode`. A chat that is working keeps its mode.
@@ -2935,6 +3038,10 @@ impl AppState {
         }
         if let Some(refused) = self.store.chat(chat).and_then(|listed| self.pictures_refused(&listed.choice, pictures.len())) {
             session.update(cx, |session, cx| session.note(refused, cx));
+            return;
+        }
+        if let Some(missing) = self.store.chat(chat).and_then(|listed| self.crew_missing(listed.team.as_ref())) {
+            session.update(cx, |session, cx| session.note(missing, cx));
             return;
         }
         let cwd = session.read(cx).cwd().to_path_buf();
@@ -4729,6 +4836,26 @@ impl AppState {
         self.watch_agent_editor(cx);
         cx.notify();
         field
+    }
+
+    pub fn toggle_team_models(&mut self, cx: &mut Context<Self>) {
+        self.subagents.team_open = !self.subagents.team_open;
+        cx.notify();
+    }
+
+    pub fn choose_team_default(&mut self, connection: Option<String>, model: Option<String>, cx: &mut Context<Self>) {
+        let choice = connection.zip(model).map(|(connection, model)| wack_core::ModelChoice { connection: Some(connection), model: Some(model), effort: None });
+        let result = self.store.set_team_default(choice);
+        self.subagents.team_open = false;
+        self.subagents_result(result, cx);
+    }
+
+    pub fn choose_agent_team(&mut self, lead: bool, cx: &mut Context<Self>) {
+        if let Some(editor) = self.subagents.editor.as_mut() {
+            editor.team = lead.then_some(wack_core::agents::Tier::Lead);
+            editor.error = None;
+            cx.notify();
+        }
     }
 
     pub fn choose_agent_model(&mut self, helper: bool, cx: &mut Context<Self>) {

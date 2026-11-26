@@ -85,6 +85,8 @@ actions!(
         ToggleConnectionKey,
         OpenModelMenu,
         OpenEffortMenu,
+        /// The crew half of a Team's model pill: the crew's models and effort.
+        OpenCrewMenu,
         CloseMenu,
         /// Moves focus to the next or previous field of a form.
         FocusNext,
@@ -220,6 +222,8 @@ actions!(
         CloseCommandEditor,
         /// Settings › Sub-agents: opens or closes the helper model list.
         ToggleHelperModels,
+        /// Settings › Sub-agents: opens or closes the default crew's model list.
+        ToggleTeamModels,
         /// Settings › Sub-agents: a new agent of the user's own.
         NewAgent,
         /// Settings › Sub-agents: a new agent starting as a copy of the one in the editor.
@@ -548,6 +552,28 @@ pub struct RemoveConnection {
 pub struct ChooseModel {
     pub connection: String,
     pub model: String,
+}
+
+/// Switches the Team of the composer on screen on (with the default crew) or off.
+#[derive(Clone, Debug, PartialEq, Action)]
+#[action(namespace = wackcode, no_json)]
+pub struct SetTeam {
+    pub on: bool,
+}
+
+/// The crew of the composer on screen's Team, which also becomes the default crew.
+#[derive(Clone, Debug, PartialEq, Action)]
+#[action(namespace = wackcode, no_json)]
+pub struct ChooseCrew {
+    pub connection: String,
+    pub model: String,
+}
+
+/// The crew's reasoning effort; `None` leaves it to the model's default.
+#[derive(Clone, Debug, PartialEq, Action)]
+#[action(namespace = wackcode, no_json)]
+pub struct ChooseCrewEffort {
+    pub effort: Option<Reasoning>,
 }
 
 /// `None` leaves the effort to the provider.
@@ -1200,6 +1226,21 @@ pub struct OpenAgent {
 #[action(namespace = wackcode, no_json)]
 pub struct ChooseAgentModel {
     pub helper: bool,
+}
+
+/// Settings › Sub-agents' editor: where the agent runs while a chat's Team is on.
+#[derive(Clone, Debug, PartialEq, Action)]
+#[action(namespace = wackcode, no_json)]
+pub struct ChooseAgentTeam {
+    pub lead: bool,
+}
+
+/// Settings › Sub-agents: the crew new Teams start with, or `None` for the first model there is.
+#[derive(Clone, Debug, PartialEq, Action)]
+#[action(namespace = wackcode, no_json)]
+pub struct ChooseTeamDefault {
+    pub connection: Option<String>,
+    pub model: Option<String>,
 }
 
 /// Settings › Sub-agents: another tool's agent folder, on or off.

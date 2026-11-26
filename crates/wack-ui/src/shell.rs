@@ -69,7 +69,7 @@ use crate::{
     edge_fade::faded,
     glass::{GLASS_BLUR, Lit, Under, glass},
     chat::ChatSession,
-    composer::{Choice, Composer, ComposerData, Input, MenuData, MenuGroup, MenuItem, Meter, Waiting},
+    composer::{Choice, Composer, ComposerData, CrewPill, Input, MenuData, MenuGroup, MenuItem, Meter, TeamRow, Waiting},
     motion,
     panes::{
         Axis, ChatPanes, Dock, Layout, PaneId, PaneKind, PaneModel, Rect,
@@ -1378,6 +1378,19 @@ impl Render for Shell {
                 }))
                 .on_action(cx.listener(|shell, _: &OpenModelMenu, _, cx| shell.open_menu(Menu::Model, cx)))
                 .on_action(cx.listener(|shell, _: &OpenEffortMenu, _, cx| shell.open_menu(Menu::Effort, cx)))
+                .on_action(cx.listener(|shell, _: &actions::OpenCrewMenu, _, cx| shell.open_menu(Menu::Crew, cx)))
+                .on_action(cx.listener(|shell, action: &actions::SetTeam, _, cx| {
+                    let on = action.on;
+                    shell.with_app(cx, |app, cx| app.set_team(on, cx));
+                }))
+                .on_action(cx.listener(|shell, action: &actions::ChooseCrew, _, cx| {
+                    let (connection, model) = (action.connection.clone(), action.model.clone());
+                    shell.with_app(cx, |app, cx| app.choose_crew(Some(connection), Some(model), None, cx));
+                }))
+                .on_action(cx.listener(|shell, action: &actions::ChooseCrewEffort, _, cx| {
+                    let effort = action.effort;
+                    shell.with_app(cx, |app, cx| app.choose_crew(None, None, Some(effort), cx));
+                }))
                 .on_action(cx.listener(|shell, _: &CloseMenu, _, cx| shell.with_app(cx, |app, cx| app.close_menu(cx))))
                 .on_action(cx.listener(|shell, action: &ChooseModel, _, cx| {
                     let (connection, model) = (action.connection.clone(), action.model.clone());
@@ -1689,6 +1702,15 @@ impl Render for Shell {
                 .on_action(cx.listener(|shell, action: &ChooseAgentModel, _, cx| {
                     let helper = action.helper;
                     shell.with_app(cx, |app, cx| app.choose_agent_model(helper, cx));
+                }))
+                .on_action(cx.listener(|shell, action: &actions::ChooseAgentTeam, _, cx| {
+                    let lead = action.lead;
+                    shell.with_app(cx, |app, cx| app.choose_agent_team(lead, cx));
+                }))
+                .on_action(cx.listener(|shell, _: &actions::ToggleTeamModels, _, cx| shell.with_app(cx, |app, cx| app.toggle_team_models(cx))))
+                .on_action(cx.listener(|shell, action: &actions::ChooseTeamDefault, _, cx| {
+                    let (connection, model) = (action.connection.clone(), action.model.clone());
+                    shell.with_app(cx, |app, cx| app.choose_team_default(connection, model, cx));
                 }))
                 .on_action(cx.listener(|shell, _: &SaveAgent, window, cx| {
                     shell.with_app(cx, |app, cx| app.save_agent(cx));
@@ -2422,6 +2444,7 @@ fn live_view(app: &AppState, cx: &App) -> (SidebarData, Screen, StripData) {
                     connection: connection_name(resolved.as_ref()),
                     effort,
                     ultra_effort: is_ultra(resolved.as_ref()),
+                    crew: None,
                     mode: AgentMode::Build,
                     key: "chat-area".into(),
                     meter: None,
@@ -2429,7 +2452,7 @@ fn live_view(app: &AppState, cx: &App) -> (SidebarData, Screen, StripData) {
                     working: false,
                     waiting: Vec::new(),
                     roomy: true,
-                    menu: menu_data(app, resolved.as_ref()),
+                    menu: menu_data(app, resolved.as_ref(), None),
                     slash: app.slash_data(None),
                     hint: None,
                     question: None,
@@ -2455,6 +2478,7 @@ fn live_view(app: &AppState, cx: &App) -> (SidebarData, Screen, StripData) {
                 let choice = store.defaults().clone();
                 let resolved = store.resolve(&choice);
                 let (model, effort) = model_words(resolved.as_ref());
+                let team = team_parts(app, app.new_chat_team.as_ref(), false);
                 Screen::NewChat {
                     project,
                     composer: ComposerData {
@@ -2465,6 +2489,7 @@ fn live_view(app: &AppState, cx: &App) -> (SidebarData, Screen, StripData) {
                         connection: connection_name(resolved.as_ref()),
                         effort,
                         ultra_effort: is_ultra(resolved.as_ref()),
+                        crew: team.0,
                         mode: app.new_chat_mode,
                         key: "new-chat".into(),
                         meter: None,
@@ -2472,7 +2497,7 @@ fn live_view(app: &AppState, cx: &App) -> (SidebarData, Screen, StripData) {
                         working: false,
                         waiting: Vec::new(),
                         roomy: true,
-                        menu: menu_data(app, resolved.as_ref()),
+                        menu: menu_data(app, resolved.as_ref(), Some(team.1)),
                         slash: app.slash_data(None),
                         hint: app.command_hint(None, cx),
                         question: None,
@@ -2503,6 +2528,7 @@ fn live_view(app: &AppState, cx: &App) -> (SidebarData, Screen, StripData) {
             let resolved = store.resolve(&chat.choice);
             let (model, effort) = model_words(resolved.as_ref());
             let state = session.read(cx);
+            let team = (!chat.is_chat_area()).then(|| team_parts(app, chat.team.as_ref(), state.running()));
             let window = resolved.as_ref().and_then(|resolved| resolved.model.context_window);
             let meter = state.context_tokens.map(|tokens| meter(tokens, window, !state.is_empty(), state.context_parts.clone()));
             let mut waiting: Vec<Waiting> =
@@ -2520,6 +2546,7 @@ fn live_view(app: &AppState, cx: &App) -> (SidebarData, Screen, StripData) {
                     connection: connection_name(resolved.as_ref()),
                     effort,
                     ultra_effort: is_ultra(resolved.as_ref()),
+                    crew: team.as_ref().and_then(|team| team.0.clone()),
                     mode: chat.mode,
                     key: chat.id.clone().into(),
                     meter,
@@ -2527,7 +2554,7 @@ fn live_view(app: &AppState, cx: &App) -> (SidebarData, Screen, StripData) {
                     working: state.running(),
                     waiting,
                     roomy: false,
-                    menu: menu_data(app, resolved.as_ref()),
+                    menu: menu_data(app, resolved.as_ref(), team.map(|team| team.1)),
                     slash: app.slash_data(Some(id)),
                     hint: (!chat.is_chat_area()).then(|| app.command_hint(Some(id), cx)).flatten(),
                     question: state.asking.as_ref().map(|asking| crate::question::QuestionData {
@@ -2590,9 +2617,37 @@ fn live_view(app: &AppState, cx: &App) -> (SidebarData, Screen, StripData) {
     (sidebar, screen, strip)
 }
 
-/// The open menu's choices, with the one in use marked.
-fn menu_data(app: &AppState, resolved: Option<&wack_core::Resolved>) -> Option<MenuData> {
+/// A Code composer's Team: the crew's half of the model's pill while Team is on, and the model
+/// picker's switch. `locked` while a run is going.
+fn team_parts(app: &AppState, crew: Option<&wack_core::ModelChoice>, locked: bool) -> (Option<CrewPill>, TeamRow) {
+    let store = app.store();
+    let unavailable = (store.agents_config().delegation == wack_core::agents::Delegation::Off)
+        .then(|| SharedString::from("Sub-agents are off in Settings › Sub-agents, so there is no one to lead."));
+    let pill = crew.map(|crew| {
+        let resolved = store.resolve_crew(crew);
+        let model = match &resolved {
+            Some(resolved) => model_name(&resolved.model.id),
+            None => crew.model.as_deref().map(model_name).unwrap_or_else(|| "No model".into()),
+        };
+        CrewPill {
+            model: model.into(),
+            connection: connection_name(resolved.as_ref()),
+            // Only an effort chosen for the crew is named; otherwise the model's own default runs.
+            effort: crew.effort.and(resolved.as_ref()).map(|resolved| resolved.effort.label().into()),
+            problem: store.team_problem(Some(crew)).map(Into::into),
+            missing: resolved.is_none(),
+        }
+    });
+    (pill, TeamRow { on: crew.is_some(), locked, unavailable })
+}
+
+/// The open menu's choices, with the one in use marked. `team` is the model picker's Team
+/// switch, for a Code chat's composer.
+fn menu_data(app: &AppState, resolved: Option<&wack_core::Resolved>, team: Option<TeamRow>) -> Option<MenuData> {
     let kind = app.menu?;
+    if kind == Menu::Crew {
+        return crew_menu(app, team);
+    }
     let groups = match kind {
         Menu::Model => app
             .store()
@@ -2617,8 +2672,53 @@ fn menu_data(app: &AppState, resolved: Option<&wack_core::Resolved>) -> Option<M
             Some(resolved) => effort_groups(&resolved.model.choices(), resolved.effort),
             None => effort_groups(&[wack_core::Reasoning::Off], wack_core::Reasoning::Off),
         },
+        Menu::Crew => Vec::new(),
     };
-    Some(MenuData { kind, groups })
+    let team = team.filter(|_| kind == Menu::Model);
+    Some(MenuData { kind, groups, team })
+}
+
+/// The crew's picker: every model of every connection that is on, the crew's marked, then its
+/// effort's levels (the model's own default first; never Ultra, which is the chat's own).
+fn crew_menu(app: &AppState, team: Option<TeamRow>) -> Option<MenuData> {
+    let crew = match app.selection() {
+        Selection::Chat(id) => app.store().chat(id).and_then(|chat| chat.team.clone()),
+        Selection::NewChat(_) => app.new_chat_team.clone(),
+        _ => None,
+    }?;
+    let store = app.store();
+    let mut groups: Vec<MenuGroup> = store
+        .enabled_connections()
+        .filter(|connection| !connection.models.is_empty())
+        .map(|connection| MenuGroup {
+            title: Some(connection.name.clone().into()),
+            items: connection
+                .models
+                .iter()
+                .map(|model| MenuItem {
+                    label: model_name(&model.id).into(),
+                    detail: model.context_window.map(|window| crate::work::count(window).into()),
+                    selected: crew.connection.as_deref() == Some(connection.id.as_str()) && crew.model.as_deref() == Some(model.id.as_str()),
+                    choice: Choice::Crew { connection: connection.id.clone(), model: model.id.clone() },
+                })
+                .collect(),
+        })
+        .collect();
+    if let Some(resolved) = store.resolve_crew(&crew) {
+        let levels: Vec<wack_core::Reasoning> = resolved.model.choices().into_iter().filter(|level| !level.is_ultra()).collect();
+        if levels.len() > 1 {
+            let mut items = vec![MenuItem { label: "Default".into(), detail: None, selected: crew.effort.is_none(), choice: Choice::CrewEffort(None) }];
+            items.extend(levels.into_iter().map(|level| MenuItem {
+                label: level.label().into(),
+                detail: None,
+                selected: crew.effort == Some(level),
+                choice: Choice::CrewEffort(Some(level)),
+            }));
+            groups.push(MenuGroup { title: None, items });
+        }
+    }
+    let _ = team;
+    Some(MenuData { kind: Menu::Crew, groups, team: None })
 }
 
 /// The effort menu: the levels the model lists in Settings › Providers (and Ultra above them),

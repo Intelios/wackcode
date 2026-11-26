@@ -129,6 +129,7 @@ pub fn composer_empty(roomy: bool) -> ComposerData {
         connection: "Testing".into(),
         effort: Some("Medium".into()),
         ultra_effort: false,
+        crew: None,
         mode: wack_core::AgentMode::Build,
         key: "scene".into(),
         meter: None,
@@ -226,7 +227,54 @@ pub fn model_menu() -> crate::composer::MenuData {
                 .collect(),
         })
         .collect();
-    MenuData { kind: crate::app::Menu::Model, groups }
+    MenuData { kind: crate::app::Menu::Model, groups, team: None }
+}
+
+/// A Team's crew on the Testing connection's cheaper model; `gone` when its model has left.
+pub fn crew_pill(gone: bool) -> crate::composer::CrewPill {
+    crate::composer::CrewPill {
+        model: if gone { "DeepSeek-V3.9-Flash".into() } else { "DeepSeek-V4.1-Flash-1017".into() },
+        connection: "Testing".into(),
+        effort: None,
+        problem: gone.then(|| "This chat's crew, deepseek-ai/DeepSeek-V3.9-Flash, is no longer available. Choose another crew, or switch Team off.".into()),
+        missing: gone,
+    }
+}
+
+/// The model menu with the Team switch at its foot.
+pub fn model_menu_with_team(on: bool) -> crate::composer::MenuData {
+    crate::composer::MenuData { team: Some(crate::composer::TeamRow { on, locked: false, unavailable: None }), ..model_menu() }
+}
+
+/// The crew's picker: both connections' models, DeepSeek chosen, and its reasoning levels.
+pub fn crew_menu() -> crate::composer::MenuData {
+    use crate::composer::{Choice, MenuData, MenuGroup, MenuItem};
+    let mut groups: Vec<MenuGroup> = connections()
+        .into_iter()
+        .map(|connection| MenuGroup {
+            title: Some(connection.name.clone().into()),
+            items: connection
+                .models
+                .iter()
+                .map(|model| MenuItem {
+                    label: crate::shell::model_name(&model.id).into(),
+                    detail: model.context_window.map(|window| work::count(window).into()),
+                    selected: model.id == "claude-haiku-5-5",
+                    choice: Choice::Crew { connection: connection.id.clone(), model: model.id.clone() },
+                })
+                .collect(),
+        })
+        .collect();
+    let levels = ["Default", "Low", "Medium", "High"];
+    groups.push(MenuGroup {
+        title: None,
+        items: levels
+            .iter()
+            .enumerate()
+            .map(|(index, label)| MenuItem { label: (*label).into(), detail: None, selected: index == 0, choice: Choice::CrewEffort(None) })
+            .collect(),
+    });
+    MenuData { kind: crate::app::Menu::Crew, groups, team: None }
 }
 
 pub const NEXT_MESSAGE: &str = "Now make retries honour Retry-After";

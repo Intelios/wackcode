@@ -1143,6 +1143,25 @@ fn agent_row(tool: &ToolStep, info: Option<&AgentInfo>, live: bool, now: u64) ->
     }
 }
 
+/// An agent as the Agents pane's Team overview lists it, from the registry alone.
+pub fn agent_line(info: &AgentInfo, now: u64) -> AgentLine {
+    AgentLine {
+        id: info.id.clone().into(),
+        role: role_name(&info.role).into(),
+        task: info.description.clone().into(),
+        state: agent_state(info),
+        words: live_words(info, now).into(),
+        round: info.round,
+        tier: info.tier,
+        files: owned_files(&info.files).into(),
+    }
+}
+
+/// Every token a model's calls used: what it read, cached or not, and what it wrote.
+pub fn spent(usage: &wack_core::Usage) -> u64 {
+    usage.input + usage.output + usage.cache_read + usage.cache_write
+}
+
 fn agent_state(info: &AgentInfo) -> AgentState {
     match &info.status {
         Status::Queued => AgentState::Queued,
@@ -1248,7 +1267,7 @@ fn doing(tool: &str, target: &str) -> String {
     }
 }
 
-fn tokens(count: u64) -> String {
+pub fn tokens(count: u64) -> String {
     match count {
         0..1_000 => format!("{count} tokens"),
         _ => format!("{}k tokens", (count + 500) / 1_000),

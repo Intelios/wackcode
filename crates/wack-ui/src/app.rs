@@ -193,6 +193,8 @@ pub struct AppState {
     pub new_chat_mode: AgentMode,
     /// The new chat's Team crew, carried into the chat its first message makes.
     pub new_chat_team: Option<ModelChoice>,
+    /// Team chats whose Agents pane has opened by itself for their first worker since launch.
+    team_pane_opened: HashSet<String>,
     /// Why the last chat could not start, shown under the new-chat composer.
     pub notice: Option<SharedString>,
     /// Settings › Providers' connection editor.
@@ -440,6 +442,7 @@ impl AppState {
             literal: None,
             new_chat_mode: AgentMode::Build,
             new_chat_team: None,
+            team_pane_opened: HashSet::new(),
             notice: None,
             form,
             menu: None,
@@ -3523,6 +3526,39 @@ impl AppState {
         }
     }
 
+    /// A Team chat as its Agents pane's overview shows it; `None` while its Team is off.
+    pub fn team_view(&self, id: &str, cx: &gpui::App) -> Option<crate::panes::agents::TeamView> {
+        let chat = self.store.chat(id)?;
+        let crew = chat.team.as_ref()?;
+        let session = self.sessions.get(id)?.read(cx);
+        let name = |choice: &ModelChoice| match self.store.resolve(choice) {
+            Some(resolved) => crate::shell::model_name(&resolved.model.id),
+            None => choice.model.as_deref().map(crate::shell::model_name).unwrap_or_else(|| "No model".into()),
+        };
+        Some(crate::panes::agents::TeamView {
+            lead: name(&chat.choice).into(),
+            crew: name(crew).into(),
+            lead_tokens: session.lead_tokens(),
+            todos: session.todos().visible().cloned().collect(),
+        })
+    }
+
+    /// A Team chat's first worker since launch opens its Agents pane on the overview, once.
+    fn team_worker_started(&mut self, id: &str, cx: &mut Context<Self>) {
+        let team = self.store.chat(id).is_some_and(|chat| chat.team.is_some());
+        if !team || !self.team_pane_opened.insert(id.to_string()) {
+            return;
+        }
+        if let Some(session) = self.sessions.get(id).cloned() {
+            session.update(cx, |session, cx| {
+                session.change_layout(cx, |layout| {
+                    layout.open(crate::panes::PaneKind::Agents);
+                });
+                session.panes.select_team(cx);
+            });
+        }
+    }
+
     fn ensure_session(&mut self, chat: &Chat, cx: &mut Context<Self>) -> Entity<ChatSession> {
         if let Some(session) = self.sessions.get(&chat.id) {
             return session.clone();
@@ -3566,6 +3602,13 @@ impl AppState {
             session
         });
         let id = chat.id.clone();
+        if !chat.is_chat_area() {
+            // The Agents pane reads the chat's Team from the app as it draws.
+            let app = cx.entity().downgrade();
+            let chat_id = id.clone();
+            let source: crate::panes::agents::TeamSource = std::rc::Rc::new(move |cx: &gpui::App| app.upgrade().and_then(|app| app.read(cx).team_view(&chat_id, cx)));
+            session.update(cx, |session, cx| session.panes.set_team_source(source, cx));
+        }
         // Cards read their dismissals and opened links from the store as it stands now.
         let view = self.suggestion_view(chat);
         session.update(cx, |session, cx| session.sync_suggestion_view(view, cx));
@@ -3596,6 +3639,7 @@ impl AppState {
                             });
                         }
                     }
+                    ChatEvent::AgentStarted => app.team_worker_started(&id, cx),
                     ChatEvent::AgentStartedCanvas => {
                         if let Some(session) = app.sessions.get(&id).cloned() {
                             session.update(cx, |session, cx| {

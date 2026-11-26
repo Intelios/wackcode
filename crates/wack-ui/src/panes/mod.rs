@@ -73,6 +73,8 @@ pub struct ChatPanes {
     tasks: Option<Tasks>,
     /// The chat's sub-agents, for its Agents pane.
     agents: Option<Agents>,
+    /// The chat's Team as its Agents pane shows it.
+    team: Option<agents::TeamSource>,
     /// The chat's browser tabs, for its Browser pane.
     browser: Option<wack_browser::ChatTabs>,
     /// The chat's canvases, for its Canvas pane.
@@ -90,6 +92,7 @@ impl ChatPanes {
             run_command: None,
             tasks: None,
             agents: None,
+            team: None,
             browser: None,
             canvases: None,
             models: HashMap::new(),
@@ -102,6 +105,25 @@ impl ChatPanes {
 
     pub fn set_agents(&mut self, agents: Agents) {
         self.agents = Some(agents);
+    }
+
+    /// Where the Agents pane reads the chat's Team from, now and for one made later.
+    pub fn set_team_source(&mut self, source: agents::TeamSource, cx: &mut App) {
+        self.team = Some(source.clone());
+        for (model, _) in self.models.values() {
+            if let PaneModel::Agents(pane) = model {
+                pane.update(cx, |pane, cx| pane.set_team_source(Some(source.clone()), cx));
+            }
+        }
+    }
+
+    /// Turns the Agents pane, if one has been made, to the Team overview.
+    pub fn select_team(&self, cx: &mut App) {
+        for (model, _) in self.models.values() {
+            if let PaneModel::Agents(pane) = model {
+                pane.update(cx, |pane, cx| pane.select_team(cx));
+            }
+        }
     }
 
     pub fn set_browser(&mut self, tabs: wack_browser::ChatTabs) {
@@ -243,7 +265,12 @@ impl ChatPanes {
                 }
                 PaneKind::Agents => {
                     let agents = self.agents.clone().unwrap_or_default();
-                    PaneModel::Agents(cx.new(|cx| AgentsPane::new(agents, folder, cx)))
+                    let team = self.team.clone();
+                    PaneModel::Agents(cx.new(|cx| {
+                        let mut pane = AgentsPane::new(agents, folder, cx);
+                        pane.set_team_source(team, cx);
+                        pane
+                    }))
                 }
                 PaneKind::Browser => {
                     let tabs = self.browser.clone().unwrap_or_else(|| wack_browser::ChatTabs::new(None));

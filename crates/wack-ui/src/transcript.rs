@@ -682,7 +682,7 @@ fn log_row(row: &WorkRow, live: bool, thinking: bool, theme: &Theme, handlers: &
 
 /// A sub-agent's row: its duck (paddling while it works), its role and task, how it stands, and a
 /// line of what it is doing or did. The whole row opens its work in the Agents pane.
-fn agent_row(key: &SharedString, agent: &AgentLine, theme: &Theme) -> AnyElement {
+pub fn agent_row(key: &SharedString, agent: &AgentLine, theme: &Theme) -> AnyElement {
     // A queued agent hasn't started: its duck waits, dimmed.
     let working = matches!(agent.state, AgentState::Working | AgentState::Background);
     let (word, colour) = agent_state_word(agent.state, theme);

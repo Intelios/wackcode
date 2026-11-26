@@ -90,6 +90,8 @@ pub enum ChatEvent {
     AgentStartedCanvas,
     /// The agent or a sub-agent opened a tab (Settings › Browser may show the pane).
     AgentOpenedTab,
+    /// The agent started a sub-agent: a Team chat's Agents pane may open on its overview.
+    AgentStarted,
 }
 
 pub struct ChatSession {
@@ -157,6 +159,8 @@ pub struct ChatSession {
     pub wake_paused: bool,
     /// Sub-agents the agent started, which outlive its runs.
     pub agents: Agents,
+    /// How many the registry listed when it last signalled, so a new one is noticed.
+    agents_seen: usize,
     /// The chat's browser tabs, which outlive its runs and the Browser pane.
     pub tabs: wack_browser::ChatTabs,
     /// The chat's canvases, which outlive its runs and the Canvas pane.
@@ -310,6 +314,7 @@ impl ChatSession {
             mcp_starting: Vec::new(),
             wakes: 0,
             wake_paused: false,
+            agents_seen: agents.list().len(),
             agents,
             tabs,
             comment_drafts: canvases.drafts(),
@@ -1049,6 +1054,20 @@ impl ChatSession {
         &self.conversation.todos
     }
 
+    /// Every token the chat's own model used since the user's latest message: its turns,
+    /// wakes included, not its agents'.
+    pub fn lead_tokens(&self) -> u64 {
+        let entries = &self.conversation.entries;
+        let start = entries.iter().rposition(|entry| matches!(entry, Entry::Prompt { steered: false, .. })).unwrap_or(0);
+        entries[start..]
+            .iter()
+            .filter_map(|entry| match entry {
+                Entry::Turn(turn) => Some(crate::work::spent(&turn.usage)),
+                _ => None,
+            })
+            .sum()
+    }
+
     /// Keeps "Working · 8s" counting.
     fn tick(&mut self, cx: &mut Context<Self>) {
         if self.run.is_some() && !self.compacting() {
@@ -1314,6 +1333,11 @@ fn watch_agents(agents: &Agents, cx: &mut Context<ChatSession>) -> Task<()> {
                     chat.sync_agents();
                     chat.panes.refresh_agents(cx);
                     cx.notify();
+                }
+                let count = chat.agents.list().len();
+                if count > chat.agents_seen {
+                    chat.agents_seen = count;
+                    cx.emit(ChatEvent::AgentStarted);
                 }
                 if news {
                     cx.emit(ChatEvent::AgentsNews);

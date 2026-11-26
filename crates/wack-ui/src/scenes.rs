@@ -1844,6 +1844,21 @@ pub fn all() -> Vec<Scene> {
             },
         },
         Scene {
+            name: "agents-pane-team",
+            description: "The Agents pane's Team overview: lead and crew, what each spent, the plan and the request's workers.",
+            size: size(px(1480.), px(1000.)),
+            build: |_, cx| team_pane_scene(None, cx),
+        },
+        Scene {
+            name: "agents-pane-team-backdrop",
+            description: "The Team overview over a backdrop.",
+            size: size(px(1480.), px(1000.)),
+            build: |_, cx| {
+                let picture = over(fixtures::backdrop(wack_core::Texture::None), cx);
+                team_pane_scene(Some(picture), cx)
+            },
+        },
+        Scene {
             name: "build-run-narrow",
             description: "Smallest window (716pt): compact icon-only Build and Run buttons in the chat's header.",
             size: size(px(716.), px(720.)),
@@ -2371,6 +2386,42 @@ fn agents_scene(backdrop: Option<crate::backdrop::Picture>, cx: &mut App) -> Any
                 project: fixtures::project(),
                 body: Body::Items(fixtures::agent_turn()),
                 composer: fixtures::composer_agents(),
+            },
+            fixtures::strip(Some(fixtures::WORKING_TITLE)),
+        )
+        .with_panes(panes, false);
+        match backdrop {
+            Some(picture) => shell.with_backdrop(picture),
+            None => shell,
+        }
+    })
+    .into()
+}
+
+/// A Team chat with its Agents pane on the Team overview.
+fn team_pane_scene(backdrop: Option<crate::backdrop::Picture>, cx: &mut App) -> AnyView {
+    cx.new(|cx| {
+        let mut layout = Layout::default();
+        let id = layout.open(PaneKind::Agents);
+        layout.right_width = Some(560.);
+        let mut panes = ChatPanes::new(layout, "/Users/you/Documents/GitHub/wackcode".into());
+        let source: crate::panes::agents::TeamSource = std::rc::Rc::new(|_: &App| Some(fixtures::team_view()));
+        panes.insert(
+            id,
+            PaneModel::Agents(cx.new(|cx| {
+                let mut pane = AgentsPane::new(fixtures::team_registry(), "/Users/you/Documents/GitHub/wackcode".into(), cx);
+                pane.set_team_source(Some(source), cx);
+                pane
+            })),
+            cx,
+        );
+        let shell = Shell::showing_tabs(
+            fixtures::sidebar(Selected::Working),
+            Screen::Chat {
+                title: fixtures::WORKING_TITLE.into(),
+                project: fixtures::project(),
+                body: Body::Items(fixtures::team_turn(false)),
+                composer: fixtures::composer_team(false),
             },
             fixtures::strip(Some(fixtures::WORKING_TITLE)),
         )

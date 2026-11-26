@@ -1825,6 +1825,7 @@ impl Render for Shell {
                 }))
                 .on_action(cx.listener(|shell, _: &ShowTeam, _, cx| {
                     shell.change_layout(cx, |layout| layout.open(PaneKind::Agents));
+                    shell.with_session(cx, |session, cx| session.panes.select_team(cx));
                 }))
                 .on_action(cx.listener(|shell, action: &ShowAgent, _, cx| {
                     let id = action.id.to_string();

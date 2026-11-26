@@ -1256,6 +1256,41 @@ pub fn agents_registry(folder: &Path) -> wack_core::agents::Agents {
     registry
 }
 
+/// The Team's workers in a registry, as the Agents pane reads them.
+pub fn team_registry() -> wack_core::agents::Agents {
+    let registry = wack_core::agents::Agents::new();
+    for info in team_agents(wack_core::tasks::now_millis(), false) {
+        registry.insert_fixture(info);
+    }
+    registry
+}
+
+/// The Team's chat side for the Agents pane: GLM leads DeepSeek, and the lead's plan.
+pub fn team_view() -> crate::panes::agents::TeamView {
+    use wack_core::todo::{Status, Task};
+    let task = |id, subject: &str, status, active: Option<&str>, blocked_by: Vec<u64>| Task {
+        id,
+        subject: subject.into(),
+        description: None,
+        active_form: active.map(Into::into),
+        status,
+        blocked_by,
+    };
+    crate::panes::agents::TeamView {
+        lead: "GLM-5.3-Flash".into(),
+        crew: "DeepSeek-V4.1-Flash-1017".into(),
+        lead_tokens: 182_400,
+        todos: vec![
+            task(1, "Map the retry callers", Status::Completed, None, vec![]),
+            task(2, "Settle the RetryAfter type", Status::Completed, None, vec![]),
+            task(3, "Parse both Retry-After forms", Status::InProgress, Some("parsing the header"), vec![2]),
+            task(4, "Cap every wait at MAX_WAIT", Status::InProgress, Some("capping the waits"), vec![2]),
+            task(5, "Test both header forms", Status::Pending, None, vec![3]),
+            task(6, "Review the change and run the tests", Status::Pending, None, vec![3, 4, 5]),
+        ],
+    }
+}
+
 /// A still of a web page for the Browser pane's scenes, which have no engine: a site bar, a
 /// heading, text and a sign-up form, drawn once into `target/gallery`.
 pub fn page_picture(width: u32, height: u32) -> PathBuf {

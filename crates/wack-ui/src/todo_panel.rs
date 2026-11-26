@@ -118,7 +118,8 @@ pub fn todo_panel(data: TodoData, theme: &Theme) -> impl IntoElement {
 /// How long a tick takes to land.
 const TICK: std::time::Duration = std::time::Duration::from_millis(320);
 
-fn row(task: &Task, show_ids: bool, theme: &Theme) -> impl IntoElement {
+/// One task as the list draws it: its mark, its subject, what it waits on.
+pub fn row(task: &Task, show_ids: bool, theme: &Theme) -> impl IntoElement + use<> {
     let done = task.status == Status::Completed;
     let working = task.status == Status::InProgress;
     let mark = div().flex_none().size(px(14.)).flex().items_center().justify_center().child(if done {

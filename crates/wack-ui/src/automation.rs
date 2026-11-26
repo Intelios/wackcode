@@ -270,6 +270,7 @@ async fn run(command: Command, cx: &mut AsyncApp) -> Result<Value, String> {
             settle(window, cx).await;
             on_window(window, cx, |window, cx| {
                 let viewport = window.viewport_size();
+                let bounds = window.bounds();
                 let tags: Vec<Value> = tags::tags(window, cx)
                     .into_iter()
                     .map(|tag| {
@@ -285,6 +286,8 @@ async fn run(command: Command, cx: &mut AsyncApp) -> Result<Value, String> {
                 json!({
                     "ok": true,
                     "window": {
+                        "x": f32::from(bounds.origin.x),
+                        "y": f32::from(bounds.origin.y),
                         "width": f32::from(viewport.width),
                         "height": f32::from(viewport.height),
                         "scale": window.scale_factor(),

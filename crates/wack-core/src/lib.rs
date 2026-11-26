@@ -47,7 +47,7 @@ pub use runner::{CommandEvent, CommandInfo, CommandSession, CommandStatus, Runne
 pub use usage::{RunRecorder, UsageStatus, UsageWriter};
 pub use store::{
     BrowserConfig, Chat, ChatKind, CommandKind, Connection, DEFAULT_EFFORTS, MODEL_MISSING_MESSAGE, Model, ModelChoice, NewConnection, Project, Reasoning,
-    Resolved, Store, SuggestionOrigin, Ui, title_from,
+    Resolved, Store, SuggestionOrigin, Ui, WindowState, title_from,
 };
 
 // What the UI needs from the layers below, so it depends on the engine alone.

@@ -24,7 +24,7 @@ use gpui::{App, AppContext, Context, Entity, FocusHandle, Focusable, SharedStrin
 use gpui_tokio::Tokio;
 use wack_core::{
     AgentMode, Appearance, Chat, ChatKind, CommandEvent, CommandKind, CommandStatus, Job, ModelChoice, Outcome,
-    AutoTitleConfig, Project, Reasoning, Runner, Store, Ui, WireFormat,
+    AutoTitleConfig, Project, Reasoning, Runner, Store, Ui, WindowState, WireFormat,
     chat_refs::{self, ChatRef},
     files::{self, WorkspaceFiles},
     skills::{Command, CommandUse, Outgoing, active_slash, find, matching, parse_line, pick, resolve_message},
@@ -274,6 +274,10 @@ pub struct AppState {
     /// Chats whose pane layout changed since it was last saved.
     unsaved_layouts: HashSet<String>,
     saving_layouts: Option<Task<()>>,
+    /// Normal-mode window geometry waiting for a move/resize drag to settle (or exit) before
+    /// writing `state.json`.
+    pending_window: Option<WindowState>,
+    saving_window: Option<Task<()>>,
     /// The connection editor's fields, re-subscribed whenever its model rows change.
     form_subscriptions: Vec<Subscription>,
     /// Automatic titles being asked for, by chat: the attempt and the request. Only the current
@@ -350,6 +354,7 @@ pub enum RenamePlace {
 
 impl Drop for AppState {
     fn drop(&mut self) {
+        self.flush_window();
         self.runs.terminate_all();
     }
 }
@@ -393,7 +398,11 @@ impl AppState {
                 cx.notify();
             }
         });
-        let subscriptions = vec![draft_subscription, search_subscription];
+        let quit_subscription = cx.on_app_quit(|app, _| {
+            app.flush_window();
+            async {}
+        });
+        let subscriptions = vec![draft_subscription, search_subscription, quit_subscription];
         let ui = store.ui().clone();
         // A fresh app: no tabs, no chat in front, and a new chat in the project last worked in (as
         // version 2 opened), rather than wherever the last one was left.
@@ -507,6 +516,8 @@ impl AppState {
             sidebar_hidden: ui.sidebar_hidden,
             unsaved_layouts: HashSet::new(),
             saving_layouts: None,
+            pending_window: None,
+            saving_window: None,
             form_subscriptions: Vec::new(),
             catalog: Default::default(),
             fetch_subscription: None,
@@ -1559,8 +1570,40 @@ impl AppState {
             .current_project()
             .map(|project| project.id.clone())
             .or_else(|| self.store.ui().last_project.clone().filter(|id| self.store.project(id).is_some()));
-        let ui = Ui { sidebar_hidden: self.sidebar_hidden, last_project, area: self.area() };
+        let window = self.pending_window.take().or_else(|| self.store.ui().window.clone());
+        self.saving_window = None;
+        let ui = Ui { sidebar_hidden: self.sidebar_hidden, last_project, area: self.area(), window };
         if let Err(message) = self.store.set_ui(ui) {
+            self.notice = Some(message.into());
+        }
+    }
+
+    /// Records a normal-mode window move or resize, saving once the drag settles (and on exit).
+    pub fn record_window(&mut self, window: WindowState, cx: &mut Context<Self>) {
+        let current = self.pending_window.as_ref().or(self.store.ui().window.as_ref());
+        if current == Some(&window) {
+            return;
+        }
+        self.pending_window = Some(window);
+        self.saving_window = Some(cx.spawn(async move |app, cx| {
+            cx.background_executor().timer(LAYOUT_SAVE_DELAY).await;
+            let _ = app.update(cx, |app, _| app.flush_window());
+        }));
+    }
+
+    /// Drops an un-flushed move/resize (for example a transition frame while entering fullscreen).
+    pub fn cancel_pending_window(&mut self) {
+        self.pending_window = None;
+        self.saving_window = None;
+    }
+
+    /// Writes any pending window geometry to `state.json`.
+    pub fn flush_window(&mut self) {
+        self.saving_window = None;
+        let Some(window) = self.pending_window.take() else {
+            return;
+        };
+        if let Err(message) = self.store.set_window(window) {
             self.notice = Some(message.into());
         }
     }

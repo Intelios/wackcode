@@ -3,17 +3,17 @@
 use std::{cell::RefCell, rc::Rc};
 
 use gpui::{
-    App, Bounds, KeyBinding, Menu, MenuItem, SystemMenuType, TitlebarOptions, WeakEntity, WindowBounds,
-    WindowOptions, actions, point, prelude::*, px, size,
+    App, KeyBinding, Menu, MenuItem, SystemMenuType, TitlebarOptions, WeakEntity, WindowOptions, actions,
+    point, prelude::*, px,
 };
 use wack_ui::{
     actions::{
         AddFolder, ArchiveCurrentChat, CloseTab, CopyScratchpadPath, EnterChatArea, EnterCodeArea, NewChat, NewTerminal, NextTab, OpenSettings, PreviousTab, RenameChat,
         RevealScratchpad, ToggleChanges, ToggleSidebar, ToggleTerminal,
     },
-    panes::solve::{CONTENT_MIN_HEIGHT, WINDOW_MIN_WIDTH},
-    shell::{FRAME_GUTTER, Shell, TITLE_STRIP_HEIGHT, TRAFFIC_LIGHTS},
-    text_field,
+    app::AppState,
+    shell::{Shell, TRAFFIC_LIGHTS},
+    text_field, window_state,
 };
 
 actions!(wackcode, [Quit]);
@@ -29,9 +29,9 @@ fn main() {
         wack_ui::init(cx);
 
         let shell_ref: Rc<RefCell<Option<WeakEntity<Shell>>>> = Rc::new(RefCell::new(None));
-        let shutdown_shell = |shell_ref: &Rc<RefCell<Option<WeakEntity<Shell>>>>, cx: &App| {
+        let shutdown_shell = |shell_ref: &Rc<RefCell<Option<WeakEntity<Shell>>>>, cx: &mut App| {
             if let Some(shell) = shell_ref.borrow().as_ref().and_then(WeakEntity::upgrade) {
-                shell.read_with(cx, |shell, cx| shell.shutdown(cx));
+                shell.update(cx, |shell, cx| shell.shutdown(cx));
             }
         };
 
@@ -97,12 +97,12 @@ fn main() {
         })
         .detach();
 
+        let opened = AppState::open_store();
+        let saved_window = opened.as_ref().ok().and_then(|store| store.ui().window.as_ref());
+        let (display_id, window_bounds) = window_state::restore(saved_window, cx);
         let options = WindowOptions {
-            window_bounds: Some(WindowBounds::Windowed(Bounds::centered(
-                None,
-                size(px(1180.), px(760.)),
-                cx,
-            ))),
+            display_id,
+            window_bounds: Some(window_bounds),
             titlebar: Some(TitlebarOptions {
                 title: Some("WackCode".into()),
                 appears_transparent: true,
@@ -110,17 +110,14 @@ fn main() {
             }),
             // The shell draws the title strip and moves the window itself (`wack_ui::shell`).
             app_owns_titlebar_drag: true,
-            // The solver keeps the transcript readable down to this size (`panes::solve`).
+            // The solver keeps the transcript readable down to this size (`panes::solve`),
             // and the frame's gutters go round that.
-            window_min_size: Some(size(
-                px(WINDOW_MIN_WIDTH) + FRAME_GUTTER * 2.,
-                px(CONTENT_MIN_HEIGHT) + TITLE_STRIP_HEIGHT + FRAME_GUTTER,
-            )),
+            window_min_size: Some(window_state::min_size()),
             ..Default::default()
         };
         if let Err(error) = cx.open_window(options, |window, cx| {
             wack_ui::theme::follow_system_appearance(window);
-            let shell = cx.new(|cx| Shell::new(window, cx));
+            let shell = cx.new(|cx| Shell::with_store(opened, window, cx));
             *shell_ref.borrow_mut() = Some(shell.downgrade());
             shell
         }) {

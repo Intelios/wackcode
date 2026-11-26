@@ -358,8 +358,27 @@ impl Chat {
     }
 }
 
+/// The main window's last normal-mode geometry in logical points, relative to its display's
+/// top-left corner (`wack_ui::window_state` records, restores and clamps it against live
+/// monitors). Absent until the user moves or resizes the window.
+#[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
+pub struct WindowState {
+    pub width: f32,
+    pub height: f32,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub x: Option<f32>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub y: Option<f32>,
+    /// Persistent UUID of the display the window was on, so a window left on a second monitor
+    /// returns to that monitor even if displays are rearranged, and pulls onto a connected
+    /// monitor if it was unplugged.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub display: Option<String>,
+}
+
 /// How the window was left. The window itself opens on a fresh new chat, as version 2 did, so
-/// only what is not about a chat is kept: the sidebar's side, and the project that new chat is in.
+/// only what is not about a chat is kept: the sidebar's side, the project that new chat is in,
+/// the area, and the window's size and position.
 #[derive(Clone, Debug, Default, PartialEq, Serialize, Deserialize)]
 pub struct Ui {
     #[serde(default)]
@@ -371,6 +390,9 @@ pub struct Ui {
     /// The area the window was left in (Code or Chat); launch opens in it.
     #[serde(default, skip_serializing_if = "is_code")]
     pub area: ChatKind,
+    /// The window's last normal-mode geometry, restored on launch.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub window: Option<WindowState>,
 }
 
 #[derive(Default, Serialize, Deserialize)]
@@ -1474,6 +1496,14 @@ impl Store {
         self.save()
     }
 
+    pub fn set_window(&mut self, window: WindowState) -> Result<(), String> {
+        if self.state.ui.window.as_ref() == Some(&window) {
+            return Ok(());
+        }
+        self.state.ui.window = Some(window);
+        self.save()
+    }
+
     /// Deletes a chat, its conversation file, its sub-agents' sessions and its canvases.
     pub fn delete_chat(&mut self, id: &str) -> Result<(), String> {
         let Some(chat) = self.chat(id).cloned() else {
@@ -2458,5 +2488,27 @@ mod tests {
         store.set_git_config(crate::GitConfig { commit_attribution: false }).unwrap();
         let reopened = Store::open(folder.path()).unwrap();
         assert!(!reopened.git_config().commit_attribution);
+    }
+
+    #[test]
+    fn window_state_defaults_absent_and_round_trips() {
+        let folder = tempfile::tempdir().unwrap();
+        fs::write(folder.path().join("state.json"), r#"{"ui":{"sidebar_hidden":true}}"#).unwrap();
+        let mut store = Store::open(folder.path()).unwrap();
+        assert_eq!(store.ui().window, None);
+        assert!(store.ui().sidebar_hidden);
+
+        let geometry = WindowState {
+            width: 1420.,
+            height: 880.,
+            x: Some(120.),
+            y: Some(64.),
+            display: Some("11111111-2222-3333-4444-555555555555".into()),
+        };
+        store.set_window(geometry.clone()).unwrap();
+
+        let reopened = Store::open(folder.path()).unwrap();
+        assert_eq!(reopened.ui().window, Some(geometry));
+        assert!(reopened.ui().sidebar_hidden);
     }
 }

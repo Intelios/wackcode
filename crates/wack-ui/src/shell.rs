@@ -189,6 +189,11 @@ pub struct Shell {
     /// A scene's backdrop; the app's comes from the store.
     scene_backdrop: Option<Picture>,
     _activation: Option<Subscription>,
+    _bounds: Option<Subscription>,
+    /// The last normal-mode window geometry seen for this window, so activation events that
+    /// re-fire `observe_window_bounds` without moving or resizing the window do not rewrite
+    /// `state.json`.
+    last_window: Option<wack_core::WindowState>,
     /// Holds focus while a screen has no text field, so its clicks and keys reach the shell.
     focus: Option<FocusHandle>,
     /// The duck's next paddle step is on its way.
@@ -222,7 +227,13 @@ pub struct Shell {
 
 impl Shell {
     pub fn new(window: &mut Window, cx: &mut Context<Self>) -> Self {
-        let source = match AppState::open_store() {
+        Self::with_store(AppState::open_store(), window, cx)
+    }
+
+    /// Builds the shell from an already-opened store (so `main` can read saved window geometry
+    /// before opening the window without loading `state.json` twice).
+    pub fn with_store(opened: Result<wack_core::Store, String>, window: &mut Window, cx: &mut Context<Self>) -> Self {
+        let source = match opened {
             Ok(store) => {
                 let app = cx.new(|cx| AppState::new(store, cx));
                 cx.observe(&app, |_, _, cx| cx.notify()).detach();
@@ -237,6 +248,10 @@ impl Shell {
                 motion::follow_system(cx);
             }
         });
+        let last_window = crate::window_state::snapshot(window, cx);
+        let bounds = cx.observe_window_bounds(window, |shell, window, cx| {
+            shell.record_window(window, cx);
+        });
         Self {
             source,
             traffic_light_stand_ins: false,
@@ -248,6 +263,8 @@ impl Shell {
             scene_sidebar_hidden: false,
             scene_backdrop: None,
             _activation: Some(activation),
+            _bounds: Some(bounds),
+            last_window,
             focus: Some(cx.focus_handle()),
             paddling: false,
             clear: None,
@@ -262,6 +279,21 @@ impl Shell {
             side_open: None,
             side_width: 0.,
         }
+    }
+
+    fn record_window(&mut self, window: &Window, cx: &mut Context<Self>) {
+        if window.is_fullscreen() {
+            self.with_app(cx, |app, _| app.cancel_pending_window());
+            return;
+        }
+        let Some(current) = crate::window_state::snapshot(window, cx) else {
+            return;
+        };
+        if self.last_window.as_ref() == Some(&current) {
+            return;
+        }
+        self.last_window = Some(current.clone());
+        self.with_app(cx, |app, cx| app.record_window(current, cx));
     }
 
     pub fn showing(sidebar: SidebarData, screen: Screen) -> Self {
@@ -280,6 +312,8 @@ impl Shell {
             scene_sidebar_hidden: false,
             scene_backdrop: None,
             _activation: None,
+            _bounds: None,
+            last_window: None,
             focus: None,
             paddling: false,
             clear: None,
@@ -296,9 +330,11 @@ impl Shell {
         }
     }
 
-    /// Terminates active Build/Run process groups before the window or application closes.
-    pub fn shutdown(&self, cx: &App) {
+    /// Flushes unsaved window geometry and terminates active Build/Run process groups before the
+    /// window or application closes.
+    pub fn shutdown(&self, cx: &mut App) {
         if let Some(app) = self.app() {
+            app.update(cx, |app, _| app.flush_window());
             app.read(cx).shutdown_runs();
         }
     }

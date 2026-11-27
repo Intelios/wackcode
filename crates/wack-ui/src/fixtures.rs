@@ -826,6 +826,31 @@ pub fn asking_turn() -> Vec<Item> {
     items(&conversation, &["ask-1"], now)
 }
 
+/// A finished planning turn whose interview is opened in its log: the question card, settled,
+/// one answer picked and one given in the user's own words.
+pub fn asked_record() -> Vec<Item> {
+    let mut conversation = Conversation::default();
+    let now = START + 60_000;
+    conversation.send("Plan how drafts should survive a crash.", now - 20_000);
+    call(
+        &mut conversation,
+        "ask-1",
+        "ask_user_question",
+        json!({ "questions": [
+            { "id": "scope", "header": "Scope", "question": "Should drafts of new chats survive too?",
+              "options": [{ "label": "Every draft", "description": "New chats and replies alike." },
+                          { "label": "Replies only", "description": "A new chat's draft is short-lived." }] },
+            { "id": "store", "header": "Storage", "question": "Where should a draft be kept while you type?",
+              "options": [{ "label": "Beside the chat", "description": "One small file per chat in the session folder." },
+                          { "label": "In state.json", "description": "With the other chat settings." }] }] }),
+        Some("The user answered your questions:\n\n**Scope** — Should drafts of new chats survive too?\n- Every draft\n\n**Storage** — Where should a draft be kept while you type?\n- Other: In the Keychain, encrypted"),
+        now - 9_000,
+    );
+    conversation.apply(&Event::Text("Drafts of every chat will be kept in the Keychain, encrypted. Here's the plan.".into()), now - 5_000);
+    conversation.finish(&Ok(Outcome::Done), now - 4_000);
+    items(&conversation, &["turn-1", "ask-1"], now)
+}
+
 fn questions_json() -> serde_json::Value {
     json!([
         { "id": "store", "header": "Storage", "question": "Where should a draft be kept while you type?",
@@ -2240,3 +2265,4 @@ pub fn chat_area_compaction_turns() -> Vec<Item> {
     }
     items
 }
+

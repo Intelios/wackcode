@@ -15,6 +15,12 @@
 //! - In Ultra Plan the card wears the prism and offers "Write the plan now", which ends the
 //!   interview: the agent submits its plan on its recommended answers.
 //!
+//! Its look is version 2.5.3's: the duck in a round tile, bobbing while the question waits and
+//! giving off bubbles at each pick; a soft halo of the card's colour round it; the question tabs
+//! strung on a line, the one on show filled; every option a bordered row whose marker fills
+//! with a tick. The record the transcript keeps of a finished interview ([`asked_view`]) is the
+//! same card, settled: the same rows, the picks lit.
+//!
 //! The drafts live in [`crate::chat::ChatSession`], so switching chats keeps them; this view
 //! draws [`QuestionData`] and reports clicks as actions.
 
@@ -147,24 +153,11 @@ impl RenderOnce for QuestionCard {
         let last = tab + 1 == count;
         let ultra = data.wrap_up;
         // The card's own colour: the accent, or the prism in Ultra Plan.
-        let (tone, tone_text, wash, line) = if ultra {
-            (theme.ultra, theme.ultra, Hsla { a: 0.10, ..theme.ultra }, Hsla { a: 0.42, ..theme.ultra })
-        } else {
-            (theme.accent, theme.accent_text, theme.accent_wash, theme.accent_line)
-        };
+        let tone = Tone::of(ultra, &theme);
+        let (tone_text, wash, line) = (tone.text, tone.wash, tone.line);
+        let still = cx.reduce_motion();
 
-        // The duck nods at each pick.
-        let duck = Icon::Duck.view(px(18.), tone_text);
-        let duck = if data.nods > 0 {
-            duck.with_animation(("question-nod", data.nods), gpui::Animation::new(std::time::Duration::from_millis(420)), |duck, t| {
-                let turn = crate::composer::keyframes(&[(0., 0.), (0.35, 12.), (0.7, -5.), (1., 0.)], t);
-                duck.with_transformation(gpui::Transformation::rotate(gpui::radians(turn.to_radians())))
-            })
-            .into_any_element()
-        } else {
-            duck.into_any_element()
-        };
-        let tile = div().flex_none().size(px(34.)).rounded(px(10.)).flex().items_center().justify_center().bg(wash).child(duck);
+        let duck = duck_tile(&tone, data.nods, !draft.answered() && !still, still);
 
         let eyebrow = div()
             .flex()
@@ -179,49 +172,43 @@ impl RenderOnce for QuestionCard {
             .min_w_0()
             .flex()
             .flex_col()
-            .gap(px(1.))
+            .gap(px(2.))
             .child(eyebrow)
             .child(div().truncate().typography(Type::UiStrong).text_color(theme.text).child(question.header.clone()));
 
+        // The tabs are strung on a line; the one on show is filled.
         let tabs = (count > 1).then(|| {
-            div().flex_none().flex().gap(px(4.)).children(data.questions.iter().enumerate().map(|(index, entry)| {
+            let thread = div().absolute().left(px(12.)).right(px(12.)).top(px(12.)).h(px(1.)).bg(line);
+            div().flex_none().relative().flex().gap(px(7.)).child(thread).children(data.questions.iter().enumerate().map(|(index, entry)| {
                 let answered = data.drafts.get(index).is_some_and(Draft::answered);
                 let active = index == tab;
+                let ink = if active { tone.ink } else if answered { tone_text } else { theme.text_dim };
                 div()
                     .id(("question-tab", index))
-                    .size(px(24.))
+                    .size(px(25.))
                     .rounded_full()
                     .flex()
                     .items_center()
                     .justify_center()
-                    .when(active, |tab| tab.bg(wash).border_1().border_color(line))
-                    .when(!active, |tab| tab.hover(|tab| tab.bg(theme.hover)))
+                    .border_1()
+                    .map(|tab| {
+                        if active {
+                            tab.bg(tone.fill).border_color(tone.fill)
+                        } else {
+                            tab.bg(theme.surface).border_color(if answered { line } else { theme.border }).hover(|tab| tab.border_color(line))
+                        }
+                    })
                     .tooltip(crate::tooltip::tip(entry.header.clone()))
                     .on_click(dispatch(ShowQuestion { index }))
-                    .child(if answered {
-                        Icon::Check.view(px(12.), tone_text).into_any_element()
+                    .child(if answered && !active {
+                        Icon::Check.view(px(12.), ink).into_any_element()
                     } else {
-                        div()
-                            .typography(Type::Small)
-                            .text_color(if active { tone_text } else { theme.text_dim })
-                            .child((index + 1).to_string())
-                            .into_any_element()
+                        div().typography(Type::Small).font_weight(gpui::FontWeight::SEMIBOLD).text_color(ink).child((index + 1).to_string()).into_any_element()
                     })
             }))
         });
 
-        let head = div().flex().items_center().gap(px(12.)).child(tile).child(heading).children(tabs);
-
-        let marker = |selected: bool| {
-            let size = px(16.);
-            let shape = div().flex_none().size(size).flex().items_center().justify_center();
-            let shape = if question.multi_select { shape.rounded(px(4.)) } else { shape.rounded_full() };
-            if selected {
-                shape.bg(tone).child(Icon::Check.view(px(11.), if ultra { theme.on_ultra } else { theme.on_accent }))
-            } else {
-                shape.border_1().border_color(theme.border_strong)
-            }
-        };
+        let head = div().flex().items_center().gap(px(12.)).child(duck).child(heading).children(tabs);
 
         let mut options = div()
             .id(SharedString::from(format!("question-options-{}", question.id)))
@@ -229,33 +216,16 @@ impl RenderOnce for QuestionCard {
             .when_some(data.focus.as_ref(), |options, focus| options.track_focus(focus))
             .flex()
             .flex_col()
-            .gap(px(4.));
+            .gap(px(6.));
         for (index, option) in question.options.iter().enumerate() {
             let selected = draft.selected.contains(&option.label);
+            let marker_id = SharedString::from(format!("question-tick-{}-{index}", question.id));
             options = options.child(
-                div()
+                option_row(marker_id, option.label.clone().into(), Some(option.description.clone().into()), selected, question.multi_select, &tone, still, &theme)
                     .id(("question-option", index))
-                    .px(px(10.))
-                    .py(px(7.))
-                    .rounded(px(9.))
-                    .flex()
-                    .items_start()
-                    .gap(px(10.))
-                    .border_1()
-                    .border_color(if selected { line } else { gpui::transparent_black() })
-                    .when(selected, |row| row.bg(wash))
-                    .when(!selected, |row| row.hover(|row| row.bg(theme.hover)))
+                    .cursor_pointer()
+                    .when(!selected, |row| row.hover(|row| row.bg(wash).border_color(line)))
                     .on_click(dispatch(PickOption { index }))
-                    .child(div().pt(px(1.)).child(marker(selected)))
-                    .child(
-                        div()
-                            .flex_1()
-                            .min_w_0()
-                            .flex()
-                            .flex_col()
-                            .child(div().typography(Type::UiStrong).text_color(theme.text).child(option.label.clone()))
-                            .child(div().typography(Type::Small).text_color(theme.text_dim).child(option.description.clone())),
-                    )
                     .when(index < 4, |row| {
                         row.child(
                             div()
@@ -263,13 +233,12 @@ impl RenderOnce for QuestionCard {
                                 .min_w(px(18.))
                                 .h(px(18.))
                                 .rounded(px(5.))
-                                .border_1()
-                                .border_color(theme.border)
+                                .bg(theme.hover)
                                 .flex()
                                 .items_center()
                                 .justify_center()
                                 .typography(Type::Small)
-                                .text_color(theme.text_faint)
+                                .text_color(if selected { tone_text } else { theme.text_faint })
                                 .child((index + 1).to_string()),
                         )
                     })
@@ -287,22 +256,22 @@ impl RenderOnce for QuestionCard {
         };
         let other = div()
             .px(px(10.))
-            .py(px(7.))
-            .rounded(px(9.))
+            .py(px(9.))
+            .rounded(px(11.))
             .flex()
             .items_start()
             .gap(px(10.))
             .border_1()
             .border_color(if has_custom { line } else { theme.border })
-            .when(has_custom, |row| row.bg(wash))
-            .child(div().pt(px(1.)).child(marker(has_custom)))
+            .bg(if has_custom { wash } else { theme.surface })
+            .child(marker(SharedString::from(format!("question-tick-{}-other", question.id)), has_custom, false, &tone, still, &theme))
             .child(other_field)
             .tag("question-other");
 
         // A new question slides its options in; the list is the part that scrolls when room
         // is short, so it is the card's own child.
         let options = crate::motion::enter(SharedString::from(format!("question-stage-{}", question.id)), options);
-        let title = div().flex_none().typography(Type::Heading).text_color(theme.text).child(question.question.clone());
+        let title = div().flex_none().pb(px(2.)).typography(Type::Heading).text_color(theme.text).child(question.question.clone());
 
         let answered = draft.answered();
         let mut actions = div().flex().items_center().justify_end().gap(px(8.));
@@ -335,11 +304,15 @@ impl RenderOnce for QuestionCard {
             .px(px(16.))
             .pt(px(14.))
             .pb(px(12.))
-            .rounded(px(14.))
+            .rounded(px(16.))
             .bg(theme.surface)
             .border_1()
             .border_color(line)
-            .shadow_md()
+            // A soft halo of the card's colour, over the drop that lifts it off the chat.
+            .shadow(vec![
+                gpui::BoxShadow { color: Hsla { a: 0.10, ..tone.fill }, offset: gpui::point(px(0.), px(0.)), blur_radius: px(0.), spread_radius: px(4.), inset: false },
+                gpui::BoxShadow { color: theme.glass_shadow, offset: gpui::point(px(0.), px(10.)), blur_radius: px(36.), spread_radius: px(0.), inset: false },
+            ])
             .min_h_0()
             .child(head.flex_none())
             // The body scrolls when room is short; the head and the buttons always show.
@@ -417,45 +390,192 @@ pub fn asked(questions: &[Question], answers: Option<&[QuestionAnswer]>) -> Vec<
         .collect()
 }
 
-/// Draws the record: each question, its options, the picks lit.
+/// Draws the record: the question card, settled. Each question under its header, its options in
+/// the card's rows with the picks lit and the rest faded, and an "Other" answer as a row of its own.
 pub fn asked_view(asked: &[Asked], theme: &Theme) -> impl IntoElement {
-    div().flex().flex_col().gap(px(12.)).children(asked.iter().map(|question| {
-        let marker = |picked: bool| {
-            let shape = div().flex_none().size(px(12.)).mt(px(3.));
-            let shape = if question.multi_select { shape.rounded(px(3.)) } else { shape.rounded_full() };
-            if picked { shape.bg(theme.accent_fill()) } else { shape.border_1().border_color(theme.border_strong) }
-        };
-        div()
-            .flex()
-            .flex_col()
-            .gap(px(5.))
-            .child(div().typography(Type::UiStrong).text_color(theme.text_soft).child(question.question.clone()))
-            .children(question.options.iter().map(|option| {
-                div()
-                    .flex()
-                    .items_start()
-                    .gap(px(8.))
-                    .child(marker(option.picked))
-                    .child(
-                        div()
-                            .flex_1()
-                            .min_w_0()
-                            .typography(Type::Ui)
-                            .text_color(if option.picked { theme.text } else { theme.text_dim })
-                            .child(option.label.clone()),
-                    )
-            }))
-            .when_some(question.custom.clone(), |column, custom| {
-                column.child(
+    let tone = Tone::of(false, theme);
+    div()
+        .flex()
+        .flex_col()
+        .gap(px(14.))
+        .px(px(14.))
+        .py(px(12.))
+        .rounded(px(14.))
+        .bg(theme.surface)
+        .border_1()
+        .border_color(theme.border)
+        .children(asked.iter().enumerate().map(|(number, question)| {
+            let answered = question.custom.is_some() || question.options.iter().any(|option| option.picked);
+            let head = div()
+                .flex()
+                .items_center()
+                .gap(px(10.))
+                .child(
                     div()
+                        .flex_none()
+                        .size(px(26.))
+                        .rounded_full()
                         .flex()
-                        .items_start()
-                        .gap(px(8.))
-                        .child(marker(true))
-                        .child(div().flex_1().min_w_0().typography(Type::Ui).text_color(theme.text).child(format!("Other: {custom}"))),
+                        .items_center()
+                        .justify_center()
+                        .border_1()
+                        .border_color(tone.line)
+                        .bg(tone.wash)
+                        .child(Icon::Duck.view(px(15.), tone.text)),
                 )
+                .child(
+                    div()
+                        .flex_1()
+                        .min_w_0()
+                        .flex()
+                        .flex_col()
+                        .child(div().typography(Type::Small).text_color(tone.text).child(question.header.clone()))
+                        .child(div().typography(Type::UiStrong).text_color(theme.text).child(question.question.clone())),
+                )
+                .when(!answered, |head| head.child(div().flex_none().typography(Type::Small).text_color(theme.text_faint).child("No answer")));
+            let rows = question.options.iter().enumerate().map(|(index, option)| {
+                option_row(SharedString::from(format!("asked-tick-{number}-{index}")), option.label.clone(), Some(option.description.clone()), option.picked, question.multi_select, &tone, true, theme)
+                    .when(!option.picked, |row| row.opacity(0.62))
+                    .into_any_element()
+            });
+            let custom = question.custom.clone().map(|custom| {
+                option_row(SharedString::from(format!("asked-tick-{number}-other")), custom, Some("Your own answer".into()), true, false, &tone, true, theme).into_any_element()
+            });
+            div().flex().flex_col().gap(px(6.)).child(head.mb(px(4.))).children(rows).children(custom)
+        }))
+        .tag("asked-card")
+}
+
+/// The card's colour: the accent, or the prism in Ultra Plan.
+struct Tone {
+    fill: Hsla,
+    text: Hsla,
+    wash: Hsla,
+    line: Hsla,
+    /// What is drawn on `fill`.
+    ink: Hsla,
+}
+
+impl Tone {
+    fn of(ultra: bool, theme: &Theme) -> Self {
+        if ultra {
+            Self { fill: theme.ultra, text: theme.ultra, wash: Hsla { a: 0.10, ..theme.ultra }, line: Hsla { a: 0.42, ..theme.ultra }, ink: theme.on_ultra }
+        } else {
+            Self { fill: theme.accent, text: theme.accent_text, wash: theme.accent_wash, line: theme.accent_line, ink: theme.on_accent }
+        }
+    }
+}
+
+/// An option as the card offers it and its record keeps it, one shape (as version 2 kept them):
+/// a bordered row, a marker that fills with a tick, the row tinted when picked.
+#[allow(clippy::too_many_arguments)]
+fn option_row(marker_id: SharedString, label: SharedString, description: Option<SharedString>, selected: bool, multi: bool, tone: &Tone, still: bool, theme: &Theme) -> gpui::Div {
+    div()
+        .px(px(10.))
+        .py(px(9.))
+        .rounded(px(11.))
+        .flex()
+        .items_start()
+        .gap(px(10.))
+        .border_1()
+        .border_color(if selected { tone.line } else { theme.border })
+        .bg(if selected { tone.wash } else { theme.surface })
+        .child(marker(marker_id, selected, multi, tone, still, theme))
+        .child(
+            div()
+                .flex_1()
+                .min_w_0()
+                .flex()
+                .flex_col()
+                .gap(px(2.))
+                .child(div().typography(Type::UiStrong).text_color(theme.text).child(label))
+                .children(description.filter(|text| !text.is_empty()).map(|text| div().typography(Type::Small).text_color(theme.text_dim).child(text))),
+        )
+}
+
+/// A choice's marker: a ring (a rounded square when several can be picked) that fills with a
+/// tick, the tick landing with a small pop.
+fn marker(id: SharedString, selected: bool, multi: bool, tone: &Tone, still: bool, theme: &Theme) -> gpui::AnyElement {
+    let shape = div().flex_none().mt(px(1.)).size(px(16.)).flex().items_center().justify_center();
+    let shape = if multi { shape.rounded(px(5.)) } else { shape.rounded_full() };
+    if !selected {
+        return shape.border_1().border_color(theme.border_strong).into_any_element();
+    }
+    let ink = tone.ink;
+    let filled = shape.bg(tone.fill);
+    if still {
+        return filled.child(Icon::Check.view(px(11.), ink)).into_any_element();
+    }
+    filled
+        .child(div().child(Icon::Check.view(px(11.), ink)).with_animation(id, gpui::Animation::new(std::time::Duration::from_millis(260)), |tick, t| {
+            tick.opacity((t * 3.).min(1.)).mt(px((1. - crate::motion::pop(t)) * 3.))
+        }))
+        .into_any_element()
+}
+
+/// The duck in its round tile: it nods at each pick (`nods`), bobs while the question waits
+/// (`idle`), and a pick sends up a few bubbles. With Reduce Motion it holds still.
+fn duck_tile(tone: &Tone, nods: usize, idle: bool, still: bool) -> gpui::AnyElement {
+    let duck = Icon::Duck.view(px(24.), tone.text);
+    let duck = if nods > 0 && !still {
+        duck.with_animation(("question-nod", nods), gpui::Animation::new(std::time::Duration::from_millis(420)), |duck, t| {
+            let turn = crate::composer::keyframes(&[(0., 0.), (0.35, 12.), (0.7, -5.), (1., 0.)], t);
+            duck.with_transformation(gpui::Transformation::rotate(gpui::radians(turn.to_radians())))
+        })
+        .into_any_element()
+    } else {
+        duck.into_any_element()
+    };
+    // The bob is the tile's contents rising and falling a few points, over and over.
+    let duck = if idle {
+        div()
+            .relative()
+            .child(duck)
+            .with_animation("question-bob", gpui::Animation::new(std::time::Duration::from_millis(3200)).repeat(), |duck, t| {
+                duck.top(px(-1.5 * (t * std::f32::consts::TAU).sin()))
             })
-    }))
+            .into_any_element()
+    } else {
+        duck
+    };
+    let ring = tone.fill;
+    let bubbles = (nods > 0 && !still).then(|| {
+        div()
+            .absolute()
+            .top(px(2.))
+            .right(px(-2.))
+            .size(px(12.))
+            .with_animation(("question-bubbles", nods), gpui::Animation::new(std::time::Duration::from_millis(650)), move |bubbles, t| {
+                // Three bubbles, each a beat after the last, rise and fade.
+                let bubble = |delay: f32, x: f32, size: f32| {
+                    let local = ((t - delay) / (1. - delay)).clamp(0., 1.);
+                    let opacity = if local < 0.15 { local / 0.15 * 0.8 } else { 0.8 * (1. - (local - 0.15) / 0.85) };
+                    div()
+                        .absolute()
+                        .left(px(x))
+                        .top(px(3. - 15. * local))
+                        .size(px(size * (1. - 0.3 * local)))
+                        .rounded_full()
+                        .border_1()
+                        .border_color(Hsla { a: opacity.max(0.), ..ring })
+                };
+                bubbles.child(bubble(0., 0., 5.)).child(bubble(0.14, 6., 3.)).child(bubble(0.28, -4., 5.))
+            })
+    });
+    div()
+        .flex_none()
+        .relative()
+        .size(px(42.))
+        .rounded_full()
+        .flex()
+        .items_center()
+        .justify_center()
+        .border_1()
+        .border_color(tone.line)
+        .bg(tone.wash)
+        .child(duck)
+        .children(bubbles)
+        .into_any_element()
 }
 
 #[cfg(test)]

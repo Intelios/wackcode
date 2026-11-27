@@ -1120,6 +1120,12 @@ pub fn all() -> Vec<Scene> {
             build: |_, cx| question_scene(false, None, WINDOW, cx),
         },
         Scene {
+            name: "asked-record",
+            description: "A finished interview opened in the log: the question card, settled, a pick lit and an answer in the user's own words.",
+            size: WINDOW,
+            build: |_, cx| chat_scene(fixtures::asked_record(), cx),
+        },
+        Scene {
             name: "question-ultra",
             description: "Ultra Plan's question card, with Write the plan now, over a backdrop.",
             size: WINDOW,

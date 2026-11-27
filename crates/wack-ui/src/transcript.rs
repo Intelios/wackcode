@@ -773,7 +773,14 @@ fn log_row(row: &WorkRow, live: bool, theme: &Theme, handlers: &Handlers) -> Any
         return div().py(px(4.)).typography(Type::Ui).text_color(theme.text_soft).child(text.clone()).into_any_element();
     }
     let running = row.meta.running();
+    // A command the model described ("Run the test suite") says so in its own words: "Ran"
+    // before them would only repeat them. Under way, the words themselves shine.
+    let described = row.verb.as_ref() == "Ran" && matches!(row.target, Target::Words(_));
     let target = match &row.target {
+        Target::Words(text) if described && running => {
+            let id = SharedString::from(format!("{}-doing", row.key));
+            div().min_w_0().truncate().typography(Type::Ui).child(crate::motion::shining_text(id, text.clone(), theme.text_soft, theme.accent_text, handlers.still)).into_any_element()
+        }
         Target::Code(text) if names_a_path(&row.verb) => path_words(text, theme),
         Target::Code(text) => div().min_w_0().truncate().typography(Type::Mono).text_color(theme.text_soft).child(text.clone()).into_any_element(),
         Target::Words(text) => div().min_w_0().truncate().typography(Type::Ui).text_color(theme.text_soft).child(text.clone()).into_any_element(),
@@ -790,14 +797,16 @@ fn log_row(row: &WorkRow, live: bool, theme: &Theme, handlers: &Handlers) -> Any
         Meta::Failed(text) => Some(marked(Icon::Close, text.clone(), theme.danger).into_any_element()),
         Meta::Clock(time) => Some(small(time.clone(), theme.text_faint).into_any_element()),
         Meta::Thinking { started, at } => Some(small(thinking_clock(*started, *at, handlers), theme.text_faint).into_any_element()),
+        // Only the sides that moved: a new file is "+12", not "+12 −0".
+        Meta::Lines { added: 0, removed: 0 } => None,
         Meta::Lines { added, removed } => Some(
             div()
                 .flex_none()
                 .flex()
                 .gap(px(5.))
                 .typography(Type::Small)
-                .child(div().text_color(theme.diff_added).child(format!("+{added}")))
-                .child(div().text_color(theme.diff_removed).child(format!("−{removed}")))
+                .when(*added > 0, |lines| lines.child(div().text_color(theme.diff_added).child(format!("+{added}"))))
+                .when(*removed > 0, |lines| lines.child(div().text_color(theme.diff_removed).child(format!("−{removed}"))))
                 .into_any_element(),
         ),
     };
@@ -826,7 +835,7 @@ fn log_row(row: &WorkRow, live: bool, theme: &Theme, handlers: &Handlers) -> Any
             line.cursor_pointer().hover(move |line| line.bg(hover)).on_click(move |_, window, cx| toggle(key.clone(), window, cx))
         })
         .children(row_icon(&row.verb).map(|icon| icon.view(px(GLYPH), if running { theme.accent_text } else { theme.text_faint })))
-        .when(!row.verb.is_empty(), |line| line.child(div().flex_none().typography(Type::Ui).text_color(theme.text_dim).child(verb)))
+        .when(!row.verb.is_empty() && !described, |line| line.child(div().flex_none().typography(Type::Ui).text_color(theme.text_dim).child(verb)))
         .child(target)
         .children(meta)
         .when(openable, |line| line.child(div().flex_none().child(if row.open { Icon::ChevronDown } else { Icon::ChevronRight }.view(px(11.), theme.text_faint))));

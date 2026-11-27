@@ -106,9 +106,27 @@ pub struct Turn {
     thinking_open: bool,
 }
 
+/// The model's reasoning, as one step of a turn.
+#[derive(Clone, Debug, Default, PartialEq)]
+pub struct Thought {
+    pub text: String,
+    /// When its first words came, while it is live (milliseconds since 1970).
+    pub started: Option<u64>,
+    /// How long the model thought, once known: measured by the agent from the request to the
+    /// first words or call after it (`Event::Thought`, saved with the reply), or here from its
+    /// first words to whatever came next.
+    pub ms: Option<u64>,
+}
+
+impl Thought {
+    pub fn new(text: impl Into<String>) -> Self {
+        Self { text: text.into(), ..Self::default() }
+    }
+}
+
 #[derive(Clone, Debug, PartialEq)]
 pub enum Step {
-    Thought(String),
+    Thought(Thought),
     /// Text the model wrote between tool calls.
     Note(String),
     Tool(ToolStep),
@@ -127,15 +145,21 @@ pub struct ToolStep {
     /// `None` while the call is still being written.
     pub input: Option<Value>,
     pub result: Option<ToolResult>,
-    /// A canvas call as it is written, before its input is whole: what it is drawing.
+    /// A call as it is written, before its input is whole: how much has come, and for a canvas
+    /// call what it is drawing.
     pub writing: Option<Writing>,
+    /// When the model began writing it, while live (milliseconds since 1970).
+    pub started: Option<u64>,
 }
 
-/// A `canvas` call while the model writes it: how much has come, and the artboard it is on.
+/// A call while the model writes it: how much has come, the start of it (where a path is), and
+/// for a `canvas` call the artboard it is on.
 #[derive(Clone, Debug, Default, PartialEq)]
 pub struct Writing {
     pub chars: usize,
     pub artboard: Option<String>,
+    /// The first few hundred characters, where a call names its file.
+    head: String,
     /// The end of what has come, where the next name may start.
     tail: String,
 }
@@ -143,13 +167,28 @@ pub struct Writing {
 impl Writing {
     /// A call this far along, for gallery scenes.
     pub fn shown(chars: usize, artboard: Option<&str>) -> Self {
-        Self { chars, artboard: artboard.map(str::to_string), tail: String::new() }
+        Self { chars, artboard: artboard.map(str::to_string), head: String::new(), tail: String::new() }
+    }
+
+    /// The file the call names, once its `path` (or `file_path`) has come whole.
+    pub fn path(&self) -> Option<String> {
+        for key in ["\"path\"", "\"file_path\""] {
+            let Some(at) = self.head.find(key) else { continue };
+            let rest = self.head[at + key.len()..].trim_start().strip_prefix(':')?.trim_start().strip_prefix('"')?;
+            let end = rest.find('"')?;
+            return Some(rest[..end].to_string());
+        }
+        None
     }
 
     /// Takes the next piece of the call's input.
     fn push(&mut self, json: &str) {
         const TAIL: usize = 400;
+        const HEAD: usize = 300;
         self.chars += json.chars().count();
+        if self.head.len() < HEAD {
+            self.head.extend(json.chars().take(HEAD - self.head.len()));
+        }
         self.tail.push_str(json);
         if let Some(name) = wack_canvas::tools::writing_name(&self.tail) {
             self.artboard = Some(name);
@@ -248,15 +287,41 @@ impl Turn {
         self.reply.push_str(text);
     }
 
-    fn push_thinking(&mut self, text: &str, streaming: bool) {
+    fn push_thinking(&mut self, text: &str, streaming: bool, now: Option<u64>) {
         self.clear_compacting();
         self.retrying = None;
         self.settle_reply();
         match self.steps.last_mut() {
-            Some(Step::Thought(thought)) if streaming && self.thinking_open => thought.push_str(text),
-            _ => self.steps.push(Step::Thought(text.to_string())),
+            Some(Step::Thought(thought)) if streaming && self.thinking_open => thought.text.push_str(text),
+            _ => self.steps.push(Step::Thought(Thought { text: text.to_string(), started: now, ms: None })),
         }
         self.thinking_open = streaming;
+    }
+
+    /// The live thought is over: something else came at `now`. Its time is how long it ran,
+    /// until the agent says how long the model really thought.
+    fn close_thought(&mut self, now: u64) {
+        if !self.thinking_open {
+            return;
+        }
+        self.thinking_open = false;
+        if let Some(Step::Thought(thought)) = self.steps.last_mut()
+            && thought.ms.is_none()
+            && let Some(started) = thought.started
+        {
+            thought.ms = Some(now.saturating_sub(started));
+        }
+    }
+
+    /// The reply now ending thought for `ms`: its latest thought takes that time.
+    fn set_thought_time(&mut self, ms: u64) {
+        let thought = self.steps.iter_mut().rev().find_map(|step| match step {
+            Step::Thought(thought) => Some(thought),
+            _ => None,
+        });
+        if let Some(thought) = thought {
+            thought.ms = Some(ms);
+        }
     }
 
     fn tool(&mut self, id: &str) -> Option<&mut ToolStep> {
@@ -277,15 +342,14 @@ impl Turn {
                     tool.input = input;
                 }
             }
-            None => self.steps.push(Step::Tool(ToolStep { id: id.into(), name: name.into(), input, result: None, writing: None })),
+            None => self.steps.push(Step::Tool(ToolStep { id: id.into(), name: name.into(), input, result: None, writing: None, started: None })),
         }
     }
 
-    /// A piece of a call's input as the model writes it: followed only for canvas calls, whose
-    /// artboards take long enough to write that the board says what is coming.
+    /// A piece of a call's input as the model writes it, so the transcript can say what is
+    /// coming ("Writing the plan", "Writing retry.rs") and the canvas board what it draws.
     fn push_tool_input(&mut self, id: &str, json: &str) {
         if let Some(tool) = self.tool(id)
-            && tool.name == wack_canvas::tools::CANVAS
             && tool.input.is_none()
         {
             tool.writing.get_or_insert_with(Writing::default).push(json);
@@ -364,7 +428,9 @@ impl Conversation {
                         conversation.entries.push(Entry::Compacted(compaction));
                     }
                 }
-                HistoryEntry::Message { message, usage, at, command } => conversation.replay(message, *usage, *at, command.clone()),
+                HistoryEntry::Message { message, usage, at, command, thought_ms } => {
+                    conversation.replay(message, *usage, *at, command.clone(), *thought_ms)
+                }
                 HistoryEntry::State { key, value } => conversation.apply_state(key, value),
                 HistoryEntry::Note { tag, text, at } if tag.starts_with(NOTE_PREFIX) || tag.starts_with(AGENT_NOTE_PREFIX) => {
                     conversation.news(News { tag: tag.clone(), text: text.clone() }, *at, false)
@@ -379,7 +445,7 @@ impl Conversation {
         conversation
     }
 
-    fn replay(&mut self, message: &Message, usage: Option<Usage>, at: Option<u64>, command: Option<CommandUse>) {
+    fn replay(&mut self, message: &Message, usage: Option<Usage>, at: Option<u64>, command: Option<CommandUse>, thought_ms: Option<u64>) {
         match message.role {
             Role::User => {
                 let results: Vec<_> = message
@@ -423,7 +489,12 @@ impl Conversation {
                 for block in &message.content {
                     match block {
                         Block::Text { text } => turn.push_text(text),
-                        Block::Thinking { text, .. } if !text.trim().is_empty() => turn.push_thinking(text, false),
+                        Block::Thinking { text, .. } if !text.trim().is_empty() => {
+                            turn.push_thinking(text, false, None);
+                            if let Some(ms) = thought_ms {
+                                turn.set_thought_time(ms);
+                            }
+                        }
                         Block::ToolUse { id, name, input } => turn.push_tool(id, name, Some(input.clone())),
                         _ => {}
                     }
@@ -675,10 +746,19 @@ impl Conversation {
         let Some(turn) = self.current() else {
             return;
         };
+        if !matches!(event, Event::Thinking(_) | Event::Thought { .. } | Event::State { .. } | Event::Notice(_)) {
+            turn.close_thought(now);
+        }
         match event {
             Event::Text(text) => turn.push_text(text),
-            Event::Thinking(text) => turn.push_thinking(text, true),
-            Event::ToolStart { id, name } => turn.push_tool(id, name, None),
+            Event::Thinking(text) => turn.push_thinking(text, true, Some(now)),
+            Event::Thought { ms } => turn.set_thought_time(*ms),
+            Event::ToolStart { id, name } => {
+                turn.push_tool(id, name, None);
+                if let Some(tool) = turn.tool(id) {
+                    tool.started.get_or_insert(now);
+                }
+            }
             Event::ToolInput { id, json } => turn.push_tool_input(id, json),
             Event::ToolCall { id, name, input } => turn.push_tool(id, name, Some(input.clone())),
             Event::ToolResult { id, content, is_error, images, .. } => {
@@ -819,8 +899,8 @@ mod tests {
     #[test]
     fn discarding_returns_to_build_and_saved_state_replays() {
         let history = vec![
-            HistoryEntry::Message { message: Message::user("Plan it"), usage: None, at: Some(1), command: None },
-            HistoryEntry::Message { message: assistant(vec![Block::Text { text: "Here it is.".into() }]), usage: None, at: Some(2), command: None },
+            HistoryEntry::Message { message: Message::user("Plan it"), usage: None, at: Some(1), command: None, thought_ms: None },
+            HistoryEntry::Message { message: assistant(vec![Block::Text { text: "Here it is.".into() }]), usage: None, at: Some(2), command: None, thought_ms: None },
             HistoryEntry::State { key: PLAN_STATE.into(), value: json!({ "mode": "plan", "plan": "Steps" }) },
             HistoryEntry::State { key: TODO_STATE.into(), value: json!({ "tasks": [{ "id": 1, "subject": "Write", "status": "pending" }], "nextId": 2 }) },
         ];
@@ -848,7 +928,7 @@ mod tests {
     }
 
     fn at(message: Message, ms: u64, usage: Option<Usage>) -> HistoryEntry {
-        HistoryEntry::Message { message, usage, at: Some(ms), command: None }
+        HistoryEntry::Message { message, usage, at: Some(ms), command: None, thought_ms: None }
     }
 
     fn turns(conversation: &Conversation) -> Vec<&Turn> {
@@ -878,7 +958,7 @@ mod tests {
         let conversation = Conversation::from_history(&history);
         assert!(matches!(&conversation.entries[0], Entry::Prompt { text, steered: false, .. } if text == "fix it"));
         let turn = turns(&conversation)[0];
-        assert!(matches!(&turn.steps[0], Step::Thought(text) if text == "look first"));
+        assert!(matches!(&turn.steps[0], Step::Thought(thought) if thought.text == "look first"));
         assert!(matches!(&turn.steps[1], Step::Note(text) if text == "I'll read the file."));
         assert!(matches!(&turn.steps[2], Step::Tool(tool) if tool.result.as_ref().unwrap().text == "contents"));
         assert_eq!(turn.reply, "Done.");
@@ -928,7 +1008,7 @@ mod tests {
         {
             let turn = conversation.last_turn().unwrap();
             assert!(turn.live);
-            assert!(matches!(&turn.steps[0], Step::Thought(text) if text == "hmm"));
+            assert!(matches!(&turn.steps[0], Step::Thought(thought) if thought.text == "hmm"));
             assert!(matches!(&turn.steps[1], Step::Note(text) if text == "Checking now."));
             assert_eq!(turn.running_tools().count(), 1);
             assert!(turn.reply.is_empty());
@@ -1022,7 +1102,7 @@ mod tests {
     #[test]
     fn a_command_replays_as_typed() {
         let command = CommandUse { name: "pdf".into(), args: "form.pdf".into(), kind: wack_core::skills::Kind::Skill };
-        let history = vec![HistoryEntry::Message { message: Message::user("<skill name=\"pdf\">…</skill>\n\nform.pdf"), usage: None, at: Some(1), command: Some(command.clone()) }];
+        let history = vec![HistoryEntry::Message { message: Message::user("<skill name=\"pdf\">…</skill>\n\nform.pdf"), usage: None, at: Some(1), command: Some(command.clone()), thought_ms: None }];
         let conversation = Conversation::from_history(&history);
         assert!(matches!(&conversation.entries[0], Entry::Prompt { text, command: Some(used), .. } if text.starts_with("<skill") && *used == command));
     }
@@ -1048,10 +1128,10 @@ mod tests {
     fn news_after_a_finished_reply_stands_alone_and_its_answer_follows_live_and_replayed() {
         let news = "Background task ab12 (`cargo build`) failed: exit code 101 after 1m32s.";
         let history = vec![
-            HistoryEntry::Message { message: Message::user("Build it in the background"), usage: None, at: Some(1), command: None },
-            HistoryEntry::Message { message: assistant(vec![Block::Text { text: "Started it.".into() }]), usage: None, at: Some(2), command: None },
+            HistoryEntry::Message { message: Message::user("Build it in the background"), usage: None, at: Some(1), command: None, thought_ms: None },
+            HistoryEntry::Message { message: assistant(vec![Block::Text { text: "Started it.".into() }]), usage: None, at: Some(2), command: None, thought_ms: None },
             noted("task:ab12:end", news),
-            HistoryEntry::Message { message: assistant(vec![Block::Text { text: "The build failed; fixing it.".into() }]), usage: None, at: Some(6), command: None },
+            HistoryEntry::Message { message: assistant(vec![Block::Text { text: "The build failed; fixing it.".into() }]), usage: None, at: Some(6), command: None, thought_ms: None },
         ];
         let replayed = Conversation::from_history(&history);
 
@@ -1109,10 +1189,10 @@ mod tests {
     #[test]
     fn news_nobody_answered_leaves_no_empty_turn_before_the_next_message() {
         let history = vec![
-            HistoryEntry::Message { message: Message::user("Serve it"), usage: None, at: Some(1), command: None },
-            HistoryEntry::Message { message: assistant(vec![Block::Text { text: "It is up.".into() }]), usage: None, at: Some(2), command: None },
+            HistoryEntry::Message { message: Message::user("Serve it"), usage: None, at: Some(1), command: None, thought_ms: None },
+            HistoryEntry::Message { message: assistant(vec![Block::Text { text: "It is up.".into() }]), usage: None, at: Some(2), command: None, thought_ms: None },
             noted("task:ab12:lost", "Background task ab12 (`npm run dev`) is no longer running: it was stopped when WackCode quit."),
-            HistoryEntry::Message { message: Message::user("Start it again"), usage: None, at: Some(9), command: None },
+            HistoryEntry::Message { message: Message::user("Start it again"), usage: None, at: Some(9), command: None, thought_ms: None },
         ];
         let conversation = Conversation::from_history(&history);
         assert!(matches!(&conversation.entries[2], Entry::News(_)));

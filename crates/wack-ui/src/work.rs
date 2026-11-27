@@ -243,9 +243,7 @@ pub fn entry_items(
                     Some(TurnEnd::Failed(message)) => items.push(Item::Notice { text: message.clone().into(), failed: true }),
                     Some(TurnEnd::Done) | None => {}
                 }
-                if !turn.live && let Some(footer) = footer(turn) {
-                    items.push(Item::Footer(footer.into()));
-                }
+
             }
         }
     }
@@ -274,10 +272,12 @@ fn turn_work_items(
                 open: true,
                 summary: summary(turn, now).into(),
                 tally: "".into(),
+                label: "".into(),
                 live: true,
                 thinking: false,
                 rows: Vec::new(),
                 key: key.to_string().into(),
+                hidden: 0,
             }));
         }
         return;
@@ -287,11 +287,17 @@ fn turn_work_items(
         Work(Vec<(usize, &'a Step)>),
         Commit(&'a ToolStep),
         Compacted(usize, &'a Compaction),
+        /// What the model said between steps: its own words, never folded into a group.
+        Prose(usize, &'a str),
     }
 
     let mut chunks: Vec<Chunk<'_>> = Vec::new();
     for (step_index, step) in turn.steps.iter().enumerate() {
-        if let Step::Compacted(compaction) = step {
+        if let Step::Note(text) = step {
+            if !text.trim().is_empty() {
+                chunks.push(Chunk::Prose(step_index, text));
+            }
+        } else if let Step::Compacted(compaction) = step {
             chunks.push(Chunk::Compacted(step_index, compaction));
         } else if let Step::Tool(tool) = step
             && crate::commit::is_commit_tool(tool)
@@ -332,16 +338,30 @@ fn turn_work_items(
                     cache,
                 )));
             }
+            Chunk::Prose(step_index, text) => {
+                items.push(Item::Reply { blocks: cache.piece(index, step_index, text.trim()), live: false });
+            }
             Chunk::Work(steps) => {
                 // First work group keeps `turn-{index}`; later ones use `turn-{index}.{n}` (no
                 // extra `-`, so `AgentsPane::toggle` still recognises them as work-log keys).
                 let group_key = if work_index == 0 { key.to_string() } else { format!("{key}.{work_index}") };
                 work_index += 1;
                 let group_live = turn.live && is_last;
+                let last_step = steps.last().map(|(step_index, _)| *step_index);
                 let rows: Vec<WorkRow> = steps
                     .iter()
-                    .map(|(step_index, step)| step_row(step, &format!("{key}-{step_index}"), cwd, group_live, open, agents, now))
+                    // The todo list has its own place by the composer; its calls are bookkeeping.
+                    .filter(|(_, step)| !matches!(step, Step::Tool(tool) if tool.name == wack_core::todo::TODO))
+                    .map(|(step_index, step)| {
+                        // The thought the model is having now: the last step of a live group, with
+                        // no words after it yet.
+                        let thinking_now = group_live && Some(*step_index) == last_step && turn.reply.trim().is_empty();
+                        step_row(step, &format!("{key}-{step_index}"), cwd, group_live, thinking_now, open, agents, now)
+                    })
                     .collect();
+                if rows.is_empty() && !group_live {
+                    continue;
+                }
                 // Agents still out keep their work group open after it settles, as a live group is.
                 let agents_out = rows.iter().any(|row| row.agent.as_ref().is_some_and(|agent| agent.state.working()));
                 // Only a single work group in a settled turn carries the turn's total duration;
@@ -354,12 +374,16 @@ fn turn_work_items(
                 let thinking = group_live
                     && turn.reply.trim().is_empty()
                     && matches!(steps.last().map(|(_, step)| *step), Some(Step::Thought(_)));
+                // A live group shows its newest rows; the earlier ones fold until asked for.
+                let hidden = if group_live && !open.contains(&format!("{group_key}-all")) { rows.len().saturating_sub(LIVE_ROWS) } else { 0 };
                 items.push(Item::Work(Work {
                     open: group_live || agents_out || open.contains(&group_key),
                     summary: group_summary.into(),
                     tally: tally(&rows).into(),
+                    label: sentence(&rows).into(),
                     live: group_live,
                     thinking,
+                    hidden,
                     rows,
                     key: group_key.into(),
                 }));
@@ -417,7 +441,7 @@ pub fn tally(rows: &[WorkRow]) -> String {
 /// the present tense, with a path cut to its file ("Editing retry.rs", "Running cargo test").
 /// `None` between steps.
 pub fn activity(rows: &[WorkRow]) -> Option<String> {
-    let row = rows.iter().rev().find(|row| matches!(row.meta, Meta::Running))?;
+    let row = rows.iter().rev().find(|row| row.meta.running())?;
     let verb = match row.verb.as_ref() {
         "Read" => "Reading",
         "Fetched" => "Fetching",
@@ -483,6 +507,7 @@ pub fn activity(rows: &[WorkRow]) -> Option<String> {
         Target::Code(text) if row.verb.as_ref() == "Fetched" => text.split('/').next().unwrap_or(text).to_string(),
         Target::Code(text) if row.verb.as_ref() != "Ran" => text.rsplit('/').next().unwrap_or(text).to_string(),
         Target::Code(text) | Target::Words(text) | Target::Note(text) => text.to_string(),
+        Target::Thought(_) | Target::Stream(_) => String::new(),
     };
     Some(if target.is_empty() {
         verb.to_string()
@@ -516,23 +541,6 @@ fn search_results(text: &str) -> Vec<String> {
     results
 }
 
-/// The facts under a finished turn: how long, how many tokens.
-fn footer(turn: &Turn) -> Option<String> {
-    let mut parts = Vec::new();
-    // Under a second is not worth saying: it is a turn that failed at once.
-    if let (Some(started), Some(ended)) = (turn.started, turn.ended)
-        && ended >= started + 1000
-    {
-        parts.push(duration(ended - started));
-    }
-    let tokens = turn.usage.input + turn.usage.cache_read + turn.usage.cache_write;
-    if tokens > 0 || turn.usage.output > 0 {
-        parts.push(format!("{} in", count(tokens)));
-        parts.push(format!("{} out", count(turn.usage.output)));
-    }
-    (!parts.is_empty()).then(|| parts.join("  ·  "))
-}
-
 /// "8s", "1m 05s", "1h 02m".
 pub fn duration(millis: u64) -> String {
     let seconds = millis / 1000;
@@ -552,18 +560,19 @@ pub fn count(value: u64) -> String {
     }
 }
 
-fn step_row(step: &Step, key: &str, cwd: &Path, live: bool, open: &HashSet<String>, agents: &HashMap<String, AgentInfo>, now: u64) -> WorkRow {
+#[allow(clippy::too_many_arguments)]
+fn step_row(
+    step: &Step,
+    key: &str,
+    cwd: &Path,
+    live: bool,
+    thinking_now: bool,
+    open: &HashSet<String>,
+    agents: &HashMap<String, AgentInfo>,
+    now: u64,
+) -> WorkRow {
     let mut row = match step {
-        Step::Thought(text) => WorkRow {
-            key: key.to_string().into(),
-            verb: "Thought".into(),
-            target: Target::Words(first_line(text).into()),
-            meta: Meta::None,
-            detail: (text.trim().contains('\n') || text.trim().len() > 120).then(|| Detail::Text(text.trim().to_string().into())),
-            open: false,
-            agent: None,
-            pictures: Vec::new(),
-        },
+        Step::Thought(thought) => thought_row(thought, key, thinking_now, now),
         Step::Note(text) => WorkRow {
             key: key.to_string().into(),
             verb: "".into(),
@@ -586,11 +595,208 @@ fn step_row(step: &Step, key: &str, cwd: &Path, live: bool, open: &HashSet<Strin
         },
         Step::Compacted(_) => unreachable!("mid-turn compactions are lifted out by turn_work_items"),
         Step::Tool(tool) if is_agent_row(tool, agents) => agent_row(tool, agents.get(&tool.id), live, now),
-        Step::Tool(tool) => tool_row(tool, cwd, live),
+        Step::Tool(tool) => {
+            let mut row = tool_row(tool, cwd, live);
+            // A step under way says how long it has been going: a stuck command shows it.
+            if matches!(row.meta, Meta::Running)
+                && let Some(started) = tool.started
+            {
+                row.meta = Meta::Clock(duration(now.saturating_sub(started)).into());
+            }
+            row
+        }
         Step::Task(news) => news_row(news, key),
     };
     row.open = row.detail.is_some() && open.contains(row.key.as_ref());
     row
+}
+
+/// Rows a live group shows before folding older ones behind "N earlier steps".
+pub const LIVE_ROWS: usize = 4;
+/// The newest reasoning a live thought's line carries, and the most its open body lays out:
+/// a long thought is never laid out whole on every word it streams.
+const STREAM_CHARS: usize = 240;
+const LIVE_BODY_CHARS: usize = 4_000;
+
+/// A thought's row. While the model is having it: "Thinking", how long so far, and its newest
+/// words running into a caret. Settled: "Thought for 12s" and its first line; open, the whole
+/// of it in a body of capped height.
+fn thought_row(thought: &crate::conversation::Thought, key: &str, now_thinking: bool, now: u64) -> WorkRow {
+    let text = thought.text.trim();
+    if now_thinking {
+        return WorkRow {
+            key: key.to_string().into(),
+            verb: "Thinking".into(),
+            target: Target::Stream(stream_tail(text, STREAM_CHARS).into()),
+            meta: match thought.started {
+                Some(started) => Meta::Clock(duration(now.saturating_sub(started)).into()),
+                None => Meta::Running,
+            },
+            detail: (!text.is_empty()).then(|| Detail::Thought { text: tail_chars(text, LIVE_BODY_CHARS).into(), live: true }),
+            open: false,
+            agent: None,
+            pictures: Vec::new(),
+        };
+    }
+    WorkRow {
+        key: key.to_string().into(),
+        verb: match thought.ms {
+            Some(ms) if ms >= 1000 => format!("Thought for {}", duration(ms)),
+            Some(_) => "Thought briefly".to_string(),
+            None => "Thought".to_string(),
+        }
+        .into(),
+        target: Target::Thought(first_line(text).into()),
+        meta: Meta::None,
+        detail: (!text.is_empty()).then(|| Detail::Thought { text: text.to_string().into(), live: false }),
+        open: false,
+        agent: None,
+        pictures: Vec::new(),
+    }
+}
+
+/// The newest of a thought as one line, as version 2 drew it: paragraphs joined by " · ",
+/// Markdown marks and runs of space dropped, the last `max` characters kept.
+pub fn stream_tail(text: &str, max: usize) -> String {
+    let flat = text
+        .split("\n\n")
+        .map(|paragraph| {
+            paragraph
+                .lines()
+                .map(|line| line.trim().trim_start_matches(['#', '>', '-', '*']).trim().replace("**", "").replace('`', ""))
+                .filter(|line| !line.is_empty())
+                .collect::<Vec<_>>()
+                .join(" ")
+        })
+        .filter(|paragraph| !paragraph.is_empty())
+        .collect::<Vec<_>>()
+        .join(" · ");
+    let flat = flat.split_whitespace().collect::<Vec<_>>().join(" ");
+    let count = flat.chars().count();
+    if count <= max { flat } else { flat.chars().skip(count - max).collect() }
+}
+
+/// The last `max` characters of a text, from the start of a line when one is near.
+fn tail_chars(text: &str, max: usize) -> String {
+    let count = text.chars().count();
+    if count <= max {
+        return text.to_string();
+    }
+    let tail: String = text.chars().skip(count - max).collect();
+    match tail.find('\n') {
+        Some(at) if at < 400 => tail[at + 1..].to_string(),
+        _ => tail,
+    }
+}
+
+/// What a settled group did, in one sentence: "Read 3 files, edited a file and ran 2
+/// commands". Files count once however often they were touched; at most three kinds are named,
+/// the rest counted as "and N more steps"; failures are said ("ran 2 commands (1 failed)").
+/// Thoughts are not counted. Empty when nothing countable happened.
+pub fn sentence(rows: &[WorkRow]) -> String {
+    struct Kind {
+        name: &'static str,
+        subjects: Vec<String>,
+        calls: usize,
+        failed: usize,
+    }
+    let mut kinds: Vec<Kind> = Vec::new();
+    for row in rows {
+        let Some(name) = kind_of(row) else { continue };
+        let subject = match &row.target {
+            Target::Code(text) | Target::Words(text) => text.to_string(),
+            _ => String::new(),
+        };
+        let at = match kinds.iter().position(|kind| kind.name == name) {
+            Some(at) => at,
+            None => {
+                kinds.push(Kind { name, subjects: Vec::new(), calls: 0, failed: 0 });
+                kinds.len() - 1
+            }
+        };
+        let kind = &mut kinds[at];
+        kind.calls += 1;
+        if !kind.subjects.contains(&subject) {
+            kind.subjects.push(subject);
+        }
+        if matches!(row.meta, Meta::Failed(_)) {
+            kind.failed += 1;
+        }
+    }
+    let phrase = |kind: &Kind| {
+        let files = kind.subjects.len();
+        let n = kind.calls;
+        let text = match kind.name {
+            "read" => if files == 1 { "read a file".to_string() } else { format!("read {files} files") },
+            "edit" => if files == 1 { "edited a file".to_string() } else { format!("edited {files} files") },
+            "run" => if n == 1 { "ran a command".to_string() } else { format!("ran {n} commands") },
+            "search" => if n == 1 { "searched the code".to_string() } else { format!("searched the code {n} times") },
+            "fetch" => if n == 1 { "read a page".to_string() } else { format!("read {n} pages") },
+            "web" => if n == 1 { "searched the web".to_string() } else { format!("searched the web {n} times") },
+            "browser" => if n == 1 { "used the browser".to_string() } else { format!("took {n} browser steps") },
+            "mac" => if n == 1 { "took a step on your Mac".to_string() } else { format!("took {n} steps on your Mac") },
+            "agent" => if n == 1 { "ran an agent".to_string() } else { format!("ran {n} agents") },
+            "ask" => if n == 1 { "asked you".to_string() } else { format!("asked you {n} times") },
+            "skill" => if n == 1 { "used a skill".to_string() } else { format!("used {n} skills") },
+            "memory" => "used memory".to_string(),
+            "mcp" => if n == 1 { "used an MCP tool".to_string() } else { format!("used {n} MCP tools") },
+            "canvas" => "worked on the canvas".to_string(),
+            "plan" => "updated the plan".to_string(),
+            "suggest" => if n == 1 { "suggested a task".to_string() } else { format!("suggested {n} tasks") },
+            "wait" => "waited for the background".to_string(),
+            "stop" => if n == 1 { "stopped a command".to_string() } else { format!("stopped {n} commands") },
+            _ => if n == 1 { "used a tool".to_string() } else { format!("used {n} tools") },
+        };
+        if kind.failed > 0 { format!("{text} ({} failed)", kind.failed) } else { text }
+    };
+    const NAMED: usize = 3;
+    let mut parts: Vec<String> = kinds.iter().take(NAMED).map(phrase).collect();
+    let more: usize = kinds.iter().skip(NAMED).map(|kind| kind.calls).sum();
+    if more > 0 {
+        parts.push(if more == 1 { "1 more step".to_string() } else { format!("{more} more steps") });
+    }
+    let mut text = match parts.len() {
+        0 => return String::new(),
+        1 => parts.remove(0),
+        _ => {
+            let last = parts.pop().unwrap_or_default();
+            format!("{} and {last}", parts.join(", "))
+        }
+    };
+    if let Some(first) = text.get(..1) {
+        text = first.to_uppercase() + &text[1..];
+    }
+    text
+}
+
+/// The kind of step a row counts as in a group's sentence; `None` for what is not counted
+/// (thoughts, notes, events).
+fn kind_of(row: &WorkRow) -> Option<&'static str> {
+    if row.is_thought() || matches!(row.target, Target::Note(_)) {
+        return None;
+    }
+    Some(match row.verb.as_ref() {
+        "Read" => "read",
+        "Edited" | "Wrote" | "Writing" | "Editing" => "edit",
+        "Ran" | "Watching" | "Finished" | "Failed" | "Ended" => "run",
+        "Searched" | "Found" | "Listed" | "Looked for" => "search",
+        "Fetched" => "fetch",
+        "Searched the web" => "web",
+        AGENT_VERB | "Reported" => "agent",
+        "Asked" => "ask",
+        "Used skill" => "skill",
+        "Saved memory" | "Updated memory" | "Recalled memory" | "Forgot memory" => "memory",
+        "Used" => "mcp",
+        "Plan" => "plan",
+        "Suggest" => "suggest",
+        "Waited" => "wait",
+        "Stopped" => "stop",
+        "" => return None,
+        verb if CANVAS_VERBS.contains(&verb) => "canvas",
+        verb if BROWSER_VERBS.contains(&verb) => "browser",
+        verb if COMPUTER_VERBS.contains(&verb) => "mac",
+        _ => "tool",
+    })
 }
 
 /// How a `bash` result says the command carried on in the background, if it did.
@@ -689,6 +895,11 @@ pub(crate) fn plural(count: usize, one: &str, many: &str) -> String {
 }
 
 pub fn tool_row(tool: &ToolStep, cwd: &Path, live: bool) -> WorkRow {
+    // A call still being written says what is coming: a plan, a file, a command.
+    if live && tool.input.is_none() && tool.result.is_none() && tool.name != wack_canvas::tools::CANVAS {
+        let (verb, target) = call_writing_words(tool, cwd);
+        return WorkRow { key: tool.id.clone().into(), verb: verb.into(), target, meta: Meta::Running, detail: None, open: false, agent: None, pictures: Vec::new() };
+    }
     let input = &tool.input;
     let path = |name: &str| text_field(input, name).map(|path| shown_path(path, cwd));
     let result = tool.result.as_ref();
@@ -938,6 +1149,34 @@ pub fn tool_row(tool: &ToolStep, cwd: &Path, live: bool) -> WorkRow {
         },
     };
     WorkRow { key: tool.id.clone().into(), verb: verb.to_string().into(), target, meta, detail, open: false, agent: None, pictures: result.map(|result| result.pictures.clone()).unwrap_or_default() }
+}
+
+/// What a call the model is still writing will be, in words: "Writing the plan", "Writing
+/// retry.rs", "Preparing a command". How much has come follows a long one.
+fn call_writing_words(tool: &ToolStep, cwd: &Path) -> (&'static str, Target) {
+    let writing = tool.writing.as_ref();
+    let file = writing.and_then(|writing| writing.path()).map(|path| shown_path(&path, cwd));
+    let size = writing.filter(|writing| writing.chars >= 2_000).map(|writing| format!(" · {} characters", count(writing.chars as u64))).unwrap_or_default();
+    let words = |text: &str| Target::Words(format!("{text}{size}").into());
+    match tool.name.as_str() {
+        wack_core::plan::PLAN_MODE_COMPLETE => ("Writing", words("the plan")),
+        "write" => match file {
+            Some(file) => ("Writing", Target::Code(file.into())),
+            None => ("Writing", words("a file")),
+        },
+        "edit" => match file {
+            Some(file) => ("Editing", Target::Code(file.into())),
+            None => ("Editing", words("a file")),
+        },
+        "bash" => ("Preparing", words("a command")),
+        wack_core::ask::ASK_USER_QUESTION => ("Preparing", words("questions for you")),
+        wack_core::suggest::SUGGEST_TASK => ("Preparing", words("a suggested task")),
+        wack_core::memory::MEMORY_SAVE => ("Preparing", words("a memory note")),
+        name if name == AGENT || name == AGENT_MESSAGE => ("Preparing", words("a brief for an agent")),
+        name if name.starts_with("browser_") => ("Preparing", words("a browser step")),
+        name if name.starts_with("computer_") => ("Preparing", words("a step on your Mac")),
+        _ => ("Preparing", words("the next step")),
+    }
 }
 
 /// The verbs canvas rows take, none shared with another tool's, so the icon and tally can tell
@@ -1594,6 +1833,7 @@ mod tests {
             input: Some(input),
             result: result.map(|(text, is_error)| ToolResult { text: text.into(), is_error, pictures: Vec::new() }),
             writing: None,
+            started: None,
         }
     }
 
@@ -1777,7 +2017,7 @@ mod tests {
     }
 
     #[test]
-    fn a_finished_turn_reports_its_time_and_tokens() {
+    fn a_finished_turn_ends_with_its_answer_and_no_token_counts() {
         let mut conversation = Conversation::default();
         conversation.send("go", 1_000);
         conversation.apply(&wack_core::Event::Text("Done **now**.".into()), 2_000);
@@ -1786,7 +2026,89 @@ mod tests {
         let items = items(&conversation, Path::new("/w"), &HashSet::new(), 30_000, &mut ReplyCache::default());
         assert!(matches!(&items[0], Item::Prompt { .. }));
         assert!(matches!(&items[1], Item::Reply { blocks, live: false } if blocks.len() == 1));
-        assert!(matches!(&items[2], Item::Footer(text) if text.as_ref() == "19s  ·  12k in  ·  300 out"));
+        assert_eq!(items.len(), 2, "the owner found the in/out footer noise: {items:?}");
+    }
+
+    #[test]
+    fn the_models_words_between_steps_split_groups_and_stay_visible() {
+        let mut conversation = Conversation::default();
+        conversation.send("go", 1_000);
+        conversation.apply(&wack_core::Event::ToolCall { id: "r1".into(), name: "read".into(), input: json!({ "path": "/w/a.rs" }) }, 2_000);
+        conversation.apply(&wack_core::Event::ToolResult { id: "r1".into(), name: "read".into(), content: "x".into(), is_error: false, images: Vec::new() }, 2_000);
+        conversation.apply(&wack_core::Event::ToolCall { id: "r2".into(), name: "read".into(), input: json!({ "path": "/w/a.rs", "offset": 40 }) }, 2_000);
+        conversation.apply(&wack_core::Event::ToolResult { id: "r2".into(), name: "read".into(), content: "x".into(), is_error: false, images: Vec::new() }, 2_000);
+        conversation.apply(&wack_core::Event::Text("Found it; fixing now.".into()), 3_000);
+        conversation.apply(&wack_core::Event::ToolCall { id: "b1".into(), name: "bash".into(), input: json!({ "command": "cargo test" }) }, 4_000);
+        conversation.apply(&wack_core::Event::ToolResult { id: "b1".into(), name: "bash".into(), content: "boom".into(), is_error: true, images: Vec::new() }, 5_000);
+        conversation.apply(&wack_core::Event::Text("Fixed.".into()), 6_000);
+        conversation.finish(&Ok(wack_core::Outcome::Done), 7_000);
+        let items = items(&conversation, Path::new("/w"), &HashSet::new(), 8_000, &mut ReplyCache::default());
+        let shapes: Vec<String> = items
+            .iter()
+            .map(|item| match item {
+                Item::Prompt { .. } => "prompt".to_string(),
+                Item::Work(work) => format!("work: {}", work.label),
+                Item::Reply { .. } => "reply".to_string(),
+                other => format!("{other:?}"),
+            })
+            .collect();
+        assert_eq!(shapes, ["prompt", "work: Read a file", "reply", "work: Ran a command (1 failed)", "reply"], "one file read twice counts once");
+        assert!(items.iter().all(|item| !matches!(item, Item::Work(work) if work.open)), "settled groups fold");
+    }
+
+    #[test]
+    fn a_sentence_names_three_kinds_then_counts_the_rest() {
+        let row = |verb: &str, target: &str| WorkRow {
+            key: "k".into(),
+            verb: verb.to_string().into(),
+            target: Target::Code(target.to_string().into()),
+            meta: Meta::None,
+            detail: None,
+            open: false,
+            agent: None,
+            pictures: Vec::new(),
+        };
+        let rows = [row("Read", "a"), row("Read", "b"), row("Edited", "a"), row("Ran", "x"), row("Ran", "y"), row("Fetched", "p"), row("Fetched", "q")];
+        assert_eq!(sentence(&rows), "Read 2 files, edited a file, ran 2 commands and 2 more steps");
+        assert_eq!(sentence(&[]), "");
+    }
+
+    #[test]
+    fn a_live_thought_streams_its_newest_words_and_a_settled_one_says_how_long() {
+        let mut conversation = Conversation::default();
+        conversation.send("go", 1_000);
+        conversation.apply(&wack_core::Event::Thinking("First idea.\n\nSecond, **longer** idea.".into()), 2_000);
+        let live = items(&conversation, Path::new("/w"), &HashSet::new(), 14_000, &mut ReplyCache::default());
+        let Some(Item::Work(work)) = live.get(1) else { panic!("{live:?}") };
+        let row = &work.rows[0];
+        assert_eq!(row.verb.as_ref(), "Thinking");
+        assert!(matches!(&row.meta, Meta::Clock(time) if time.as_ref() == "12s"));
+        assert!(matches!(&row.target, Target::Stream(tail) if tail.as_ref() == "First idea. · Second, longer idea."));
+
+        conversation.apply(&wack_core::Event::Text("Done.".into()), 20_000);
+        conversation.apply(&wack_core::Event::Thought { ms: 19_000 }, 20_000);
+        conversation.finish(&Ok(wack_core::Outcome::Done), 21_000);
+        let settled = items(&conversation, Path::new("/w"), &HashSet::new(), 30_000, &mut ReplyCache::default());
+        let Some(Item::Work(work)) = settled.get(1) else { panic!("{settled:?}") };
+        assert!(work.only_thoughts());
+        assert_eq!(work.rows[0].verb.as_ref(), "Thought for 19s");
+        assert!(matches!(&work.rows[0].detail, Some(Detail::Thought { live: false, .. })));
+    }
+
+    #[test]
+    fn a_call_being_written_says_what_is_coming() {
+        let mut conversation = Conversation::default();
+        conversation.send("plan it", 1_000);
+        conversation.apply(&wack_core::Event::ToolStart { id: "p".into(), name: wack_core::plan::PLAN_MODE_COMPLETE.into() }, 2_000);
+        conversation.apply(&wack_core::Event::ToolInput { id: "p".into(), json: format!("{{\"plan\": \"{}", "x".repeat(3_000)) }, 3_000);
+        conversation.apply(&wack_core::Event::ToolStart { id: "w".into(), name: "write".into() }, 4_000);
+        conversation.apply(&wack_core::Event::ToolInput { id: "w".into(), json: "{\"path\": \"/w/src/lib.rs\", \"content\": \"fn".into() }, 4_000);
+        let live = items(&conversation, Path::new("/w"), &HashSet::new(), 9_000, &mut ReplyCache::default());
+        let Some(Item::Work(work)) = live.get(1) else { panic!("{live:?}") };
+        assert_eq!(work.rows[0].verb.as_ref(), "Writing");
+        assert!(matches!(&work.rows[0].target, Target::Words(words) if words.as_ref() == "the plan · 3k characters"));
+        assert!(matches!(&work.rows[0].meta, Meta::Clock(time) if time.as_ref() == "7s"));
+        assert!(matches!(&work.rows[1].target, Target::Code(path) if path.as_ref() == "src/lib.rs"));
     }
 
     #[test]
@@ -1980,7 +2302,7 @@ mod tests {
         let settled = items(&conversation, Path::new("/"), &HashSet::new(), 11_000, &mut ReplyCache::default());
         assert!(matches!(&settled[1], Item::Commit(_)));
         assert!(matches!(&settled[2], Item::Reply { live: false, .. }));
-        assert!(matches!(&settled[3], Item::Footer(_)));
+        assert_eq!(settled.len(), 3);
     }
 
     #[test]
@@ -2000,7 +2322,7 @@ mod tests {
     }
 
     #[test]
-    fn settled_turns_with_edits_emit_a_changes_card_before_the_footer() {
+    fn settled_turns_with_edits_end_with_a_changes_card() {
         let mut conversation = Conversation::default();
         conversation.send("Update sse.rs.", 1_000);
         conversation.apply(
@@ -2035,7 +2357,7 @@ mod tests {
         let Item::Changes(card) = &settled[3] else { panic!("expected changes card: {settled:?}") };
         assert_eq!(card.heading.as_ref(), "Edited 1 file");
         assert_eq!((card.added, card.removed), (2, 1));
-        assert!(matches!(&settled[4], Item::Footer(_)));
+        assert_eq!(settled.len(), 4);
     }
 
     #[test]

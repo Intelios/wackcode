@@ -540,7 +540,8 @@ fn turn_items(conversation: &Conversation, index: usize, turn: &Turn, scratchpad
     };
     for (at, step) in turn.steps.iter().enumerate() {
         match step {
-            Step::Thought(text) => {
+            Step::Thought(thought_step) => {
+                let text = &thought_step.text;
                 // Thinking still under way is the typing bubble's "pondering…".
                 if (turn.live && at == last) || text.trim().is_empty() {
                     continue;
@@ -893,6 +894,7 @@ mod tests {
             input: Some(input),
             result: result.map(|(text, is_error)| ToolResult { text: text.into(), is_error, pictures: Vec::new() }),
             writing: None,
+            started: None,
         }
     }
 
@@ -975,7 +977,7 @@ mod tests {
         let mut turn = Turn::default();
         turn.live = true;
         assert_eq!(mood(&turn), Some(Mood::Typing));
-        turn.steps.push(Step::Thought("hmm".into()));
+        turn.steps.push(Step::Thought(crate::conversation::Thought::new("hmm")));
         assert_eq!(mood(&turn), Some(Mood::Thinking));
         turn.steps.push(Step::Tool(tool("web_fetch", json!({}), None)));
         assert_eq!(mood(&turn), Some(Mood::Using));

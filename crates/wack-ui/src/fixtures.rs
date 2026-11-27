@@ -601,6 +601,86 @@ pub fn working_turn() -> Vec<Item> {
     items(&conversation, &[], now)
 }
 
+/// A call the model streams first, as a real reply does, so its row knows when it began.
+fn started_call(conversation: &mut Conversation, id: &str, name: &str, input: serde_json::Value, result: Option<&str>, at: u64) {
+    conversation.apply(&Event::ToolStart { id: id.into(), name: name.into() }, at);
+    call(conversation, id, name, input, result, at);
+}
+
+const THINKING: &str = "The Compare page picks its pair in loadCatalog(): the URL first, then the saved tt.compare.pair preference, then the two most-used models. So \"start blank\" means dropping the last two fallbacks and letting the URL be the only record of a matchup.\n\nBut the model list still has to load, or the two pickers have nothing in them. That is one cheap get_model_stats call; the comparison itself must wait until both sides are chosen and differ.\n\nEdge cases: a URL naming a model that was hidden or renamed should clear to blank with a notice rather than fail; a pair of the same model is not a matchup; and a sync while the page is blank must not fire a comparison.";
+
+/// A finished turn the way a real one reads: reasoning and reading folded into a line, the
+/// model's own words between, the edits and checks folded, the answer and its changes.
+pub fn grouped_turn(open: &[&str]) -> Vec<Item> {
+    let mut conversation = Conversation::default();
+    let t = START;
+    conversation.send("In the Compare tab I'd like it to start with no models: you go there to compare two specific ones, so let me choose them.", t);
+    conversation.apply(&Event::Thinking(THINKING.into()), t + 1_000);
+    started_call(&mut conversation, "g-1", "read", json!({ "path": format!("{CWD}/src/routes/compare/+page.svelte") }), Some(&"x\n".repeat(712)), t + 15_000);
+    started_call(&mut conversation, "g-2", "read", json!({ "path": format!("{CWD}/src/lib/api.ts"), "offset": 390 }), Some(&"x\n".repeat(90)), t + 15_500);
+    started_call(&mut conversation, "g-3", "grep", json!({ "pattern": "tt.compare.pair", "path": "src" }), Some("a\nb"), t + 16_000);
+    started_call(&mut conversation, "g-4", "read", json!({ "path": format!("{CWD}/src/lib/prefs.ts") }), Some(&"x\n".repeat(40)), t + 16_500);
+    conversation.apply(&Event::Thought { ms: 14_000 }, t + 17_000);
+    conversation.apply(&Event::Reply { usage: None }, t + 17_000);
+    conversation.apply(&Event::Text("The pair comes from the URL, a saved preference, or the two most-used models. I'll make the URL the only record of a matchup and leave the pickers blank until you choose.".into()), t + 18_000);
+    conversation.apply(&Event::Thinking("Edit the state first, then the markup.".into()), t + 19_000);
+    started_call(
+        &mut conversation,
+        "g-5",
+        "edit",
+        json!({ "path": "src/routes/compare/+page.svelte", "edits": [{ "old_text": "a\nb\nc", "new_text": "a\nB\nC\nD\nc" }] }),
+        Some("Edited."),
+        t + 24_000,
+    );
+    started_call(
+        &mut conversation,
+        "g-6",
+        "edit",
+        json!({ "path": "src/routes/compare/+page.svelte", "edits": [{ "old_text": "x\ny", "new_text": "x\nY\nZ" }] }),
+        Some("Edited."),
+        t + 30_000,
+    );
+    started_call(&mut conversation, "g-7", "bash", json!({ "command": "bun run check 2>&1 | tail -10", "description": "Type-check the frontend" }), Some("svelte-check found 0 errors and 0 warnings"), t + 36_000);
+    conversation.apply(&Event::Thought { ms: 5_000 }, t + 37_000);
+    conversation.apply(&Event::Reply { usage: None }, t + 37_000);
+    conversation.apply(&Event::Text("Type-check is clean. Checking it in the browser against the mock data.".into()), t + 38_000);
+    started_call(&mut conversation, "g-8", "browser_navigate", json!({ "url": "http://localhost:1420/compare?mock" }), Some("Opened a new tab."), t + 40_000);
+    started_call(&mut conversation, "g-9", "browser_eval", json!({ "expression": "document.title" }), Some("\"TokenTrail\""), t + 41_000);
+    started_call(&mut conversation, "g-10", "browser_act", json!({ "action": "click", "ref": "ref_3" }), Some("Clicked ref_3."), t + 42_000);
+    started_call(&mut conversation, "g-11", "browser_screenshot", json!({}), Some("A screenshot."), t + 43_000);
+    conversation.apply(&Event::Text("Done. The Compare tab now opens blank: both pickers start empty, nothing is compared until you choose two different models, and a link with `?a=…&b=…` still opens that matchup.\n\nA link naming a model that's gone clears to blank with a short notice instead of failing.".into()), t + 45_000);
+    conversation.apply(&Event::Reply { usage: None }, t + 45_000);
+    conversation.finish(&Ok(Outcome::Done), t + 46_000);
+    items(&conversation, open, t + 60_000)
+}
+
+/// A turn whose model is reasoning now: a folded line of what it read, its words, and the
+/// thought still coming, its newest words running into the caret.
+pub fn thinking_turn(open: &[&str]) -> Vec<Item> {
+    let mut conversation = Conversation::default();
+    let now = START + 90_000;
+    conversation.send("In the Compare tab I'd like it to start with no models: you go there to compare two specific ones, so let me choose them.", now - 60_000);
+    started_call(&mut conversation, "t-1", "read", json!({ "path": format!("{CWD}/src/routes/compare/+page.svelte") }), Some(&"x\n".repeat(712)), now - 50_000);
+    started_call(&mut conversation, "t-2", "grep", json!({ "pattern": "loadCatalog", "path": "src" }), Some("a"), now - 48_000);
+    conversation.apply(&Event::Reply { usage: None }, now - 47_000);
+    conversation.apply(&Event::Text("Found where the pair is chosen. Working out the blank state before I touch it.".into()), now - 46_000);
+    conversation.apply(&Event::Thinking(THINKING.into()), now - 34_000);
+    items(&conversation, open, now)
+}
+
+/// A plan being written: the thought before it settled, and the call's row saying what comes.
+pub fn writing_plan_turn() -> Vec<Item> {
+    let mut conversation = Conversation::default();
+    let now = START + 120_000;
+    conversation.send("Let's plan this out.", now - 100_000);
+    conversation.apply(&Event::Thinking(THINKING.into()), now - 95_000);
+    started_call(&mut conversation, "w-1", "read", json!({ "path": format!("{CWD}/src/routes/compare/+page.svelte") }), Some(&"x\n".repeat(712)), now - 70_000);
+    conversation.apply(&Event::Thinking("All decisions are made; write the plan now.".into()), now - 60_000);
+    conversation.apply(&Event::ToolStart { id: "w-2".into(), name: "plan_mode_complete".into() }, now - 22_000);
+    conversation.apply(&Event::ToolInput { id: "w-2".into(), json: format!("{{\"plan\": \"# Compare tab: start blank\\n\\n{}", "x".repeat(6_400)) }, now - 2_000);
+    items(&conversation, &[], now)
+}
+
 /// The agent checking a form in the browser: each step in words, the last one still running.
 pub fn browser_turn() -> Vec<Item> {
     let mut conversation = Conversation::default();

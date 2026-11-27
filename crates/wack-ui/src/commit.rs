@@ -713,6 +713,7 @@ mod tests {
             input: Some(json!({ "command": command })),
             result: result.map(|(text, is_error)| ToolResult { text: text.into(), is_error, pictures: Vec::new() }),
             writing: None,
+            started: None,
         }
     }
 

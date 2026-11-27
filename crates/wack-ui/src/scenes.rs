@@ -238,6 +238,56 @@ pub fn all() -> Vec<Scene> {
             },
         },
         Scene {
+            name: "chat-groups",
+            description: "A finished turn as it reads: thought and reading folded into a line, the model's words between groups, edits and checks folded, the answer and its changes.",
+            size: WINDOW,
+            build: |_, cx| chat_scene(fixtures::grouped_turn(&[]), cx),
+        },
+        Scene {
+            name: "chat-groups-open",
+            description: "The same turn with its first group opened and its thought's body open: capped, scrolling inside.",
+            size: WINDOW,
+            build: |_, cx| chat_scene(fixtures::grouped_turn(&["turn-1", "turn-1-1"]), cx),
+        },
+        Scene {
+            name: "chat-thinking",
+            description: "The model reasoning now: \"Thinking\", how long, and its newest words running into the caret.",
+            size: WINDOW,
+            build: |_, cx| chat_scene(fixtures::thinking_turn(&[]), cx),
+        },
+        Scene {
+            name: "chat-thinking-open",
+            description: "A live thought opened: its body holds to the newest reasoning, at a capped height.",
+            size: WINDOW,
+            build: |_, cx| chat_scene(fixtures::thinking_turn(&["turn-1-3"]), cx),
+        },
+        Scene {
+            name: "chat-groups-backdrop",
+            description: "The grouped turn over a backdrop, with a live thought below.",
+            size: WINDOW,
+            build: |_, cx| {
+                let picture = over(fixtures::backdrop(wack_core::Texture::None), cx);
+                let mut items = fixtures::grouped_turn(&[]);
+                items.extend(fixtures::thinking_turn(&[]).into_iter().skip(1));
+                let composer = fixtures::composer_after_turn(crate::composer::Input::Drawn { text: None, placeholder: "Reply, or ask for the next change".into() });
+                cx.new(|_| {
+                    Shell::showing_tabs(
+                        fixtures::sidebar(Selected::Working),
+                        Screen::Chat { title: fixtures::WORKING_TITLE.into(), project: fixtures::project(), body: Body::Items(items), composer },
+                        fixtures::strip(Some(fixtures::WORKING_TITLE)),
+                    )
+                    .with_backdrop(picture)
+                })
+                .into()
+            },
+        },
+        Scene {
+            name: "chat-writing-plan",
+            description: "A plan being written: the row says so, and how much has come.",
+            size: WINDOW,
+            build: |_, cx| chat_scene(fixtures::writing_plan_turn(), cx),
+        },
+        Scene {
             name: "chat-commits",
             description: "Commit milestone rows breaking work groups: a landed commit with hash pill and ±stats, and a second commit expanded to its command and output.",
             size: size(px(1180.), px(900.)),
@@ -3144,6 +3194,19 @@ pub fn find(name: &str) -> Option<Scene> {
 }
 
 /// Wraps a scene's view so any scene can be the root of a window.
+/// A chat in the sample sidebar showing `items`, with a quiet composer so the turn has room.
+fn chat_scene(items: Vec<crate::transcript::Item>, cx: &mut App) -> AnyView {
+    let composer = fixtures::composer_after_turn(crate::composer::Input::Drawn { text: None, placeholder: "Reply, or ask for the next change".into() });
+    cx.new(|_| {
+        Shell::showing_tabs(
+            fixtures::sidebar(Selected::Working),
+            Screen::Chat { title: fixtures::WORKING_TITLE.into(), project: fixtures::project(), body: Body::Items(items), composer },
+            fixtures::strip(Some(fixtures::WORKING_TITLE)),
+        )
+    })
+    .into()
+}
+
 pub struct SceneRoot {
     view: AnyView,
 }

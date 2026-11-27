@@ -666,7 +666,7 @@ mod tests {
         let message = |role: Role, text: &str| {
             let mut message = Message::user(text);
             message.role = role;
-            HistoryEntry::Message { message, usage: None, at: None, command: None }
+            HistoryEntry::Message { message, usage: None, at: None, command: None, thought_ms: None }
         };
         let history = vec![
             message(Role::User, "The parent's question"),

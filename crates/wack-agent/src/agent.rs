@@ -287,6 +287,9 @@ pub enum Event {
     ToolCall { id: String, name: String, input: Value },
     /// `images` are the viewing copies the model is sent (each with its saved original's id).
     ToolResult { id: String, name: String, content: String, is_error: bool, images: Vec<Image> },
+    /// The reply that is ending reasoned for this long, from its request until its first words
+    /// or call. Comes just before its `Reply`.
+    Thought { ms: u64 },
     /// One reply from the model is complete and saved.
     Reply { usage: Option<Usage> },
     Retrying(RetryNotice),
@@ -532,7 +535,19 @@ impl Agent {
 
             let request = self.request();
             let written = Mutex::new(String::new());
+            // When reasoning first came, and when the first words or call after it did.
+            let thinking = Mutex::new((None::<Instant>, None::<Instant>));
             let sink = |delta: Delta| {
+                {
+                    let mut thinking = thinking.lock().unwrap();
+                    match &delta {
+                        Delta::Thinking(_) => {
+                            thinking.0.get_or_insert_with(Instant::now);
+                        }
+                        _ if thinking.0.is_some() && thinking.1.is_none() => thinking.1 = Some(Instant::now()),
+                        _ => {}
+                    }
+                }
                 events(match delta {
                     Delta::Text(text) => {
                         written.lock().unwrap().push_str(&text);
@@ -597,7 +612,15 @@ impl Agent {
             };
             compacted_for_overflow = false;
 
-            self.session.push(response.message.clone(), response.usage)?;
+            // Thought from the request until the first words or call that followed its reasoning.
+            let thought_ms = {
+                let (first, end) = *thinking.lock().unwrap();
+                first.map(|_| end.unwrap_or_else(Instant::now).duration_since(started).as_millis() as u64)
+            };
+            self.session.push_reply(response.message.clone(), response.usage, thought_ms)?;
+            if let Some(ms) = thought_ms {
+                events(Event::Thought { ms });
+            }
             events(Event::Reply { usage: response.usage });
             for feature in &self.features {
                 feature.after_turn(&response.message);

@@ -54,6 +54,10 @@ enum Entry {
         /// transcript shows in place of the expanded text the model got.
         #[serde(default, skip_serializing_if = "Option::is_none")]
         command: Option<CommandUse>,
+        /// A reply that reasoned: how long the model thought, from the request until its first
+        /// words or call, in milliseconds. Display only ("Thought for 12s").
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        thought_ms: Option<u64>,
     },
     /// Everything before this line is replaced by `summary`, except the last `keep` messages.
     Compaction {
@@ -242,7 +246,14 @@ impl Session {
 
     /// Adds a message the user sent as a slash command (`command`), or a plain one (`None`).
     pub fn push_as(&mut self, message: Message, usage: Option<Usage>, command: Option<CommandUse>) -> Result<(), String> {
-        self.append(&Entry::Message { message: message.clone(), usage, at: Some(now_millis()), note: None, command })?;
+        self.append(&Entry::Message { message: message.clone(), usage, at: Some(now_millis()), note: None, command, thought_ms: None })?;
+        self.remember(message, usage, None);
+        Ok(())
+    }
+
+    /// Adds the model's reply, with how long it thought when it did.
+    pub fn push_reply(&mut self, message: Message, usage: Option<Usage>, thought_ms: Option<u64>) -> Result<(), String> {
+        self.append(&Entry::Message { message: message.clone(), usage, at: Some(now_millis()), note: None, command: None, thought_ms })?;
         self.remember(message, usage, None);
         Ok(())
     }
@@ -250,7 +261,7 @@ impl Session {
     /// Adds a message the app wrote for the model.
     pub fn push_note(&mut self, note: Note) -> Result<(), String> {
         let message = Message::user(note.text);
-        self.append(&Entry::Message { message: message.clone(), usage: None, at: Some(now_millis()), note: Some(note.tag.clone()), command: None })?;
+        self.append(&Entry::Message { message: message.clone(), usage: None, at: Some(now_millis()), note: Some(note.tag.clone()), command: None, thought_ms: None })?;
         self.remember(message, None, Some(note.tag));
         Ok(())
     }
@@ -384,7 +395,7 @@ fn now_millis() -> u64 {
 /// [`Session::messages`], nothing is dropped at a compaction.
 #[derive(Clone, Debug, PartialEq)]
 pub enum HistoryEntry {
-    Message { message: Message, usage: Option<Usage>, at: Option<u64>, command: Option<CommandUse> },
+    Message { message: Message, usage: Option<Usage>, at: Option<u64>, command: Option<CommandUse>, thought_ms: Option<u64> },
     /// The conversation before this point was summarised for the model.
     Compacted {
         summary: Summary,
@@ -407,7 +418,9 @@ pub fn history(path: &Path) -> Result<Vec<HistoryEntry>, String> {
     for line in String::from_utf8_lossy(&bytes[..complete]).lines() {
         match serde_json::from_str::<Entry>(line) {
             Ok(Entry::Message { note: Some(tag), message, at, .. }) => entries.push(HistoryEntry::Note { tag, text: message.text(), at }),
-            Ok(Entry::Message { message, usage, at, note: None, command }) => entries.push(HistoryEntry::Message { message, usage, at, command }),
+            Ok(Entry::Message { message, usage, at, note: None, command, thought_ms }) => {
+                entries.push(HistoryEntry::Message { message, usage, at, command, thought_ms })
+            }
             Ok(Entry::Compaction { summary, tokens_before, tokens_after, .. }) => {
                 entries.push(HistoryEntry::Compacted { summary, tokens_before, tokens_after });
             }

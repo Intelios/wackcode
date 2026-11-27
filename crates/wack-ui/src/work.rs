@@ -727,35 +727,127 @@ fn thought_row(thought: &crate::conversation::Thought, key: &str, now_thinking: 
 
 /// The newest of a thought as one line, as version 2 drew it: paragraphs joined by " · ",
 /// Markdown marks and runs of space dropped, the last `max` characters kept.
+///
+/// Walks backwards from the end so a long live thought stays O(max) per streaming delta rather than
+/// rescanning the whole thought on every token.
 pub fn stream_tail(text: &str, max: usize) -> String {
-    let flat = text
-        .split("\n\n")
-        .map(|paragraph| {
-            paragraph
-                .lines()
-                .map(|line| line.trim().trim_start_matches(['#', '>', '-', '*']).trim().replace("**", "").replace('`', ""))
-                .filter(|line| !line.is_empty())
-                .collect::<Vec<_>>()
-                .join(" ")
-        })
-        .filter(|paragraph| !paragraph.is_empty())
-        .collect::<Vec<_>>()
-        .join(" · ");
-    let flat = flat.split_whitespace().collect::<Vec<_>>().join(" ");
-    let count = flat.chars().count();
-    if count <= max { flat } else { flat.chars().skip(count - max).collect() }
+    if max == 0 {
+        return String::new();
+    }
+    let mut paragraphs: Vec<String> = Vec::new();
+    let mut total_chars = 0usize;
+    for paragraph in text.rsplit("\n\n") {
+        let sep_chars = if paragraphs.is_empty() { 0 } else { 3 };
+        let needed = max.saturating_sub(total_chars + sep_chars);
+        let mut lines: Vec<String> = Vec::new();
+        let mut para_chars = 0usize;
+        for line in paragraph.lines().rev() {
+            let line_need = needed.saturating_sub(para_chars);
+            let cleaned = clean_stream_line(line, line_need.max(1));
+            if cleaned.is_empty() {
+                continue;
+            }
+            if !lines.is_empty() {
+                para_chars += 1;
+            }
+            para_chars += cleaned.chars().count();
+            lines.push(cleaned);
+            if total_chars + sep_chars + para_chars >= max {
+                break;
+            }
+        }
+        if lines.is_empty() {
+            continue;
+        }
+        lines.reverse();
+        let joined = lines.join(" ");
+        if !paragraphs.is_empty() {
+            total_chars += 3;
+        }
+        total_chars += joined.chars().count();
+        paragraphs.push(joined);
+        if total_chars >= max {
+            break;
+        }
+    }
+    paragraphs.reverse();
+    let flat = paragraphs.join(" · ");
+    last_chars(&flat, max)
+}
+
+/// Cleans one line for [`stream_tail`], slicing from the end when a single line is very long so
+/// pathological single-line thoughts stay O(max) too.
+fn clean_stream_line(line: &str, max: usize) -> String {
+    let line = line.trim_end();
+    if line.is_empty() {
+        return String::new();
+    }
+    let mut window = max.saturating_mul(8).max(512);
+    loop {
+        if line.len() <= window {
+            let cleaned = line.trim_start().trim_start_matches(['#', '>', '-', '*']).trim_start().replace("**", "").replace('`', "");
+            return collapse_spaces(&cleaned);
+        }
+        let mut cut = line.len() - window;
+        while cut > 0 && !line.is_char_boundary(cut) {
+            cut -= 1;
+        }
+        // Don't split a run of `*`, so `**` replacement has the same parity as from byte 0.
+        while cut > 0 && line.as_bytes()[cut - 1] == b'*' {
+            cut -= 1;
+        }
+        if cut == 0 {
+            let cleaned = line.trim_start().trim_start_matches(['#', '>', '-', '*']).trim_start().replace("**", "").replace('`', "");
+            return collapse_spaces(&cleaned);
+        }
+        let cleaned = collapse_spaces(&line[cut..].replace("**", "").replace('`', ""));
+        // Safe to stop only when enough non-prefix chars follow `cut` that byte-0 `trim_start_matches`
+        // and any word split at `cut` cannot affect the last `max` characters.
+        let safe_tail = cleaned.trim_start_matches(['#', '>', '-', '*', ' ']);
+        if safe_tail.chars().count() > max {
+            return last_chars(&cleaned, max);
+        }
+        window = window.saturating_mul(2);
+    }
+}
+
+fn collapse_spaces(text: &str) -> String {
+    let mut out = String::with_capacity(text.len());
+    for (index, word) in text.split_whitespace().enumerate() {
+        if index > 0 {
+            out.push(' ');
+        }
+        out.push_str(word);
+    }
+    out
+}
+
+/// The last `max` characters of `text`, in O(max) from the end.
+fn last_chars(text: &str, max: usize) -> String {
+    if max == 0 {
+        return String::new();
+    }
+    match text.char_indices().rev().nth(max - 1) {
+        Some((start, _)) if start > 0 => text[start..].to_string(),
+        _ => text.to_string(),
+    }
 }
 
 /// The last `max` characters of a text, from the start of a line when one is near.
 fn tail_chars(text: &str, max: usize) -> String {
-    let count = text.chars().count();
-    if count <= max {
+    if max == 0 {
+        return String::new();
+    }
+    let Some((start, _)) = text.char_indices().rev().nth(max - 1) else {
+        return text.to_string();
+    };
+    if start == 0 {
         return text.to_string();
     }
-    let tail: String = text.chars().skip(count - max).collect();
+    let tail = &text[start..];
     match tail.find('\n') {
         Some(at) if at < 400 => tail[at + 1..].to_string(),
-        _ => tail,
+        _ => tail.to_string(),
     }
 }
 
@@ -2545,5 +2637,82 @@ mod tests {
         assert!(card.open && !card.blocks.is_empty());
         assert!(card.text.contains("Keep the stream decoding clean."));
         assert!(card.text.contains("`src/sse.rs`"));
+    }
+
+    #[test]
+    fn stream_tail_and_tail_chars_match_full_scan_and_stay_fast_on_long_thoughts() {
+        fn reference_stream_tail(text: &str, max: usize) -> String {
+            let flat = text
+                .split("\n\n")
+                .map(|paragraph| {
+                    paragraph
+                        .lines()
+                        .map(|line| {
+                            let cleaned = line.trim().trim_start_matches(['#', '>', '-', '*']).trim().replace("**", "").replace('`', "");
+                            cleaned.split_whitespace().collect::<Vec<_>>().join(" ")
+                        })
+                        .filter(|line| !line.is_empty())
+                        .collect::<Vec<_>>()
+                        .join(" ")
+                })
+                .filter(|paragraph| !paragraph.is_empty())
+                .collect::<Vec<_>>()
+                .join(" · ");
+            let count = flat.chars().count();
+            if count <= max { flat } else { flat.chars().skip(count - max).collect() }
+        }
+
+        fn reference_tail_chars(text: &str, max: usize) -> String {
+            let count = text.chars().count();
+            if count <= max {
+                return text.to_string();
+            }
+            let tail: String = text.chars().skip(count - max).collect();
+            match tail.find('\n') {
+                Some(at) if at < 400 => tail[at + 1..].to_string(),
+                _ => tail,
+            }
+        }
+
+        let cases = [
+            "",
+            "   \n\n  ",
+            "Short thought.",
+            "First idea.\n\nSecond, **longer** `idea`.",
+            "### Heading\n> - * Bullet with **bold** and `code`\n\n\n\nNext paragraph — with UTF-8 café 🦆 and ***triple*** stars.",
+            "** **\n\nReal words after blank markdown.",
+            &format!("{}Final paragraph with **bold** and `ticks`.", "Initial paragraph about the layout.\n\n".repeat(400)),
+            &format!("### {}tail words **kept** at the end", "word ".repeat(8_000)),
+            &format!("{}tail", "#".repeat(4_000)),
+            &format!("{}end", "*".repeat(4_001)),
+            &format!("prefix{}", " ".repeat(4_000)),
+        ];
+
+        for case in cases {
+            for max in [0, 1, 5, 24, 60, STREAM_CHARS] {
+                assert_eq!(stream_tail(case, max), reference_stream_tail(case, max), "stream_tail mismatch for max={max}");
+            }
+            for max in [0, 1, 10, 50, LIVE_BODY_CHARS] {
+                assert_eq!(tail_chars(case, max), reference_tail_chars(case, max), "tail_chars mismatch for max={max}");
+            }
+        }
+
+        // A 200 KB thought (realistic long reasoning turn) must still take sub-millisecond time
+        // in debug builds, instead of stalling the UI thread on every streamed token.
+        let mut long_thought = String::with_capacity(210_000);
+        for i in 0..3_000 {
+            long_thought.push_str(&format!("## Step {i}\n- Inspect **module_{i}** and `fn_{i}()` carefully.\n\n"));
+        }
+        assert!(long_thought.len() > 180_000);
+        assert_eq!(stream_tail(&long_thought, STREAM_CHARS), reference_stream_tail(&long_thought, STREAM_CHARS));
+        assert_eq!(tail_chars(&long_thought, LIVE_BODY_CHARS), reference_tail_chars(&long_thought, LIVE_BODY_CHARS));
+
+        let start = std::time::Instant::now();
+        for _ in 0..50 {
+            let _ = std::hint::black_box(stream_tail(&long_thought, STREAM_CHARS));
+            let _ = std::hint::black_box(tail_chars(&long_thought, LIVE_BODY_CHARS));
+        }
+        // 50 calls on a >150 KB thought used to take ~1,000 ms in debug; O(max) takes a few ms.
+        assert!(start.elapsed() < std::time::Duration::from_millis(200), "50 tail extractions took {:?}", start.elapsed());
     }
 }

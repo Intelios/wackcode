@@ -198,15 +198,20 @@ impl Writing {
     }
 
     /// Takes the next piece of the call's input.
-    fn push(&mut self, json: &str) {
+    fn push(&mut self, json: &str, track_canvas: bool) {
         const TAIL: usize = 400;
         const HEAD: usize = 300;
         self.chars += json.chars().count();
         if self.head.len() < HEAD {
             self.head.extend(json.chars().take(HEAD - self.head.len()));
         }
+        if !track_canvas {
+            return;
+        }
         self.tail.push_str(json);
-        if let Some(name) = wack_canvas::tools::writing_name(&self.tail) {
+        if self.tail.contains("\"name\"")
+            && let Some(name) = wack_canvas::tools::writing_name(&self.tail)
+        {
             self.artboard = Some(name);
         }
         if self.tail.len() > TAIL {
@@ -368,7 +373,8 @@ impl Turn {
         if let Some(tool) = self.tool(id)
             && tool.input.is_none()
         {
-            tool.writing.get_or_insert_with(Writing::default).push(json);
+            let is_canvas = tool.name == wack_canvas::tools::CANVAS;
+            tool.writing.get_or_insert_with(Writing::default).push(json, is_canvas);
         }
     }
 

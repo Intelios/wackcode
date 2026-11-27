@@ -57,6 +57,11 @@ use crate::{
 };
 
 pub const FOLLOW_UP_PLACEHOLDER: &str = "Reply, or ask for the next change";
+/// Maximum channel items drained per UI turn so a busy producer can never monopolise the main thread.
+const MAX_EVENT_BATCH: usize = 4_096;
+/// Pace for applying streaming run events (~30 Hz): keeps typing smooth while always yielding back
+/// to AppKit and GPUI between batches so high-rate token streams cannot starve the main run loop.
+const EVENT_PACE: Duration = Duration::from_millis(33);
 
 /// How many files differ from the last commit, and the lines added and removed across them.
 #[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
@@ -538,12 +543,16 @@ impl ChatSession {
         let run = Tokio::spawn(cx, wack_core::run(setup, job, control.clone(), sink));
         let events = cx.spawn(async move |this, cx| {
             while let Some(first) = receiver.next().await {
-                let mut batch = vec![first];
-                while let Ok(event) = receiver.try_recv() {
-                    batch.push(event);
-                }
+                let batch = drain_batch(first, &mut receiver);
+                let finished = batch.iter().any(|event| matches!(event, RunEvent::Finished { .. }));
                 if this.update(cx, |chat, cx| chat.apply(number, batch, cx)).is_err() {
                     return;
+                }
+                // Always yield back to the main queue between streaming batches: without a timer,
+                // any batch that takes longer than the token arrival interval finds the channel
+                // non-empty on the next poll and spins inside one GCD callback until the stream stops.
+                if !finished {
+                    cx.background_executor().timer(EVENT_PACE).await;
                 }
             }
             // The channel closes when the run is over. A run always reports how it ended, so
@@ -586,10 +595,15 @@ impl ChatSession {
         });
         self._computer_watch = Some(cx.spawn(async move |this, cx| {
             while receiver.next().await.is_some() {
-                while receiver.try_recv().is_ok() {}
+                for _ in 0..MAX_EVENT_BATCH {
+                    if receiver.try_recv().is_err() {
+                        break;
+                    }
+                }
                 if this.update(cx, |chat, cx| chat.computer_changed(cx)).is_err() {
                     return;
                 }
+                cx.background_executor().timer(Duration::from_millis(100)).await;
             }
         }));
         self.computer = Some(computer);
@@ -998,6 +1012,7 @@ impl ChatSession {
         let mut from = self.conversation.entries.len().saturating_sub(1);
         let (awaiting_before, mode_before) = (self.conversation.awaiting, self.conversation.plan.mode);
         let mut finished = None;
+        let mut refresh_changes = false;
         for event in batch {
             match event {
                 RunEvent::Agent(event) => {
@@ -1008,10 +1023,7 @@ impl ChatSession {
                         // Everything waiting is delivered together.
                         Event::Steered(_) => self.steering.clear(),
                         // A tool may have changed files.
-                        Event::ToolResult { .. } => {
-                            self.panes.refresh_changes(cx);
-                            self.count_changes(cx);
-                        }
+                        Event::ToolResult { .. } => refresh_changes = true,
                         Event::Question { id, questions, wrap_up } => {
                             self.ask(id.clone(), questions.clone(), *wrap_up, cx);
                         }
@@ -1037,11 +1049,14 @@ impl ChatSession {
                         run.events.detach();
                     }
                     self.close_question(cx);
-                    self.panes.refresh_changes(cx);
-                    self.count_changes(cx);
+                    refresh_changes = true;
                     finished = Some(result);
                 }
             }
+        }
+        if refresh_changes {
+            self.panes.refresh_changes(cx);
+            self.count_changes(cx);
         }
         // A plan that stopped awaiting a decision loses its actions, wherever it is.
         if self.conversation.awaiting != awaiting_before
@@ -1359,8 +1374,11 @@ fn watch_tasks(tasks: &Tasks, cx: &mut Context<ChatSession>) -> Task<()> {
                 () = futures::FutureExt::fuse(cx.background_executor().timer(Duration::from_secs(1))) => None,
             };
             let mut news = first == Some(Signal::News);
-            while let Ok(signal) = receiver.try_recv() {
-                news |= signal == Signal::News;
+            for _ in 0..MAX_EVENT_BATCH {
+                match receiver.try_recv() {
+                    Ok(signal) => news |= signal == Signal::News,
+                    Err(_) => break,
+                }
             }
             let kept = this.update(cx, |chat, cx| {
                 if first.is_some() || !chat.tasks.running().is_empty() {
@@ -1393,11 +1411,13 @@ fn watch_canvases(canvases: &wack_canvas::Canvases, cx: &mut Context<ChatSession
         while let Some(first) = receiver.next().await {
             let mut started = false;
             let mut signal = Some(first);
+            let mut drained = 0usize;
             while let Some(next) = signal {
                 if matches!(next, wack_canvas::Signal::Changed { created: true, .. }) {
                     started = true;
                 }
-                signal = receiver.try_recv().ok();
+                drained += 1;
+                signal = if drained < MAX_EVENT_BATCH { receiver.try_recv().ok() } else { None };
             }
             let kept = this.update(cx, |chat, cx| {
                 if started {
@@ -1432,11 +1452,13 @@ fn watch_browser(tabs: &wack_browser::ChatTabs, cx: &mut Context<ChatSession>) -
             // Read every signal in the batch: an agent's new tab is one worth acting on.
             let mut opened = vec![];
             let mut signal = Some(first);
+            let mut drained = 0usize;
             while let Some(next) = signal {
                 if let wack_browser::Signal::Opened(id) = next {
                     opened.push(id);
                 }
-                signal = receiver.try_recv().ok();
+                drained += 1;
+                signal = if drained < MAX_EVENT_BATCH { receiver.try_recv().ok() } else { None };
             }
             let kept = this.update(cx, |chat, cx| {
                 // Restored tabs were listed before this watch began, so these are new.
@@ -1473,8 +1495,11 @@ fn watch_agents(agents: &Agents, cx: &mut Context<ChatSession>) -> Task<()> {
                 () = futures::FutureExt::fuse(cx.background_executor().timer(Duration::from_secs(1))) => None,
             };
             let mut news = first == Some(AgentSignal::News);
-            while let Ok(signal) = receiver.try_recv() {
-                news |= signal == AgentSignal::News;
+            for _ in 0..MAX_EVENT_BATCH {
+                match receiver.try_recv() {
+                    Ok(signal) => news |= signal == AgentSignal::News,
+                    Err(_) => break,
+                }
             }
             let kept = this.update(cx, |chat, cx| {
                 if first.is_some() || !chat.agents.active().is_empty() {
@@ -1511,6 +1536,17 @@ fn last_agents(history: &[HistoryEntry]) -> Vec<wack_core::agents::AgentInfo> {
         .unwrap_or_default()
 }
 
+fn drain_batch<T>(first: T, receiver: &mut mpsc::UnboundedReceiver<T>) -> Vec<T> {
+    let mut batch = vec![first];
+    while batch.len() < MAX_EVENT_BATCH {
+        match receiver.try_recv() {
+            Ok(event) => batch.push(event),
+            Err(_) => break,
+        }
+    }
+    batch
+}
+
 fn last_context(history: &[HistoryEntry]) -> Option<u64> {
     for entry in history.iter().rev() {
         match entry {
@@ -1520,4 +1556,29 @@ fn last_context(history: &[HistoryEntry]) -> Option<u64> {
         }
     }
     None
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn drain_batch_caps_a_flood_and_keeps_the_rest_in_order() {
+        let (sender, mut receiver) = mpsc::unbounded::<usize>();
+        let total = MAX_EVENT_BATCH + 25;
+        for i in 0..total {
+            sender.unbounded_send(i).unwrap();
+        }
+        let first = receiver.try_recv().unwrap();
+        let batch = drain_batch(first, &mut receiver);
+        assert_eq!(batch.len(), MAX_EVENT_BATCH);
+        assert_eq!(batch[0], 0);
+        assert_eq!(*batch.last().unwrap(), MAX_EVENT_BATCH - 1);
+
+        let next = receiver.try_recv().unwrap();
+        let rest = drain_batch(next, &mut receiver);
+        assert_eq!(rest.len(), 25);
+        assert_eq!(rest[0], MAX_EVENT_BATCH);
+        assert_eq!(*rest.last().unwrap(), total - 1);
+    }
 }

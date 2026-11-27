@@ -455,14 +455,21 @@ impl AppState {
         let runs = Runner::new();
         let (command_event_tx, mut command_event_rx) = mpsc::unbounded::<CommandEvent>();
         cx.spawn(async move |app, cx| {
+            const MAX_BATCH: usize = 4_096;
             while let Some(first) = command_event_rx.next().await {
                 let mut batch = vec![first];
-                while let Ok(next) = command_event_rx.try_recv() {
-                    batch.push(next);
+                while batch.len() < MAX_BATCH {
+                    match command_event_rx.try_recv() {
+                        Ok(next) => batch.push(next),
+                        Err(_) => break,
+                    }
                 }
                 if app.update(cx, |app, cx| app.handle_command_events(batch, cx)).is_err() {
                     break;
                 }
+                // Yield back to the main queue (~60 Hz cap) so noisy Build/Run output never
+                // starves AppKit or GPUI.
+                cx.background_executor().timer(Duration::from_millis(16)).await;
             }
         })
         .detach();
@@ -4642,8 +4649,13 @@ impl AppState {
             });
             let watched = project_id.clone();
             cx.spawn(async move |app, cx| {
+                const MAX_BATCH: usize = 4_096;
                 while receiver.next().await.is_some() {
-                    while receiver.try_recv().is_ok() {}
+                    for _ in 0..MAX_BATCH {
+                        if receiver.try_recv().is_err() {
+                            break;
+                        }
+                    }
                     let kept = app.update(cx, |app, cx| {
                         if let Some(panes) = app.new_chat_panes.get(&watched) {
                             panes.refresh_browser(cx);

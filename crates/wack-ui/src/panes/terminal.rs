@@ -16,7 +16,7 @@
 //!   Copy, Add selection to draft, Paste, Select all, Clear screen, and Restart shell.
 //! - Not yet: IME composition, mouse reporting to programs, and links.
 
-use std::path::PathBuf;
+use std::{path::PathBuf, time::Duration};
 
 use futures::{StreamExt, channel::mpsc};
 use gpui::{
@@ -162,14 +162,21 @@ impl TerminalPane {
             Ok(terminal) => {
                 self.terminal = Some(terminal);
                 self._events = Some(cx.spawn(async move |pane, cx| {
+                    const MAX_BATCH: usize = 4_096;
                     while let Some(first) = receiver.next().await {
                         let mut batch = vec![first];
-                        while let Ok(event) = receiver.try_recv() {
-                            batch.push(event);
+                        while batch.len() < MAX_BATCH {
+                            match receiver.try_recv() {
+                                Ok(event) => batch.push(event),
+                                Err(_) => break,
+                            }
                         }
                         if pane.update(cx, |pane, cx| pane.apply(batch, cx)).is_err() {
                             return;
                         }
+                        // Yield back to the main queue (~60 Hz cap) so noisy shell output never
+                        // starves AppKit or GPUI; the first event after idle still applies at once.
+                        cx.background_executor().timer(Duration::from_millis(16)).await;
                     }
                 }));
             }

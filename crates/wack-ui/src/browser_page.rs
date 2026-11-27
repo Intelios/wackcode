@@ -48,7 +48,7 @@ pub struct BrowserData {
 
 impl Default for BrowserData {
     fn default() -> Self {
-        Self { agent_opens_pane: true, default_viewport: Viewport::Fit, clearing: Clearing::Idle, version: "Chromium".into(), error: None }
+        Self { agent_opens_pane: true, default_viewport: Viewport::Desktop, clearing: Clearing::Idle, version: "Chromium".into(), error: None }
     }
 }
 

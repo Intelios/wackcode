@@ -36,6 +36,8 @@ use crate::{
 pub const PANE_CONTEXT: &str = "Pane";
 pub const HEADER_HEIGHT: f32 = 34.;
 /// A tab's pill.
+/// The width a pane tab's close button answers to.
+const CLOSE_HIT: f32 = 24.;
 const TAB_HEIGHT: f32 = 24.;
 /// How far either side of a line its resize handle reaches.
 const HANDLE_REACH: f32 = 3.;
@@ -286,7 +288,7 @@ fn stack_view(place: &StackPlace, stack: &Stack, frame: &Frame, theme: &Theme, c
             .max_w(px(200.))
             .h(px(TAB_HEIGHT))
             .pl(px(9.))
-            .pr(px(4.))
+            .pr(px(1.))
             .rounded_full()
             .flex()
             .items_center()
@@ -323,25 +325,38 @@ fn stack_view(place: &StackPlace, stack: &Stack, frame: &Frame, theme: &Theme, c
             .when_some(badge, |tab, badge| {
                 tab.child(div().flex_none().typography(Type::Small).text_color(theme.text_faint).child(badge))
             })
-            .child(
+            // Close takes the tab's whole height and a generous width, so it is easy to hit; the
+            // circle inside lights when the pointer is anywhere on it. Always shown on the tab in
+            // front, on the others when hovered.
+            .child({
+                let close_group: SharedString = format!("pane-close-{}", pane.id).into();
                 div()
                     .id(("close-pane", pane.id as usize))
+                    .group(close_group.clone())
                     .flex_none()
-                    .size(px(18.))
-                    .rounded_full()
+                    .w(px(CLOSE_HIT))
+                    .h_full()
                     .flex()
                     .items_center()
                     .justify_center()
-                    .invisible()
-                    .group_hover(group.clone(), |close| close.visible())
-                    .hover(|close| close.bg(theme.hover))
+                    .cursor_pointer()
+                    .when(!selected, |close| close.invisible().group_hover(group.clone(), |close| close.visible()))
                     .on_click(move |_, window, cx| {
                         cx.stop_propagation();
                         window.dispatch_action(Box::new(ClosePaneId { pane: id }), cx);
                     })
-                    .child(Icon::Close.view(px(11.), theme.text_dim))
-                    .tag("close-pane"),
-            )
+                    .child(
+                        div()
+                            .size(px(20.))
+                            .rounded_full()
+                            .flex()
+                            .items_center()
+                            .justify_center()
+                            .group_hover(close_group, |circle| circle.bg(theme.hover))
+                            .child(Icon::Close.view(px(12.), if selected { theme.text_dim } else { theme.text_faint })),
+                    )
+                    .tag("close-pane")
+            })
             .tag(match pane.kind {
                 PaneKind::Changes => "pane-tab-changes",
                 PaneKind::Terminal => "pane-tab-terminal",

@@ -4068,7 +4068,7 @@ fn browser_settings_scene(clearing: crate::browser_page::Clearing, backdrop: Opt
         mcp: Default::default(),
         browser: crate::browser_page::BrowserData {
             agent_opens_pane: true,
-            default_viewport: wack_browser::Viewport::Fit,
+            default_viewport: wack_browser::Viewport::Desktop,
             clearing,
             version: wack_browser::cef::version().into(),
             error: None,

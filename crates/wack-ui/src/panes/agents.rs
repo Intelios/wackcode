@@ -447,6 +447,7 @@ impl Render for AgentsPane {
             // A sub-agent's messages are its parent's to rewind, never the user's: Copy only.
             prompts: Default::default(),
             clock: true,
+            folds: Default::default(),
         };
         let mut work = div().px(px(16.)).py(px(14.)).flex().flex_col();
         if items.is_empty() {

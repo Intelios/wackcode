@@ -107,6 +107,10 @@ pub struct ChatSession {
     conversation: Conversation,
     /// Keys of the work logs and rows the user opened.
     open: HashSet<String>,
+    /// When each was last opened or closed, so it moves as it does; and how many toggles there
+    /// have been, so each plays afresh.
+    folds: std::rc::Rc<std::collections::HashMap<String, crate::transcript::Fold>>,
+    toggles: u64,
     cache: ReplyCache,
     items: Vec<Item>,
     spans: Vec<usize>,
@@ -316,6 +320,8 @@ impl ChatSession {
             session_path: session_path.to_path_buf(),
             conversation,
             open: HashSet::new(),
+            folds: Default::default(),
+            toggles: 0,
             cache: ReplyCache::default(),
             items: Vec::new(),
             spans: Vec::new(),
@@ -973,6 +979,10 @@ impl ChatSession {
         if !self.open.remove(&key) {
             self.open.insert(key.clone());
         }
+        self.toggles += 1;
+        let folds = std::rc::Rc::make_mut(&mut self.folds);
+        folds.retain(|_, fold| fold.at.elapsed() < crate::transcript::FOLD * 4);
+        folds.insert(key.clone(), crate::transcript::Fold { at: std::time::Instant::now(), count: self.toggles });
         if let Some(index) = self.entry_holding(&key) {
             self.refresh_entry(index);
         }
@@ -1228,6 +1238,11 @@ impl ChatSession {
         } else {
             work::entry_items(&self.conversation, index, &self.cwd, &self.open, now, &mut self.cache, items);
         }
+    }
+
+    /// When each group or row was last opened or closed (`transcript::Handlers::folds`).
+    pub fn folds(&self) -> std::rc::Rc<std::collections::HashMap<String, crate::transcript::Fold>> {
+        self.folds.clone()
     }
 
     /// The entry whose items show the work log or row with this key.

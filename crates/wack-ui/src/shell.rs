@@ -4211,6 +4211,7 @@ fn chat(
                 still,
                 prompts: Default::default(),
                 clock: true,
+                folds: Default::default(),
             };
             list(list_state, move |index, _, cx| {
                 let theme = Theme::get(cx);
@@ -4221,10 +4222,10 @@ fn chat(
                 };
                 let previous = index.checked_sub(1).and_then(|index| items.get(index));
                 let handlers = match current {
-                    transcript::Item::Prompt { .. } => &Handlers { prompts: chat.prompt_view(), ..handlers.clone() },
-                    _ => &handlers,
+                    transcript::Item::Prompt { .. } => Handlers { prompts: chat.prompt_view(), ..handlers.clone() },
+                    _ => Handlers { folds: chat.folds(), ..handlers.clone() },
                 };
-                column(transcript::item(current, previous, theme, handlers), narrow).into_any_element()
+                column(transcript::item(current, previous, theme, &handlers), narrow).into_any_element()
             })
             .size_full()
             .pt(px(24.))

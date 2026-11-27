@@ -12,7 +12,8 @@
 //!   rows hang under it, indented: a faint icon, the verb in grey, what it acted on a shade
 //!   lighter (a file's name, then its folder faint; a command in mono), then what came of it
 //!   (+/− in the diff colours, a pass in success's, a failure in danger's). A row with more to
-//!   show (a diff, a command's output) opens in place.
+//!   show (a diff, a command's output) opens in place. Opening and closing move: what opens
+//!   grows under its line as its chevron turns ([`unfolding`]).
 //! - Live, a group's line is a breathing dot and what it is doing now, shining; its newest rows
 //!   come under it, older ones behind "N earlier steps", the step under way shining in the
 //!   present tense. The accent is only ever on what is live and on actions.
@@ -24,7 +25,7 @@
 //! - A call still being written says what is coming ("Writing the plan · 6.4k characters").
 //! - Diffs, output and code are sheets: rounded, a hairline round the code's own ground. A
 //!   reply's code adds a head naming its language, with a copy button.
-//! - The reply is running text in the UI face, with code in mono on a faint wash.
+//! - The reply is running text in the UI face, with code in mono.
 //!
 //! Everything sits on the stage's glass, so grounds are the theme's washes (`hover`, `border`),
 //! never solid fills that would cut a hole in the picture.
@@ -32,11 +33,16 @@
 //! Draws [`Item`]s, one at a time, so the chat can hand them to GPUI's virtual list. Building
 //! items from a conversation is `work.rs`; parsing replies is `markdown.rs`.
 
-use std::rc::Rc;
+use std::{
+    collections::HashMap,
+    rc::Rc,
+    time::{Duration, Instant},
+};
 
 use gpui::{
-    AnyElement, App, ElementId, FontStyle, FontWeight, Hsla, InteractiveText, SharedString, StrikethroughStyle,
-    StyledText, TextRun, UnderlineStyle, Window, div, font, prelude::*, px, relative,
+    Animation, AnimationExt, AnyElement, App, ElementId, FontStyle, FontWeight, Hsla, InteractiveText, SharedString,
+    StrikethroughStyle, StyledText, TextRun, Transformation, UnderlineStyle, Window, div, font, prelude::*, px, radians,
+    relative,
 };
 
 use crate::{
@@ -315,14 +321,43 @@ pub struct Handlers {
     /// A live chat: clocks read the time as they are drawn. A scene's keep the time its items
     /// were built with.
     pub clock: bool,
+    /// When each group or row was last opened or closed, by key, so it can move as it does.
+    pub folds: Rc<HashMap<String, Fold>>,
 }
 
 impl Handlers {
     /// Clicks that do nothing: for scenes.
     pub fn inert() -> Self {
-        Self { toggle: Rc::new(|_, _, _| {}), open_link: Rc::new(|_, _, _| {}), still: false, prompts: Default::default(), clock: false }
+        Self {
+            toggle: Rc::new(|_, _, _| {}),
+            open_link: Rc::new(|_, _, _| {}),
+            still: false,
+            prompts: Default::default(),
+            clock: false,
+            folds: Default::default(),
+        }
+    }
+
+    /// `key` was opened or closed a moment ago, so it is still moving. Never with Reduce Motion.
+    pub(crate) fn folding(&self, key: &str) -> Option<Fold> {
+        if self.still {
+            return None;
+        }
+        self.folds.get(key).copied().filter(|fold| fold.at.elapsed() < FOLD + FOLD_SLACK)
     }
 }
+
+/// A group or row just opened or closed: when, and which toggle it was, so each plays afresh.
+#[derive(Clone, Copy, Debug)]
+pub struct Fold {
+    pub at: Instant,
+    pub count: u64,
+}
+
+/// How long a group or row takes to open or close.
+pub const FOLD: Duration = Duration::from_millis(300);
+/// How long after that a toggle still counts as moving: the first frame can come a little late.
+const FOLD_SLACK: Duration = Duration::from_millis(150);
 
 /// A slash command's bubble: its name in the accent (a button that shows the prompt the agent
 /// got), then what was typed after it.
@@ -600,21 +635,94 @@ fn work_log(work: &Work, theme: &Theme, handlers: &Handlers) -> AnyElement {
         Some(fold_line(&work.key, &work.label, work.open, theme, handlers))
     };
     let indented = head.is_some();
-    div()
-        .flex()
-        .flex_col()
-        .children(head)
-        .when(work.open || head_less(work), |log| {
-            log.child(
-                div()
-                    .flex()
-                    .flex_col()
-                    .when(indented, |rows| rows.pl(px(INDENT)))
-                    .when(work.hidden > 0, |rows| rows.child(earlier_steps(work, theme, handlers)))
-                    .children(shown.iter().map(|row| log_row(row, work.live, theme, handlers))),
-            )
-        })
-        .into_any_element()
+    // Its rows are drawn while it is open, and while it folds shut.
+    let body = (work.open || head_less(work) || handlers.folding(&work.key).is_some()).then(|| {
+        div()
+            .flex()
+            .flex_col()
+            .when(indented, |rows| rows.pl(px(INDENT)))
+            .when(work.hidden > 0, |rows| rows.child(earlier_steps(work, theme, handlers)))
+            .children(shown.iter().map(|row| log_row(row, work.live, theme, handlers)))
+            .into_any_element()
+    });
+    let body = match body {
+        Some(rows) if head_less(work) => Some(rows),
+        Some(rows) => unfolding(rows, &work.key, work.open, rows_height(shown, work.hidden > 0), handlers),
+        None => None,
+    };
+    div().flex().flex_col().children(head).children(body).into_any_element()
+}
+
+/// What a line opens to, under it. Just toggled, it grows open or folds shut: its height eases
+/// between nothing and `height` as it fades in or out. `height` is an estimate: anything past it
+/// shows as the opening ends. Closed and still, nothing.
+pub(crate) fn unfolding(body: AnyElement, key: &SharedString, open: bool, height: f32, handlers: &Handlers) -> Option<AnyElement> {
+    let Some(fold) = handlers.folding(key) else {
+        return open.then_some(body);
+    };
+    let id = ElementId::NamedInteger(format!("{key}-fold").into(), fold.count);
+    let element = div().overflow_hidden().child(body).with_animation(id, Animation::new(FOLD).with_easing(crate::motion::spring), move |frame, t| {
+        let shown = if open { t } else { 1. - t };
+        if open && t >= 1. {
+            frame
+        } else {
+            frame.max_h(px(height * shown)).opacity(shown)
+        }
+    });
+    Some(element.into_any_element())
+}
+
+/// A line's chevron: pointing on when shut, down when open, turning between them as it is
+/// toggled.
+pub(crate) fn chevron(key: &SharedString, open: bool, colour: Hsla, handlers: &Handlers) -> AnyElement {
+    let quarter = std::f32::consts::FRAC_PI_2;
+    let icon = Icon::ChevronRight.view(px(11.), colour);
+    let turned = match handlers.folding(key) {
+        None => icon.with_transformation(Transformation::rotate(radians(if open { quarter } else { 0. }))).into_any_element(),
+        Some(fold) => icon
+            .with_animation(ElementId::NamedInteger(format!("{key}-turn").into(), fold.count), Animation::new(FOLD).with_easing(crate::motion::spring), move |icon, t| {
+                icon.with_transformation(Transformation::rotate(radians(quarter * if open { t } else { 1. - t })))
+            })
+            .into_any_element(),
+    };
+    div().flex_none().child(turned).into_any_element()
+}
+
+/// About how tall `rows` stand, for their opening: a line each, an opened row's sheet, an
+/// agent's lines of words, a row's pictures.
+fn rows_height(rows: &[WorkRow], earlier: bool) -> f32 {
+    let mut height = if earlier { ROW } else { 0. };
+    for row in rows {
+        height += if row.agent.is_some() {
+            ROW + 33.
+        } else if row.is_thought() {
+            LINE
+        } else if matches!(row.target, Target::Note(_)) {
+            30.
+        } else {
+            ROW
+        };
+        if !row.pictures.is_empty() {
+            height += 128.;
+        }
+        if row.open {
+            height += row.detail.as_ref().map_or(0., detail_height);
+        }
+    }
+    height
+}
+
+/// About how tall an opened row's detail stands, with the space round it.
+fn detail_height(detail: &Detail) -> f32 {
+    let lines = |text: &str| text.lines().count().max(1) as f32;
+    let wrapped = |text: &str| (text.len() as f32 / 90.).ceil().max(1.) + text.matches("\n\n").count() as f32;
+    12. + match detail {
+        Detail::Diff(diff) => (diff.lines.len() as f32 * 19. + 14.).min(422.),
+        Detail::Output(text) => (lines(text) * 19. + 22.).min(322.),
+        Detail::Thought { text, .. } => (wrapped(text) * 18.).min(THOUGHT_BODY),
+        Detail::Text(text) => wrapped(text) * 18.,
+        Detail::Asked(asked) => asked.len() as f32 * 64.,
+    }
 }
 
 /// A settled group with nothing countable to name (only notes or events) shows its rows bare.
@@ -626,6 +734,7 @@ fn head_less(work: &Work) -> bool {
 fn fold_line(key: &SharedString, label: &SharedString, open: bool, theme: &Theme, handlers: &Handlers) -> AnyElement {
     let toggle = handlers.toggle.clone();
     let id = key.clone();
+    let key_for_chevron = key.clone();
     let key = key.clone();
     let (hover, bright) = (theme.hover, theme.text_soft);
     div()
@@ -647,7 +756,7 @@ fn fold_line(key: &SharedString, label: &SharedString, open: bool, theme: &Theme
                 .hover(move |line| line.bg(hover).text_color(bright))
                 .on_click(move |_, window, cx| toggle(key.clone(), window, cx))
                 .child(div().min_w_0().truncate().child(label.clone()))
-                .child(div().flex_none().child(if open { Icon::ChevronDown } else { Icon::ChevronRight }.view(px(11.), theme.text_faint)))
+                .child(chevron(&key_for_chevron, open, theme.text_faint, handlers))
                 .tag("work-line"),
         )
         .into_any_element()
@@ -838,7 +947,7 @@ fn log_row(row: &WorkRow, live: bool, theme: &Theme, handlers: &Handlers) -> Any
         .when(!row.verb.is_empty() && !described, |line| line.child(div().flex_none().typography(Type::Ui).text_color(theme.text_dim).child(verb)))
         .child(target)
         .children(meta)
-        .when(openable, |line| line.child(div().flex_none().child(if row.open { Icon::ChevronDown } else { Icon::ChevronRight }.view(px(11.), theme.text_faint))));
+        .when(openable, |line| line.child(chevron(&row.key, row.open, theme.text_faint, handlers)));
     let line = div().flex().child(line);
     let line = if live && running { crate::motion::land(SharedString::from(format!("{}-land", row.key)), line, handlers.still) } else { line.into_any_element() };
     div()
@@ -852,9 +961,7 @@ fn log_row(row: &WorkRow, live: bool, theme: &Theme, handlers: &Handlers) -> Any
                 align_end: false,
             }))
         })
-        .when_some(row.detail.as_ref().filter(|_| row.open), |column, detail| {
-            column.child(div().pt(px(4.)).pb(px(8.)).child(detail_view(detail, &row.key, theme)))
-        })
+        .children(opened_detail(row, 4., theme, handlers))
         .into_any_element()
 }
 
@@ -900,7 +1007,7 @@ fn thought_line(row: &WorkRow, live: bool, theme: &Theme, handlers: &Handlers) -
             // Wide enough for "88.8s", so what follows holds still as it counts.
             line.child(div().flex_none().min_w(px(CLOCK_WIDTH)).typography(Type::Small).text_color(theme.text_faint).child(time))
         })
-        .when(openable, |line| line.child(div().flex_none().child(if row.open { Icon::ChevronDown } else { Icon::ChevronRight }.view(px(11.), theme.text_faint))))
+        .when(openable, |line| line.child(chevron(&row.key, row.open, theme.text_faint, handlers)))
         .tag("thought-line");
     let line = div().flex().child(line);
     let line = if live && streaming { crate::motion::land(SharedString::from(format!("{}-land", row.key)), line, handlers.still) } else { line.into_any_element() };
@@ -908,9 +1015,7 @@ fn thought_line(row: &WorkRow, live: bool, theme: &Theme, handlers: &Handlers) -
         .flex()
         .flex_col()
         .child(line)
-        .when_some(row.detail.as_ref().filter(|_| row.open), |column, detail| {
-            column.child(div().pt(px(2.)).pb(px(8.)).child(detail_view(detail, &row.key, theme)))
-        })
+        .children(opened_detail(row, 2., theme, handlers))
         .into_any_element()
 }
 
@@ -1021,6 +1126,16 @@ pub fn agent_state_word(state: AgentState, theme: &Theme) -> (&'static str, Hsla
         AgentState::Stopped => ("Stopped", theme.text_dim),
         AgentState::Interrupted => ("Interrupted", theme.warning),
     }
+}
+
+/// A row's detail under it while it is open, growing open and folding shut as it is toggled.
+fn opened_detail(row: &WorkRow, above: f32, theme: &Theme, handlers: &Handlers) -> Option<AnyElement> {
+    let detail = row.detail.as_ref()?;
+    if !row.open && handlers.folding(&row.key).is_none() {
+        return None;
+    }
+    let body = div().pt(px(above)).pb(px(8.)).child(detail_view(detail, &row.key, theme)).into_any_element();
+    unfolding(body, &row.key, row.open, detail_height(detail), handlers)
 }
 
 /// What a row opens into, under it: a diff or output in a sheet, the questions it asked, or a
@@ -1289,8 +1404,7 @@ fn rich(spans: &[Span], key: &str, fresh: bool, theme: &Theme, handlers: &Handle
             len: span.text.len(),
             font: face,
             color: colour,
-            // Inline code sits on a faint wash, as a word set apart.
-            background_color: span.code.then_some(theme.hover),
+            background_color: None,
             underline: span.link.as_ref().map(|_| UnderlineStyle { color: Some(colour), thickness: px(1.), wavy: false }),
             strikethrough: span.strike.then_some(StrikethroughStyle { color: Some(colour), thickness: px(1.) }),
         });

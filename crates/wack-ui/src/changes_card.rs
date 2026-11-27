@@ -404,8 +404,9 @@ fn stats_view(added: usize, removed: usize, theme: &Theme) -> Option<gpui::Div> 
     )
 }
 
-/// The card, quiet: a hairline round what changed, no fill. Its line says how much, its one
-/// action in the accent; each file is its name, its folder faint, its lines in the diff colours.
+/// The card: on the cards' own ground, so it reads over any picture, a hairline round it. Its line
+/// says how much, its one action in the accent; each file is its name, its folder quieter, its
+/// lines in the diff colours.
 pub fn view(card: &ChangesCard, theme: &Theme, handlers: &Handlers) -> impl IntoElement {
     let head = div()
         .min_h(px(38.))
@@ -415,7 +416,7 @@ pub fn view(card: &ChangesCard, theme: &Theme, handlers: &Handlers) -> impl Into
         .flex()
         .items_center()
         .gap(px(8.))
-        .child(div().flex_none().min_w_0().truncate().typography(Type::Ui).text_color(theme.text_soft).child(card.heading.clone()))
+        .child(div().flex_none().min_w_0().truncate().typography(Type::UiStrong).text_color(theme.text).child(card.heading.clone()))
         .children(stats_view(card.added, card.removed, theme).map(|stats| stats.tag("turn-changes-totals")))
         .child(div().flex_1())
         .child(
@@ -475,6 +476,7 @@ pub fn view(card: &ChangesCard, theme: &Theme, handlers: &Handlers) -> impl Into
         card.key.clone(),
         div()
             .rounded(px(12.))
+            .bg(theme.surface)
             .border_1()
             .border_color(theme.border)
             .overflow_hidden()
@@ -495,7 +497,7 @@ fn file_row(file: &ChangedFile, theme: &Theme, handlers: &Handlers) -> impl Into
         FileKind::Create => Icon::FilePlus,
         FileKind::Edit => Icon::File,
     }
-    .view(px(13.), theme.text_faint);
+    .view(px(13.), theme.text_dim);
 
     let head = div()
         .id(file.key.clone())
@@ -518,16 +520,17 @@ fn file_row(file: &ChangedFile, theme: &Theme, handlers: &Handlers) -> impl Into
                 .items_center()
                 .gap(px(6.))
                 .overflow_hidden()
-                .child(div().flex_none().typography(Type::Ui).text_color(theme.text_soft).child(file.name.clone()))
+                .child(div().flex_none().typography(Type::Ui).text_color(theme.text_body).child(file.name.clone()))
                 .when(!file.dir.is_empty(), |path| {
-                    path.child(div().min_w_0().truncate().typography(Type::Ui).text_color(theme.text_faint).child(file.dir.clone().trim_end_matches('/').to_string()))
+                    path.child(div().min_w_0().truncate().typography(Type::Ui).text_color(theme.text_dim).child(file.dir.clone().trim_end_matches('/').to_string()))
                 }),
         )
         .children(stats_view(file.added, file.removed, theme))
-        .child(if file.open { Icon::ChevronDown } else { Icon::ChevronRight }.view(px(11.), theme.text_faint))
+        .child(crate::transcript::chevron(&file.key, file.open, theme.text_faint, handlers))
         .tag("turn-changes-file");
 
-    let diff_body = file.open.then(|| {
+    // Drawn while open, and while it folds shut.
+    let diff_body = (file.open || handlers.folding(&file.key).is_some()).then(|| {
         let open_path = file.path.to_string();
         let copy_label = if file.plain_write { "Copy" } else { "Copy diff" };
         let meta = if file.calls > 1 {
@@ -601,7 +604,10 @@ fn file_row(file: &ChangedFile, theme: &Theme, handlers: &Handlers) -> impl Into
             .child(sub_bar)
             .child(content)
             .tag("turn-changes-diff")
+            .into_any_element()
     });
+    let height = 31. + (file.lines.len() as f32 * 19. + 12.).min(DIFF_MAX_HEIGHT);
+    let diff_body = diff_body.and_then(|body| crate::transcript::unfolding(body, &file.key, file.open, height, handlers));
 
     div().border_t_1().border_color(theme.border).flex().flex_col().child(head).children(diff_body)
 }

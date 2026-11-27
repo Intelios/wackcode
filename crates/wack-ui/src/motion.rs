@@ -14,7 +14,11 @@
 //! - **At work** ([`paddling`], [`sheen_band`], [`shining_text`], [`breathing`]): the duck
 //!   paddles while the agent works, a light crosses its chat's tab and runs along "Working", and
 //!   the step under way breathes.
-//! - **Landing** ([`land`]): each work-log mark drops onto the rail as its step starts.
+//! - **Landing** ([`land`]): each work-log row drops into place as its step starts.
+//! - **Folding** (`transcript::unfolding`, `transcript::chevron`): a group of steps, a row's
+//!   diff or output, a commit or a changed file grows open under its line and folds shut again,
+//!   fading as it goes, while its chevron turns. The chat notes when each was toggled
+//!   (`transcript::Fold`), so it moves only then, never when scrolled back into view.
 //! - **Sending** ([`send_moment`]): the composer lifts a point or two and settles as a message
 //!   leaves, its rim lit while a glint crosses it.
 //! - **A new name** ([`TitleSwap`]): a title the model wrote swipes in on its tab, the old one

@@ -603,9 +603,10 @@ pub fn view(commit: &CommitRow, theme: &Theme, handlers: &Handlers) -> gpui::Any
         .children(subject)
         .children(stats)
         .children(status)
-        .child(div().flex_none().child(if commit.open { Icon::ChevronDown } else { Icon::ChevronRight }.view(px(11.), theme.text_faint)));
+        .child(crate::transcript::chevron(&commit.key, commit.open, theme.text_faint, handlers));
 
-    let body = commit.open.then(|| {
+    // Drawn while open, and while it folds shut.
+    let body = (commit.open || handlers.folding(&commit.key).is_some()).then(|| {
         let mut content = div()
             .id(ElementId::Name(format!("{}-output", commit.key).into()))
             .max_h(px(DETAIL_MAX_HEIGHT))
@@ -636,7 +637,10 @@ pub fn view(commit: &CommitRow, theme: &Theme, handlers: &Handlers) -> gpui::Any
             .overflow_hidden()
             .child(content)
             .tag("commit-output")
+            .into_any_element()
     });
+    let lines = commit.command.len() / 90 + 1 + commit.output.as_ref().map_or(0, |output| output.lines().count() + 1);
+    let body = body.and_then(|body| crate::transcript::unfolding(body, &commit.key, commit.open, (lines as f32 * 19. + 32.).min(DETAIL_MAX_HEIGHT + 6.), handlers));
 
     div()
         .flex()

@@ -2303,10 +2303,6 @@ dependencies = [
  "gpui",
  "gpui_platform",
  "image",
- "tempfile",
- "wack-browser",
- "wack-canvas",
- "wack-core",
  "wack-ui",
 ]
 

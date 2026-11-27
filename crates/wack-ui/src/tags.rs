@@ -39,11 +39,21 @@ pub fn root(child: impl IntoElement) -> impl IntoElement {
 }
 
 #[cfg(feature = "automation")]
-pub use recorded::{TagBounds, tags};
+pub use recorded::{TagBounds, frame_started, start_frames, stop_frames, tags};
+
+/// Marks the start of a frame, for the automation socket's frame log. Without the `automation`
+/// feature it does nothing.
+#[cfg(not(feature = "automation"))]
+pub fn frame_started() {}
 
 #[cfg(feature = "automation")]
 mod recorded {
-    use std::{collections::HashMap, panic::Location};
+    use std::{
+        cell::RefCell,
+        collections::HashMap,
+        panic::Location,
+        time::{Duration, Instant},
+    };
 
     use gpui::{
         AnyElement, App, Bounds, Element, ElementId, Global, GlobalElementId, InspectorElementId,
@@ -60,6 +70,68 @@ mod recorded {
     struct Registry(HashMap<WindowId, Vec<TagBounds>>);
 
     impl Global for Registry {}
+
+    /// While the socket measures frames (`{"cmd":"frames"}`): each frame drawn (when the shell
+    /// began rendering it, and how long the main thread spent until the root's paint), and each
+    /// tick of the display the window took.
+    #[derive(Default)]
+    struct FrameLog {
+        on: bool,
+        started: Option<Instant>,
+        draws: Vec<(Instant, Duration)>,
+        ticks: Vec<Instant>,
+    }
+
+    thread_local! {
+        static FRAMES: RefCell<FrameLog> = RefCell::new(FrameLog::default());
+    }
+
+    /// The shell has begun rendering a frame.
+    pub fn frame_started() {
+        FRAMES.with(|log| {
+            let mut log = log.borrow_mut();
+            if log.on {
+                log.started = Some(Instant::now());
+            }
+        });
+    }
+
+    /// Starts logging frames, following the display from `window`.
+    pub fn start_frames(window: &mut Window) {
+        FRAMES.with(|log| *log.borrow_mut() = FrameLog { on: true, ..FrameLog::default() });
+        window.on_next_display_frame(tick);
+    }
+
+    /// Stops logging, and hands back the frames drawn and the display's ticks.
+    pub fn stop_frames() -> (Vec<(Instant, Duration)>, Vec<Instant>) {
+        FRAMES.with(|log| {
+            let log = std::mem::take(&mut *log.borrow_mut());
+            (log.draws, log.ticks)
+        })
+    }
+
+    /// A tick of the display, at the start of the window's frame: asks for the next while logging.
+    fn tick(window: &mut Window, _: &mut App) {
+        let on = FRAMES.with(|log| {
+            let mut log = log.borrow_mut();
+            if log.on {
+                log.ticks.push(Instant::now());
+            }
+            log.on
+        });
+        if on {
+            window.on_next_display_frame(tick);
+        }
+    }
+
+    fn frame_finished() {
+        FRAMES.with(|log| {
+            let mut log = log.borrow_mut();
+            if let Some(started) = log.started.take() {
+                log.draws.push((started, started.elapsed()));
+            }
+        });
+    }
 
     /// The tags drawn in `window`'s latest frame, in drawing order.
     pub fn tags(window: &Window, cx: &App) -> Vec<TagBounds> {
@@ -149,6 +221,9 @@ mod recorded {
             cx: &mut App,
         ) {
             self.child.paint(window, cx);
+            if self.name.is_none() {
+                frame_finished();
+            }
         }
     }
 }

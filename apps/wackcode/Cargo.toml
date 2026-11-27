@@ -6,8 +6,10 @@ edition.workspace = true
 publish.workspace = true
 
 [features]
-# Dev only: compiles in the automation socket (docs/testing.md). `cargo dev` turns it on.
-automation = ["wack-ui/automation", "gpui_platform/test-support"]
+# Dev only: compiles in the automation socket (docs/testing.md). `cargo dev` turns on both;
+# `cargo dev --smooth` only `automation`, so the app draws as a release build does.
+automation = ["wack-ui/automation"]
+screenshots = ["automation", "wack-ui/screenshots", "gpui_platform/test-support"]
 
 [dependencies]
 wack-ui.workspace = true

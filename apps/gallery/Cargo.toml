@@ -10,9 +10,3 @@ wack-ui = { workspace = true, features = ["automation"] }
 gpui = { workspace = true, features = ["test-support"] }
 gpui_platform = { workspace = true, features = ["font-kit", "test-support"] }
 image = { version = "0.25", default-features = false, features = ["png"] }
-
-[dev-dependencies]
-wack-core = { workspace = true }
-wack-browser = { workspace = true }
-wack-canvas = { workspace = true }
-tempfile = { workspace = true }

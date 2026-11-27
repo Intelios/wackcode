@@ -1,8 +1,11 @@
 //! `cargo xtask`: builds WackCode's `.app` bundles.
 //!
-//! - `cargo dev [args…]` (an alias for `cargo xtask dev`): builds the app with the automation
-//!   socket and the CEF helper, writes `target/debug/WackCode Dev.app`, and runs it in place of
-//!   this process, so the terminal, Ctrl-C and `WACKCODE_AUTOMATION` behave as `cargo run` did.
+//! - `cargo dev [--smooth] [args…]` (an alias for `cargo xtask dev`): builds the app with the
+//!   automation socket and the CEF helper, writes `target/debug/WackCode Dev.app`, and runs it in
+//!   place of this process, so the terminal, Ctrl-C and `WACKCODE_AUTOMATION` behave as `cargo run`
+//!   did. The socket's screenshots need GPUI's test mode, which draws after every event instead of
+//!   once a refresh; `--smooth` leaves it (and screenshots) out, so the app draws as a release
+//!   build does. Use it to judge how scrolling and motion feel (docs/testing.md).
 //! - `cargo xtask bundle`: a release build in `target/release/WackCode.app`, signed ad hoc
 //!   (notarization is out of scope).
 //!
@@ -24,7 +27,7 @@ fn main() {
     let result = match args.next().as_deref() {
         Some("dev") => dev(args.collect()),
         Some("bundle") => release_bundle(),
-        _ => Err("Usage: cargo xtask dev [app args…] | cargo xtask bundle".to_string()),
+        _ => Err("Usage: cargo xtask dev [--smooth] [app args…] | cargo xtask bundle".to_string()),
     };
     if let Err(message) = result {
         eprintln!("xtask: {message}");
@@ -69,8 +72,12 @@ fn sources(profile_dir: &Path, flavour: Flavour) -> Result<Sources, String> {
     })
 }
 
-fn dev(app_args: Vec<String>) -> Result<(), String> {
-    cargo_build(false, &["wackcode/automation"])?;
+fn dev(mut app_args: Vec<String>) -> Result<(), String> {
+    let smooth = app_args.first().is_some_and(|arg| arg == "--smooth");
+    if smooth {
+        app_args.remove(0);
+    }
+    cargo_build(false, &[if smooth { "wackcode/automation" } else { "wackcode/screenshots" }])?;
     let profile_dir = target_dir().join("debug");
     let app = profile_dir.join(format!("{}.app", Flavour::Dev.bundle_name()));
     let executable = bundle::assemble(&app, Flavour::Dev, &sources(&profile_dir, Flavour::Dev)?)?;

@@ -30,6 +30,7 @@ pub mod conversation;
 pub mod copy;
 pub mod edge_fade;
 pub mod fixtures;
+pub mod frames;
 pub mod browser_page;
 pub mod git_page;
 pub mod glass;

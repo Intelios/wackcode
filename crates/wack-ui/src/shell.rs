@@ -250,6 +250,7 @@ impl Shell {
         };
         motion::follow_system(cx);
         crate::browser::attach(window, cx);
+        crate::frames::keep_three(window);
         let activation = cx.observe_window_activation(window, |_, window, cx| {
             if window.is_window_active() {
                 motion::follow_system(cx);
@@ -967,6 +968,7 @@ fn settings_editor_open(app: &AppState) -> bool {
 
 impl Render for Shell {
     fn render(&mut self, window: &mut Window, cx: &mut Context<Self>) -> impl IntoElement {
+        tags::frame_started();
         let theme = Theme::get(cx).clone();
         self.focus_field(window, cx);
         let command_editor_open = self.app().is_some_and(|app| app.read(cx).command_editor.is_some());

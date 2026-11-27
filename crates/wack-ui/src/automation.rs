@@ -8,11 +8,16 @@
 //!
 //! ```text
 //! {"cmd":"tree"}                                  the window size and every tagged element's bounds
-//! {"cmd":"screenshot","path":"/abs/file.png"}     writes what the window is showing
+//! {"cmd":"screenshot","path":"/abs/file.png"}     writes what the window is showing (not with --smooth)
 //! {"cmd":"click","tag":"send"}                    also {"x":10,"y":20}; optional "count", "right"
 //! {"cmd":"hover","tag":"context-ring"}          the pointer moved there, no button; also x and y
 //! {"cmd":"drag","x":10,"y":20,"to_x":300,"to_y":20}   presses, moves in steps, releases
 //! {"cmd":"scroll","x":400,"y":300,"dy":600}      a wheel turn there; positive dy scrolls toward the top
+//! {"cmd":"frames","x":400,"y":300,"seconds":5}   scrolls there as a trackpad does (120 moves a
+//!     second, "step" points each, turning every second and a half) and reports the frames the
+//!     display showed and those drawn. The window must be in front: macOS draws no covered window
+//! {"cmd":"frames-start"} … {"cmd":"frames-stop"}   the same report for whatever ran in between
+//!     (clicks that open a menu, a slide), without scrolling
 //! {"cmd":"type","text":"hello"}                   types into whatever has focus
 //! {"cmd":"key","keys":"cmd-n enter"}              space-separated keystrokes
 //! {"cmd":"compose","text":"hello","send":true}    into the chat's composer, focus or not
@@ -103,6 +108,20 @@ enum Command {
         #[serde(default)]
         dy: f32,
     },
+    /// Scrolls at `x`, `y` as a trackpad does for `seconds`, and reports the frames drawn meanwhile.
+    Frames {
+        x: f32,
+        y: f32,
+        #[serde(default = "frame_seconds")]
+        seconds: f32,
+        #[serde(default = "frame_step")]
+        step: f32,
+    },
+    /// Starts recording frames, for `FramesStop` to report.
+    #[serde(rename = "frames-start")]
+    FramesStart,
+    #[serde(rename = "frames-stop")]
+    FramesStop,
     Type {
         text: String,
     },
@@ -185,6 +204,14 @@ struct BrowserArgs {
 
 fn one() -> usize {
     1
+}
+
+fn frame_seconds() -> f32 {
+    5.
+}
+
+fn frame_step() -> f32 {
+    6.
 }
 
 type Request = (Command, mpsc::Sender<Value>);
@@ -301,14 +328,17 @@ async fn run(command: Command, cx: &mut AsyncApp) -> Result<Value, String> {
                 return Err("The screenshot path must be absolute.".into());
             }
             settle(window, cx).await;
-            let image = on_window(window, cx, |window, _| window.render_to_image())?
-                .map_err(|error| format!("Could not capture the window: {error}"))?;
-            image
-                .save(&path)
-                .map_err(|error| format!("Could not write {}: {error}", path.display()))?;
-            Ok(
-                json!({ "ok": true, "path": path, "width": image.width(), "height": image.height() }),
-            )
+            #[cfg(not(feature = "screenshots"))]
+            return Err("This dev app was started with `cargo dev --smooth`, which takes no screenshots: restart it with `cargo dev`.".into());
+            #[cfg(feature = "screenshots")]
+            {
+                let image = on_window(window, cx, |window, _| window.render_to_image())?
+                    .map_err(|error| format!("Could not capture the window: {error}"))?;
+                image
+                    .save(&path)
+                    .map_err(|error| format!("Could not write {}: {error}", path.display()))?;
+                Ok(json!({ "ok": true, "path": path, "width": image.width(), "height": image.height() }))
+            }
         }
         Command::Click {
             tag,
@@ -381,6 +411,42 @@ async fn run(command: Command, cx: &mut AsyncApp) -> Result<Value, String> {
             })?;
             settle(window, cx).await;
             Ok(json!({ "ok": true }))
+        }
+        Command::Frames { x, y, seconds, step } => {
+            let position = point(px(x), px(y));
+            on_window(window, cx, |window, cx| {
+                window.dispatch_event(PlatformInput::MouseMove(MouseMoveEvent { position, pressed_button: None, modifiers: Modifiers::default() }), cx);
+                tags::start_frames(window);
+            })?;
+            let started = std::time::Instant::now();
+            let mut moves = 0u64;
+            while started.elapsed().as_secs_f32() < seconds {
+                let dy = if (moves / 180).is_multiple_of(2) { step } else { -step };
+                on_window(window, cx, |window, cx| {
+                    window.dispatch_event(
+                        PlatformInput::ScrollWheel(ScrollWheelEvent { position, delta: ScrollDelta::Pixels(point(px(0.), px(dy))), modifiers: Modifiers::default(), touch_phase: TouchPhase::Moved }),
+                        cx,
+                    );
+                })?;
+                moves += 1;
+                cx.background_executor().timer(Duration::from_micros(8_333)).await;
+            }
+            let (draws, ticks) = tags::stop_frames();
+            let mut report = frame_report(&draws, &ticks, started.elapsed().as_secs_f32(), moves)?;
+            report["drawables"] = json!(on_window(window, cx, |window, _| crate::frames::drawables(window))?);
+            Ok(report)
+        }
+        Command::FramesStart => {
+            on_window(window, cx, |window, _| tags::start_frames(window))?;
+            *FRAMES_STARTED.lock().unwrap_or_else(|poisoned| poisoned.into_inner()) = Some(std::time::Instant::now());
+            Ok(json!({ "ok": true }))
+        }
+        Command::FramesStop => {
+            let started = FRAMES_STARTED.lock().unwrap_or_else(|poisoned| poisoned.into_inner()).take().ok_or("No frames are being recorded: send frames-start first.")?;
+            let (draws, ticks) = tags::stop_frames();
+            let mut report = frame_report(&draws, &ticks, started.elapsed().as_secs_f32(), 0)?;
+            report["drawables"] = json!(on_window(window, cx, |window, _| crate::frames::drawables(window))?);
+            Ok(report)
         }
         Command::Drag { x, y, to_x, to_y } => {
             let modifiers = Modifiers::default();
@@ -541,6 +607,43 @@ fn click(
         }),
         cx,
     );
+}
+
+/// When `frames-start` began recording, until `frames-stop`.
+static FRAMES_STARTED: std::sync::Mutex<Option<std::time::Instant>> = std::sync::Mutex::new(None);
+
+/// What `{"cmd":"frames"}` answers. `shown`: the display's ticks that put a newly drawn frame on
+/// screen, and the gaps between them, which are what the eye sees (a gap past 25 ms is a frame
+/// missed at 60 Hz). `drawn`: every frame drawn, some of which the screen never showed, and how
+/// long the main thread spent on each.
+fn frame_report(draws: &[(std::time::Instant, Duration)], ticks: &[std::time::Instant], seconds: f32, moves: u64) -> Result<Value, String> {
+    if ticks.is_empty() {
+        return Err("The display gave the window no frames: it is covered or hidden. Bring it to the front and try again.".into());
+    }
+    let ms = |duration: Duration| duration.as_secs_f64() * 1000.;
+    let percentile = |values: &mut Vec<f64>, share: f64| {
+        values.sort_by(f64::total_cmp);
+        values.get(((values.len() as f64 - 1.) * share).round() as usize).copied().unwrap_or(0.)
+    };
+    let round = |value: f64| (value * 10.).round() / 10.;
+    let mut drawing: Vec<f64> = draws.iter().map(|(_, took)| ms(*took)).collect();
+    // A tick shows something new when a frame finished drawing since the tick before it.
+    let finished: Vec<std::time::Instant> = draws.iter().map(|(start, took)| *start + *took).collect();
+    let shown: Vec<std::time::Instant> = ticks
+        .windows(2)
+        .filter(|pair| finished.iter().any(|done| *done > pair[0] && *done <= pair[1]))
+        .map(|pair| pair[1])
+        .collect();
+    let mut gaps: Vec<f64> = shown.windows(2).map(|pair| ms(pair[1] - pair[0])).collect();
+    let late = gaps.iter().filter(|gap| **gap > 25.).count();
+    let seconds = seconds.max(0.001) as f64;
+    Ok(json!({
+        "ok": true,
+        "moves": moves,
+        "shown": { "per_second": round(shown.len() as f64 / seconds), "gap_ms": { "p50": round(percentile(&mut gaps, 0.5)), "p90": round(percentile(&mut gaps, 0.9)), "p99": round(percentile(&mut gaps, 0.99)), "max": round(percentile(&mut gaps, 1.)) }, "late": late },
+        "drawn": { "per_second": round(draws.len() as f64 / seconds), "ms": { "p50": round(percentile(&mut drawing, 0.5)), "p90": round(percentile(&mut drawing, 0.9)), "max": round(percentile(&mut drawing, 1.)) } },
+        "ticks_per_second": round(ticks.len() as f64 / seconds),
+    }))
 }
 
 fn on_window<R>(

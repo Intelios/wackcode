@@ -29,18 +29,27 @@ Elements that matter to tests carry a tag: end the element's builder chain with 
 
 ## Frame rate
 
-The gallery's pictures say nothing about smoothness, and much of a frame's cost is the GPU's, which only a real window shows. `scroll_window` opens one, scrolls a saved chat in it as a trackpad would, and reports the frames the screen got:
+The gallery's pictures say nothing about smoothness, and much of a frame's cost is the GPU's, which only the real window shows. Measure in the dev app started with `cargo dev --smooth`: plain `cargo dev` builds in GPUI's test mode for the socket's screenshots, which draws after every event instead of once a refresh, so it scrolls less smoothly than the app will.
 
 ```sh
-cargo run -p gallery --example scroll_window -- <session.jsonl> 6 10   # 6 seconds over a backdrop blurred 10 points
-cargo run -p gallery --example scroll_window -- <session.jsonl> 6      # no backdrop
+MTL_HUD_ENABLED=1 cargo dev --smooth &         # macOS's Metal HUD: frames a second and the GPU's ms a frame
+ask '{"cmd":"frames","x":960,"y":500,"seconds":6}'   # scrolls there as a trackpad does and reports
+ask '{"cmd":"frames-start"}'; …clicks…; ask '{"cmd":"frames-stop"}'   # the same report for a menu, a slide
 ```
 
-Use it after touching anything drawn on every frame (glass, the backdrop, the transcript), on the owner's own Mac if you can: an M1 is where a live blur cost the most (2026-11-27: 36 frames a second and a hundred late frames in six seconds, against 99 and none once the blur was baked).
+The report's `shown` is what the eye gets: frames a second, the gaps between them, and `late` (gaps past 25 ms). `drawn` is the main thread's ms a frame. `drawables` should say 3 (`crates/wack-ui/src/frames.rs`). The HUD draws in the window, so read it from `screencapture -x -o -l <window id>`.
+
+Both need the window in front and unhidden: macOS stops drawing a window that is covered, and the report then shows nothing. Don't take the front from the owner while they are working; ask them, or measure when they are away.
+
+Use them after touching anything drawn on every frame (glass, the backdrop, the transcript, anything in the composer), on the owner's M1 if you can. At 60 Hz a frame has 16.7 ms, the CPU's draw and the GPU's work both inside it. 2026-11-27, scrolling a long chat over a backdrop: the GPU took 17.6 ms a frame and the app ran at 40 to 48 frames a second. After the fixes below it took 6 to 8 ms, and the app held 60 with a handful of late frames in eight seconds. What it cost, from switching each part off in turn:
+
+- **A path: 5 to 7 ms.** GPUI draws every path through a window-sized, multisampled texture, so one small path costs a whole-window pass. The context ring was the only one; it is now a cached picture (`ring.rs`). Don't paint paths in anything on screen while a chat is in view.
+- **The glass: about 7 ms** for four panes, from layers each covering a whole pane (5.6 million pixels for the stage at 2x). Each layer now covers only where it shows (`glass.rs`).
+- **A live backdrop blur: about 17 ms** before the picture was baked (`backdrop::baked`).
 
 ## The dev app
 
-`cargo dev` runs the app with the `automation` feature. Use it for what the gallery cannot show: real windows, focus, typing, IME, resizing, animation.
+`cargo dev` runs the app with the `automation` and `screenshots` features. Use it for what the gallery cannot show: real windows, focus, typing, IME, resizing, animation. `cargo dev --smooth` leaves screenshots out, so the app draws as a release build does: start it that way when the owner wants to try the app, or to judge smoothness ([Frame rate](#frame-rate)).
 
 It runs the app from a bundle, `target/debug/WackCode Dev.app`, because the browser engine only works inside one ([cef.md](cef.md)). The first build downloads CEF into `target/cef/`, about 100 MB, once. Arguments after `cargo dev` go to the app.
 

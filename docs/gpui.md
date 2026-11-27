@@ -22,8 +22,17 @@ All three crates must share the same `rev`. Two different revisions in one build
 
 ## Features we rely on that are not in a GPUI release
 
-- `HeadlessAppContext` with `gpui_platform::current_headless_renderer()`: renders a window to an image with the real Metal renderer and no visible window. The gallery is built on it (`apps/gallery`). It needs GPUI's `test-support` feature, which only the gallery and the dev app's `automation` feature turn on.
+- `HeadlessAppContext` with `gpui_platform::current_headless_renderer()`: renders a window to an image with the real Metal renderer and no visible window. The gallery is built on it (`apps/gallery`). It needs GPUI's `test-support` feature, which only the gallery and the dev app's `screenshots` feature turn on. Test support also makes GPUI draw every window after every event rather than once a refresh, so a dev app built with it is less smooth than the real one (`cargo dev --smooth` builds without it).
 - `WindowOptions::app_owns_titlebar_drag`: the shell draws the title strip and moves the window with `Window::start_window_move`.
+
+## Costs worth knowing
+
+Measured on an M1 at 2x (docs/testing.md, Frame rate):
+
+- **Paths are dear.** Each frame with a path in it rasterizes through a window-sized texture with 4x multisampling: 5 to 7 ms of GPU, however small the path. Draw shapes as quads, SVG icons or cached pictures instead (`ring.rs`).
+- **Every layer pays for its whole area.** A quad or shadow the size of a pane costs about a millisecond at the window's size even where it is clear or hidden. Clip it to where it shows with `Window::with_content_mask`: GPUI clips in hardware, so nothing is worked out outside the mask (`glass.rs`).
+- **Backdrop blur breaks the render pass** to copy what is beneath; blur a still picture once, not every frame (`backdrop::baked`).
+- **Two drawables by default.** zui gives a window's Metal layer two, so a frame that runs past one refresh holds the next back a whole one. WackCode sets three after the window opens (`frames.rs`), as Zed does.
 
 ## Text input
 

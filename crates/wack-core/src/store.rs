@@ -27,7 +27,12 @@ use crate::{
 
 #[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
 pub struct Model {
+    /// What requests name the model by.
     pub id: String,
+    /// What the app calls it ("GLM 5.3" for `z-ai/glm-5.3`), if the user gave it a name, as
+    /// version 2's Display name. Requests never see it.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub name: Option<String>,
     /// The model's context size in tokens, if the user gave one. It decides when chats compact.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub context_window: Option<u64>,
@@ -55,7 +60,16 @@ pub const DEFAULT_EFFORTS: [Reasoning; 4] = [Reasoning::Off, Reasoning::Low, Rea
 impl Model {
     /// A model that does not reason, as a new model row starts.
     pub fn new(id: impl Into<String>, context_window: Option<u64>) -> Self {
-        Self { id: id.into(), context_window, efforts: Vec::new(), accepts_images: true, max_output: None }
+        Self { id: id.into(), name: None, context_window, efforts: Vec::new(), accepts_images: true, max_output: None }
+    }
+
+    /// What the app shows for the model: its name, or the last part of its id
+    /// (`claude-sonnet-5.5` for `anthropic/claude-sonnet-5.5`).
+    pub fn label(&self) -> &str {
+        match self.name.as_deref().map(str::trim) {
+            Some(name) if !name.is_empty() => name,
+            _ => self.id.rsplit('/').next().unwrap_or(&self.id),
+        }
     }
 
     /// The model's output ceiling for a request, when known.
@@ -820,6 +834,7 @@ impl Store {
             .into_iter()
             .map(|model| Model {
                 id: model.id.trim().to_string(),
+                name: model.name.map(|name| name.trim().to_string()).filter(|name| !name.is_empty()),
                 ..model
             })
             .filter(|model| !model.id.is_empty())
@@ -1750,6 +1765,18 @@ mod tests {
         let written = serde_json::to_string(&text_only).unwrap();
         assert_eq!(written, r#"{"id":"m","accepts_images":false}"#);
         assert_eq!(serde_json::from_str::<Model>(&written).unwrap(), text_only);
+    }
+
+    #[test]
+    fn a_model_shows_its_name_and_falls_back_to_its_id() {
+        let plain = Model::new("z-ai/glm-5.3", None);
+        assert_eq!(plain.label(), "glm-5.3");
+        let named = Model { name: Some("GLM 5.3".into()), ..plain.clone() };
+        assert_eq!(named.label(), "GLM 5.3");
+        assert_eq!(Model { name: Some("  ".into()), ..plain }.label(), "glm-5.3", "a blank name is no name");
+        let written = serde_json::to_string(&named).unwrap();
+        assert_eq!(written, r#"{"id":"z-ai/glm-5.3","name":"GLM 5.3"}"#);
+        assert_eq!(serde_json::from_str::<Model>(&written).unwrap(), named);
     }
 
     /// Answers one connection with a model list, and reports the request it was sent.

@@ -60,6 +60,8 @@ use crate::{
 #[derive(Clone)]
 pub struct ModelField {
     pub id: Entity<TextField>,
+    /// What the app calls the model ("GLM 5.3"); blank shows the id.
+    pub name: Entity<TextField>,
     pub context: Entity<TextField>,
     /// The most it writes in one reply; optional, a ceiling on what requests ask for.
     pub output: Entity<TextField>,
@@ -165,6 +167,7 @@ fn level_word(level: catalog::Level) -> &'static str {
 #[derive(Clone, Default)]
 pub struct ModelSummary {
     pub id: SharedString,
+    pub name: SharedString,
     pub context: SharedString,
     pub output: SharedString,
 }
@@ -230,6 +233,7 @@ impl ProviderForm {
         let mut fields = vec![self.name.clone(), self.address.clone(), self.key.clone()];
         for model in &self.models {
             fields.push(model.id.clone());
+            fields.push(model.name.clone());
             fields.push(model.context.clone());
             fields.push(model.output.clone());
         }
@@ -258,6 +262,9 @@ impl ProviderForm {
             if let Some(row) = self.models.last_mut() {
                 if let Some(output) = model.max_output {
                     row.output.update(cx, |field, cx| field.set_text(&tokens_text(output), cx));
+                }
+                if let Some(name) = &model.name {
+                    row.name.update(cx, |field, cx| field.set_text(name, cx));
                 }
                 row.open = false;
                 row.accepts_images = model.accepts_images;
@@ -370,6 +377,11 @@ impl ProviderForm {
         };
         if let Some(id) = id {
             row.id.update(cx, |field, cx| field.set_text(id, cx));
+        }
+        // The catalogue's name for it ("GLM 5.3"), unless the user already gave one.
+        let listed_name = suggestion.listing.name.trim();
+        if !listed_name.is_empty() && row.name.read(cx).text().trim().is_empty() {
+            row.name.update(cx, |field, cx| field.set_text(listed_name, cx));
         }
         if let Some(context) = fill.context {
             row.context.update(cx, |field, cx| field.set_text(&tokens_text(context), cx));
@@ -502,6 +514,7 @@ impl ProviderForm {
     fn model_field(cx: &mut App) -> ModelField {
         ModelField {
             id: cx.new(|cx| TextField::new(Type::Mono, "model-id", cx)),
+            name: cx.new(|cx| TextField::new(Type::Ui, "Display name", cx)),
             context: cx.new(|cx| TextField::new(Type::Ui, "200k", cx)),
             output: cx.new(|cx| TextField::new(Type::Ui, "32k", cx)),
             reasoning: false,
@@ -532,6 +545,7 @@ impl ProviderForm {
                 .iter()
                 .map(|row| ModelValue {
                     id: text(&row.id),
+                    name: text(&row.name),
                     context: text(&row.context),
                     output: text(&row.output),
                     efforts: if row.reasoning { saved_efforts(&row.efforts) } else { Vec::new() },
@@ -576,6 +590,7 @@ impl ProviderForm {
             }
             models.push(Model {
                 id: row.id.clone(),
+                name: (!row.name.is_empty()).then(|| row.name.clone()),
                 context_window,
                 efforts: row.efforts.clone(),
                 accepts_images: row.accepts_images,
@@ -631,6 +646,7 @@ impl ProviderForm {
         }
         models.iter().zip(&saved.models).any(|(row, saved)| {
             row.id != saved.id
+                || row.name != saved.name.as_deref().unwrap_or_default()
                 || row.efforts != saved_efforts(&saved.efforts)
                 || row.accepts_images != saved.accepts_images
                 || tokens_changed(&row.context, saved.context_window)
@@ -663,6 +679,7 @@ fn tokens_changed(text: &str, saved: Option<u64>) -> bool {
 
 struct ModelValue {
     id: String,
+    name: String,
     context: String,
     output: String,
     efforts: Vec<Reasoning>,
@@ -837,7 +854,7 @@ impl ProvidersData {
                             let typed = text(field);
                             parse_tokens(&typed).map(|tokens| tokens_about(tokens).into()).unwrap_or(typed)
                         };
-                        let summary = ModelSummary { id: text(&row.id), context: count(&row.context), output: count(&row.output) };
+                        let summary = ModelSummary { id: text(&row.id), name: text(&row.name), context: count(&row.context), output: count(&row.output) };
                         ModelField { summary: Some(summary), ..row.clone() }
                     })
                     .collect(),
@@ -1314,6 +1331,10 @@ const MODEL_ID_TAGS: [&str; 12] = [
     "model-id-0", "model-id-1", "model-id-2", "model-id-3", "model-id-4", "model-id-5", "model-id-6", "model-id-7", "model-id-8", "model-id-9",
     "model-id-10", "model-id-11",
 ];
+const MODEL_NAME_TAGS: [&str; 12] = [
+    "model-name-0", "model-name-1", "model-name-2", "model-name-3", "model-name-4", "model-name-5", "model-name-6", "model-name-7",
+    "model-name-8", "model-name-9", "model-name-10", "model-name-11",
+];
 const MODEL_CONTEXT_TAGS: [&str; 12] = [
     "model-context-0", "model-context-1", "model-context-2", "model-context-3", "model-context-4", "model-context-5", "model-context-6",
     "model-context-7", "model-context-8", "model-context-9", "model-context-10", "model-context-11",
@@ -1607,8 +1628,7 @@ const CONTEXT_WIDTH: f32 = 140.;
 const OUTPUT_WIDTH: f32 = 124.;
 
 fn model_row(index: usize, row: &ModelField, suggest: Option<&SuggestView>, theme: &Theme) -> impl IntoElement {
-    let ModelSummary { id, context, output } = row.summary.clone().unwrap_or_default();
-    let name: SharedString = if id.is_empty() { "New model".into() } else { id };
+    let ModelSummary { id, name, context, output } = row.summary.clone().unwrap_or_default();
     let limits: SharedString = match (context.is_empty(), output.is_empty()) {
         (false, false) => format!("{context} context · {output} out").into(),
         (false, true) => format!("{context} context").into(),
@@ -1617,6 +1637,18 @@ fn model_row(index: usize, row: &ModelField, suggest: Option<&SuggestView>, them
     };
     let badge = |word: &'static str| {
         div().flex_none().h(px(18.)).px(px(7.)).rounded_full().flex().items_center().bg(theme.hover).typography(Type::Small).text_color(theme.text_soft).child(word)
+    };
+    // The model by its name, with the id it is asked for by after it; or the id alone.
+    let title = match (name.is_empty(), id.is_empty()) {
+        (false, _) => div()
+            .min_w_0()
+            .flex()
+            .items_baseline()
+            .gap(px(8.))
+            .child(div().flex_none().typography(Type::UiStrong).text_color(theme.text).child(name))
+            .child(div().min_w_0().truncate().typography(Type::Mono).text_color(theme.text_faint).child(id)),
+        (true, false) => div().min_w_0().truncate().typography(Type::Mono).text_color(theme.text).child(id),
+        (true, true) => div().min_w_0().truncate().typography(Type::Ui).text_color(theme.text_dim).child("New model"),
     };
     // The folded line, as version 2's: a chevron, the model, its context and what it can do.
     let head = div()
@@ -1631,28 +1663,12 @@ fn model_row(index: usize, row: &ModelField, suggest: Option<&SuggestView>, them
                 .view(px(12.), theme.text_dim)
                 .with_transformation(gpui::Transformation::rotate(gpui::radians(if row.open { std::f32::consts::FRAC_PI_2 } else { 0. }))),
         )
-        .child(div().min_w_0().truncate().typography(Type::Mono).text_color(theme.text).child(name))
+        .child(title)
         .child(div().flex_1())
         .when(!limits.is_empty(), |head| head.child(div().flex_none().typography(Type::Small).text_color(theme.text_dim).child(limits)))
         .when(row.reasoning, |head| head.child(badge("Reasoning")))
         .when(row.accepts_images, |head| head.child(badge("Vision")))
-        .when(!row.open, |head| head.child(
-            div()
-                .id(("remove-model-head", index))
-                .flex_none()
-                .size(px(26.))
-                .rounded_full()
-                .flex()
-                .items_center()
-                .justify_center()
-                .hover(|button| button.bg(theme.hover))
-                .tooltip(crate::tooltip::tip("Remove this model"))
-                .on_click(move |_, window, cx| {
-                    cx.stop_propagation();
-                    window.dispatch_action(Box::new(RemoveModelRow { index }), cx);
-                })
-                .child(Icon::Trash.view(px(14.), theme.text_dim)),
-        ));
+        .when(!row.open, |head| head.child(remove_button(("remove-model-head", index), index, None, theme)));
     div()
         .px(px(18.))
         .py(px(10.))
@@ -1668,86 +1684,159 @@ fn model_row(index: usize, row: &ModelField, suggest: Option<&SuggestView>, them
                 div()
                     .flex()
                     .flex_col()
-                    .gap(px(8.))
+                    .gap(px(10.))
                     .pl(px(21.))
                     .child(model_fields(index, row, suggest, theme))
-                    .child(reasoning_line(index, row, theme))
+                    .child(limits_line(index, row, theme))
+                    .children(row.reasoning.then(|| efforts_block(index, row, theme)))
                     .children(row.filled.as_ref().filter(|filled| row.summary.as_ref().is_some_and(|summary| summary.id == filled.id)).map(|filled| filled_note(filled, theme))),
             ))
         })
 }
 
+/// The bin that removes a model row.
+fn remove_button(id: (&'static str, usize), index: usize, tag: Option<&'static str>, theme: &Theme) -> impl IntoElement {
+    let button = div()
+        .id(id)
+        .flex_none()
+        .size(px(26.))
+        .rounded_full()
+        .flex()
+        .items_center()
+        .justify_center()
+        .hover(|button| button.bg(theme.hover))
+        .tooltip(crate::tooltip::tip("Remove this model"))
+        .on_click(move |_, window, cx| {
+            cx.stop_propagation();
+            window.dispatch_action(Box::new(RemoveModelRow { index }), cx);
+        })
+        .child(Icon::Trash.view(px(14.), theme.text_dim));
+    match tag {
+        Some(tag) => button.tag(tag).into_any_element(),
+        None => button.into_any_element(),
+    }
+}
+
 /// Tags for the automation socket, which takes only fixed names.
 const VISION_TAGS: [&str; 4] = ["model-vision-0", "model-vision-1", "model-vision-2", "model-vision-3"];
 
-/// The Vision switch: off and the model is never sent pictures (screenshots, image files, the
-/// user's attachments), and is told they were left out.
-fn vision_toggle(index: usize, row: &ModelField, theme: &Theme) -> impl IntoElement {
+/// A labelled switch on a model row.
+fn model_switch(id: (&'static str, usize), on: bool, label: &'static str, tip: &'static str, action: impl gpui::Action, tag: &'static str, theme: &Theme) -> impl IntoElement {
     div()
-        .id(("model-vision", index))
+        .id(id)
         .flex()
         .flex_none()
         .items_center()
         .gap(px(8.))
         .cursor_pointer()
-        .tooltip(crate::tooltip::tip("Whether this model is sent pictures: screenshots, image files and your attachments"))
-        .on_click(dispatch(ToggleModelVision { index }))
-        .child(switch(row.accepts_images, theme))
-        .child(div().typography(Type::Ui).text_color(if row.accepts_images { theme.text_soft } else { theme.text_dim }).child("Vision"))
-        .tag(VISION_TAGS.get(index).copied().unwrap_or("model-vision"))
+        .tooltip(crate::tooltip::tip(tip))
+        .on_click(dispatch(action))
+        .child(switch(on, theme))
+        .child(div().typography(Type::Ui).text_color(if on { theme.text } else { theme.text_dim }).child(label))
+        .tag(tag)
 }
 
 /// Tags for the automation socket, which takes only fixed names.
 const REASONING_TAGS: [&str; 4] = ["model-reasoning-0", "model-reasoning-1", "model-reasoning-2", "model-reasoning-3"];
 
-/// The Reasoning switch and, while it is on, the efforts the endpoint accepts.
-fn reasoning_line(index: usize, row: &ModelField, theme: &Theme) -> impl IntoElement {
-    let toggle = div()
-        .id(("model-reasoning", index))
+/// The model's limits, then its Vision and Reasoning switches. Vision off and the model is
+/// never sent pictures (screenshots, image files, the user's attachments), and is told they were
+/// left out.
+fn limits_line(index: usize, row: &ModelField, theme: &Theme) -> impl IntoElement {
+    let rule = || div().flex_none().h(px(16.)).w(px(1.)).bg(theme.border);
+    div()
         .flex()
         .items_center()
-        .gap(px(8.))
-        .cursor_pointer()
-        .on_click(dispatch(ToggleModelReasoning { index }))
-        .child(switch(row.reasoning, theme))
-        .child(div().typography(Type::Ui).text_color(if row.reasoning { theme.text_soft } else { theme.text_dim }).child("Reasoning"))
-        .tag(REASONING_TAGS.get(index).copied().unwrap_or("model-reasoning"));
-    let chips = row.reasoning.then(|| {
-        div().flex().flex_wrap().items_center().gap(px(6.)).children(Reasoning::LEVELS.iter().map(|&effort| {
-            let on = row.efforts.contains(&effort);
-            div()
-                .id(SharedString::from(format!("effort-{index}-{}", effort.label())))
-                .h(px(24.))
-                .px(px(10.))
-                .rounded_full()
-                .flex()
-                .items_center()
-                .cursor_pointer()
-                .typography(Type::Small)
-                .when(on, |chip| chip.bg(theme.accent_wash).text_color(theme.accent_text))
-                .when(!on, |chip| chip.border_1().border_color(theme.border_strong).text_color(theme.text_dim).hover(|chip| chip.bg(theme.hover)))
-                .on_click(dispatch(ToggleModelEffort { index, effort }))
-                .child(effort.label().to_lowercase())
-        }))
-    });
-    let only_off = row.reasoning && row.efforts.iter().all(|effort| *effort == Reasoning::Off);
+        .gap(px(14.))
+        .child(div().w(px(CONTEXT_WIDTH)).flex_none().child(tokens_input(
+            row.context.clone(),
+            "context",
+            "The model's context window in tokens. It decides when chats compact.",
+            MODEL_CONTEXT_TAGS.get(index).copied().unwrap_or("model-context"),
+            theme,
+        )))
+        .child(div().w(px(OUTPUT_WIDTH)).flex_none().ml(px(-4.)).child(tokens_input(
+            row.output.clone(),
+            "out",
+            "The most the model writes in one reply. Requests never ask for more.",
+            MODEL_OUTPUT_TAGS.get(index).copied().unwrap_or("model-output"),
+            theme,
+        )))
+        .child(rule())
+        .child(model_switch(
+            ("model-vision", index),
+            row.accepts_images,
+            "Vision",
+            "Whether this model is sent pictures: screenshots, image files and your attachments",
+            ToggleModelVision { index },
+            VISION_TAGS.get(index).copied().unwrap_or("model-vision"),
+            theme,
+        ))
+        .child(rule())
+        .child(model_switch(
+            ("model-reasoning", index),
+            row.reasoning,
+            "Reasoning",
+            "Whether this model thinks before it answers, at the efforts ticked below",
+            ToggleModelReasoning { index },
+            REASONING_TAGS.get(index).copied().unwrap_or("model-reasoning"),
+            theme,
+        ))
+}
+
+/// While Reasoning is on: the efforts the endpoint accepts, as ticks. A ticked effort is filled
+/// in the accent with a check; an unticked one is an empty outline with an empty ring, so the two
+/// never read alike in any theme.
+fn efforts_block(index: usize, row: &ModelField, theme: &Theme) -> impl IntoElement {
+    let chips = div().flex().flex_wrap().items_center().gap(px(6.)).children(Reasoning::LEVELS.iter().map(|&effort| {
+        let on = row.efforts.contains(&effort);
+        let mark = if on {
+            Icon::Check.view(px(11.), theme.on_accent).into_any_element()
+        } else {
+            div().size(px(9.)).rounded_full().border_1().border_color(theme.text_faint).into_any_element()
+        };
+        div()
+            .id(SharedString::from(format!("effort-{index}-{}", effort.label())))
+            .h(px(26.))
+            .pl(px(8.))
+            .pr(px(11.))
+            .rounded_full()
+            .flex()
+            .items_center()
+            .gap(px(6.))
+            .cursor_pointer()
+            .typography(Type::Small)
+            .when(on, |chip| chip.bg(theme.accent).text_color(theme.on_accent).hover(|chip| chip.bg(theme.accent_hover)))
+            .when(!on, |chip| chip.border_1().border_color(theme.border).text_color(theme.text_dim).hover(|chip| chip.bg(theme.hover).text_color(theme.text_soft)))
+            .on_click(dispatch(ToggleModelEffort { index, effort }))
+            .child(div().size(px(12.)).flex().items_center().justify_center().child(mark))
+            .child(effort.label().to_lowercase())
+    }));
+    let only_off = row.efforts.iter().all(|effort| *effort == Reasoning::Off);
+    let ticked = row.efforts.iter().filter(|effort| **effort != Reasoning::Off).count();
+    let count: SharedString = match ticked {
+        0 => "none ticked".into(),
+        1 => "1 effort".into(),
+        many => format!("{many} efforts").into(),
+    };
     div()
         .flex()
         .flex_col()
-        .gap(px(8.))
+        .gap(px(7.))
         .child(
             div()
                 .flex()
-                .items_center()
-                .gap(px(14.))
-                .child(vision_toggle(index, row, theme))
-                .child(div().h(px(16.)).w(px(1.)).bg(theme.border))
-                .child(toggle)
-                .when_some(chips, |line, chips| line.child(div().h(px(16.)).w(px(1.)).bg(theme.border)).child(chips)),
+                .items_baseline()
+                .gap(px(8.))
+                .child(div().typography(Type::Ui).text_color(theme.text_soft).child("Efforts it accepts"))
+                .child(div().typography(Type::Small).text_color(theme.text_faint).child(count)),
         )
-        .when(only_off, |line| {
-            line.child(div().typography(Type::Small).text_color(theme.text_faint).child("Only off is ticked. Tick the efforts this endpoint accepts."))
-        })
+        .child(chips)
+        .child(div().typography(Type::Small).text_color(if only_off { theme.warning } else { theme.text_faint }).child(if only_off {
+            "Only off is ticked. Tick the efforts this endpoint accepts."
+        } else {
+            "The ticked efforts are the ones the composer offers for this model. Ticking off lets you turn reasoning off there."
+        }))
 }
 
 fn model_fields(index: usize, row: &ModelField, suggest: Option<&SuggestView>, theme: &Theme) -> impl IntoElement {
@@ -1764,36 +1853,19 @@ fn model_fields(index: usize, row: &ModelField, suggest: Option<&SuggestView>, t
                 .child(text_input(row.id.clone(), MODEL_ID_TAGS.get(index).copied().unwrap_or("model-id"), theme))
                 .children(suggest.map(|suggest| suggest_card(suggest, theme))),
         )
-        .child(div().w(px(CONTEXT_WIDTH)).flex_none().child(tokens_input(
-            row.context.clone(),
-            "context",
-            "The model's context window in tokens. It decides when chats compact.",
-            MODEL_CONTEXT_TAGS.get(index).copied().unwrap_or("model-context"),
-            theme,
-        )))
-        .child(div().w(px(OUTPUT_WIDTH)).flex_none().child(tokens_input(
-            row.output.clone(),
-            "out",
-            "The most the model writes in one reply. Requests never ask for more.",
-            MODEL_OUTPUT_TAGS.get(index).copied().unwrap_or("model-output"),
-            theme,
-        )))
         .child(
             div()
-                .id(("remove-model", index))
+                .id(("model-name", index))
+                .w(px(NAME_WIDTH))
                 .flex_none()
-                .size(px(26.))
-                .rounded_full()
-                .flex()
-                .items_center()
-                .justify_center()
-                .hover(|button| button.bg(theme.hover))
-                .tooltip(crate::tooltip::tip("Remove this model"))
-                .on_click(dispatch(RemoveModelRow { index }))
-                .child(Icon::Trash.view(px(14.), theme.text_dim))
-                .tag(REMOVE_MODEL_TAGS.get(index).copied().unwrap_or("remove-model")),
+                .tooltip(crate::tooltip::tip("What the app calls this model, such as GLM 5.3. Requests still use the id."))
+                .child(text_input(row.name.clone(), MODEL_NAME_TAGS.get(index).copied().unwrap_or("model-name"), theme)),
         )
+        .child(remove_button(("remove-model", index), index, Some(REMOVE_MODEL_TAGS.get(index).copied().unwrap_or("remove-model")), theme))
 }
+
+/// The display name field's width.
+const NAME_WIDTH: f32 = 220.;
 
 /// A labelled control in the connection card.
 pub(crate) fn field(label: &'static str, hint: Option<SharedString>, control: impl IntoElement, theme: &Theme) -> impl IntoElement {

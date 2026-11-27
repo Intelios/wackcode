@@ -2830,7 +2830,7 @@ fn team_parts(app: &AppState, crew: Option<&wack_core::ModelChoice>, locked: boo
     let pill = crew.map(|crew| {
         let resolved = store.resolve_crew(crew);
         let model = match &resolved {
-            Some(resolved) => model_name(&resolved.model.id),
+            Some(resolved) => resolved.model.label().to_string(),
             None => crew.model.as_deref().map(model_name).unwrap_or_else(|| "No model".into()),
         };
         CrewPill {
@@ -2862,7 +2862,7 @@ fn menu_data(app: &AppState, resolved: Option<&wack_core::Resolved>, team: Optio
                     .models
                     .iter()
                     .map(|model| MenuItem {
-                        label: model_name(&model.id).into(),
+                        label: model.label().to_string().into(),
                         detail: model.context_window.map(|window| crate::work::count(window).into()),
                         selected: resolved.is_some_and(|resolved| {
                             resolved.connection.id == connection.id && resolved.model.id == model.id
@@ -2900,7 +2900,7 @@ fn crew_menu(app: &AppState, team: Option<TeamRow>) -> Option<MenuData> {
                 .models
                 .iter()
                 .map(|model| MenuItem {
-                    label: model_name(&model.id).into(),
+                    label: model.label().to_string().into(),
                     detail: model.context_window.map(|window| crate::work::count(window).into()),
                     selected: crew.connection.as_deref() == Some(connection.id.as_str()) && crew.model.as_deref() == Some(model.id.as_str()),
                     choice: Choice::Crew { connection: connection.id.clone(), model: model.id.clone() },
@@ -2984,7 +2984,7 @@ fn waiting_item(raw: &str, steering: bool) -> Waiting {
 fn model_words(resolved: Option<&wack_core::Resolved>) -> (SharedString, Option<SharedString>) {
     match resolved {
         Some(resolved) => (
-            model_name(&resolved.model.id).into(),
+            resolved.model.label().to_string().into(),
             Some(resolved.effort.label().into()),
         ),
         None => ("No model".into(), None),

@@ -3799,7 +3799,7 @@ impl AppState {
         let crew = chat.team.as_ref()?;
         let session = self.sessions.get(id)?.read(cx);
         let name = |choice: &ModelChoice| match self.store.resolve(choice) {
-            Some(resolved) => crate::shell::model_name(&resolved.model.id),
+            Some(resolved) => resolved.model.label().to_string(),
             None => choice.model.as_deref().map(crate::shell::model_name).unwrap_or_else(|| "No model".into()),
         };
         Some(crate::panes::agents::TeamView {

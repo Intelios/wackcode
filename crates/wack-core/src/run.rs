@@ -813,6 +813,7 @@ mod tests {
                     base_url: "https://example.invalid/v1".into(),
                     models: vec![crate::Model {
                         id: "zai-org/GLM-5.3-Flash".into(),
+                        name: None,
                         context_window: Some(128_000),
                         efforts: vec![crate::Reasoning::Off, crate::Reasoning::High],
                         accepts_images: true,

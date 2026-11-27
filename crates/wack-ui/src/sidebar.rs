@@ -239,13 +239,13 @@ impl RenderOnce for Sidebar {
                 );
             }
         } else if !self.data.pinned.is_empty() {
-            list = list.child(label("Pinned", false, &theme));
+            list = list.child(label("Pinned", &theme));
             for project in self.data.pinned {
                 list = list.child(project_rows(project, &theme));
             }
         }
         if !archive_open && self.data.area == ChatKind::Code && (!self.data.projects.is_empty() || (empty && !searching)) {
-            list = list.child(label("Projects", !searching, &theme));
+            list = list.child(label("Projects", &theme));
             for project in self.data.projects {
                 list = list.child(project_rows(project, &theme));
             }
@@ -259,6 +259,9 @@ impl RenderOnce for Sidebar {
                     .text_color(theme.text_dim)
                     .child("Add a folder to start a chat in it."),
             );
+        }
+        if !archive_open && !searching && self.data.area == ChatKind::Code {
+            list = list.child(add_project_row(&theme));
         }
 
         div()
@@ -345,7 +348,7 @@ fn settings_row(theme: &Theme) -> impl IntoElement {
 }
 
 /// A project's round monogram: its name's first letter, lit while the project is open.
-fn monogram(name: &str, lit: bool, theme: &Theme) -> impl IntoElement {
+pub(crate) fn monogram(name: &str, lit: bool, theme: &Theme) -> impl IntoElement {
     let letter: String = name.chars().find(|c| c.is_alphanumeric()).map(|c| c.to_uppercase().collect()).unwrap_or_default();
     div()
         .flex_none()
@@ -367,22 +370,43 @@ fn label_text(name: SharedString, theme: &Theme) -> impl IntoElement {
 }
 
 /// A section name, set in the serif's italic.
-fn label(name: &'static str, with_add: bool, theme: &Theme) -> impl IntoElement {
+fn label(name: &'static str, theme: &Theme) -> impl IntoElement {
+    div().pt(px(14.)).pb(px(4.)).px(px(10.)).child(div().typography(Type::Label).text_color(theme.text_dim).child(name))
+}
+
+/// The end of the Code area's project list: Add project… (⌘O), as a row of its own where the
+/// projects are, so it is found where it is wanted.
+fn add_project_row(theme: &Theme) -> impl IntoElement {
     div()
-        .pt(px(14.))
-        .pb(px(4.))
-        .px(px(10.))
+        .id("add-folder")
+        .group("add-folder")
+        .mt(px(2.))
+        .h(px(28.))
+        .pl(px(ROW_INSET))
+        .pr(px(10.))
+        .rounded_full()
         .flex()
         .items_center()
-        .justify_between()
-        .child(div().typography(Type::Label).text_color(theme.text_dim).child(name))
-        .when(with_add, |row| {
-            row.child(
-                small_button("add-folder", Icon::Plus, theme.text_faint, theme)
-                    .on_click(dispatch(AddFolder))
-                    .tag("add-folder"),
-            )
-        })
+        .gap(px(8.))
+        .cursor_pointer()
+        .hover(|row| row.bg(theme.hover))
+        .on_click(dispatch(AddFolder))
+        .child(
+            div()
+                .flex_none()
+                .size(px(MONOGRAM))
+                .rounded_full()
+                .border_1()
+                .border_color(theme.border_strong)
+                .flex()
+                .items_center()
+                .justify_center()
+                .group_hover("add-folder", |circle| circle.border_color(theme.accent_line))
+                .child(Icon::Plus.view(px(11.), theme.text_soft)),
+        )
+        .child(div().flex_1().typography(Type::Ui).text_color(theme.text_dim).group_hover("add-folder", |words| words.text_color(theme.text)).child("Add project…"))
+        .child(div().invisible().group_hover("add-folder", |keys| keys.visible()).typography(Type::Small).text_color(theme.text_faint).child("⌘O"))
+        .tag("add-folder")
 }
 
 /// A 20-point icon button, for a row's own controls.

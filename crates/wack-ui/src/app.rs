@@ -294,6 +294,8 @@ pub struct AppState {
     pub title_error: Option<SharedString>,
     /// The chat being renamed in place, if any.
     pub renaming: Option<Renaming>,
+    /// The New Chat screen's list of projects is open.
+    pub project_picker: bool,
     /// A chat's right-click menu, while open.
     pub chat_menu: Option<ChatMenu>,
     /// The `/` menu, open over one composer.
@@ -544,6 +546,7 @@ impl AppState {
             title_error: None,
             renaming: None,
             chat_menu: None,
+            project_picker: false,
             _subscriptions: subscriptions,
         };
         app.watch_form(cx);
@@ -1743,6 +1746,7 @@ impl AppState {
     }
 
     pub fn select(&mut self, selection: Selection, cx: &mut Context<Self>) {
+        self.project_picker = false;
         // Leaving an area parks where it was, and its new chat's draft, so coming back finds
         // both; Settings shows over an area without leaving it.
         // Leaving a new chat keeps its words in its tab.
@@ -1997,6 +2001,34 @@ impl AppState {
             Some(project) => self.select(Selection::NewChat(project), cx),
             None => self.select(Selection::Welcome, cx),
         }
+    }
+
+    pub fn toggle_project_picker(&mut self, cx: &mut Context<Self>) {
+        self.project_picker = !self.project_picker && matches!(self.selection, Selection::NewChat(_));
+        cx.notify();
+    }
+
+    pub fn close_project_picker(&mut self, cx: &mut Context<Self>) {
+        if std::mem::take(&mut self.project_picker) {
+            cx.notify();
+        }
+    }
+
+    /// A project picked in the New Chat screen's list: the new chat on screen moves to it, with
+    /// its words, pictures and files, and its draft tab with it.
+    pub fn choose_new_chat_project(&mut self, project: String, cx: &mut Context<Self>) {
+        self.project_picker = false;
+        if !matches!(self.selection, Selection::NewChat(_)) || self.store.project(&project).is_none() {
+            cx.notify();
+            return;
+        }
+        if let Some(key) = self.active_draft
+            && let Some(draft) = self.drafts.iter_mut().find(|draft| draft.key == key)
+        {
+            draft.project = Some(project.clone());
+        }
+        self.select(Selection::NewChat(project), cx);
+        cx.notify();
     }
 
     pub fn add_project(&mut self, path: &Path, cx: &mut Context<Self>) {

@@ -46,6 +46,25 @@ pub fn all() -> Vec<Scene> {
             },
         },
         Scene {
+            name: "new-chat-project-picker",
+            description: "The new-chat screen with its project list open under the project's name: pinned first, the current one ticked, Add project… at the foot.",
+            size: WINDOW,
+            build: |_, cx| {
+                cx.new(|_| {
+                    Shell::showing_tabs(
+                        fixtures::sidebar(Selected::None),
+                        Screen::NewChat {
+                            project: fixtures::project(),
+                            composer: fixtures::composer_empty(true),
+                            notice: None,
+                        },
+                        crate::shell::StripData { project_picker: Some(fixtures::picker_projects()), ..fixtures::strip(None) },
+                    )
+                })
+                .into()
+            },
+        },
+        Scene {
             name: "new-chat",
             description: "The new-chat screen in a project, with the sidebar.",
             size: WINDOW,

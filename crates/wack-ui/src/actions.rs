@@ -32,6 +32,9 @@ actions!(
         ArchiveCurrentChat,
         /// Pick a folder to add as a project.
         AddFolder,
+        /// The New Chat screen's project name: opens or closes the list of projects under it.
+        ToggleProjectPicker,
+        CloseProjectPicker,
         OpenSettings,
         CloseSettings,
         /// Send the composer's text, or queue it behind the run.
@@ -688,6 +691,14 @@ pub struct UseIdea {
 #[action(namespace = wackcode, no_json)]
 pub struct ToggleProject {
     pub id: String,
+}
+
+/// A project picked in the New Chat screen's list: the new chat on screen moves there, its words
+/// with it.
+#[derive(Clone, Debug, PartialEq, Action)]
+#[action(namespace = wackcode, no_json)]
+pub struct ChooseNewChatProject {
+    pub project: String,
 }
 
 #[derive(Clone, Debug, PartialEq, Action)]

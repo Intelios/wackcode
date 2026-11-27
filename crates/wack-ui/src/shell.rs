@@ -52,7 +52,7 @@ use crate::{
         NewChat, NewChatIn, SelectDraft, CloseDraft, NewTerminal, NewTerminalWith, TogglePaneMenu, ClosePaneMenu, HideSidePanel, ToggleSidePanel, RevealProject, OpenPaneKind, NextTab, OpenEffortMenu, OpenModelMenu, OpenSettings,
         OpenSettingsSection, PinProject, PreviousTab, RemoveConnection, RemovePicture, ShowCommandOutput, ShowPicture, ShuffleBackdrop, ToggleBackdropShuffle, RemoveProject, ResetDockSize,
         PickCommand, RetryWorkspaceFiles, SelectChat, Send, Stop, StopCommand, MoveToBackground, ToggleTasks, ToggleTasksPane, StopTask, ShowTask, ToggleAgentsPane, ShowTeam, ToggleBrowserPane, ToggleCanvasPane, ShowCanvas, WriteInComposer, ShowAgent, StopAgent, ShowChanges, ToggleChanges, ToggleProject, ToggleSidebar, ToggleTerminal, TriggerProjectCommand, Unqueue,
-        ToggleAutoTitles, ToggleTitleModels, ChooseTitleModel, RenameChat, RenameChatAt, CancelRename, OpenChatMenu, CloseChatMenu, ChatMenuPick, ChatPick, ToggleModelReasoning, ToggleModelRow, ToggleModelVision, AttachPictures, AttachFiles, AttachTerminalSelection, RemoveAttachment, InsertFile, RemoveFile, SteerQueued, RemoveQueued, OpenPicture, ClosePicture, StepPicture, ZoomPicture,
+        ToggleAutoTitles, ToggleTitleModels, ChooseTitleModel, RenameChat, RenameChatAt, CancelRename, ToggleProjectPicker, CloseProjectPicker, ChooseNewChatProject, OpenChatMenu, CloseChatMenu, ChatMenuPick, ChatPick, ToggleModelReasoning, ToggleModelRow, ToggleModelVision, AttachPictures, AttachFiles, AttachTerminalSelection, RemoveAttachment, InsertFile, RemoveFile, SteerQueued, RemoveQueued, OpenPicture, ClosePicture, StepPicture, ZoomPicture,
         StartSuggestion, DismissSuggestion, CopySuggestion, OpenChat,
         ArchiveChat, ArchiveCurrentChat, ClearSearch, RevealScratchpadFile, DeleteAllArchived, DeleteArchivedChat, ToggleArchived, UnarchiveChat,
         ToggleModelEffort, SwitchSkill, SwitchSkillFolder, RemoveSkillFolder, OpenSkill, CopySkill, ChooseSkillUse, NewSkill, SaveSkill,
@@ -1409,6 +1409,13 @@ impl Render for Shell {
                     let id = action.id.clone();
                     shell.with_app(cx, |app, cx| app.delete_archived_chat(&id, cx));
                 }))
+                .on_action(cx.listener(|shell, _: &ToggleProjectPicker, _, cx| shell.with_app(cx, |app, cx| app.toggle_project_picker(cx))))
+                .on_action(cx.listener(|shell, _: &CloseProjectPicker, _, cx| shell.with_app(cx, |app, cx| app.close_project_picker(cx))))
+                .on_action(cx.listener(|shell, action: &ChooseNewChatProject, window, cx| {
+                    let project = action.project.clone();
+                    shell.with_app(cx, |app, cx| app.choose_new_chat_project(project, cx));
+                    shell.focus_composer(window, cx);
+                }))
                 .on_action(cx.listener(|shell, action: &NewChatIn, _, cx| {
                     let project = action.project.clone();
                     shell.with_app(cx, |app, cx| app.new_chat(Some(project), cx));
@@ -2462,6 +2469,20 @@ pub struct StripData {
     pub drafts: Vec<(u64, bool)>,
     pub commands: Option<[CommandButtonData; 2]>,
     pub command_editor: Option<CommandEditorData>,
+    /// The New Chat screen's list of projects, while it is open.
+    pub project_picker: Option<Vec<PickerProject>>,
+}
+
+/// A project in the New Chat screen's list.
+#[derive(Clone)]
+pub struct PickerProject {
+    pub id: SharedString,
+    pub name: SharedString,
+    /// Shown shortened, with `~` for the home folder.
+    pub path: SharedString,
+    pub pinned: bool,
+    /// The project the new chat is in now.
+    pub current: bool,
 }
 
 impl StripData {
@@ -2807,6 +2828,25 @@ fn live_view(app: &AppState, cx: &App) -> (SidebarData, Screen, StripData) {
         drafts: app.draft_tabs(),
         commands: app.command_buttons(),
         command_editor: app.command_editor_data(cx),
+        project_picker: match app.selection() {
+            Selection::NewChat(current) if app.project_picker => {
+                // Pinned first, as the sidebar lists them; otherwise in the sidebar's order.
+                let mut projects: Vec<PickerProject> = store
+                    .projects()
+                    .iter()
+                    .map(|project| PickerProject {
+                        id: project.id.clone().into(),
+                        name: project.name.clone().into(),
+                        path: shown_path(&project.path).into(),
+                        pinned: project.pinned,
+                        current: project.id == *current,
+                    })
+                    .collect();
+                projects.sort_by_key(|project| !project.pinned);
+                Some(projects)
+            }
+            _ => None,
+        },
     };
     (sidebar, screen, strip)
 }
@@ -3233,7 +3273,7 @@ fn new_chat(
             .flex_col()
             .items_center()
             .child(on_ground(kicker("New chat in", theme), ground, theme))
-            .child(div().pt(px(6.)).child(display_line(project.name.clone(), false, theme)))
+            .child(div().w_full().pt(px(6.)).child(project_trigger(&project, strip.project_picker.as_deref(), viewport, ground, theme)))
             // Held to the block's width, so a long path ends in an ellipsis instead of spilling out.
             .child(div().max_w_full().pt(px(8.)).child(on_ground(project_line(&project, theme).max_w_full(), ground, theme)))
             .when_some(strip.commands.as_ref(), |block, commands| {
@@ -3260,6 +3300,173 @@ fn new_chat(
             .child(notice_line(notice, ground, theme)),
     )
 }
+
+/// The New Chat screen's project name, which is also its project picker, after version 2's pill:
+/// a click lists every project under it, pinned first, the current one ticked, with
+/// Add project… at the foot. Picking one moves the new chat there with its words.
+fn project_trigger(project: &ProjectInfo, list: Option<&[PickerProject]>, viewport: Size<Pixels>, ground: Option<Hsla>, theme: &Theme) -> impl IntoElement {
+    let open = list.is_some();
+    let chevron = div()
+        .flex_none()
+        .size(px(30.))
+        .rounded_full()
+        .flex()
+        .items_center()
+        .justify_center()
+        .border_1()
+        .border_color(if open { theme.accent_line } else { theme.border_strong })
+        .bg(match ground {
+            Some(ground) => ground,
+            None if open => theme.hover,
+            None => theme.surface,
+        })
+        .group_hover("project-trigger", |circle| circle.border_color(theme.accent_line))
+        .child(
+            Icon::ChevronDown
+                .view(px(14.), if open { theme.accent_text } else { theme.text_soft })
+                .with_transformation(gpui::Transformation::rotate(gpui::radians(if open { std::f32::consts::PI } else { 0. }))),
+        );
+    let trigger = div()
+        .id("project-trigger")
+        .group("project-trigger")
+        .flex()
+        .items_center()
+        .gap(px(14.))
+        .cursor_pointer()
+        .tooltip(crate::tooltip::tip("Start this chat in another project"))
+        .on_click(|_, window, cx| window.dispatch_action(Box::new(ToggleProjectPicker), cx))
+        .child(display_line(project.name.clone(), false, theme))
+        .child(chevron)
+        .tag("project-trigger");
+    div()
+        .relative()
+        .w_full()
+        .flex()
+        .justify_center()
+        .child(trigger)
+        .when_some(list, |row, list| {
+            let (backdrop, card) = project_list(list, viewport, theme);
+            row.child(backdrop).child(card)
+        })
+}
+
+/// The project list under the New Chat screen's project name, and the click-away layer behind
+/// it. The list hangs from the full width of the screen's block, centred under the name.
+fn project_list(list: &[PickerProject], viewport: Size<Pixels>, theme: &Theme) -> (gpui::AnyElement, gpui::AnyElement) {
+    let backdrop = gpui::anchored().position_mode(gpui::AnchoredPositionMode::Window).position(gpui::point(px(0.), px(0.))).child(
+        div()
+            .id("project-list-backdrop")
+            .w(viewport.width)
+            .h(viewport.height)
+            .on_mouse_down(MouseButton::Left, |_, window, cx| {
+                cx.stop_propagation();
+                window.dispatch_action(Box::new(CloseProjectPicker), cx);
+            })
+            .on_mouse_down(MouseButton::Right, |_, window, cx| {
+                cx.stop_propagation();
+                window.dispatch_action(Box::new(CloseProjectPicker), cx);
+            }),
+    );
+    let row = |index: usize, project: &PickerProject| {
+        let id = project.id.to_string();
+        div()
+            .id(("pick-project", index))
+            .h(px(44.))
+            .px(px(10.))
+            .rounded(px(10.))
+            .flex()
+            .items_center()
+            .gap(px(11.))
+            .cursor_pointer()
+            .map(|row| if project.current { row.bg(theme.accent_wash) } else { row.hover(|row| row.bg(theme.hover)) })
+            .on_click(move |_, window, cx| window.dispatch_action(Box::new(ChooseNewChatProject { project: id.clone() }), cx))
+            .child(crate::sidebar::monogram(&project.name, project.current, theme))
+            .child(
+                div()
+                    .flex_1()
+                    .min_w_0()
+                    .flex()
+                    .flex_col()
+                    .child(div().truncate().typography(Type::UiStrong).text_color(theme.text).child(project.name.clone()))
+                    .child(div().truncate().typography(Type::Small).text_color(theme.text_faint).child(project.path.clone())),
+            )
+            .when(project.current, |row| row.child(Icon::Check.view(px(14.), theme.accent_text)))
+    };
+    let heading = |name: &'static str| div().px(px(10.)).pt(px(8.)).pb(px(3.)).typography(Type::Label).text_color(theme.text_dim).child(name);
+    let pinned: Vec<(usize, &PickerProject)> = list.iter().enumerate().filter(|(_, project)| project.pinned).collect();
+    let others: Vec<(usize, &PickerProject)> = list.iter().enumerate().filter(|(_, project)| !project.pinned).collect();
+    let rows = div()
+        .id("project-list-rows")
+        .max_h(px(PROJECT_LIST_HEIGHT))
+        .overflow_y_scroll()
+        .flex()
+        .flex_col()
+        .gap(px(1.))
+        .when(!pinned.is_empty(), |rows| rows.child(heading("Pinned")).children(pinned.iter().map(|(index, project)| row(*index, project))))
+        .when(!others.is_empty(), |rows| {
+            rows.when(!pinned.is_empty(), |rows| rows.child(heading("Projects"))).children(others.iter().map(|(index, project)| row(*index, project)))
+        });
+    let add = div()
+        .id("picker-add-project")
+        .h(px(38.))
+        .px(px(10.))
+        .rounded(px(10.))
+        .flex()
+        .items_center()
+        .gap(px(11.))
+        .cursor_pointer()
+        .hover(|row| row.bg(theme.hover))
+        .on_click(|_, window, cx| {
+            window.dispatch_action(Box::new(CloseProjectPicker), cx);
+            window.dispatch_action(Box::new(AddFolder), cx);
+        })
+        .child(
+            div()
+                .flex_none()
+                .size(px(20.))
+                .rounded_full()
+                .border_1()
+                .border_color(theme.border_strong)
+                .flex()
+                .items_center()
+                .justify_center()
+                .child(Icon::Plus.view(px(11.), theme.text_soft)),
+        )
+        .child(div().flex_1().typography(Type::Ui).text_color(theme.text_soft).child("Add project…"))
+        .child(div().typography(Type::Small).text_color(theme.text_faint).child("⌘O"))
+        .tag("picker-add-project");
+    let card = div()
+        .id("project-list")
+        // Presses inside stay inside: the click-away layer beneath must not close it first.
+        .occlude()
+        .w(px(PROJECT_LIST_WIDTH))
+        .p(px(6.))
+        .rounded(px(16.))
+        .bg(theme.raised)
+        .border_1()
+        .border_color(theme.border_strong)
+        .shadow_lg()
+        .flex()
+        .flex_col()
+        .child(rows)
+        .child(div().mx(px(8.)).my(px(5.)).h(px(1.)).bg(theme.border))
+        .child(add)
+        .tag("project-list");
+    let hanging = div()
+        .absolute()
+        .top_full()
+        .left_0()
+        .right_0()
+        .pt(px(10.))
+        .flex()
+        .justify_center()
+        .child(crate::motion::enter("arrive-project-list", div().child(card)));
+    (gpui::deferred(backdrop).with_priority(1).into_any_element(), gpui::deferred(hanging).with_priority(2).into_any_element())
+}
+
+const PROJECT_LIST_WIDTH: f32 = 380.;
+/// The list scrolls past about seven projects.
+const PROJECT_LIST_HEIGHT: f32 = 330.;
 
 /// The Chat area's new chat, after version 2's hero: a small duck, a greeting for the hour, a
 /// line of welcome, the composer, and three ideas to start from (each fills the composer, never

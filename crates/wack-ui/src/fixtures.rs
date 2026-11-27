@@ -78,6 +78,23 @@ pub fn sidebar(selected: Selected) -> SidebarData {
     }
 }
 
+/// The New Chat screen's list of projects, open on wackcode.
+pub fn picker_projects() -> Vec<crate::shell::PickerProject> {
+    let project = |name: &'static str, path: &'static str, pinned: bool| crate::shell::PickerProject {
+        id: name.into(),
+        name: name.into(),
+        path: path.into(),
+        pinned,
+        current: name == "wackcode",
+    };
+    vec![
+        project("wackcode", "~/Documents/GitHub/wackcode", true),
+        project("wackchatter", "~/Documents/GitHub/wackchatter", false),
+        project("TokenTrail", "~/Documents/Projects/TokenTrail", false),
+        project("duck-pond", "~/Code/duck-pond", false),
+    ]
+}
+
 pub fn project() -> ProjectInfo {
     ProjectInfo {
         name: "wackcode".into(),
@@ -961,6 +978,7 @@ pub fn strip(active: Option<&'static str>) -> crate::shell::StripData {
             crate::run_button::CommandButtonData::idle(wack_core::CommandKind::Run, None),
         ]),
         command_editor: None,
+        project_picker: None,
     }
 }
 
@@ -1864,6 +1882,7 @@ pub fn chat_strip(active: Option<&'static str>) -> crate::shell::StripData {
         drafts: Vec::new(),
         commands: None,
         command_editor: None,
+        project_picker: None,
     }
 }
 

@@ -1294,7 +1294,7 @@ fn remove_button(id: (&'static str, usize), action: impl gpui::Action, tag: &'st
 /// agent takes it. A queued one (`queued` is its place in the queue) can be sent as steering now,
 /// taken back to edit, or removed; steering is already on its way.
 fn waiting_bubble(index: usize, queued: Option<usize>, waiting: Waiting, working: bool, theme: &Theme) -> impl IntoElement {
-    let words = if waiting.steering { "Steering · reaches the agent at its next step" } else { "Queued · sends when the agent finishes" };
+    let words = if waiting.steering { "Steering · interrupting the agent now" } else { "Queued · sends when the agent finishes" };
     let action = |id: &'static str, words: &'static str, action: Box<dyn gpui::Action>| {
         div()
             .id((id, index))

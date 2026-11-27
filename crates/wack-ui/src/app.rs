@@ -3149,7 +3149,7 @@ impl AppState {
     }
 
     /// ↩ in a chat's composer: send now, or queue behind the run. With `steer` (⌘↩) a message
-    /// written during a run goes to the agent at its next step instead. A `/command` is resolved
+    /// written during a run interrupts the agent with it instead. A `/command` is resolved
     /// here: WackCode's own act at once, and one for the model runs (or waits in the queue, as
     /// typed, to be resolved when it is sent; a command never steers).
     pub fn submit(&mut self, chat: &str, steer: bool, cx: &mut Context<Self>) {

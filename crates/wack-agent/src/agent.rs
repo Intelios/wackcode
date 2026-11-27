@@ -171,6 +171,8 @@ pub trait Feature: Send + Sync {
 pub struct Control {
     cancel: CancellationToken,
     steering: Arc<Mutex<VecDeque<String>>>,
+    /// Wakes whatever the run is waiting on when a message is steered in.
+    steered: Arc<tokio::sync::Notify>,
     interactive: Arc<AtomicBool>,
     questions: Arc<Questions>,
 }
@@ -244,10 +246,24 @@ impl Control {
         self.cancel.clone()
     }
 
-    /// Queues a message for the model. It is delivered with the next tool results, or as a new
-    /// turn if the model was about to finish.
+    /// Sends a message to the model while it works, as version 2's Steer did: a reply being
+    /// written is cut off and asked again with the message (what the user saw of its text
+    /// stays); a command the run waits on moves to the background and `wait_for_tasks` returns,
+    /// so the message reaches the model with that batch's results instead of after them.
     pub fn steer(&self, text: impl Into<String>) {
         self.steering.lock().unwrap().push_back(text.into());
+        self.steered.notify_waiters();
+    }
+
+    /// Resolves once a steered message is waiting to be delivered.
+    pub async fn steering(&self) {
+        loop {
+            let notified = self.steered.notified();
+            if !self.steering.lock().unwrap().is_empty() {
+                return;
+            }
+            notified.await;
+        }
     }
 
     fn take_steering(&self) -> Option<String> {
@@ -276,6 +292,9 @@ pub enum Event {
     Retrying(RetryNotice),
     /// A message the user sent mid-run was handed to the model.
     Steered(String),
+    /// The reply being written was cut off for a steered message: what it had started (thinking,
+    /// a tool call not yet complete) is dropped; text the user saw is kept.
+    Interrupted,
     Compacting,
     Compacted { usage: Option<Usage>, summary: Summary, tokens_before: u64, tokens_after: u64 },
     /// A tool is waiting for the user to answer. Answer with [`Control::answer`]. `wrap_up`
@@ -505,6 +524,11 @@ impl Agent {
             // A tool may have changed the mode, a compaction summarised a note away, or a
             // background task has news.
             self.save_notes(events)?;
+            // A message steered in since the last request goes into this one.
+            if let Some(text) = control.take_steering() {
+                self.session.push(Message::user(text.clone()), None)?;
+                events(Event::Steered(text));
+            }
 
             let request = self.request();
             let written = Mutex::new(String::new());
@@ -524,9 +548,24 @@ impl Agent {
             let result = tokio::select! {
                 biased;
                 () = control.cancel.cancelled() => None,
-                result = stream_with_retry(self.provider.as_ref(), &request, &sink, &retrying) => Some(result),
+                () = control.steering() => Some(Err(None)),
+                result = stream_with_retry(self.provider.as_ref(), &request, &sink, &retrying) => Some(result.map_err(Some)),
             };
             let response = match result {
+                Some(Err(None)) => {
+                    // Steered: the reply is cut off and asked again with the message.
+                    self.record(Purpose::Chat, started, CallOutcome::Cancelled, None);
+                    let text = written.into_inner().unwrap();
+                    if !text.trim().is_empty() {
+                        self.session.push(Message { role: Role::Assistant, content: vec![Block::Text { text }] }, None)?;
+                    }
+                    events(Event::Interrupted);
+                    if let Some(text) = control.take_steering() {
+                        self.session.push(Message::user(text.clone()), None)?;
+                        events(Event::Steered(text));
+                    }
+                    continue;
+                }
                 None => {
                     self.record(Purpose::Chat, started, CallOutcome::Cancelled, None);
                     // The user saw this text appear, so it stays in the conversation.
@@ -536,7 +575,7 @@ impl Agent {
                     }
                     return Ok(Outcome::Stopped);
                 }
-                Some(Err(error)) if error.kind == ErrorKind::ContextOverflow && !compacted_for_overflow => {
+                Some(Err(Some(error))) if error.kind == ErrorKind::ContextOverflow && !compacted_for_overflow => {
                     self.record(Purpose::Chat, started, CallOutcome::Failed, None);
                     compacted_for_overflow = true;
                     match self.compact(None, true, control, events).await {
@@ -547,7 +586,7 @@ impl Agent {
                         }
                     }
                 }
-                Some(Err(error)) => {
+                Some(Err(Some(error))) => {
                     self.record(Purpose::Chat, started, CallOutcome::Failed, None);
                     return Err(error.message);
                 }
@@ -791,7 +830,21 @@ impl Agent {
                     end += 1;
                 }
             }
-            results.extend(join_all((index..end).map(&run_one)).await);
+            // A message steered in while this batch runs moves a command it waits on to the
+            // background, so the message reaches the model now rather than after the command.
+            let batch = join_all((index..end).map(&run_one));
+            tokio::pin!(batch);
+            let mut moved = false;
+            let batch = loop {
+                tokio::select! {
+                    results = &mut batch => break results,
+                    () = control.steering(), if !moved => {
+                        moved = true;
+                        tasks.background_foreground();
+                    }
+                }
+            };
+            results.extend(batch);
             index = end;
         }
         Ok(results)
@@ -1345,12 +1398,26 @@ mod tests {
         );
     }
 
+    /// Steers a message in when it runs, as a user typing while a tool works.
+    struct SteersIn(Control, &'static str);
+
+    #[async_trait]
+    impl Tool for SteersIn {
+        fn spec(&self) -> ToolSpec {
+            spec("steers", Loading::Always, false)
+        }
+
+        async fn run(&self, _: Value, _: &ToolContext<'_>) -> Result<ToolOutput, String> {
+            self.0.steer(self.1);
+            Ok("ran".to_string().into())
+        }
+    }
+
     #[tokio::test]
     async fn a_message_sent_mid_run_rides_with_the_tool_results() {
-        let steps = vec![call(&[("a", "echo", json!({ "text": "one" }))]), say("Switching."), say("Done.")];
-        let mut rig = rig(steps, vec![Arc::new(Echo("echo", Loading::Always))]);
         let control = Control::new();
-        control.steer("use the other file");
+        let steps = vec![call(&[("a", "steers", json!({}))]), say("Switching.")];
+        let mut rig = rig(steps, vec![Arc::new(SteersIn(control.clone(), "use the other file"))]);
         assert_eq!(rig.run("go", &control).await, Ok(Outcome::Done));
 
         let requests = rig.provider.requests();
@@ -1362,15 +1429,90 @@ mod tests {
     }
 
     #[tokio::test]
-    async fn a_message_sent_as_the_model_finishes_starts_another_turn() {
-        let mut rig = rig(vec![say("Finished."), say("Also done.")], vec![]);
+    async fn a_message_waiting_when_a_request_starts_goes_into_it() {
+        let mut rig = rig(vec![say("On it.")], vec![]);
         let control = Control::new();
         control.steer("one more thing");
         control.steer("and another");
         assert_eq!(rig.run("go", &control).await, Ok(Outcome::Done));
         let requests = rig.provider.requests();
+        assert_eq!(requests.len(), 1);
+        assert_eq!(requests[0].messages[1].text(), "one more thing\n\nand another");
+    }
+
+    #[tokio::test]
+    async fn a_message_sent_as_the_model_finishes_starts_another_turn() {
+        let mut rig = rig(vec![say("Finished."), say("Also done.")], vec![]);
+        let control = Control::new();
+        let steerer = control.clone();
+        let events = rig.events.clone();
+        let outcome = rig
+            .agent
+            .run("go", &control, &move |event| {
+                if event == Event::Text("Finished.".into()) {
+                    steerer.steer("one more thing");
+                }
+                events.lock().unwrap().push(event);
+            })
+            .await;
+        assert_eq!(outcome, Ok(Outcome::Done));
+        let requests = rig.provider.requests();
+        assert_eq!(requests.len(), 2, "the reply finished, so it is not asked again");
+        assert_eq!(requests[1].messages[1].text(), "Finished.");
+        assert_eq!(requests[1].messages[2].text(), "one more thing");
+    }
+
+    #[tokio::test]
+    async fn a_message_sent_while_the_model_writes_cuts_the_reply_off_and_asks_again() {
+        let mut rig = rig(vec![Step::Hang { text: "Let me think about".into() }, say("Changing course.")], vec![]);
+        let control = Control::new();
+        let steerer = control.clone();
+        tokio::spawn(async move {
+            tokio::time::sleep(Duration::from_millis(50)).await;
+            steerer.steer("stop, do the other thing");
+        });
+        let outcome = tokio::time::timeout(Duration::from_secs(5), rig.run("go", &control)).await.expect("the hang is cut off");
+        assert_eq!(outcome, Ok(Outcome::Done));
+        let requests = rig.provider.requests();
         assert_eq!(requests.len(), 2);
-        assert_eq!(requests[1].messages[2].text(), "one more thing\n\nand another");
+        let messages = &requests[1].messages;
+        assert_eq!(messages[1].text(), "Let me think about", "the text the user saw stays");
+        assert_eq!(messages[2].text(), "stop, do the other thing");
+        let events = rig.events.lock().unwrap().clone();
+        let interrupted = events.iter().position(|event| *event == Event::Interrupted).expect("interrupted");
+        let steered = events.iter().position(|event| *event == Event::Steered("stop, do the other thing".into())).expect("steered");
+        assert!(interrupted < steered);
+    }
+
+    #[tokio::test]
+    async fn a_message_sent_while_a_command_runs_moves_it_to_the_background() {
+        let folder = tempfile::tempdir().unwrap();
+        let control = Control::new();
+        let steps = vec![call(&[("a", "steers", json!({})), ("b", "forever", json!({}))]), say("Noted.")];
+        let forever = Arc::new(Forever::default());
+        let mut rig = rig(steps, vec![Arc::new(SteersIn(control.clone(), "hurry up")), forever.clone()]);
+        // A command in the foreground, as `bash` leaves one while it waits.
+        let tasks = rig.agent.tasks.clone();
+        let command = tasks.start(folder.path(), "sleep 60", "", crate::tasks::Kind::Shell, None).unwrap();
+        let control_for_tool = control.clone();
+        let outcome = tokio::time::timeout(Duration::from_secs(5), async {
+            // `forever` stands for a tool that waits on that command: it returns once its
+            // command moves, as `bash` does.
+            let command = command.clone();
+            let waiter = tokio::spawn(async move {
+                command.detached().await;
+                control_for_tool.stop();
+            });
+            let outcome = rig.run("go", &control).await;
+            waiter.abort();
+            outcome
+        })
+        .await
+        .expect("the steer did not wait for the command");
+        assert_eq!(command.info().background, Some(crate::tasks::Why::User), "moved, as ⌘B does");
+        assert!(command.info().status.running(), "and still running");
+        assert!(outcome.is_ok());
+        tasks.terminate_all();
     }
 
     #[tokio::test]
@@ -1599,10 +1741,9 @@ mod tests {
 
     #[tokio::test]
     async fn a_message_sent_as_the_run_would_end_keeps_it_going() {
-        let steps = vec![call(&[("a", "finish", json!({}))]), say("Revised.")];
-        let mut rig = rig(steps, vec![Arc::new(Finish)]);
         let control = Control::new();
-        control.steer("one change first");
+        let steps = vec![call(&[("s", "steers", json!({})), ("a", "finish", json!({}))]), say("Revised.")];
+        let mut rig = rig(steps, vec![Arc::new(SteersIn(control.clone(), "one change first")), Arc::new(Finish)]);
         assert_eq!(rig.run("go", &control).await, Ok(Outcome::Done));
         assert_eq!(rig.provider.requests().len(), 2);
     }
@@ -2005,6 +2146,7 @@ mod tests {
                 log: folder.path().join("gone1234.log"),
                 bytes: 0,
                 last_line: String::new(),
+                serving: None,
             };
             session.set_state(crate::tasks::TASKS_STATE, json!([info])).unwrap();
         }

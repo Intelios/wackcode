@@ -10,6 +10,8 @@
 //! Invariants:
 //! - Each task runs in its own process group, and the whole group is killed when the command's
 //!   own process exits, so nothing a finished command started outlives it.
+//! - A task's end never depends on SIGCHLD reaching tokio ([`reap`] polls too): the browser
+//!   engine resets that signal's handler when it starts.
 //! - A foreground task whose wait is dropped (the user stopped the run) is killed: see
 //!   [`Holding`]. Tasks already in the background are left alone.
 //! - Whether a task finished in the foreground or the background is decided under one lock, so
@@ -98,6 +100,8 @@ pub enum Why {
     TimedOut,
     /// The user moved it (⌘B).
     User,
+    /// A command waited on in the foreground started serving on this Mac: a server never ends.
+    Serving,
 }
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Serialize, Deserialize)]
@@ -149,6 +153,9 @@ pub struct TaskInfo {
     /// The last line it printed. Not saved.
     #[serde(skip)]
     pub last_line: String,
+    /// The address on this Mac it said it is serving at, once it has. Not saved.
+    #[serde(skip)]
+    pub serving: Option<String>,
 }
 
 impl TaskInfo {
@@ -187,6 +194,8 @@ struct Inner {
     /// Each notice, and whether it should wake the agent.
     inbox: Mutex<VecDeque<(Note, bool)>>,
     news: Notify,
+    /// Wakes `wait_for_tasks` when a command starts serving: a server never finishes.
+    served: Notify,
     observer: Mutex<Option<Observer>>,
     /// A scratch registry deletes its folder when it goes.
     scratch: bool,
@@ -221,6 +230,8 @@ pub struct Task {
     pgid: i32,
     live: Mutex<Live>,
     exited: watch::Sender<bool>,
+    /// Set once it prints an address it serves at.
+    heard: watch::Sender<bool>,
     /// The user moved the foreground command to the background.
     detached: Notify,
     file: Mutex<Option<File>>,
@@ -235,6 +246,9 @@ struct Live {
     /// A watch's whole lines not yet sent, and the line being written.
     lines: Vec<String>,
     partial: String,
+    /// The line being written, searched for a serving address until one is found.
+    scan: String,
+    serving: Option<String>,
 }
 
 impl Task {
@@ -252,7 +266,40 @@ impl Task {
             log: self.log.clone(),
             bytes: live.bytes,
             last_line: live.ring.last_line().to_string(),
+            serving: live.serving.clone(),
         }
+    }
+
+    /// The address on this Mac it said it is serving at, if it has.
+    pub fn serving(&self) -> Option<String> {
+        self.live.lock().unwrap_or_else(|e| e.into_inner()).serving.clone()
+    }
+
+    /// Resolves once it is serving on this Mac: it printed an address, or [`Task::probe`] found
+    /// one of its processes listening.
+    pub async fn served(&self) {
+        let mut heard = self.heard.subscribe();
+        let _ = heard.wait_for(|heard| *heard).await;
+    }
+
+    /// Asks the system whether any process the command started is listening for TCP
+    /// connections, and if so records it as serving there. A server whose banner is buffered
+    /// (Python's `http.server` into a pipe prints nothing until it exits) is found this way.
+    /// True when this call found it.
+    pub async fn probe(&self) -> bool {
+        if self.kind != Kind::Shell || self.pgid <= 0 || self.serving().is_some() || !self.info().status.running() {
+            return false;
+        }
+        let pgid = self.pgid;
+        let Ok(Some(port)) = tokio::task::spawn_blocking(move || listening_port(pgid)).await else { return false };
+        let mut live = self.live.lock().unwrap_or_else(|e| e.into_inner());
+        if live.serving.is_some() || !live.status.running() {
+            return false;
+        }
+        live.serving = Some(format!("http://localhost:{port}/"));
+        drop(live);
+        self.heard.send_replace(true);
+        true
     }
 
     pub fn elapsed(&self) -> Duration {
@@ -307,7 +354,8 @@ impl Task {
         true
     }
 
-    fn record(&self, bytes: &[u8], text: &str, watched: bool) {
+    /// Keeps what it printed. True when this is where it first said it is serving.
+    fn record(&self, bytes: &[u8], text: &str, watched: bool) -> bool {
         if let Ok(mut file) = self.file.lock()
             && let Some(handle) = file.as_mut()
         {
@@ -333,6 +381,24 @@ impl Task {
             }
             live.partial = rest.to_string();
         }
+        if self.kind != Kind::Shell || live.serving.is_some() {
+            return false;
+        }
+        live.scan.push_str(text);
+        let scan = std::mem::take(&mut live.scan);
+        let mut found = None;
+        let mut rest = scan.as_str();
+        while let Some(end) = rest.find(['\n', '\r']) {
+            found = found.or_else(|| serving_address(&rest[..end]));
+            rest = &rest[end + 1..];
+        }
+        live.scan = if rest.len() > 4_096 { String::new() } else { rest.to_string() };
+        let Some(address) = found else { return false };
+        live.serving = Some(address);
+        live.scan = String::new();
+        drop(live);
+        self.heard.send_replace(true);
+        true
     }
 
     /// A watch's lines not yet sent, at most `max`, and how many more there were.
@@ -381,6 +447,7 @@ impl Tasks {
                 tasks: Mutex::new(Vec::new()),
                 inbox: Mutex::new(VecDeque::new()),
                 news: Notify::new(),
+                served: Notify::new(),
                 observer: Mutex::new(None),
                 scratch,
                 replies: AtomicU64::new(0),
@@ -420,6 +487,22 @@ impl Tasks {
 
     pub fn running(&self) -> Vec<Arc<Task>> {
         self.all().into_iter().filter(|task| task.info().status.running()).collect()
+    }
+
+    /// Probes every running command not yet known to serve ([`Task::probe`]), and wakes a
+    /// `wait_for_tasks` if one is. True when one was found.
+    pub async fn probe(&self) -> bool {
+        let mut found = false;
+        for task in self.running() {
+            if task.probe().await {
+                found = true;
+            }
+        }
+        if found {
+            self.inner.served.notify_waiters();
+            self.signal(Signal::Changed);
+        }
+        found
     }
 
     // ---------------------------------------------------------------------------------------------
@@ -520,8 +603,11 @@ impl Tasks {
                 ring: Ring::default(),
                 lines: Vec::new(),
                 partial: String::new(),
+                scan: String::new(),
+                serving: None,
             }),
             exited,
+            heard: watch::channel(false).0,
             detached: Notify::new(),
             file: Mutex::new(Some(file)),
         });
@@ -544,8 +630,11 @@ impl Tasks {
                         break;
                     }
                     let text = decode(&mut carry, &buffer[..read]);
-                    task.record(&buffer[..read], &text, watched);
+                    let serving = task.record(&buffer[..read], &text, watched);
                     if let Some(inner) = tasks.upgrade() {
+                        if serving {
+                            inner.served.notify_waiters();
+                        }
                         Tasks { inner }.signal(Signal::Changed);
                     }
                 }
@@ -555,7 +644,7 @@ impl Tasks {
         let waiter = task.clone();
         let tasks = Arc::downgrade(&self.inner);
         tokio::spawn(async move {
-            let status = child.wait().await;
+            let status = reap(&mut child).await;
             // Whatever the command left running holds the output pipes open; killing the group
             // is what lets the readers finish.
             signal_group(waiter.pgid, libc::SIGKILL);
@@ -623,8 +712,11 @@ impl Tasks {
                 ring,
                 lines: Vec::new(),
                 partial: String::new(),
+                scan: String::new(),
+                serving: info.serving,
             }),
             exited,
+            heard: watch::channel(false).0,
             detached: Notify::new(),
             file: Mutex::new(None),
         });
@@ -821,6 +913,133 @@ fn decode(carry: &mut Vec<u8>, bytes: &[u8]) -> String {
     text
 }
 
+/// The address on this Mac a line of a command's output says it is serving at: a URL on
+/// localhost, `localhost:5173`, or "listening on port 3000". Terminal colours are ignored (Vite
+/// prints its port in bold). Any-address hosts read as localhost, which is how a browser opens
+/// them.
+pub fn serving_address(line: &str) -> Option<String> {
+    let line = plain(line);
+    let lower = line.to_ascii_lowercase();
+    const HOSTS: [&str; 6] = ["localhost", "127.0.0.1", "0.0.0.0", "[::1]", "[::]", "[0:0:0:0:0:0:0:1]"];
+    for scheme in ["http://", "https://"] {
+        let mut from = 0;
+        while let Some(at) = lower[from..].find(scheme).map(|at| at + from) {
+            let rest = &lower[at + scheme.len()..];
+            let end = rest.find(|c: char| c.is_whitespace() || matches!(c, '"' | '\'' | '<' | '>' | '`' | ',' | ')')).unwrap_or(rest.len());
+            let authority = rest[..end].split('/').next().unwrap_or_default();
+            if let Some(host) = HOSTS.iter().find(|host| authority == **host || authority.starts_with(&format!("{host}:"))) {
+                let port = authority[host.len()..].trim_start_matches(':');
+                let path = rest[authority.len()..end].trim_end_matches(['.', ';']);
+                let path = if path.is_empty() { "/" } else { path };
+                return Some(match port {
+                    "" => format!("{scheme}localhost{path}"),
+                    port => format!("{scheme}localhost:{port}{path}"),
+                });
+            }
+            from = at + scheme.len();
+        }
+    }
+    for host in HOSTS {
+        if let Some(at) = lower.find(&format!("{host}:")) {
+            let port: String = lower[at + host.len() + 1..].chars().take_while(char::is_ascii_digit).collect();
+            if (2..=5).contains(&port.len()) {
+                return Some(format!("http://localhost:{port}/"));
+            }
+        }
+    }
+    for verb in ["listening on port ", "listening at port ", "running on port ", "serving on port ", "started on port ", "server on port "] {
+        if let Some(at) = lower.find(verb) {
+            let port: String = lower[at + verb.len()..].chars().take_while(char::is_ascii_digit).collect();
+            if (2..=5).contains(&port.len()) {
+                return Some(format!("http://localhost:{port}/"));
+            }
+        }
+    }
+    None
+}
+
+/// Whether a command reads as one that starts a server (`npm run dev`, `vite`, `rails s`,
+/// `python -m http.server`): with a serving address heard and nothing printed since, a command
+/// waited on in the foreground is moved to the background rather than held until its timeout.
+pub fn looks_like_server(command: &str) -> bool {
+    const WORDS: [&str; 18] = [
+        "dev", "serve", "server", "start", "preview", "runserver", "uvicorn", "gunicorn", "hypercorn", "vite", "storybook",
+        "http-server", "live-server", "http.server", "webpack-dev-server", "nodemon", "s", "up",
+    ];
+    let lower = command.to_ascii_lowercase();
+    let words: Vec<&str> = lower.split(|c: char| c.is_whitespace() || matches!(c, ';' | '&' | '|' | '(' | ')' | '"' | '\'')).filter(|word| !word.is_empty()).collect();
+    words.iter().enumerate().any(|(at, word)| match *word {
+        // `rails s`, `docker compose up`: only after the program that gives them that meaning.
+        "s" => at > 0 && (words[at - 1] == "rails" || words[at - 1].ends_with("/rails")),
+        "up" => at > 0 && words[at - 1] == "compose",
+        word => WORDS.contains(&word) || word.ends_with(":dev") || word.ends_with(":serve") || word.ends_with(":start"),
+    }) || lower.contains("php -s ")
+}
+
+/// The lowest TCP port a process in the group listens on, from `lsof` (about 70 ms). Blocking.
+fn listening_port(pgid: i32) -> Option<u16> {
+    let output = std::process::Command::new("/usr/sbin/lsof")
+        .args(["-nP", "-a", "-g", &pgid.to_string(), "-iTCP", "-sTCP:LISTEN", "-Fn"])
+        .stdin(Stdio::null())
+        .stderr(Stdio::null())
+        .output()
+        .ok()?;
+    String::from_utf8_lossy(&output.stdout)
+        .lines()
+        .filter_map(|line| line.strip_prefix('n'))
+        .filter_map(|name| name.rsplit(':').next()?.parse::<u16>().ok())
+        .min()
+}
+
+/// A line without its terminal escapes (colours, cursor moves, titles).
+fn plain(line: &str) -> String {
+    let mut out = String::with_capacity(line.len());
+    let mut chars = line.chars().peekable();
+    while let Some(c) = chars.next() {
+        if c != '\u{1b}' {
+            out.push(c);
+            continue;
+        }
+        match chars.next() {
+            Some('[') => {
+                for c in chars.by_ref() {
+                    if ('\u{40}'..='\u{7e}').contains(&c) {
+                        break;
+                    }
+                }
+            }
+            Some(']') => {
+                while let Some(c) = chars.next() {
+                    if c == '\u{7}' || (c == '\u{1b}' && chars.next_if_eq(&'\\').is_some()) {
+                        break;
+                    }
+                }
+            }
+            _ => {}
+        }
+    }
+    out
+}
+
+/// How often [`reap`] asks whether the command has exited, in case no SIGCHLD reaches tokio.
+const REAP_POLL: Duration = Duration::from_millis(200);
+
+/// Waits for the command's process to exit. Tokio learns of an exit through its own SIGCHLD
+/// handler, and Chromium's startup resets SIGCHLD to its default action in this process; without
+/// the poll, a command that exited after the browser started would never end (each `bash` call
+/// waited out its timeout, `wait_for_tasks` never returned). `tests/sigchld.rs` guards it.
+async fn reap(child: &mut tokio::process::Child) -> std::io::Result<std::process::ExitStatus> {
+    loop {
+        tokio::select! {
+            status = child.wait() => return status,
+            () = tokio::time::sleep(REAP_POLL) => {}
+        }
+        if let Some(status) = child.try_wait()? {
+            return Ok(status);
+        }
+    }
+}
+
 fn signal_group(pgid: i32, signal: libc::c_int) {
     if pgid > 0 {
         // SAFETY: a plain system call. A negative id addresses the group; if every member has
@@ -891,6 +1110,60 @@ mod tests {
         assert!(ring.dropped);
         assert!(ring.text.len() <= 2 * RING_BYTES);
         assert!(ring.text.ends_with("éa"));
+    }
+
+    #[test]
+    fn a_serving_address_is_found_through_colours_and_phrasings() {
+        let vite = "  \u{1b}[32m➜\u{1b}[39m  \u{1b}[1mLocal\u{1b}[22m:   \u{1b}[36mhttp://localhost:\u{1b}[1m1420\u{1b}[22m/\u{1b}[39m";
+        assert_eq!(serving_address(vite).as_deref(), Some("http://localhost:1420/"));
+        assert_eq!(serving_address("Serving HTTP on 0.0.0.0 port 8000 (http://0.0.0.0:8000/) ...").as_deref(), Some("http://localhost:8000/"));
+        assert_eq!(serving_address("ready - started server on [::]:3000, url: http://localhost:3000").as_deref(), Some("http://localhost:3000/"));
+        assert_eq!(serving_address("Server listening on port 4000").as_deref(), Some("http://localhost:4000/"));
+        assert_eq!(serving_address("Listening at http://127.0.0.1:5000/app.").as_deref(), Some("http://localhost:5000/app"));
+        assert_eq!(serving_address("Fetched https://example.com/ in 3ms"), None);
+        assert_eq!(serving_address("compiled 42 modules"), None);
+    }
+
+    #[test]
+    fn server_commands_are_told_from_others() {
+        for command in ["bun run dev 2>&1", "npm run dev", "pnpm dev --port 3000", "python3 -m http.server 8000", "bin/rails s", "npm start", "yarn serve:dev", "docker compose up"] {
+            assert!(looks_like_server(command), "{command}");
+        }
+        for command in ["bun run check 2>&1 | tail -12", "git diff", "cargo test", "ls -s", "grep -rn localhost:3000 src"] {
+            assert!(!looks_like_server(command), "{command}");
+        }
+    }
+
+    #[tokio::test]
+    async fn a_task_that_prints_a_local_address_is_serving() {
+        let folder = tempfile::tempdir().unwrap();
+        let tasks = Tasks::new(folder.path());
+        let task = tasks.start(folder.path(), "printf 'ready\\n  Local: http://localhost:4321/\\n'; sleep 60", "", Kind::Shell, Some(Why::Asked)).unwrap();
+        tokio::time::timeout(Duration::from_secs(5), task.served()).await.expect("heard the address");
+        assert_eq!(task.serving().as_deref(), Some("http://localhost:4321/"));
+        tasks.terminate_all();
+    }
+
+    #[tokio::test]
+    async fn a_server_that_prints_nothing_is_found_listening() {
+        let folder = tempfile::tempdir().unwrap();
+        let tasks = Tasks::new(folder.path());
+        // Python buffers its banner into a pipe, so only the socket says it serves.
+        let task = tasks
+            .start(folder.path(), "exec python3 -c 'import socket,time; s=socket.socket(); s.bind((\"127.0.0.1\", 0)); s.listen(); time.sleep(60)'", "", Kind::Shell, Some(Why::Asked))
+            .unwrap();
+        let mut found = false;
+        for _ in 0..50 {
+            if tasks.probe().await {
+                found = true;
+                break;
+            }
+            tokio::time::sleep(Duration::from_millis(100)).await;
+        }
+        assert!(found, "found listening");
+        assert!(task.serving().unwrap().starts_with("http://localhost:"));
+        assert!(!tasks.probe().await, "found once");
+        tasks.terminate_all();
     }
 
     #[test]

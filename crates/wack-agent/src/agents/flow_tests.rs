@@ -460,9 +460,11 @@ async fn a_message_steers_a_working_agent_and_unknown_ids_are_explained() {
     assert!(results[2].1 && results[2].0.contains("There is no agent a9 in this chat. Its agents: a1."));
     gate.add_permits(1);
     parent.agents.get("a1").unwrap().ended().await;
-    // The message rode along with the gate's result.
-    let after_gate = child.requests()[1].messages.last().unwrap().clone();
-    assert!(format!("{after_gate:?}").contains("Also check the tests."));
+    // The message reached the working child: in the request it was making, or with the gate's
+    // result, whichever came first.
+    let requests = child.requests();
+    let delivered = requests.iter().position(|request| format!("{:?}", request.messages).contains("Also check the tests."));
+    assert!(delivered.is_some(), "{requests:?}");
 }
 
 #[tokio::test]

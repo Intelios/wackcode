@@ -93,6 +93,11 @@ impl Printer {
                 Self::break_line(&mut state);
                 println!("{}", dim(&format!("Retrying in {}s (try {}): {}", notice.wait.as_secs(), notice.attempt, notice.reason)));
             }
+            Event::Interrupted => {
+                state.thinking = false;
+                Self::break_line(&mut state);
+                println!("{}", dim("Interrupted for your message."));
+            }
             Event::Steered(text) => {
                 Self::break_line(&mut state);
                 println!("{}", paint("36", &format!("→ you: {text}")));

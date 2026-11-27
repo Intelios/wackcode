@@ -43,9 +43,11 @@ pub const NO_SUCH_TASK: &str =
     "That task is no longer available in this chat: it may have ended long ago, or WackCode restarted. Do not assume it succeeded.";
 
 /// What `bash` returns for a command that carries on in the background. Every sentence answers
-/// a question the model would otherwise answer by polling.
+/// a question the model would otherwise answer by polling: what it printed so far, where it is
+/// serving, and that a server never finishes.
 pub fn moved_result(task: &Task, why: Why, timeout: Duration) -> String {
     let id = &task.id;
+    let serving = task.serving();
     let opening = match why {
         Why::Asked => format!("Started in the background (ID: {id})."),
         Why::TimedOut => format!(
@@ -53,14 +55,29 @@ pub fn moved_result(task: &Task, why: Why, timeout: Duration) -> String {
             timeout.as_secs()
         ),
         Why::User => format!("The user moved this command to the background (ID: {id})."),
+        Why::Serving => format!("It started serving and kept running, so it was moved to the background (ID: {id})."),
     };
-    let mut lines = vec![
-        opening,
-        format!("Output is being written to: {}", task.log().display()),
-        "You will be notified when it finishes — do not poll that file, sleep, or run commands to check on it.".to_string(),
-        format!("It is running now: do not start a second copy. If it is no longer needed, stop it with {STOP_TASK}."),
-        "Read the file only if the user asks for progress, or if you need a line it prints before you can go on, such as a server's ready line or port.".to_string(),
-    ];
+    let mut lines = vec![opening];
+    if let Some(address) = &serving {
+        lines.push(format!(
+            "It is serving at {address}. A server keeps running and never finishes: do not wait for it. Open or test the address now; stop it with {STOP_TASK} once it is no longer needed."
+        ));
+    }
+    let output = task.output();
+    let printed: Vec<&str> = output.lines().filter(|line| !line.trim().is_empty()).collect();
+    if !printed.is_empty() {
+        let shown: Vec<String> = printed[printed.len().saturating_sub(SO_FAR_LINES)..].iter().map(|line| line.to_string()).collect();
+        let more = if printed.len() > SO_FAR_LINES { " (its last lines)" } else { "" };
+        lines.push(format!("So far it printed{more}:\n```\n{}\n```", quoted(&shown, SO_FAR_LINES)));
+    }
+    lines.push(format!("Output is being written to: {}", task.log().display()));
+    if serving.is_none() {
+        lines.push("You will be notified when it finishes — do not poll that file, sleep, or run commands to check on it.".to_string());
+    }
+    lines.push(format!("It is running now: do not start a second copy. If it is no longer needed, stop it with {STOP_TASK}."));
+    if serving.is_none() {
+        lines.push("Read the file only if the user asks for progress, or if you need a line it prints before you can go on, such as a server's ready line or port.".to_string());
+    }
     if why != Why::Asked && task.bytes() == 0 {
         lines.push(
             "No output had been read from it when it was moved. A program that buffers its output, or a pipe into one such as tail, can keep the output file empty until the command finishes."
@@ -69,6 +86,9 @@ pub fn moved_result(task: &Task, why: Why, timeout: Duration) -> String {
     }
     lines.join("\n")
 }
+
+/// Lines of output quoted when a command moves to the background.
+const SO_FAR_LINES: usize = 15;
 
 fn parse<T: serde::de::DeserializeOwned>(input: Value) -> Result<T, String> {
     serde_json::from_value(input).map_err(|error| format!("The tool's input is wrong: {error}."))
@@ -129,10 +149,15 @@ impl Tool for WaitForTasks {
         ToolSpec {
             name: WAIT_FOR_TASKS.into(),
             description: format!(
-                "Pauses until one of your background commands, watches or agents reports something (a command finishes or prints watched lines, an agent finishes), then returns what arrived and what is still running. Call it only when you have no other work and cannot go on without the result; otherwise carry on, or end your turn: you are told when they report, even after your turn has ended. It waits at most {} seconds, and only once per reply.",
+                "Pauses until one of your background commands, watches or agents reports something (a command finishes or prints watched lines, an agent finishes, a server starts serving), then returns what arrived and what is still running. Call it only when you have no other work and cannot go on without the result; otherwise carry on, or end your turn: you are told when they report, even after your turn has ended. A server that is serving never finishes, so it is never waited for. It waits at most {} seconds, and only once per reply.",
                 WAIT_LIMIT.as_secs()
             ),
-            input_schema: json!({ "type": "object", "properties": {} }),
+            input_schema: json!({
+                "type": "object",
+                "properties": {
+                    "ids": { "type": "array", "items": { "type": "string" }, "description": "Wait only for these tasks or agents. Name a server here only if it must be waited for even though it is serving." }
+                }
+            }),
             loading: Loading::Always,
             parallel_safe: false,
             hint: "pause until a background command or agent reports, when there is nothing else to do".into(),
@@ -142,10 +167,40 @@ impl Tool for WaitForTasks {
         }
     }
 
-    async fn run(&self, _input: Value, context: &ToolContext<'_>) -> Result<ToolOutput, String> {
+    async fn run(&self, input: Value, context: &ToolContext<'_>) -> Result<ToolOutput, String> {
+        let input: WaitInput = parse(input)?;
+        let named: Vec<String> = input.ids.iter().map(|id| id.trim().to_string()).filter(|id| !id.is_empty()).collect();
         let (tasks, agents) = (&context.tasks, &context.agents);
+        // A server whose banner is buffered is found by its listening socket.
+        tasks.probe().await;
         let agents_working = || agents.active().into_iter().filter(|info| info.background).collect::<Vec<_>>();
-        if tasks.running().is_empty() && !tasks.has_news() && agents_working().is_empty() && !agents.has_news() {
+        // A server that is serving is never waited for unless it is named: it never finishes, and
+        // a wait on one only ever ran out the clock.
+        let awaited = || -> Vec<Arc<Task>> {
+            tasks
+                .running()
+                .into_iter()
+                .filter(|task| if named.is_empty() { task.serving().is_none() } else { named.contains(&task.id) })
+                .collect()
+        };
+        let servers: Vec<Arc<Task>> = tasks.running().into_iter().filter(|task| task.serving().is_some() && !named.contains(&task.id)).collect();
+        let serving_lines = |servers: &[Arc<Task>]| -> Vec<String> {
+            servers
+                .iter()
+                .map(|task| format!("- {} (`{}`) is serving at {} and keeps running", task.id, first_line(&task.command), task.serving().unwrap_or_default()))
+                .collect()
+        };
+        if awaited().is_empty() && !tasks.has_news() && agents_working().is_empty() && !agents.has_news() {
+            if !servers.is_empty() {
+                return Ok(format!(
+                    "Nothing to wait for. A server never finishes, and these are already serving:\n{}\nCarry on with them: open or test the address now.",
+                    serving_lines(&servers).join("\n")
+                )
+                .into());
+            }
+            if !named.is_empty() {
+                return Err(format!("None of {} is running in the background.", named.join(", ")));
+            }
             return Err("Nothing is running in the background, so there is nothing to wait for.".to_string());
         }
         let reply = tasks.inner.replies.load(Ordering::SeqCst);
@@ -156,10 +211,15 @@ impl Tool for WaitForTasks {
             );
         }
         let started = Instant::now();
+        let was_serving: Vec<String> = tasks.running().iter().filter(|task| task.serving().is_some()).map(|task| task.id.clone()).collect();
         if !tasks.has_news() && !agents.has_news() {
+            let served = tasks.inner.served.notified();
             tokio::select! {
                 () = tasks.news() => {}
                 () = agents.news() => {}
+                () = served => {}
+                () = probing(tasks) => {}
+                () = context.user.steered() => return Ok(still_running_after_message(tasks, agents).into()),
                 () = tokio::time::sleep(WAIT_LIMIT) => {}
                 () = context.cancel.cancelled() => return Err("Stopped by the user while waiting. The tasks are still running.".to_string()),
             }
@@ -167,12 +227,22 @@ impl Tool for WaitForTasks {
         // An agent's report is handed over here rather than as a note: it leaves the inbox once.
         let mut news = tasks.take_news();
         news.extend(agents.take_news());
+        let now_serving: Vec<Arc<Task>> =
+            tasks.running().into_iter().filter(|task| task.serving().is_some() && !was_serving.contains(&task.id)).collect();
         let mut parts = Vec::new();
-        if news.is_empty() {
+        if news.is_empty() && now_serving.is_empty() {
             parts.push(format!("Nothing reported in {}.", elapsed(started.elapsed())));
         } else {
             parts.push("While you waited:".to_string());
             parts.extend(news.into_iter().map(|note| note.text));
+            for task in &now_serving {
+                parts.push(format!(
+                    "{} (`{}`) started serving at {}. A server keeps running and never finishes: carry on with it now.",
+                    task.id,
+                    first_line(&task.command),
+                    task.serving().unwrap_or_default()
+                ));
+            }
         }
         let running = tasks.running();
         let working = agents_working();
@@ -182,8 +252,12 @@ impl Tool for WaitForTasks {
             let mut list = vec!["Still running:".to_string()];
             for task in running {
                 let info = task.info();
-                let last = if info.last_line.trim().is_empty() { String::new() } else { format!(" — last line: {}", info.last_line.trim()) };
-                list.push(format!("- {} (`{}`), for {}{last}", info.id, first_line(&info.command), elapsed(task.elapsed())));
+                let state = match &info.serving {
+                    Some(address) => format!(" — serving at {address}"),
+                    None if info.last_line.trim().is_empty() => String::new(),
+                    None => format!(" — last line: {}", info.last_line.trim()),
+                };
+                list.push(format!("- {} (`{}`), for {}{state}", info.id, first_line(&info.command), elapsed(task.elapsed())));
             }
             for info in working {
                 let since = agents.get(&info.id).map(|child| elapsed(child.elapsed())).unwrap_or_default();
@@ -193,6 +267,38 @@ impl Tool for WaitForTasks {
         }
         Ok(parts.join("\n\n").into())
     }
+}
+
+/// Probes the running commands every second for one that started listening; never resolves on
+/// its own (a find wakes the wait through `served`).
+async fn probing(tasks: &Tasks) {
+    loop {
+        tokio::time::sleep(Duration::from_secs(1)).await;
+        tasks.probe().await;
+    }
+}
+
+/// What `wait_for_tasks` returns when the user sends a message while it waits.
+fn still_running_after_message(tasks: &Tasks, agents: &crate::agents::Agents) -> String {
+    let mut text = "The user sent a message while you waited; it follows these results. Nothing has been stopped: you are still told when each task reports.".to_string();
+    let running = tasks.running();
+    let working: Vec<_> = agents.active().into_iter().filter(|info| info.background).collect();
+    if !running.is_empty() || !working.is_empty() {
+        text.push_str("\n\nStill running:");
+        for task in running {
+            text.push_str(&format!("\n- {} (`{}`), for {}", task.id, first_line(&task.command), elapsed(task.elapsed())));
+        }
+        for info in working {
+            text.push_str(&format!("\n- agent {} ({} · {})", info.id, info.role, info.description));
+        }
+    }
+    text
+}
+
+#[derive(serde::Deserialize, Default)]
+struct WaitInput {
+    #[serde(default)]
+    ids: Vec<String>,
 }
 
 // -------------------------------------------------------------------------------------------------
@@ -412,6 +518,27 @@ mod tests {
         tasks.inner.replies.fetch_add(1, Ordering::SeqCst);
         tasks.tell(Note { tag: "task:x:end".into(), text: "news".into() });
         assert!(WaitForTasks.run(json!({}), &context).await.unwrap().text.contains("news"));
+        tasks.terminate_all();
+    }
+
+    #[tokio::test]
+    async fn a_server_that_is_serving_is_never_waited_for() {
+        let folder = tempfile::tempdir().unwrap();
+        let tasks = Tasks::new(folder.path());
+        let context = context(&folder, &tasks);
+        let server = tasks.start(folder.path(), "sleep 0.3; echo '  Local: http://localhost:1420/'; sleep 60", "", Kind::Shell, Some(Why::Asked)).unwrap();
+        // Still starting: the wait ends when it starts serving, not after the full limit.
+        let started = Instant::now();
+        let woke = tokio::time::timeout(Duration::from_secs(10), WaitForTasks.run(json!({}), &context)).await.expect("woke on serving").unwrap().text;
+        assert!(started.elapsed() < Duration::from_secs(5));
+        assert!(woke.contains("started serving at http://localhost:1420/"), "{woke}");
+        // Serving: nothing to wait for, at once, even in a later reply.
+        tasks.inner.replies.fetch_add(1, Ordering::SeqCst);
+        let at_once = tokio::time::timeout(Duration::from_secs(2), WaitForTasks.run(json!({}), &context)).await.expect("no wait").unwrap().text;
+        assert!(at_once.starts_with("Nothing to wait for.") && at_once.contains(&server.id), "{at_once}");
+        let moved = moved_result(&server, Why::Asked, Duration::ZERO);
+        assert!(moved.contains("serving at http://localhost:1420/") && moved.contains("never finishes"), "{moved}");
+        assert!(moved.contains("So far it printed:") && !moved.contains("You will be notified"), "{moved}");
         tasks.terminate_all();
     }
 

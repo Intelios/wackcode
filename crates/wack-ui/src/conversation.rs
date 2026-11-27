@@ -292,6 +292,14 @@ impl Turn {
         }
     }
 
+    /// The reply being written was cut off for a steered message: a tool call it had only begun
+    /// never ran and is not in the conversation, so it goes; thinking stops being live.
+    fn interrupt(&mut self) {
+        self.steps.retain(|step| !matches!(step, Step::Tool(tool) if tool.input.is_none() && tool.result.is_none()));
+        self.thinking_open = false;
+        self.retrying = None;
+    }
+
     fn push_result(&mut self, id: &str, text: &str, is_error: bool, pictures: Vec<Picture>) {
         self.thinking_open = false;
         if let Some(tool) = self.tool(id) {
@@ -691,6 +699,7 @@ impl Conversation {
             }
             // Never settles the reply: a notice at the end of a run must not fold it away.
             Event::Notice(text) => turn.notices.push(text.clone()),
+            Event::Interrupted => turn.interrupt(),
             Event::Steered(_) | Event::Question { .. } | Event::Noted { .. } => {}
         }
     }

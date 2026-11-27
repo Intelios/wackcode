@@ -117,6 +117,12 @@ impl<'a> User<'a> {
         self.control.interactive()
     }
 
+    /// Resolves once the user has sent a message while the run works: a tool that only waits
+    /// (`wait_for_tasks`) returns, so the message reaches the model.
+    pub async fn steered(&self) {
+        self.control.steering().await
+    }
+
     /// Shows the user questions and waits for the answer. Stopping the run drops the wait, and
     /// the question with it.
     pub async fn ask(&self, questions: Vec<Question>, wrap_up: bool) -> Answer {

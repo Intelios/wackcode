@@ -300,6 +300,31 @@ pub fn load_library() {
     }
 }
 
+/// SIGCHLD's handler from before Chromium started. Chromium's startup (`SetupSignalHandlers`)
+/// resets SIGCHLD to its default action, which silently removes tokio's handler: from then on no
+/// `tokio::process` child (an agent's command, an MCP server) was ever seen to exit. Restoring the
+/// earlier handler is safe for Chromium, which watches its own helpers through kqueue, not
+/// SIGCHLD; tokio reaps only its own children, by pid.
+struct SigchldHandler(libc::sigaction);
+
+impl SigchldHandler {
+    fn save() -> Self {
+        // SAFETY: reads the current action into a zeroed struct; no handler changes.
+        unsafe {
+            let mut action: libc::sigaction = std::mem::zeroed();
+            libc::sigaction(libc::SIGCHLD, std::ptr::null(), &mut action);
+            Self(action)
+        }
+    }
+
+    fn restore(self) {
+        // SAFETY: puts back an action this process had installed itself.
+        unsafe {
+            libc::sigaction(libc::SIGCHLD, &self.0, std::ptr::null_mut());
+        }
+    }
+}
+
 /// Starts CEF. Main thread only; at most once per process.
 fn start() -> Result<(), String> {
     let config = CONFIG
@@ -328,13 +353,15 @@ fn start() -> Result<(), String> {
     };
     let args = cef::args::Args::new();
     let mut app = WackApp::new();
-    if cef::initialize(
+    let sigchld = SigchldHandler::save();
+    let started = cef::initialize(
         Some(args.as_main_args()),
         Some(&settings),
         Some(&mut app),
         std::ptr::null_mut(),
-    ) != 1
-    {
+    );
+    sigchld.restore();
+    if started != 1 {
         return Err("The browser engine failed to start. Its log is in the app's data folder (browser/browser.log).".into());
     }
     RUNNING.store(true, Ordering::Release);

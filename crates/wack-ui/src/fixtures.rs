@@ -362,6 +362,7 @@ pub fn tasks() -> wack_core::tasks::Tasks {
         log: format!("/tmp/{id}.log").into(),
         bytes: 0,
         last_line: String::new(),
+        serving: None,
     };
     tasks.insert_fixture(
         info("p8q2w7z0", "npm test", "Run the test suite", Kind::Shell, 260_000, Some(168_000), Status::Failed { code: Some(1), signal: None }),

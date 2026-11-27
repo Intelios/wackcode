@@ -14,7 +14,9 @@
 //! running, the project's changed files (opening Changes), and ⌘B while the agent waits on
 //! something it could leave running. The todo list and the commands open as popovers rising from
 //! their segment, over the transcript, so opening one never moves the page; in a chat the tab's
-//! room is always kept, so a run starting never moves it either. Messages written while the agent
+//! room is always kept, so a run starting never moves it either. It never runs past the card: short
+//! of room it gives up words, then whole segments, in the order `Fit::fitting` gives (measured
+//! against the card's width as last drawn). Messages written while the agent
 //! works wait above the card as faint bubbles, at the foot of the chat, with Steer now, Edit and
 //! Remove. An open question comes first: it stacks above the card, and while it is open the tab
 //! only reports.
@@ -541,12 +543,39 @@ impl RenderOnce for Composer {
         // The tab sits on the card's top edge, drawn over the edge so the two read as one piece.
         // In a chat its room is kept even while it is empty, so it coming and going never moves
         // the transcript.
-        let tab = tab(&data, running_tasks, asking, viewport, &theme);
+        // The card's width as last drawn: the tab gives up words to fit inside it.
+        let card_width = window.use_keyed_state("composer-card-width", cx, |_, _| 0f32);
+        let room = Some(*card_width.read(cx) - 2. * TAB_INSET).filter(|room| *room > 0.);
+        let measure = {
+            let text_system = window.text_system().clone();
+            let style = Type::Small.style();
+            move |text: &str| {
+                let run = gpui::TextRun { len: text.len(), font: gpui::font(style.family), color: theme.text, background_color: None, underline: None, strikethrough: None };
+                f32::from(text_system.shape_line(SharedString::from(text.to_string()), px(style.size), &[run], None).width())
+            }
+        };
+        let tab = tab(&data, running_tasks, asking, viewport, room, &measure, &theme);
         let card = div()
             .relative()
             .when(tab.is_some() || !data.roomy, |card| card.mt(px(TAB_HEIGHT - 1.)))
             .when_some(moment, |card, moment| card.top(px(-moment.lift)))
             .child(card)
+            .child(
+                gpui::canvas(
+                    move |bounds, _, cx| {
+                        let width = f32::from(bounds.size.width);
+                        if (*card_width.read(cx) - width).abs() > 0.5 {
+                            card_width.update(cx, |shown, cx| {
+                                *shown = width;
+                                cx.notify();
+                            });
+                        }
+                    },
+                    |_, _, _, _| {},
+                )
+                .absolute()
+                .size_full(),
+            )
             .children(moment.map(|moment| send_glint(moment, &theme)))
             .children(tab.map(|tab| div().absolute().left(px(TAB_INSET)).top(px(1. - TAB_HEIGHT)).child(tab)))
             // The `/` menu rises from the card's top edge, over whatever is above it.
@@ -611,11 +640,135 @@ fn provider_mark(letter: SharedString, theme: &Theme) -> impl IntoElement {
         .child(letter)
 }
 
+/// How much of each segment the tab shows: everything while there is room, then less, in the
+/// order [`Fit::fitting`] gives things up, so the tab never runs past the card.
+#[derive(Clone, Copy, Debug, PartialEq)]
+struct Fit {
+    /// The longest the todo in hand runs; 0 leaves it out.
+    todo_words: f32,
+    /// "⌘B Background", or "⌘B" alone.
+    background_words: bool,
+    /// "2 working · 1 queued", or "2 working" alone.
+    crew_all: bool,
+    /// "Working for 8s", or "8s" alone.
+    activity_words: bool,
+    /// The changed files' lines added and removed.
+    change_lines: bool,
+    background: bool,
+    crew: bool,
+    changes: bool,
+}
+
+impl Fit {
+    const FULL: Fit = Fit { todo_words: TODO_WORDS, background_words: true, change_lines: true, activity_words: true, crew_all: true, background: true, crew: true, changes: true };
+
+    /// The fullest tab no wider than `room`, given how wide a fit draws (`width`): the todo in
+    /// hand shortens first, then ⌘B's word, the crew's queue, "Working for", the changed lines,
+    /// and last whole segments (⌘B, the crew, the changes). The time, the todo count and the
+    /// running commands always stay.
+    fn fitting(room: Option<f32>, width: impl Fn(Fit) -> f32) -> Fit {
+        let mut fit = Fit::FULL;
+        let Some(room) = room else {
+            return fit;
+        };
+        if width(fit) <= room {
+            return fit;
+        }
+        // The todo's words give up exactly what is over, while enough of them stays to read.
+        let over = width(fit) - room;
+        let without = width(Fit { todo_words: 0., ..fit });
+        // What the words draw, less the gap before them.
+        let drawn = width(fit) - without - TAB_GAP;
+        if drawn - over >= TODO_WORDS_LEAST {
+            return Fit { todo_words: drawn - over, ..fit };
+        }
+        fit.todo_words = 0.;
+        let steps: [fn(&mut Fit); 7] = [
+            |fit| fit.background_words = false,
+            |fit| fit.crew_all = false,
+            |fit| fit.activity_words = false,
+            |fit| fit.change_lines = false,
+            |fit| fit.background = false,
+            |fit| fit.crew = false,
+            |fit| fit.changes = false,
+        ];
+        for step in steps {
+            if width(fit) <= room {
+                break;
+            }
+            step(&mut fit);
+        }
+        fit
+    }
+}
+
 /// The tab on the card's top edge: a segment for each thing worth saying (see the module's
-/// header), joined by hairlines. `None` when there is nothing to say.
-fn tab(data: &ComposerData, running: usize, asking: bool, viewport: gpui::Size<Pixels>, theme: &Theme) -> Option<gpui::AnyElement> {
+/// header), joined by hairlines, no wider than `room` (the card's width less the tab's insets,
+/// once known; `measure` gives a small text's width). `None` when there is nothing to say.
+#[allow(clippy::too_many_arguments)]
+fn tab(data: &ComposerData, running: usize, asking: bool, viewport: gpui::Size<Pixels>, room: Option<f32>, measure: &dyn Fn(&str) -> f32, theme: &Theme) -> Option<gpui::AnyElement> {
     let opens = !asking;
-    let segment = |id: &'static str| div().id(id).flex_none().h_full().px(px(8.)).rounded(px(8.)).flex().items_center().gap(px(6.));
+    let activity_time = |time: &SharedString, fit: Fit| -> SharedString {
+        match time.strip_prefix("Working for ") {
+            Some(short) if !fit.activity_words => short.to_string().into(),
+            _ => time.clone(),
+        }
+    };
+    let crew_words = |crew: &CrewAtWork, fit: Fit| -> String {
+        let words = crew.words();
+        if fit.crew_all { words } else { words.split(" · ").next().unwrap_or_default().to_string() }
+    };
+    let todo_task = data.todos.as_ref().and_then(|todos| crate::todo_panel::in_hand(&todos.view));
+    let changes = data.changes.filter(|changes| changes.files > 0);
+    // What each segment draws, by the sizes below: its padding, icons, the gaps between, words.
+    const PAD: f32 = 16.;
+    const GAP: f32 = TAB_GAP;
+    const RULE: f32 = 5.;
+    let width = |fit: Fit| -> f32 {
+        let mut widths: Vec<f32> = Vec::new();
+        if let Some(time) = &data.activity {
+            widths.push(PAD + 13. + GAP + measure(&activity_time(time, fit)));
+        }
+        if let Some(crew) = data.crew_at_work.filter(|_| fit.crew) {
+            widths.push(PAD + 12. + GAP + measure(&crew_words(&crew, fit)));
+        }
+        if let Some(todos) = &data.todos {
+            let mut todo = PAD + 12. + GAP + measure(&format!("{}/{}", todos.view.done, todos.view.total));
+            if let Some(task) = &todo_task
+                && fit.todo_words > 0.
+            {
+                todo += GAP + measure(task).min(fit.todo_words);
+            }
+            if opens {
+                todo += GAP + 10.;
+            }
+            widths.push(todo);
+        }
+        if running > 0 {
+            widths.push(PAD + 12. + GAP + measure(&format!("{running} running")) + if opens { GAP + 10. } else { 0. });
+        }
+        if let Some(changes) = changes.filter(|_| fit.changes) {
+            let noun = if changes.files == 1 { "file" } else { "files" };
+            let mut change = PAD + 12. + GAP + measure(&format!("{} {noun}", changes.files));
+            if fit.change_lines {
+                if changes.added > 0 {
+                    change += GAP + measure(&format!("+{}", changes.added));
+                }
+                if changes.removed > 0 {
+                    change += GAP + measure(&format!("−{}", changes.removed));
+                }
+            }
+            widths.push(change);
+        }
+        if data.working && data.foreground && fit.background {
+            widths.push(PAD + measure("⌘B") + if fit.background_words { GAP + measure("Background") } else { 0. });
+        }
+        // The tab's own padding and edges, and a hairline between segments.
+        let rules = widths.len().saturating_sub(1) as f32 * RULE;
+        widths.iter().sum::<f32>() + rules + 10.
+    };
+    let fit = Fit::fitting(room, width);
+    let segment = |id: &'static str| div().id(id).flex_none().h_full().px(px(8.)).rounded(px(8.)).flex().items_center().gap(px(TAB_GAP));
     let words = |text: SharedString, colour: Hsla| div().flex_none().typography(Type::Small).text_color(colour).child(text);
     // Closed it points up, where the list rises; open, down, where it goes back.
     let chevron = |open: bool| {
@@ -629,12 +782,12 @@ fn tab(data: &ComposerData, running: usize, asking: bool, viewport: gpui::Size<P
         segments.push(
             segment("activity")
                 .child(crate::motion::paddling(div().flex_none().child(Icon::Duck.view(px(13.), theme.accent_text))))
-                .child(words(time, theme.text_soft))
+                .child(words(activity_time(&time, fit), theme.text_soft))
                 .tag("activity")
                 .into_any_element(),
         );
     }
-    if let Some(crew) = data.crew_at_work {
+    if let Some(crew) = data.crew_at_work.filter(|_| fit.crew) {
         let duck = Icon::Duck.view(px(12.), if crew.working > 0 { theme.accent_text } else { theme.text_faint });
         segments.push(
             segment("crew-pill")
@@ -645,7 +798,7 @@ fn tab(data: &ComposerData, running: usize, asking: bool, viewport: gpui::Size<P
                 .on_click(dispatch(crate::actions::ShowTeam))
                 // One duck paddles at a time: the lead's while it works, else the crew's.
                 .child(if lead_idle && crew.working > 0 { crate::motion::paddling(div().child(duck)).into_any_element() } else { duck.into_any_element() })
-                .child(words(crew.words().into(), theme.text_soft))
+                .child(words(crew_words(&crew, fit).into(), theme.text_soft))
                 .tag("crew-pill")
                 .into_any_element(),
         );
@@ -672,7 +825,9 @@ fn tab(data: &ComposerData, running: usize, asking: bool, viewport: gpui::Size<P
             .tooltip(tip("The agent's todo list"))
             .child(mark)
             .child(words(format!("{}/{}", view.done, view.total).into(), theme.text_soft))
-            .children(crate::todo_panel::in_hand(view).map(|task| div().flex_none().max_w(px(TODO_WORDS)).truncate().typography(Type::Small).text_color(theme.text_dim).child(task)))
+            .when(fit.todo_words > 0., |segment| {
+                segment.children(todo_task.clone().map(|task| div().flex_none().max_w(px(fit.todo_words)).truncate().typography(Type::Small).text_color(theme.text_dim).child(task)))
+            })
             .when(opens, |segment| segment.child(chevron(open)))
             .tag("todos-pill");
         let list = open.then(|| todos_popover(todos, theme));
@@ -691,7 +846,7 @@ fn tab(data: &ComposerData, running: usize, asking: bool, viewport: gpui::Size<P
         let list = open.then(|| tasks_popover(&data.tasks, running, theme));
         segments.push(rising(button, "tasks", Box::new(ToggleTasks), list, viewport));
     }
-    if let Some(changes) = data.changes.filter(|changes| changes.files > 0) {
+    if let Some(changes) = changes.filter(|_| fit.changes) {
         let noun = if changes.files == 1 { "file" } else { "files" };
         segments.push(
             segment("changes-pill")
@@ -701,13 +856,13 @@ fn tab(data: &ComposerData, running: usize, asking: bool, viewport: gpui::Size<P
                 .on_click(dispatch(crate::actions::ToggleChanges))
                 .child(Icon::Branch.view(px(12.), theme.accent_text))
                 .child(words(format!("{} {noun}", changes.files).into(), theme.text_soft))
-                .when(changes.added > 0, |segment| segment.child(words(format!("+{}", changes.added).into(), theme.diff_added)))
-                .when(changes.removed > 0, |segment| segment.child(words(format!("−{}", changes.removed).into(), theme.diff_removed)))
+                .when(fit.change_lines && changes.added > 0, |segment| segment.child(words(format!("+{}", changes.added).into(), theme.diff_added)))
+                .when(fit.change_lines && changes.removed > 0, |segment| segment.child(words(format!("−{}", changes.removed).into(), theme.diff_removed)))
                 .tag("changes-pill")
                 .into_any_element(),
         );
     }
-    if data.working && data.foreground {
+    if data.working && data.foreground && fit.background {
         segments.push(
             segment("background-pill")
                 .cursor_pointer()
@@ -715,7 +870,7 @@ fn tab(data: &ComposerData, running: usize, asking: bool, viewport: gpui::Size<P
                 .tooltip(tip("Keep it working in the background and let the agent carry on"))
                 .on_click(dispatch(MoveToBackground))
                 .child(words("⌘B".into(), theme.text_faint))
-                .child(words("Background".into(), theme.text_dim))
+                .when(fit.background_words, |segment| segment.child(words("Background".into(), theme.text_dim)))
                 .tag("background-pill")
                 .into_any_element(),
         );
@@ -746,8 +901,12 @@ fn tab(data: &ComposerData, running: usize, asking: bool, viewport: gpui::Size<P
     Some(tab.tag("composer-tab").into_any_element())
 }
 
-/// The longest a todo's words run on the tab before they truncate.
+/// The longest a todo's words run on the tab before they truncate, and the least worth showing
+/// when the tab is short of room.
 const TODO_WORDS: f32 = 220.;
+const TODO_WORDS_LEAST: f32 = 60.;
+/// The space between the things in a segment of the tab.
+const TAB_GAP: f32 = 6.;
 
 /// A segment of the tab with its list, when open, rising from it over everything; a click
 /// anywhere else closes the list (`close`), as the pickers' menus close.
@@ -2542,6 +2701,35 @@ pub fn keyframes(keys: &[(f32, f32)], t: f32) -> f32 {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    /// A tab whose todo in hand draws 200 points, beside 400 of everything else at its fullest;
+    /// each step after the todo's words takes 40 off.
+    fn drawn(fit: Fit) -> f32 {
+        let mut width = 400. + if fit.todo_words > 0. { TAB_GAP + fit.todo_words.min(200.) } else { 0. };
+        for given_up in [!fit.background_words, !fit.crew_all, !fit.activity_words, !fit.change_lines, !fit.background, !fit.crew, !fit.changes] {
+            if given_up {
+                width -= 40.;
+            }
+        }
+        width
+    }
+
+    #[test]
+    fn the_tab_gives_up_words_in_order_until_it_fits_the_card() {
+        assert_eq!(Fit::fitting(None, drawn), Fit::FULL, "before the card is measured");
+        assert_eq!(Fit::fitting(Some(700.), drawn), Fit::FULL);
+        // The todo's words shorten to what is left.
+        let fit = Fit::fitting(Some(520.), drawn);
+        assert_eq!(fit, Fit { todo_words: 520. - 400. - TAB_GAP, ..Fit::FULL });
+        // Too little left for them to read: they go, then ⌘B's word, then the crew's queue.
+        let fit = Fit::fitting(Some(330.), drawn);
+        assert_eq!(fit.todo_words, 0.);
+        assert!(!fit.background_words && !fit.crew_all && fit.activity_words && fit.change_lines);
+        assert!(drawn(fit) <= 330.);
+        // However narrow, the time, the todo count and the commands stay.
+        let fit = Fit::fitting(Some(10.), drawn);
+        assert!(!fit.background && !fit.crew && !fit.changes);
+    }
 
     #[test]
     fn the_slider_finds_the_nearest_stop() {

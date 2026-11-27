@@ -604,10 +604,12 @@ pub struct StepPicture {
     pub by: i32,
 }
 
-/// The lightbox between fitting the window and the picture's own size.
+/// The lightbox's zoom: in a step (1), out a step (-1) or back to fitting the window (0).
 #[derive(Clone, Debug, PartialEq, Action)]
 #[action(namespace = wackcode, no_json)]
-pub struct ZoomPicture;
+pub struct ZoomPicture {
+    pub by: i32,
+}
 
 /// The composer's attach button: choose pictures or text files to send with the message.
 #[derive(Clone, Debug, PartialEq, Action)]
@@ -1338,6 +1340,16 @@ pub fn init(cx: &mut App) {
         KeyBinding::new("ctrl-tab", NextTab, Some(CONTEXT)),
         KeyBinding::new("ctrl-shift-tab", PreviousTab, Some(CONTEXT)),
         KeyBinding::new("escape", TerminalEscape, Some(TERMINAL_CONTEXT)),
+        KeyBinding::new("left", StepPicture { by: -1 }, Some(crate::pictures::LIGHTBOX_CONTEXT)),
+        KeyBinding::new("right", StepPicture { by: 1 }, Some(crate::pictures::LIGHTBOX_CONTEXT)),
+        KeyBinding::new("cmd-=", ZoomPicture { by: 1 }, Some(crate::pictures::LIGHTBOX_CONTEXT)),
+        KeyBinding::new("cmd-+", ZoomPicture { by: 1 }, Some(crate::pictures::LIGHTBOX_CONTEXT)),
+        KeyBinding::new("=", ZoomPicture { by: 1 }, Some(crate::pictures::LIGHTBOX_CONTEXT)),
+        KeyBinding::new("+", ZoomPicture { by: 1 }, Some(crate::pictures::LIGHTBOX_CONTEXT)),
+        KeyBinding::new("cmd--", ZoomPicture { by: -1 }, Some(crate::pictures::LIGHTBOX_CONTEXT)),
+        KeyBinding::new("-", ZoomPicture { by: -1 }, Some(crate::pictures::LIGHTBOX_CONTEXT)),
+        KeyBinding::new("cmd-0", ZoomPicture { by: 0 }, Some(crate::pictures::LIGHTBOX_CONTEXT)),
+        KeyBinding::new("0", ZoomPicture { by: 0 }, Some(crate::pictures::LIGHTBOX_CONTEXT)),
         KeyBinding::new("shift-tab", CycleAgentMode, Some(CONTEXT)),
         KeyBinding::new("shift-tab", TerminalBackTab, Some(TERMINAL_CONTEXT)),
     ]);

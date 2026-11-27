@@ -400,7 +400,8 @@ pub fn summary(turn: &Turn, now: u64) -> String {
         if let Some(retrying) = &turn.retrying {
             return retrying.clone();
         }
-        return match turn.started {
+        // Never "Working for 0s": the time shows once there is a second of it.
+        return match turn.started.filter(|started| now.saturating_sub(*started) >= 1000) {
             Some(started) => format!("Working for {}", duration(now.saturating_sub(started))),
             None => "Working".into(),
         };
@@ -553,6 +554,16 @@ pub fn duration(millis: u64) -> String {
     }
 }
 
+/// How long a thought took, in seconds and tenths as version 2's timer counted it: "0.4s",
+/// "12.3s", "75.0s" (tenths never fold into minutes); under a tenth, "<0.1s". Never "0s".
+pub fn thought_time(millis: u64) -> String {
+    if millis < 100 {
+        return "<0.1s".into();
+    }
+    let tenths = millis / 100;
+    format!("{}.{}s", tenths / 10, tenths % 10)
+}
+
 /// "812", "12.4k", "1.2M".
 pub fn count(value: u64) -> String {
     match value {
@@ -599,9 +610,10 @@ fn step_row(
         Step::Tool(tool) if is_agent_row(tool, agents) => agent_row(tool, agents.get(&tool.id), live, now),
         Step::Tool(tool) => {
             let mut row = tool_row(tool, cwd, live);
-            // A step under way says how long it has been going: a stuck command shows it.
+            // A step under way says how long it has been going, once it has gone a second: a
+            // stuck command shows it.
             if matches!(row.meta, Meta::Running)
-                && let Some(started) = tool.started
+                && let Some(started) = tool.started.filter(|started| now.saturating_sub(*started) >= 1000)
             {
                 row.meta = Meta::Clock(duration(now.saturating_sub(started)).into());
             }
@@ -630,8 +642,9 @@ fn thought_row(thought: &crate::conversation::Thought, key: &str, now_thinking: 
             key: key.to_string().into(),
             verb: "Thinking".into(),
             target: Target::Stream(stream_tail(text, STREAM_CHARS).into()),
+            // Counted in tenths as it is drawn, not as the row is built (`transcript::thinking_clock`).
             meta: match thought.started {
-                Some(started) => Meta::Clock(duration(now.saturating_sub(started)).into()),
+                Some(started) => Meta::Thinking { started, at: now },
                 None => Meta::Running,
             },
             detail: (!text.is_empty()).then(|| Detail::Thought { text: tail_chars(text, LIVE_BODY_CHARS).into(), live: true }),
@@ -643,7 +656,7 @@ fn thought_row(thought: &crate::conversation::Thought, key: &str, now_thinking: 
     WorkRow {
         key: key.to_string().into(),
         verb: match thought.ms {
-            Some(ms) if ms >= 1000 => format!("Thought for {}", duration(ms)),
+            Some(ms) if ms >= 100 => format!("Thought for {}", thought_time(ms)),
             Some(_) => "Thought briefly".to_string(),
             None => "Thought".to_string(),
         }
@@ -2018,6 +2031,15 @@ mod tests {
 
     #[test]
     fn numbers_read_naturally() {
+        let mut conversation = Conversation::default();
+        conversation.send("go", 1_000);
+        let Some(Entry::Turn(turn)) = conversation.entries.last() else { panic!() };
+        assert_eq!(summary(turn, 1_400), "Working", "never \"Working for 0s\"");
+        assert_eq!(summary(turn, 2_400), "Working for 1s");
+        assert_eq!(thought_time(0), "<0.1s");
+        assert_eq!(thought_time(1_150), "1.1s");
+        assert_eq!(thought_time(4_290), "4.2s");
+        assert_eq!(thought_time(75_000), "75.0s");
         assert_eq!(duration(8_400), "8s");
         assert_eq!(duration(65_000), "1m 05s");
         assert_eq!(duration(3_720_000), "1h 02m");
@@ -2093,7 +2115,7 @@ mod tests {
         let Some(Item::Work(work)) = live.get(1) else { panic!("{live:?}") };
         let row = &work.rows[0];
         assert_eq!(row.verb.as_ref(), "Thinking");
-        assert!(matches!(&row.meta, Meta::Clock(time) if time.as_ref() == "12s"));
+        assert!(matches!(row.meta, Meta::Thinking { started: 2_000, at: 14_000 }));
         assert!(matches!(&row.target, Target::Stream(tail) if tail.as_ref() == "First idea. · Second, longer idea."));
 
         conversation.apply(&wack_core::Event::Text("Done.".into()), 20_000);
@@ -2102,7 +2124,7 @@ mod tests {
         let settled = items(&conversation, Path::new("/w"), &HashSet::new(), 30_000, &mut ReplyCache::default());
         let Some(Item::Work(work)) = settled.get(1) else { panic!("{settled:?}") };
         assert!(work.only_thoughts());
-        assert_eq!(work.rows[0].verb.as_ref(), "Thought for 19s");
+        assert_eq!(work.rows[0].verb.as_ref(), "Thought for 19.0s");
         assert!(matches!(&work.rows[0].detail, Some(Detail::Thought { live: false, .. })));
     }
 

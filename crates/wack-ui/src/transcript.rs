@@ -234,12 +234,22 @@ pub enum Meta {
     Running,
     /// Running, for this long: "12s".
     Clock(SharedString),
+    /// A thought under way since `started` (milliseconds since 1970): its clock counts tenths
+    /// as it is drawn (`thinking_clock`), so it moves smoothly between the chat's rebuilds.
+    /// `at` is when the row was built, the time a scene shows.
+    Thinking { started: u64, at: u64 },
 }
 
 impl Meta {
     pub fn running(&self) -> bool {
-        matches!(self, Meta::Running | Meta::Clock(_))
+        matches!(self, Meta::Running | Meta::Clock(_) | Meta::Thinking { .. })
     }
+}
+
+/// A live thought's time: now, in a live chat; when the row was built, in a scene.
+fn thinking_clock(started: u64, at: u64, handlers: &Handlers) -> SharedString {
+    let now = if handlers.clock { crate::chat::now_millis().max(at) } else { at };
+    crate::work::thought_time(now.saturating_sub(started)).into()
 }
 
 #[derive(Clone, Debug)]
@@ -293,12 +303,15 @@ pub struct Handlers {
     pub still: bool,
     /// What the user's messages offer, and the one being edited or asked about.
     pub prompts: crate::rewind::Prompts,
+    /// A live chat: clocks read the time as they are drawn. A scene's keep the time its items
+    /// were built with.
+    pub clock: bool,
 }
 
 impl Handlers {
     /// Clicks that do nothing: for scenes.
     pub fn inert() -> Self {
-        Self { toggle: Rc::new(|_, _, _| {}), open_link: Rc::new(|_, _, _| {}), still: false, prompts: Default::default() }
+        Self { toggle: Rc::new(|_, _, _| {}), open_link: Rc::new(|_, _, _| {}), still: false, prompts: Default::default(), clock: false }
     }
 }
 
@@ -534,6 +547,9 @@ pub fn item(item: &Item, previous: Option<&Item>, theme: &Theme, handlers: &Hand
     div().pt(px(gap_above(item, previous))).child(body).into_any_element()
 }
 
+/// The room a thought's clock keeps.
+const CLOCK_WIDTH: f32 = 34.;
+
 /// The most of the column a prompt's bubble takes, and its corners.
 const BUBBLE_SHARE: f32 = 0.78;
 const BUBBLE_RADIUS: f32 = 16.;
@@ -712,7 +728,7 @@ fn row_mark(row: &WorkRow, thinking: bool, theme: &Theme, still: bool) -> AnyEle
     };
     let (ink, ring, glow) = match &row.meta {
         Meta::Failed(_) => (theme.danger, Hsla { a: 0.6, ..theme.danger }, theme.danger),
-        Meta::Running | Meta::Clock(_) => (theme.accent_text, theme.accent_line, theme.accent),
+        Meta::Running | Meta::Clock(_) | Meta::Thinking { .. } => (theme.accent_text, theme.accent_line, theme.accent),
         _ if matches!(row.verb.as_ref(), "Ran" | "Finished") => (theme.success, Hsla { a: 0.6, ..theme.success }, theme.success),
         _ => (theme.accent_text, theme.accent_line, theme.accent),
     };
@@ -736,7 +752,7 @@ fn row_mark(row: &WorkRow, thinking: bool, theme: &Theme, still: bool) -> AnyEle
         .child(icon.view(px(12.), ink));
     match row.meta {
         _ if thinking => crate::motion::breathing(SharedString::from(format!("{}-breath", row.key)), mark, still),
-        Meta::Running | Meta::Clock(_) => crate::motion::breathing(SharedString::from(format!("{}-breath", row.key)), mark, still),
+        Meta::Running | Meta::Clock(_) | Meta::Thinking { .. } => crate::motion::breathing(SharedString::from(format!("{}-breath", row.key)), mark, still),
         _ => mark.into_any_element(),
     }
 }
@@ -798,6 +814,7 @@ fn log_row(row: &WorkRow, live: bool, thinking: bool, theme: &Theme, handlers: &
         Meta::Failed(text) => div().text_color(theme.danger).child(text.clone()),
         Meta::Running => div().text_color(theme.accent_text).child("running"),
         Meta::Clock(time) => div().text_color(theme.accent_text).child(time.clone()),
+        Meta::Thinking { started, at } => div().text_color(theme.accent_text).child(thinking_clock(*started, *at, handlers)),
         Meta::Lines { added, removed } => div()
             .flex()
             .gap(px(6.))
@@ -905,8 +922,12 @@ fn thought_line(row: &WorkRow, live: bool, theme: &Theme, handlers: &Handlers) -
                 .child(div().flex_none().typography(Type::Ui).text_color(theme.text_dim).child(label))
                 .when_some(match &row.meta {
                     Meta::Clock(time) => Some(time.clone()),
+                    Meta::Thinking { started, at } => Some(thinking_clock(*started, *at, handlers)),
                     _ => None,
-                }, |line, time| line.child(div().flex_none().typography(Type::Small).text_color(theme.text_faint).child(time)))
+                }, |line, time| {
+                    // Wide enough for "88.8s", so the words after it hold still as it counts.
+                    line.child(div().flex_none().min_w(px(CLOCK_WIDTH)).typography(Type::Small).text_color(theme.text_faint).child(time))
+                })
                 .child(preview)
                 .when(openable, |line| {
                     line.child(div().flex_none().child(if row.open { Icon::ChevronDown } else { Icon::ChevronRight }.view(px(11.), theme.text_faint)))

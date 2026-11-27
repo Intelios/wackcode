@@ -52,7 +52,7 @@ use crate::{
         NewChat, NewChatIn, SelectDraft, CloseDraft, NewTerminal, NewTerminalWith, TogglePaneMenu, ClosePaneMenu, HideSidePanel, ToggleSidePanel, RevealProject, OpenPaneKind, NextTab, OpenEffortMenu, OpenModelMenu, OpenSettings,
         OpenSettingsSection, PinProject, PreviousTab, RemoveConnection, RemovePicture, ShowCommandOutput, ShowPicture, ShuffleBackdrop, ToggleBackdropShuffle, RemoveProject, ResetDockSize,
         PickCommand, RetryWorkspaceFiles, SelectChat, Send, Stop, StopCommand, MoveToBackground, ToggleTasks, ToggleTasksPane, StopTask, ShowTask, ToggleAgentsPane, ShowTeam, ToggleBrowserPane, ToggleCanvasPane, ShowCanvas, WriteInComposer, ShowAgent, StopAgent, ShowChanges, ToggleChanges, ToggleProject, ToggleSidebar, ToggleTerminal, TriggerProjectCommand, Unqueue,
-        ToggleAutoTitles, ToggleTitleModels, ChooseTitleModel, RenameChat, RenameChatAt, CancelRename, ToggleProjectPicker, CloseProjectPicker, ChooseNewChatProject, OpenChatMenu, CloseChatMenu, ChatMenuPick, ChatPick, OpenPromptMenu, ClosePromptMenu, CopyPrompt, EditPrompt, CancelEdit, SendEdit, RewindPrompt, RetryPrompt, CancelRewind, ToggleRewindFile, ToggleRewindFiles, ConfirmRewind, UndoRewind, ToggleModelReasoning, ToggleModelRow, ToggleModelVision, AttachPictures, AttachFiles, AttachTerminalSelection, RemoveAttachment, InsertFile, RemoveFile, SteerQueued, RemoveQueued, OpenPicture, ClosePicture, StepPicture, ZoomPicture,
+        ToggleAutoTitles, ToggleTitleModels, ChooseTitleModel, RenameChat, RenameChatAt, CancelRename, ToggleProjectPicker, CloseProjectPicker, ChooseNewChatProject, OpenChatMenu, CloseChatMenu, ChatMenuPick, ChatPick, OpenPromptMenu, ClosePromptMenu, CopyPrompt, EditPrompt, CancelEdit, SendEdit, RewindPrompt, RetryPrompt, CancelRewind, ToggleRewindFile, ToggleRewindFiles, ConfirmRewind, UndoRewind, ToggleModelReasoning, ToggleModelRow, ToggleModelVision, AttachPictures, AttachFiles, AttachTerminalSelection, RemoveAttachment, InsertFile, RemoveFile, SteerQueued, RemoveQueued, OpenPicture, ClosePicture, StepPicture,
         StartSuggestion, DismissSuggestion, CopySuggestion, OpenChat,
         ArchiveChat, ArchiveCurrentChat, ClearSearch, RevealScratchpadFile, DeleteAllArchived, DeleteArchivedChat, ToggleArchived, UnarchiveChat,
         ToggleModelEffort, SwitchSkill, SwitchSkillFolder, RemoveSkillFolder, OpenSkill, CopySkill, ChooseSkillUse, NewSkill, SaveSkill,
@@ -550,6 +550,7 @@ impl Shell {
                 app.lightbox = None;
                 cx.notify();
             });
+            self.focus_composer(window, cx);
             return;
         }
         if app.read(cx).command_editor.is_some() {
@@ -2051,25 +2052,19 @@ impl Render for Shell {
                         cx.notify();
                     });
                 }))
-                .on_action(cx.listener(|shell, _: &ClosePicture, _, cx| {
+                .on_action(cx.listener(|shell, _: &ClosePicture, window, cx| {
                     shell.with_app(cx, |app, cx| {
                         app.lightbox = None;
                         cx.notify();
                     });
+                    // The lightbox held focus for its keys: the composer has it back.
+                    shell.focus_composer(window, cx);
                 }))
                 .on_action(cx.listener(|shell, action: &StepPicture, _, cx| {
                     let by = action.by;
                     shell.with_app(cx, |app, cx| {
                         if let Some(lightbox) = &mut app.lightbox {
                             lightbox.step(by);
-                            cx.notify();
-                        }
-                    });
-                }))
-                .on_action(cx.listener(|shell, _: &ZoomPicture, _, cx| {
-                    shell.with_app(cx, |app, cx| {
-                        if let Some(lightbox) = &mut app.lightbox {
-                            lightbox.zoomed = !lightbox.zoomed;
                             cx.notify();
                         }
                     });
@@ -4215,6 +4210,7 @@ fn chat(
                 }),
                 still,
                 prompts: Default::default(),
+                clock: true,
             };
             list(list_state, move |index, _, cx| {
                 let theme = Theme::get(cx);

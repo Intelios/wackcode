@@ -874,6 +874,29 @@ pub fn all() -> Vec<Scene> {
             },
         },
         Scene {
+            name: "composer-tab-crowded",
+            description: "Everything on the composer's tab at once, in a wide and a narrow composer: the tab gives up words to stay inside the card.",
+            size: size(px(760.), px(520.)),
+            build: |_, cx| {
+                let drawn = Input::Drawn { text: None, placeholder: crate::chat::FOLLOW_UP_PLACEHOLDER.into() };
+                let crowded = ComposerData {
+                    chat_area: false,
+                    archived: None,
+                    input: drawn,
+                    activity: Some("Working for 1m 05s".into()),
+                    crew_at_work: Some(crate::composer::CrewAtWork { working: 2, queued: 1, done: 2 }),
+                    todos: Some(fixtures::todos()),
+                    tasks: crate::shell::task_lines(&fixtures::tasks()),
+                    changes: Some(crate::chat::ChangeCount { files: 12, added: 1_204, removed: 380 }),
+                    foreground: true,
+                    waiting: Vec::new(),
+                    ..fixtures::composer_working()
+                };
+                let rows = vec![("Wide", crowded.clone()), ("Narrow", crowded)];
+                cx.new(|_| ComposerSheet { rows }).into()
+            },
+        },
+        Scene {
             name: "context-popover",
             description: "The ring round Send hovered: WackCode 2's context popover, every part with its share, and Compact.",
             size: size(px(760.), px(620.)),
@@ -3293,17 +3316,24 @@ struct ComposerSheet {
     rows: Vec<(&'static str, ComposerData)>,
 }
 
+impl ComposerSheet {
+    /// A row captioned "Narrow" is drawn this wide, as in a window with the side panel open.
+    const NARROW: f32 = 470.;
+}
+
 impl Render for ComposerSheet {
     fn render(&mut self, _: &mut Window, cx: &mut Context<Self>) -> impl IntoElement {
         use crate::typography::Typography;
         let theme = crate::theme::Theme::get(cx).clone();
-        gpui::div().size_full().bg(theme.window).p(px(32.)).flex().flex_col().justify_end().gap(px(22.)).children(self.rows.iter().map(|(caption, data)| {
+        gpui::div().size_full().bg(theme.window).p(px(32.)).flex().flex_col().justify_end().gap(px(22.)).children(self.rows.iter().enumerate().map(|(index, (caption, data))| {
+            // Each its own id, so each composer keeps its own state (its card's width).
             gpui::div()
+                .id(("composer-row", index))
                 .flex()
                 .flex_col()
                 .gap(px(8.))
                 .child(gpui::div().typography(Type::Label).text_color(theme.text_dim).child(*caption))
-                .child(crate::composer::Composer::new(data.clone()))
+                .child(gpui::div().when(*caption == "Narrow", |row| row.w(px(Self::NARROW))).child(crate::composer::Composer::new(data.clone())))
         }))
     }
 }

@@ -553,10 +553,14 @@ impl ChatSession {
                 }
             });
         });
+        // Ten beats a second: a live thought's clock counts tenths; everything else that counts
+        // (the run's time, a command's) moves on each tenth beat.
         let tick = cx.spawn(async move |this, cx| {
+            let mut beats = 0u32;
             loop {
-                cx.background_executor().timer(Duration::from_secs(1)).await;
-                if this.update(cx, |chat, cx| chat.tick(cx)).is_err() {
+                cx.background_executor().timer(Duration::from_millis(100)).await;
+                beats = beats.wrapping_add(1);
+                if this.update(cx, |chat, cx| chat.tick(beats.is_multiple_of(10), cx)).is_err() {
                     return;
                 }
             }
@@ -1177,12 +1181,23 @@ impl ChatSession {
             .sum()
     }
 
-    /// Keeps "Working · 8s" counting.
-    fn tick(&mut self, cx: &mut Context<Self>) {
-        if self.run.is_some() && !self.compacting() {
+    /// A beat of the run's clock: each second the live turn is rebuilt, so its times move;
+    /// between, only a live thought's clock (drawn from the time itself) needs a redraw.
+    fn tick(&mut self, second: bool, cx: &mut Context<Self>) {
+        if self.run.is_none() || self.compacting() {
+            return;
+        }
+        if second {
             self.refresh_from(self.conversation.entries.len().saturating_sub(1));
             cx.notify();
+        } else if self.thinking_now() {
+            cx.notify();
         }
+    }
+
+    /// The model is having a thought, whose clock counts tenths.
+    fn thinking_now(&self) -> bool {
+        self.items.iter().rev().take(6).any(|item| matches!(item, Item::Work(work) if work.live && work.thinking))
     }
 
     /// Makes this a Chat area chat, drawn as a messenger's transcript. Its list tells the chat

@@ -924,12 +924,13 @@ pub fn tool_row(tool: &ToolStep, cwd: &Path, live: bool) -> WorkRow {
         "write" => {
             let content = text_field(input, "content").unwrap_or("");
             let lines = write_lines(content);
-            let added = lines.len();
+            // A replaced file's result says what changed; its body is still the whole new file.
+            let (added, removed) = tool.result.as_ref().and_then(|result| replaced_counts(&result.text)).unwrap_or((lines.len(), 0));
             (
                 "Wrote",
                 Target::Code(path("path").unwrap_or_default().into()),
                 None,
-                (!lines.is_empty()).then(|| Detail::Diff(Diff { path: path("path").unwrap_or_default().into(), lines: cap(lines), added, removed: 0 })),
+                (!lines.is_empty()).then(|| Detail::Diff(Diff { path: path("path").unwrap_or_default().into(), lines: cap(lines), added, removed })),
             )
         }
         "edit" => {
@@ -1404,6 +1405,14 @@ pub(crate) fn tail(text: &str, lines: usize) -> String {
         return text.to_string();
     }
     format!("… {} earlier lines\n{}", all.len() - lines, all[all.len() - lines..].join("\n"))
+}
+
+/// The `+added −removed` a `write` that replaced a file reports ("Replaced a.rs (2 lines, +1 −1).").
+pub(crate) fn replaced_counts(result: &str) -> Option<(usize, usize)> {
+    let rest = result.strip_prefix("Replaced ")?;
+    let counts = rest.rsplit_once(", +")?.1;
+    let (added, removed) = counts.split_once(" −")?;
+    Some((added.parse().ok()?, removed.trim_end_matches(").").parse().ok()?))
 }
 
 pub(crate) fn write_lines(content: &str) -> Vec<DiffLine> {

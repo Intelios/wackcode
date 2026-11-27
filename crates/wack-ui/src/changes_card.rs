@@ -285,9 +285,16 @@ pub fn from_turn(turn: &Turn, turn_key: &str, cwd: &Path, open: &HashSet<String>
         if tool.name == "write" {
             let content = tool.input.as_ref().and_then(|input| input.get("content")).and_then(Value::as_str).unwrap_or("");
             let lines = write_lines(content);
-            acc.added = lines.len();
-            if acc.created_in_turn {
-                acc.removed = 0;
+            match crate::work::replaced_counts(&result.text) {
+                // Replacing a file it did not create: what changed, as Git will count it.
+                Some((added, removed)) if !acc.created_in_turn => {
+                    acc.added += added;
+                    acc.removed += removed;
+                }
+                _ => {
+                    acc.added = lines.len();
+                    acc.removed = 0;
+                }
             }
             if acc.calls > 0 {
                 acc.shown_lines.push(DiffLine { kind: LineKind::Gap, number: None, text: "Replaced file".into() });
@@ -667,6 +674,22 @@ mod tests {
         assert_eq!((cli.added, cli.removed, cli.calls), (2, 2, 2));
         assert!(!cli.plain_write);
         assert!(cli.lines.iter().any(|line| line.kind == LineKind::Gap && line.text.as_ref() == "Edit 2"));
+    }
+
+    #[test]
+    fn a_replaced_file_counts_what_changed_as_git_does() {
+        let turn = turn_with(vec![tool_step(
+            "w1",
+            "write",
+            json!({ "path": "src/compare.js", "content": "a\nb\nc\n" }),
+            Some(("Replaced src/compare.js (3 lines, +10 −13).", false)),
+        )]);
+        let card = from_turn(&turn, "turn-1", Path::new("/repo"), &HashSet::new()).unwrap();
+        assert_eq!(card.heading.as_ref(), "Edited 1 file");
+        assert_eq!((card.added, card.removed), (10, 13));
+        // A result from before the counts were reported still reads as the whole file.
+        let old = turn_with(vec![tool_step("w1", "write", json!({ "path": "a.rs", "content": "1\n2" }), Some(("Replaced a.rs (2 lines).", false)))]);
+        assert_eq!(from_turn(&old, "turn-1", Path::new("/repo"), &HashSet::new()).map(|card| (card.added, card.removed)), Some((2, 0)));
     }
 
     #[test]

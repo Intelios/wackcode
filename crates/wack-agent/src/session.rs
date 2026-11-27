@@ -59,6 +59,10 @@ enum Entry {
     Compaction {
         summary: Summary,
         keep: usize,
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        tokens_before: Option<u64>,
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        tokens_after: Option<u64>,
     },
     /// Deferred tools the model has found, so a resumed chat offers the same tools.
     ToolsLoaded {
@@ -164,7 +168,7 @@ impl Session {
             match entry {
                 Entry::Meta { .. } => {}
                 Entry::Message { message, usage, note, .. } => session.remember(message, usage, note),
-                Entry::Compaction { summary, keep } => session.apply_compaction(summary, keep),
+                Entry::Compaction { summary, keep, .. } => session.apply_compaction(summary, keep),
                 Entry::ToolsLoaded { names } => session.loaded.extend(names),
                 Entry::State { key, value } => session.remember_state(key, value),
             }
@@ -311,11 +315,23 @@ impl Session {
         Ok(true)
     }
 
-    /// Replaces all but the last `keep` messages with a summary.
-    pub fn compact(&mut self, summary: Summary, keep: usize) -> Result<(), String> {
-        self.append(&Entry::Compaction { summary: summary.clone(), keep })?;
+    /// Replaces all but the last `keep` messages with a summary. Returns `(tokens_before,
+    /// tokens_after)`: the context size before compaction and the estimated size after.
+    pub fn compact(&mut self, summary: Summary, keep: usize) -> Result<(u64, u64), String> {
+        let tokens_before = self.context_tokens();
+        let from = self.messages.len() - keep.min(self.messages.len());
+        let mut after = Vec::with_capacity(1 + self.messages.len() - from);
+        after.push(Message::user(summary.render()));
+        after.extend_from_slice(&self.messages[from..]);
+        let tokens_after = estimate_tokens(&after);
+        self.append(&Entry::Compaction {
+            summary: summary.clone(),
+            keep,
+            tokens_before: Some(tokens_before),
+            tokens_after: Some(tokens_after),
+        })?;
         self.apply_compaction(summary, keep);
-        Ok(())
+        Ok((tokens_before, tokens_after))
     }
 
     /// Records a deferred tool as found. Returns false if it already was.
@@ -370,7 +386,11 @@ fn now_millis() -> u64 {
 pub enum HistoryEntry {
     Message { message: Message, usage: Option<Usage>, at: Option<u64>, command: Option<CommandUse> },
     /// The conversation before this point was summarised for the model.
-    Compacted,
+    Compacted {
+        summary: Summary,
+        tokens_before: Option<u64>,
+        tokens_after: Option<u64>,
+    },
     /// The app told the model something here (a mode contract, a background task's news). Not
     /// shown as a message.
     Note { tag: String, text: String, at: Option<u64> },
@@ -388,7 +408,9 @@ pub fn history(path: &Path) -> Result<Vec<HistoryEntry>, String> {
         match serde_json::from_str::<Entry>(line) {
             Ok(Entry::Message { note: Some(tag), message, at, .. }) => entries.push(HistoryEntry::Note { tag, text: message.text(), at }),
             Ok(Entry::Message { message, usage, at, note: None, command }) => entries.push(HistoryEntry::Message { message, usage, at, command }),
-            Ok(Entry::Compaction { .. }) => entries.push(HistoryEntry::Compacted),
+            Ok(Entry::Compaction { summary, tokens_before, tokens_after, .. }) => {
+                entries.push(HistoryEntry::Compacted { summary, tokens_before, tokens_after });
+            }
             Ok(Entry::State { key, value }) => entries.push(HistoryEntry::State { key, value }),
             Ok(Entry::Meta { .. } | Entry::ToolsLoaded { .. }) | Err(_) => {}
         }
@@ -491,9 +513,25 @@ mod tests {
         let entries = history(&path).unwrap();
         assert_eq!(entries.len(), 4);
         assert!(matches!(&entries[0], HistoryEntry::Message { message, at: Some(_), .. } if message.text() == "one"));
-        assert_eq!(entries[1], HistoryEntry::Compacted);
+        assert!(matches!(
+            &entries[1],
+            HistoryEntry::Compacted { summary, tokens_before: Some(_), tokens_after: Some(_) } if summary.body == "so far"
+        ));
         assert!(matches!(&entries[3], HistoryEntry::Message { at: None, .. }));
         assert_eq!(Session::open(&path).unwrap().messages().len(), 3);
+
+        // An older compaction line without saved token counts still loads with its summary.
+        std::fs::OpenOptions::new()
+            .append(true)
+            .open(&path)
+            .unwrap()
+            .write_all(b"{\"type\":\"compaction\",\"summary\":{\"body\":\"legacy body\",\"user_messages\":[],\"omitted_user_messages\":0,\"read_files\":[],\"modified_files\":[]},\"keep\":0}\n")
+            .unwrap();
+        let entries = history(&path).unwrap();
+        assert!(matches!(
+            entries.last(),
+            Some(HistoryEntry::Compacted { summary, tokens_before: None, tokens_after: None }) if summary.body == "legacy body"
+        ));
     }
 
     #[test]
@@ -525,7 +563,7 @@ mod tests {
             .iter()
             .map(|entry| match entry {
                 HistoryEntry::Message { message, .. } => format!("message {}", message.text()),
-                HistoryEntry::Compacted => "compacted".to_string(),
+                HistoryEntry::Compacted { .. } => "compacted".to_string(),
                 HistoryEntry::Note { tag, .. } => format!("note {tag}"),
                 HistoryEntry::State { key, .. } => format!("state {key}"),
             })

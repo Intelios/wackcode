@@ -43,11 +43,19 @@ pub enum Entry {
     Prompt { text: String, steered: bool, command: Option<CommandUse>, suggestion: Option<Started>, pictures: Vec<Picture>, files: Vec<crate::attachments::FileAttachment> },
     Turn(Turn),
     /// The older conversation was summarised here.
-    Compacted,
+    Compacted(Compaction),
     /// Something about the chat rather than a turn: a manual compaction under way or failed.
     Notice { text: String, failed: bool },
     /// A background task reported while the chat was idle.
     News(News),
+}
+
+/// A compaction boundary in the conversation: what the summary carried into the model's context.
+#[derive(Clone, Debug, Default, PartialEq)]
+pub struct Compaction {
+    pub summary: wack_core::compaction::Summary,
+    pub tokens_before: Option<u64>,
+    pub tokens_after: Option<u64>,
 }
 
 /// A background task's news as the model read it.
@@ -104,8 +112,10 @@ pub enum Step {
     /// Text the model wrote between tool calls.
     Note(String),
     Tool(ToolStep),
-    /// Something the loop did on its own, such as compacting.
-    Event(String),
+    /// Auto-compaction running inside a live turn.
+    Compacting,
+    /// Auto-compaction finished inside a turn: lifted out of work logs as its own card.
+    Compacted(Compaction),
     /// A background task reported while the turn worked.
     Task(News),
 }
@@ -223,13 +233,23 @@ impl Turn {
         }
     }
 
+    /// Drops a live `Step::Compacting` placeholder when the turn moved on without compacting
+    /// (for instance, a threshold compaction that failed silently before retrying the request).
+    fn clear_compacting(&mut self) {
+        if matches!(self.steps.last(), Some(Step::Compacting)) {
+            self.steps.pop();
+        }
+    }
+
     fn push_text(&mut self, text: &str) {
+        self.clear_compacting();
         self.thinking_open = false;
         self.retrying = None;
         self.reply.push_str(text);
     }
 
     fn push_thinking(&mut self, text: &str, streaming: bool) {
+        self.clear_compacting();
         self.retrying = None;
         self.settle_reply();
         match self.steps.last_mut() {
@@ -247,6 +267,7 @@ impl Turn {
     }
 
     fn push_tool(&mut self, id: &str, name: &str, input: Option<Value>) {
+        self.clear_compacting();
         self.thinking_open = false;
         self.retrying = None;
         self.settle_reply();
@@ -316,11 +337,24 @@ impl Conversation {
     /// The transcript of a saved chat.
     pub fn from_history(history: &[HistoryEntry]) -> Self {
         let mut conversation = Self::default();
-        for entry in history {
+        for (index, entry) in history.iter().enumerate() {
             match entry {
-                HistoryEntry::Compacted => {
-                    conversation.close_turn(None);
-                    conversation.entries.push(Entry::Compacted);
+                HistoryEntry::Compacted { summary, tokens_before, tokens_after } => {
+                    let compaction = Compaction {
+                        summary: summary.clone(),
+                        tokens_before: *tokens_before,
+                        tokens_after: *tokens_after,
+                    };
+                    if mid_turn_compaction(history, index + 1)
+                        && let Some(turn) = conversation.current()
+                    {
+                        turn.settle_reply();
+                        turn.thinking_open = false;
+                        turn.steps.push(Step::Compacted(compaction));
+                    } else {
+                        conversation.close_turn(None);
+                        conversation.entries.push(Entry::Compacted(compaction));
+                    }
                 }
                 HistoryEntry::Message { message, usage, at, command } => conversation.replay(message, *usage, *at, command.clone()),
                 HistoryEntry::State { key, value } => conversation.apply_state(key, value),
@@ -459,6 +493,7 @@ impl Conversation {
     /// Ends the current turn as finished, unless it already ended.
     fn close_turn(&mut self, at: Option<u64>) {
         if let Some(turn) = self.current() {
+            turn.clear_compacting();
             turn.live = false;
             turn.thinking_open = false;
             turn.retrying = None;
@@ -607,6 +642,28 @@ impl Conversation {
             let pictures: Vec<Picture> = images.iter().map(Picture::of_image).collect();
             self.remember(&pictures);
         }
+        if let Event::Compacted { summary, tokens_before, tokens_after, .. } = event {
+            let compaction = Compaction {
+                summary: summary.clone(),
+                tokens_before: Some(*tokens_before),
+                tokens_after: Some(*tokens_after),
+            };
+            if let Some(turn) = self.current() {
+                if matches!(turn.steps.last(), Some(Step::Compacting)) {
+                    *turn.steps.last_mut().expect("checked above") = Step::Compacted(compaction);
+                } else {
+                    turn.settle_reply();
+                    turn.thinking_open = false;
+                    turn.steps.push(Step::Compacted(compaction));
+                }
+            } else {
+                if matches!(self.entries.last(), Some(Entry::Notice { failed: false, .. })) {
+                    self.entries.pop();
+                }
+                self.entries.push(Entry::Compacted(compaction));
+            }
+            return;
+        }
         let Some(turn) = self.current() else {
             return;
         };
@@ -624,13 +681,10 @@ impl Conversation {
             Event::Retrying(notice) => turn.retrying = Some(retry_text(notice)),
             Event::Compacting => {
                 turn.settle_reply();
-                turn.steps.push(Step::Event("Compacting the conversation to make room".into()));
+                turn.thinking_open = false;
+                turn.steps.push(Step::Compacting);
             }
-            Event::Compacted { .. } => {
-                if let Some(Step::Event(text)) = turn.steps.last_mut() {
-                    *text = "Compacted the conversation to make room".into();
-                }
-            }
+            Event::Compacted { .. } => {}
             Event::State { key, value } => {
                 let (key, value) = (key.clone(), value.clone());
                 self.apply_state(&key, &value);
@@ -677,11 +731,32 @@ impl Conversation {
             self.entries.pop();
         }
         match result {
-            Ok(Outcome::Done) => self.entries.push(Entry::Compacted),
+            Ok(Outcome::Done) => {
+                if !matches!(self.entries.last(), Some(Entry::Compacted(_))) {
+                    self.entries.push(Entry::Compacted(Compaction::default()));
+                }
+            }
             Ok(_) => {}
             Err(message) => self.entries.push(Entry::Notice { text: message.clone(), failed: true }),
         }
     }
+}
+
+/// Whether a saved `HistoryEntry::Compacted` happened inside a turn that carried on afterwards
+/// (auto-compaction), rather than between turns (manual compaction).
+fn mid_turn_compaction(history: &[HistoryEntry], after: usize) -> bool {
+    for entry in &history[after..] {
+        match entry {
+            HistoryEntry::State { .. } | HistoryEntry::Compacted { .. } => continue,
+            HistoryEntry::Note { tag, .. } if !tag.starts_with(NOTE_PREFIX) && !tag.starts_with(AGENT_NOTE_PREFIX) => continue,
+            HistoryEntry::Message { message, .. } => {
+                return message.role == Role::Assistant
+                    || message.content.iter().any(|block| matches!(block, Block::ToolResult { .. }));
+            }
+            HistoryEntry::Note { .. } => return false,
+        }
+    }
+    false
 }
 
 #[cfg(test)]
@@ -868,12 +943,71 @@ mod tests {
         conversation.finish(&Err("The key was refused.".into()), 1);
         assert_eq!(conversation.last_turn().unwrap().end, Some(TurnEnd::Failed("The key was refused.".into())));
 
+        let summary = wack_core::compaction::Summary { body: "## Goal\nKeep going.".into(), ..Default::default() };
         conversation.begin_compaction();
+        conversation.apply(
+            &Event::Compacted { usage: None, summary: summary.clone(), tokens_before: 42_000, tokens_after: 7_500 },
+            2,
+        );
         conversation.finish_compaction(&Ok(Outcome::Done));
-        assert_eq!(conversation.entries.last(), Some(&Entry::Compacted));
+        assert_eq!(
+            conversation.entries.last(),
+            Some(&Entry::Compacted(Compaction {
+                summary,
+                tokens_before: Some(42_000),
+                tokens_after: Some(7_500),
+            }))
+        );
         conversation.begin_compaction();
         conversation.finish_compaction(&Err("There is nothing to compact yet.".into()));
         assert!(matches!(conversation.entries.last(), Some(Entry::Notice { failed: true, .. })));
+    }
+
+    #[test]
+    fn mid_turn_compaction_matches_between_live_events_and_replayed_history() {
+        let summary = wack_core::compaction::Summary {
+            body: "## Goal\nFix the retry loop.".into(),
+            user_messages: vec!["Fix it".into()],
+            modified_files: vec!["src/retry.rs".into()],
+            ..Default::default()
+        };
+        let history = vec![
+            at(Message::user("Fix it"), 1_000, None),
+            at(assistant(vec![Block::ToolUse { id: "a".into(), name: "read".into(), input: json!({ "path": "src/retry.rs" }) }]), 2_000, None),
+            at(results(&[("a", "contents")], None), 3_000, None),
+            HistoryEntry::Compacted { summary: summary.clone(), tokens_before: Some(80_000), tokens_after: Some(12_000) },
+            HistoryEntry::Note { tag: "contract:build".into(), text: "Build rules".into(), at: Some(3_500) },
+            at(assistant(vec![Block::Text { text: "Fixed the retry loop.".into() }]), 5_000, None),
+            HistoryEntry::Compacted { summary: summary.clone(), tokens_before: Some(14_000), tokens_after: Some(4_000) },
+        ];
+        let replayed = Conversation::from_history(&history);
+
+        let mut live = Conversation::default();
+        live.send("Fix it", 1_000);
+        live.apply(&Event::ToolCall { id: "a".into(), name: "read".into(), input: json!({ "path": "src/retry.rs" }) }, 2_000);
+        live.apply(&Event::ToolResult { id: "a".into(), name: "read".into(), content: "contents".into(), is_error: false, images: Vec::new() }, 3_000);
+        live.apply(&Event::Compacting, 3_200);
+        live.apply(&Event::Compacted { usage: None, summary: summary.clone(), tokens_before: 80_000, tokens_after: 12_000 }, 3_500);
+        live.apply(&Event::Text("Fixed the retry loop.".into()), 5_000);
+        live.finish(&Ok(Outcome::Done), 5_000);
+        live.begin_compaction();
+        live.apply(&Event::Compacted { usage: None, summary: summary.clone(), tokens_before: 14_000, tokens_after: 4_000 }, 6_000);
+        live.finish_compaction(&Ok(Outcome::Done));
+
+        assert_eq!(replayed.entries.len(), 3, "prompt, turn (with mid-turn compaction), manual compaction");
+        assert_eq!(live.entries.len(), 3);
+        for conversation in [&replayed, &live] {
+            let Entry::Turn(turn) = &conversation.entries[1] else { panic!("expected turn") };
+            assert_eq!(turn.reply, "Fixed the retry loop.");
+            assert!(matches!(
+                &turn.steps[1],
+                Step::Compacted(compaction) if compaction.summary == summary && compaction.tokens_before == Some(80_000) && compaction.tokens_after == Some(12_000)
+            ));
+            assert!(matches!(
+                &conversation.entries[2],
+                Entry::Compacted(compaction) if compaction.summary == summary && compaction.tokens_before == Some(14_000) && compaction.tokens_after == Some(4_000)
+            ));
+        }
     }
 
     #[test]

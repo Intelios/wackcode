@@ -251,7 +251,7 @@ fn observe(child: &Child, root: &Path, event: Event) {
             live.context_tokens = usage.input + usage.cache_read + usage.cache_write + usage.output;
             add_usage(&mut live.spent, &usage);
         }),
-        Event::Compacted { usage: Some(usage) } => child.step(|live| add_usage(&mut live.spent, &usage)),
+        Event::Compacted { usage: Some(usage), .. } => child.step(|live| add_usage(&mut live.spent, &usage)),
         _ => {}
     }
 }

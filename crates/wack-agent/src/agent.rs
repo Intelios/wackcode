@@ -277,7 +277,7 @@ pub enum Event {
     /// A message the user sent mid-run was handed to the model.
     Steered(String),
     Compacting,
-    Compacted { usage: Option<Usage> },
+    Compacted { usage: Option<Usage>, summary: Summary, tokens_before: u64, tokens_after: u64 },
     /// A tool is waiting for the user to answer. Answer with [`Control::answer`]. `wrap_up`
     /// offers Ultra Plan's "Write the plan now".
     Question { id: String, questions: Vec<Question>, wrap_up: bool },
@@ -879,8 +879,8 @@ impl Agent {
         let mut summary = Summary::build(self.session.summary(), &conversation, body);
         summary.sections = self.features.iter().flat_map(|feature| feature.summary_sections()).collect();
         let keep = messages.len() - cut;
-        self.session.compact(summary, keep)?;
-        events(Event::Compacted { usage: response.usage });
+        let (tokens_before, tokens_after) = self.session.compact(summary.clone(), keep)?;
+        events(Event::Compacted { usage: response.usage, summary, tokens_before, tokens_after });
         Ok(())
     }
 }
@@ -1445,6 +1445,11 @@ mod tests {
         let last = &requests[2].messages;
         assert!(last[0].text().contains("Summary body."));
         assert_eq!(last[1].text(), "next", "the newest turn is kept word for word");
+        assert!(rig.saw(|event| matches!(
+            event,
+            Event::Compacted { summary, tokens_before, tokens_after, .. }
+                if summary.body == "Summary body." && *tokens_before > *tokens_after && *tokens_after > 0
+        )));
     }
 
     #[tokio::test]

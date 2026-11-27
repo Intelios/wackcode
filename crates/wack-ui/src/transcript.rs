@@ -58,7 +58,8 @@ pub enum Item {
     Notice { text: SharedString, failed: bool },
     /// A background task reported while the chat was idle: one log row on its own.
     News(WorkRow),
-    Compacted,
+    /// A compaction boundary whose summary opens in place.
+    Compacted(crate::compaction_card::CompactionCard),
     /// A proposed plan: the transcript's hero card.
     Plan(crate::plan_card::PlanCard),
     /// The files a settled turn edited or created, with inline diffs and a link to Changes.
@@ -82,8 +83,8 @@ pub enum Item {
     ChatTyping(crate::chat_transcript::Mood),
     /// The files a settled reply wrote in the scratchpad, which show in the Finder.
     ChatFiles(Vec<crate::chat_transcript::ScratchFile>),
-    /// The conversation was compacted here.
-    ChatTidied,
+    /// The conversation was compacted here; clicking opens the summary.
+    ChatTidied(crate::compaction_card::CompactionCard),
 }
 
 /// A slash command as the user typed it.
@@ -345,6 +346,8 @@ fn gap_above(item: &Item, previous: Option<&Item>) -> f32 {
         (Some(Item::Commit(_)), Item::Commit(_)) => 8.,
         (Some(Item::Work(_)), Item::Commit(_)) => 10.,
         (Some(Item::Commit(_)), Item::Work(_)) => 12.,
+        (Some(Item::Work(_)), Item::Compacted(_)) => 12.,
+        (Some(Item::Compacted(_)), Item::Work(_)) => 12.,
         (Some(Item::Prompt { .. }), _) => 16.,
         _ => 18.,
     }
@@ -445,15 +448,8 @@ pub fn item(item: &Item, previous: Option<&Item>, theme: &Theme, handlers: &Hand
         | Item::ChatChips(_)
         | Item::ChatTyping(_)
         | Item::ChatFiles(_)
-        | Item::ChatTidied => div().into_any_element(),
-        Item::Compacted => div()
-            .flex()
-            .items_center()
-            .gap(px(12.))
-            .child(div().flex_1().h(px(1.)).bg(theme.border))
-            .child(div().typography(Type::Small).text_color(theme.text_faint).child("Earlier messages were summarised"))
-            .child(div().flex_1().h(px(1.)).bg(theme.border))
-            .into_any_element(),
+        | Item::ChatTidied(_) => div().into_any_element(),
+        Item::Compacted(card) => crate::compaction_card::view(card, theme, handlers),
     };
     div().pt(px(gap_above(item, previous))).child(body).into_any_element()
 }

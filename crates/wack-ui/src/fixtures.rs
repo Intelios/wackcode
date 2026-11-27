@@ -2079,3 +2079,83 @@ pub fn turn_changes_turn() -> Vec<Item> {
 
     items(&conversation, &["turn-1-changes-file-1"], t2 + 12_000)
 }
+
+/// A Code chat showing compaction summaries: a collapsed manual compaction boundary and an
+/// expanded mid-turn compaction card with token counts, structured Markdown, file lists and
+/// quoted user messages.
+pub fn compaction_turn() -> Vec<Item> {
+    let mut conversation = Conversation::default();
+    let t2 = START + 25_000;
+    conversation.send("Now honour `Retry-After` on 429 responses and cap the wait at 60 seconds.", t2);
+    call(&mut conversation, "cmp-r2", "read", json!({ "path": format!("{CWD}/crates/wack-llm/src/retry.rs") }), Some(&"x\n".repeat(140)), t2 + 2_000);
+    let expanded_summary = wack_core::compaction::Summary {
+        body: "## Goal\nHonour `Retry-After` headers (delta-seconds and RFC 9110 dates) in `wack-llm` and cap waits at 60 seconds.\n\n## Progress\n- Buffered split UTF-8 chunks in `sse.rs` (`sse_split_utf8` passes).\n- Audited `retry.rs` and `http.rs` for 429 and 529 handling.\n\n## Next steps\n1. Parse `Retry-After` in `retry::parse_retry_after` and clamp to 60s.\n2. Run `cargo test -p wack-llm`.".into(),
+        user_messages: vec![
+            "Fix the SSE decoder tail so a split UTF-8 byte sequence never panics.".into(),
+            "Now honour `Retry-After` on 429 responses and cap the wait at 60 seconds.".into(),
+        ],
+        omitted_user_messages: 1,
+        read_files: vec!["crates/wack-llm/src/http.rs".into()],
+        modified_files: vec!["crates/wack-llm/src/sse.rs".into(), "crates/wack-llm/src/retry.rs".into()],
+        sections: Vec::new(),
+    };
+    conversation.apply(&Event::Compacting, t2 + 4_000);
+    conversation.apply(&Event::Compacted { usage: None, summary: expanded_summary, tokens_before: 162_450, tokens_after: 18_320 }, t2 + 7_000);
+    call(&mut conversation, "cmp-b1", "bash", json!({ "command": "cargo test -p wack-llm retry" }), Some("test result: ok. 9 passed; 0 failed"), t2 + 12_000);
+    conversation.apply(&Event::Text("Parsed both `Retry-After` forms, clamped delays to 60 seconds, and verified all 9 retry tests.".into()), t2 + 15_000);
+    conversation.apply(&Event::Reply { usage: Some(Usage { input: 1_100, output: 410, cache_read: 19_400, cache_write: 0 }) }, t2 + 15_000);
+    conversation.finish(&Ok(Outcome::Done), t2 + 16_000);
+
+    let collapsed_summary = wack_core::compaction::Summary {
+        body: "## Goal\nHarden streaming and retries in `wack-llm`.".into(),
+        user_messages: vec!["Now honour `Retry-After` on 429 responses and cap the wait at 60 seconds.".into()],
+        modified_files: vec!["crates/wack-llm/src/retry.rs".into()],
+        ..Default::default()
+    };
+    conversation.begin_compaction();
+    conversation.apply(&Event::Compacted { usage: None, summary: collapsed_summary, tokens_before: 48_200, tokens_after: 9_400 }, t2 + 22_000);
+    conversation.finish_compaction(&Ok(Outcome::Done));
+
+    items(&conversation, &["turn-1-compact-1"], t2 + 25_000)
+}
+
+/// A Chat area conversation with both a collapsed and an expanded compaction summary.
+pub fn chat_area_compaction_turns() -> Vec<Item> {
+    let earlier = START - 20_000;
+    let mut conversation = Conversation::default();
+    conversation.send("Swap day 3 for something quieter and add a good coffee spot near Graça.", earlier);
+    conversation.apply(
+        &Event::Text("Replaced Chiado with Príncipe Real and Estrela Gardens, and added Fabrica Coffee Roasters plus Comoba for mornings near Graça.".into()),
+        earlier + 4_000,
+    );
+    conversation.finish(&Ok(Outcome::Done), earlier + 5_000);
+
+    let expanded_summary = wack_core::compaction::Summary {
+        body: "## Goal\nRefine a relaxed four-day Lisbon itinerary focused on neighbourhood walks, local food, and coffee.\n\n## Decisions\n- Skip museums; anchor each day on one walkable neighbourhood.\n- Day 3 moved to Príncipe Real and Estrela Gardens for a quieter pace.\n- Morning coffee near Graça: Fabrica Coffee Roasters and Comoba.".into(),
+        user_messages: vec![
+            "Plan four days in Lisbon for someone who likes food and long walks, not museums.".into(),
+            "Swap day 3 for something quieter and add a good coffee spot near Graça.".into(),
+        ],
+        modified_files: vec!["lisbon/plan.md".into()],
+        ..Default::default()
+    };
+    conversation.begin_compaction();
+    conversation.apply(&Event::Compacted { usage: None, summary: expanded_summary, tokens_before: 44_600, tokens_after: 6_100 }, earlier + 8_000);
+    conversation.finish_compaction(&Ok(Outcome::Done));
+
+    let collapsed_summary = wack_core::compaction::Summary {
+        body: "## Goal\nFinalise Lisbon dinner bookings.".into(),
+        ..Default::default()
+    };
+    conversation.begin_compaction();
+    conversation.apply(&Event::Compacted { usage: None, summary: collapsed_summary, tokens_before: 18_400, tokens_after: 3_200 }, earlier + 12_000);
+    conversation.finish_compaction(&Ok(Outcome::Done));
+
+    let open: HashSet<String> = ["compact-2".to_string()].into_iter().collect();
+    let mut items = Vec::new();
+    let mut cache = ReplyCache::default();
+    for index in 0..conversation.entries.len() {
+        crate::chat_transcript::entry_items(&conversation, index, Path::new(SCRATCHPAD), &open, &mut cache, &mut items);
+    }
+    items
+}

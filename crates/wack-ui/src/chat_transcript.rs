@@ -140,7 +140,7 @@ pub fn mood(turn: &Turn) -> Option<Mood> {
     }
     Some(match turn.steps.last() {
         Some(Step::Thought(_)) => Mood::Thinking,
-        Some(Step::Event(_)) => Mood::Tidying,
+        Some(Step::Compacting) => Mood::Tidying,
         Some(Step::Tool(tool)) if tool.result.is_none() => Mood::Using,
         _ => Mood::Typing,
     })
@@ -486,7 +486,15 @@ pub fn entry_items(conversation: &Conversation, index: usize, scratchpad: &Path,
                 })
                 .collect(),
         }),
-        Entry::Compacted => items.push(Item::ChatTidied),
+        Entry::Compacted(compaction) => {
+            let key = format!("compact-{index}");
+            items.push(Item::ChatTidied(crate::compaction_card::from_compaction(
+                compaction,
+                &key,
+                open.contains(&key),
+                cache,
+            )));
+        }
         Entry::Notice { text, failed } => items.push(Item::Notice { text: text.clone().into(), failed: *failed }),
         // A Chat chat has no background tasks or sub-agents to hear from.
         Entry::News(_) => {}
@@ -561,13 +569,20 @@ fn turn_items(conversation: &Conversation, index: usize, turn: &Turn, scratchpad
                 flush_thought(&mut thought, items);
                 run.push(tool);
             }
-            Step::Event(_) => {
+            Step::Compacting => {
                 flush_run(&mut run, items);
                 flush_thought(&mut thought, items);
-                // Compacting now is the typing bubble's; done, it is a quiet line.
-                if !(turn.live && at == last) {
-                    items.push(Item::ChatTidied);
-                }
+            }
+            Step::Compacted(compaction) => {
+                flush_run(&mut run, items);
+                flush_thought(&mut thought, items);
+                let card_key = format!("{key}-compact-{at}");
+                items.push(Item::ChatTidied(crate::compaction_card::from_compaction(
+                    compaction,
+                    &card_key,
+                    open.contains(&card_key),
+                    cache,
+                )));
             }
             Step::Task(_) => {}
         }
@@ -640,7 +655,7 @@ pub fn gap_above(item: &Item, previous: Option<&Item>) -> Option<f32> {
         (Item::ChatSpeaker { .. }, _) => 8.,
         (_, Item::Prompt { .. }) => 26.,
         (_, Item::ChatBubble { .. } | Item::ChatChips(_) | Item::ChatThought { .. } | Item::ChatTyping(_) | Item::ChatFiles(_)) => 8.,
-        (_, Item::ChatTidied) => 18.,
+        (_, Item::ChatTidied(_)) => 18.,
         _ => return None,
     })
 }
@@ -768,20 +783,7 @@ pub fn item(item: &Item, theme: &Theme, handlers: &Handlers, still: bool) -> Opt
             }
             row.into_any_element()
         }
-        Item::ChatTidied => div()
-            .flex()
-            .justify_center()
-            .child(
-                div()
-                    .flex()
-                    .items_center()
-                    .gap(px(6.))
-                    .typography(Type::Small)
-                    .text_color(theme.text_faint)
-                    .child(Icon::Spark.view(px(11.), theme.text_faint))
-                    .child("Tidied up the conversation"),
-            )
-            .into_any_element(),
+        Item::ChatTidied(card) => crate::compaction_card::chat_view(card, theme, handlers),
         _ => return None,
     })
 }
@@ -977,7 +979,7 @@ mod tests {
         assert_eq!(mood(&turn), Some(Mood::Thinking));
         turn.steps.push(Step::Tool(tool("web_fetch", json!({}), None)));
         assert_eq!(mood(&turn), Some(Mood::Using));
-        turn.steps.push(Step::Event("Compacting".into()));
+        turn.steps.push(Step::Compacting);
         assert_eq!(mood(&turn), Some(Mood::Tidying));
         turn.reply = "Here".into();
         assert_eq!(mood(&turn), None, "its words are coming in");
@@ -1051,5 +1053,41 @@ mod tests {
         assert_eq!(format!("{items:?}"), whole(&conversation));
         assert!(items.iter().any(|item| matches!(item, Item::ChatFiles(files) if files[0].name.as_ref() == "a.md")), "{items:?}");
         assert!(items.iter().any(|item| matches!(item, Item::ChatBubble { copy: Some(_), .. })));
+    }
+
+    #[test]
+    fn chat_compactions_open_to_their_summary() {
+        let summary = wack_core::compaction::Summary {
+            body: "## Goal\nPlan the Lisbon itinerary.\n\n## Decisions\nStaying in Alfama for four nights.".into(),
+            user_messages: vec!["Help me plan four days in Lisbon.".into()],
+            ..Default::default()
+        };
+        let mut conversation = Conversation::default();
+        conversation.send("Help me plan four days in Lisbon.", 1_000);
+        conversation.apply(&wack_core::Event::Text("Here is day one.".into()), 2_000);
+        conversation.finish(&Ok(wack_core::Outcome::Done), 3_000);
+        conversation.begin_compaction();
+        conversation.apply(&wack_core::Event::Compacted { usage: None, summary, tokens_before: 28_000, tokens_after: 3_200 }, 4_000);
+        conversation.finish_compaction(&Ok(wack_core::Outcome::Done));
+
+        let build = |open: &HashSet<String>| {
+            let mut cache = ReplyCache::default();
+            let mut items = Vec::new();
+            for index in 0..conversation.entries.len() {
+                entry_items(&conversation, index, Path::new("/s"), open, &mut cache, &mut items);
+            }
+            items
+        };
+        let closed = build(&HashSet::new());
+        let Some(Item::ChatTidied(card)) = closed.last() else { panic!("expected chat compaction: {closed:?}") };
+        assert!(!card.open && card.blocks.is_empty());
+        let key = card.key.to_string();
+
+        let mut open = HashSet::new();
+        open.insert(key);
+        let expanded = build(&open);
+        let Some(Item::ChatTidied(card)) = expanded.last() else { panic!("expected expanded chat compaction") };
+        assert!(card.open && !card.blocks.is_empty());
+        assert!(card.text.contains("Staying in Alfama for four nights."));
     }
 }

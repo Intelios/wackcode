@@ -274,7 +274,7 @@ pub fn render(chat: &Readable, entries: &[HistoryEntry], tools: bool) -> String 
     let mut names: std::collections::HashMap<String, String> = std::collections::HashMap::new();
     for entry in entries {
         match entry {
-            HistoryEntry::Compacted => blocks.push("## The conversation before this point was summarised for the model.".to_string()),
+            HistoryEntry::Compacted { .. } => blocks.push("## The conversation before this point was summarised for the model.".to_string()),
             HistoryEntry::Message { message, .. } => match message.role {
                 Role::User => {
                     let results: Vec<String> = message

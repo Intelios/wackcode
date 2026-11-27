@@ -60,6 +60,7 @@ pub use wack_web::{WEB_FETCH, WEB_SEARCH};
 pub use wack_mcp as mcp_client;
 /// The user's login-shell environment, read once at launch for `bash` and MCP servers.
 pub use wack_agent::shell_env;
+pub use wack_agent::compaction;
 pub use wack_agent::context;
 
 /// Asking the user: the questions a tool raises and the answers that go back.

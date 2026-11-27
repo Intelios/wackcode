@@ -11,7 +11,7 @@ use serde_json::Value;
 use wack_core::agents::{AGENT, AGENT_MESSAGE, AgentInfo, Status, StoppedBy};
 
 use crate::{
-    conversation::{Conversation, Entry, News, Step, ToolStep, Turn, TurnEnd},
+    conversation::{Compaction, Conversation, Entry, News, Step, ToolStep, Turn, TurnEnd},
     markdown,
     suggestions,
     transcript::{AgentLine, AgentState, AttachedFileShown, CommandShown, Detail, Diff, DiffLine, Item, LineKind, Meta, Target, Work, WorkRow},
@@ -34,6 +34,8 @@ pub struct ReplyCache {
     /// A Chat reply's bubbles, by entry and by the bubble's place in it, so one streaming never
     /// pushes out another.
     pieces: HashMap<(usize, usize), Parsed>,
+    /// Expanded compaction summaries, keyed by card toggle key.
+    compactions: HashMap<String, Parsed>,
 }
 
 impl ReplyCache {
@@ -44,6 +46,18 @@ impl ReplyCache {
             _ => {
                 let blocks = Rc::new(markdown::parse(text));
                 self.pieces.insert((index, piece), (text.to_string(), blocks.clone()));
+                blocks
+            }
+        }
+    }
+
+    /// Expanded compaction summary for `key`, parsed once for each text it has held.
+    pub fn compaction(&mut self, key: &str, text: &str) -> Rc<Vec<markdown::Block>> {
+        match self.compactions.get(key) {
+            Some((parsed, blocks)) if parsed == text => blocks.clone(),
+            _ => {
+                let blocks = Rc::new(markdown::parse(text));
+                self.compactions.insert(key.to_string(), (text.to_string(), blocks.clone()));
                 blocks
             }
         }
@@ -118,7 +132,15 @@ pub fn entry_items(
                         .collect(),
                 })
             }
-            Entry::Compacted => items.push(Item::Compacted),
+            Entry::Compacted(compaction) => {
+                let key = format!("compact-{index}");
+                items.push(Item::Compacted(crate::compaction_card::from_compaction(
+                    compaction,
+                    &key,
+                    open.contains(&key),
+                    cache,
+                )));
+            }
             Entry::Notice { text, failed } => items.push(Item::Notice { text: text.clone().into(), failed: *failed }),
             Entry::News(news) => {
                 let mut row = news_row(news, &format!("news-{index}"));
@@ -127,7 +149,7 @@ pub fn entry_items(
             }
             Entry::Turn(turn) => {
                 let key = format!("turn-{index}");
-                turn_work_items(turn, &key, cwd, open, &conversation.agents, now, items);
+                turn_work_items(conversation, index, cwd, open, now, cache, items);
                 let outcomes: Vec<wack_canvas::tools::Outcome> = turn
                     .steps
                     .iter()
@@ -229,17 +251,23 @@ pub fn entry_items(
     }
 }
 
-/// Emits the work logs and standalone commit milestone rows for `turn`, splitting work groups
-/// wherever a `git commit` call lands so commits always stand visible in chronological order.
+/// Emits the work logs, standalone commit milestone rows, and mid-turn compaction cards for
+/// `turn`, splitting work groups wherever a `git commit` or compaction lands so each stands
+/// visible in chronological order outside folded work.
 fn turn_work_items(
-    turn: &Turn,
-    key: &str,
+    conversation: &Conversation,
+    index: usize,
     cwd: &Path,
     open: &HashSet<String>,
-    agents: &HashMap<String, AgentInfo>,
     now: u64,
+    cache: &mut ReplyCache,
     items: &mut Vec<Item>,
 ) {
+    let Some(Entry::Turn(turn)) = conversation.entries.get(index) else {
+        return;
+    };
+    let key = format!("turn-{index}");
+    let agents = &conversation.agents;
     if turn.steps.is_empty() {
         if turn.live {
             items.push(Item::Work(Work {
@@ -258,11 +286,14 @@ fn turn_work_items(
     enum Chunk<'a> {
         Work(Vec<(usize, &'a Step)>),
         Commit(&'a ToolStep),
+        Compacted(usize, &'a Compaction),
     }
 
     let mut chunks: Vec<Chunk<'_>> = Vec::new();
     for (step_index, step) in turn.steps.iter().enumerate() {
-        if let Step::Tool(tool) = step
+        if let Step::Compacted(compaction) = step {
+            chunks.push(Chunk::Compacted(step_index, compaction));
+        } else if let Step::Tool(tool) = step
             && crate::commit::is_commit_tool(tool)
         {
             chunks.push(Chunk::Commit(tool));
@@ -273,10 +304,12 @@ fn turn_work_items(
         }
     }
 
-    // While a turn is live, its latest step is a finished commit, and no reply has arrived yet,
-    // keep a live trailing work chip below the commit so the paddling duck shows the model is
+    // While a turn is live, its latest step is a finished commit or compaction, and no reply has
+    // arrived yet, keep a live trailing work chip below it so the paddling duck shows the model is
     // still working on what comes next.
-    if turn.live && turn.reply.trim().is_empty() && matches!(chunks.last(), Some(Chunk::Commit(tool)) if tool.result.is_some()) {
+    let trailing_milestone = matches!(chunks.last(), Some(Chunk::Commit(tool)) if tool.result.is_some())
+        || matches!(chunks.last(), Some(Chunk::Compacted(..)));
+    if turn.live && turn.reply.trim().is_empty() && trailing_milestone {
         chunks.push(Chunk::Work(Vec::new()));
     }
 
@@ -289,6 +322,15 @@ fn turn_work_items(
         match chunk {
             Chunk::Commit(tool) => {
                 items.push(Item::Commit(crate::commit::from_tool(tool, turn.live, open.contains(&tool.id))));
+            }
+            Chunk::Compacted(step_index, compaction) => {
+                let card_key = format!("{key}-compact-{step_index}");
+                items.push(Item::Compacted(crate::compaction_card::from_compaction(
+                    compaction,
+                    &card_key,
+                    open.contains(&card_key),
+                    cache,
+                )));
             }
             Chunk::Work(steps) => {
                 // First work group keeps `turn-{index}`; later ones use `turn-{index}.{n}` (no
@@ -442,7 +484,13 @@ pub fn activity(rows: &[WorkRow]) -> Option<String> {
         Target::Code(text) if row.verb.as_ref() != "Ran" => text.rsplit('/').next().unwrap_or(text).to_string(),
         Target::Code(text) | Target::Words(text) | Target::Note(text) => text.to_string(),
     };
-    Some(if target.is_empty() { verb.to_string() } else { format!("{verb} {target}") })
+    Some(if target.is_empty() {
+        verb.to_string()
+    } else if verb.is_empty() {
+        target
+    } else {
+        format!("{verb} {target}")
+    })
 }
 
 /// A web search's results as "Title — site" lines, read back from the tool's text.
@@ -526,16 +574,17 @@ fn step_row(step: &Step, key: &str, cwd: &Path, live: bool, open: &HashSet<Strin
             agent: None,
             pictures: Vec::new(),
         },
-        Step::Event(text) => WorkRow {
+        Step::Compacting => WorkRow {
             key: key.to_string().into(),
             verb: "".into(),
-            target: Target::Words(text.clone().into()),
-            meta: Meta::None,
+            target: Target::Words("Compacting the conversation to make room…".into()),
+            meta: Meta::Running,
             detail: None,
             open: false,
             agent: None,
             pictures: Vec::new(),
         },
+        Step::Compacted(_) => unreachable!("mid-turn compactions are lifted out by turn_work_items"),
         Step::Tool(tool) if is_agent_row(tool, agents) => agent_row(tool, agents.get(&tool.id), live, now),
         Step::Tool(tool) => tool_row(tool, cwd, live),
         Step::Task(news) => news_row(news, key),
@@ -1987,5 +2036,48 @@ mod tests {
         assert_eq!(card.heading.as_ref(), "Edited 1 file");
         assert_eq!((card.added, card.removed), (2, 1));
         assert!(matches!(&settled[4], Item::Footer(_)));
+    }
+
+    #[test]
+    fn compactions_lift_out_of_work_groups_and_open_to_their_summary() {
+        let summary = wack_core::compaction::Summary {
+            body: "## Goal\nKeep the stream decoding clean.\n\n## Next steps\nRun the test suite.".into(),
+            user_messages: vec!["Fix the decoder".into()],
+            modified_files: vec!["src/sse.rs".into()],
+            ..Default::default()
+        };
+        let mut conversation = Conversation::default();
+        conversation.send("Fix the decoder", 1_000);
+        conversation.apply(&wack_core::Event::ToolCall { id: "r1".into(), name: "read".into(), input: json!({ "path": "src/sse.rs" }) }, 2_000);
+        conversation.apply(&wack_core::Event::ToolResult { id: "r1".into(), name: "read".into(), content: "ok".into(), is_error: false, images: Vec::new() }, 3_000);
+        conversation.apply(&wack_core::Event::Compacting, 3_500);
+
+        // While compacting mid-turn, the live work log shows it and reports activity.
+        let live_compacting = items(&conversation, Path::new("/"), &HashSet::new(), 4_000, &mut ReplyCache::default());
+        let Item::Work(live_work) = &live_compacting[1] else { panic!("expected live work") };
+        assert_eq!(activity(&live_work.rows).as_deref(), Some("Compacting the conversation to make room…"));
+
+        conversation.apply(&wack_core::Event::Compacted { usage: None, summary: summary.clone(), tokens_before: 64_000, tokens_after: 9_200 }, 5_000);
+        // Right after mid-turn compaction completes, the card stands on its own and a live trailing work chip waits below.
+        let waiting = items(&conversation, Path::new("/"), &HashSet::new(), 6_000, &mut ReplyCache::default());
+        assert!(matches!(&waiting[1], Item::Work(_)));
+        assert!(matches!(&waiting[2], Item::Compacted(card) if !card.open && card.tokens_before == Some(64_000) && card.tokens_after == Some(9_200)));
+        assert!(matches!(&waiting[3], Item::Work(work) if work.live && work.rows.is_empty()));
+
+        conversation.apply(&wack_core::Event::Text("All fixed.".into()), 7_000);
+        conversation.finish(&Ok(wack_core::Outcome::Done), 10_000);
+
+        let closed = items(&conversation, Path::new("/"), &HashSet::new(), 12_000, &mut ReplyCache::default());
+        let Item::Compacted(card) = &closed[2] else { panic!("expected mid-turn compaction card: {closed:?}") };
+        assert_eq!(card.key.as_ref(), "turn-1-compact-1");
+        assert!(!card.open && card.blocks.is_empty());
+
+        let mut open = HashSet::new();
+        open.insert(card.key.to_string());
+        let expanded = items(&conversation, Path::new("/"), &open, 12_000, &mut ReplyCache::default());
+        let Item::Compacted(card) = &expanded[2] else { panic!("expected expanded compaction card") };
+        assert!(card.open && !card.blocks.is_empty());
+        assert!(card.text.contains("Keep the stream decoding clean."));
+        assert!(card.text.contains("`src/sse.rs`"));
     }
 }

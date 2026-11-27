@@ -358,6 +358,75 @@ pub fn all() -> Vec<Scene> {
             },
         },
         Scene {
+            name: "chat-compaction",
+            description: "Compaction summary cards in Code: a collapsed manual compaction boundary and an expanded mid-turn compaction with token counts, Markdown summary, files and quoted user messages.",
+            size: size(px(1180.), px(1280.)),
+            build: |_, cx| {
+                cx.new(|_| {
+                    Shell::showing_tabs(
+                        fixtures::sidebar(Selected::Finished),
+                        Screen::Chat {
+                            title: fixtures::WORKING_TITLE.into(),
+                            project: fixtures::project(),
+                            body: Body::Items(fixtures::compaction_turn()),
+                            composer: fixtures::composer_after_turn(Input::Drawn {
+                                text: None,
+                                placeholder: crate::chat::FOLLOW_UP_PLACEHOLDER.into(),
+                            }),
+                        },
+                        fixtures::strip(Some(fixtures::WORKING_TITLE)),
+                    )
+                })
+                .into()
+            },
+        },
+        Scene {
+            name: "chat-compaction-backdrop",
+            description: "Compaction summary cards over an image backdrop: collapsed boundary and expanded summary card on glass.",
+            size: size(px(1180.), px(1280.)),
+            build: |_, cx| {
+                let picture = over(fixtures::backdrop(wack_core::Texture::None), cx);
+                cx.new(|_| {
+                    Shell::showing_tabs(
+                        fixtures::sidebar(Selected::Finished),
+                        Screen::Chat {
+                            title: fixtures::WORKING_TITLE.into(),
+                            project: fixtures::project(),
+                            body: Body::Items(fixtures::compaction_turn()),
+                            composer: fixtures::composer_after_turn(Input::Drawn {
+                                text: None,
+                                placeholder: crate::chat::FOLLOW_UP_PLACEHOLDER.into(),
+                            }),
+                        },
+                        fixtures::strip(Some(fixtures::WORKING_TITLE)),
+                    )
+                    .with_backdrop(picture)
+                })
+                .into()
+            },
+        },
+        Scene {
+            name: "chat-area-compaction",
+            description: "Chat area compaction summaries: a collapsed pill and an expanded summary sheet.",
+            size: size(px(1180.), px(1080.)),
+            build: |_, cx| {
+                let screen = Screen::Chat {
+                    title: fixtures::CHAT_AREA_TITLE.into(),
+                    project: crate::shell::ProjectInfo { name: "".into(), path: "".into(), branch: None },
+                    body: crate::shell::Body::Items(fixtures::chat_area_compaction_turns()),
+                    composer: ComposerData {
+                        chat_area: true,
+                        input: Input::Drawn { text: None, placeholder: crate::app::CHAT_FOLLOW_UP_PLACEHOLDER.into() },
+                        ..fixtures::composer_after_turn(Input::Drawn {
+                            text: None,
+                            placeholder: crate::app::CHAT_FOLLOW_UP_PLACEHOLDER.into(),
+                        })
+                    },
+                };
+                cx.new(|_| Shell::showing_tabs(fixtures::chat_sidebar(true, false), screen, fixtures::chat_strip(Some(fixtures::CHAT_AREA_TITLE)))).into()
+            },
+        },
+        Scene {
             name: "suggestions",
             description: "The suggested-task tray under a settled turn: open, queued, started, opened-in and dismissed cards.",
             size: size(px(1180.), px(1240.)),

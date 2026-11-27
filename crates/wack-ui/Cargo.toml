@@ -23,6 +23,7 @@ futures.workspace = true
 tokio.workspace = true
 unicode-segmentation = "1"
 serde_json.workspace = true
+regex.workspace = true
 pulldown-cmark = { version = "0.13", default-features = false }
 # Grammars only, with the pure-Rust regex engine: colours come from the theme, not syntect.
 syntect = { version = "5", default-features = false, features = ["default-syntaxes", "regex-fancy"] }

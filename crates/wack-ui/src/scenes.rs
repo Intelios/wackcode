@@ -589,6 +589,7 @@ pub fn all() -> Vec<Scene> {
                         chat_area: false,
                         archived: None,
                         model: "claude-opus-5-5".into(),
+                        brand: Some(crate::brand::Brand::Claude),
                         menu: Some(fixtures::model_menu()),
                         ..fixtures::composer_after_turn(Input::Drawn { text: None, placeholder: crate::chat::FOLLOW_UP_PLACEHOLDER.into() })
                     };
@@ -613,6 +614,7 @@ pub fn all() -> Vec<Scene> {
                 cx.new(|_| {
                     let composer = ComposerData {
                         model: "claude-opus-5-5".into(),
+                        brand: Some(crate::brand::Brand::Claude),
                         menu: Some(fixtures::model_menu_with_team(false)),
                         ..fixtures::composer_after_turn(Input::Drawn { text: None, placeholder: crate::chat::FOLLOW_UP_PLACEHOLDER.into() })
                     };
@@ -632,6 +634,7 @@ pub fn all() -> Vec<Scene> {
                 cx.new(|_| {
                     let composer = ComposerData {
                         model: "claude-opus-5-5".into(),
+                        brand: Some(crate::brand::Brand::Claude),
                         crew: Some(crate::composer::CrewPill { model: "claude-haiku-5-5".into(), ..fixtures::crew_pill(false) }),
                         menu: Some(fixtures::crew_menu()),
                         ..fixtures::composer_after_turn(Input::Drawn { text: None, placeholder: crate::chat::FOLLOW_UP_PLACEHOLDER.into() })
@@ -659,6 +662,29 @@ pub fn all() -> Vec<Scene> {
                     ("Working", ComposerData { crew: Some(fixtures::crew_pill(false)), ..fixtures::composer_working() }),
                 ];
                 cx.new(|_| ComposerSheet { rows }).into()
+            },
+        },
+        Scene {
+            name: "model-logos",
+            description: "All 25 model provider logos in light, dark and Mono, plus composer states for Logos On, custom model, and Logos Off.",
+            size: size(px(820.), px(780.)),
+            build: |_, cx| {
+                let drawn = || Input::Drawn { text: None, placeholder: crate::chat::FOLLOW_UP_PLACEHOLDER.into() };
+                let rows = vec![
+                    (
+                        "Logos on · recognised model (Claude)",
+                        ComposerData { model: "claude-opus-5-5".into(), brand: Some(crate::brand::Brand::Claude), ..fixtures::composer_after_turn(drawn()) },
+                    ),
+                    (
+                        "Logos on · unrecognised custom model (nothing beside name)",
+                        ComposerData { model: "local-finetune-v2".into(), brand: None, ..fixtures::composer_after_turn(drawn()) },
+                    ),
+                    (
+                        "Logos off · nothing beside name",
+                        ComposerData { model: "GLM-5.3-Flash".into(), brand: None, ..fixtures::composer_after_turn(drawn()) },
+                    ),
+                ];
+                cx.new(|_| ModelLogosSheet { rows }).into()
             },
         },
         Scene {
@@ -928,7 +954,7 @@ pub fn all() -> Vec<Scene> {
                 cx.new(|_| {
                     let composer = ComposerData {
                         model: "Choose model".into(),
-                        connection: "".into(),
+                        brand: None,
                         effort: None,
                         model_missing: Some(wack_core::MODEL_MISSING_MESSAGE.into()),
                         meter: Some(crate::composer::Meter {
@@ -966,7 +992,7 @@ pub fn all() -> Vec<Scene> {
                 cx.new(|_| {
                     let composer = ComposerData {
                         model: "Choose model".into(),
-                        connection: "".into(),
+                        brand: None,
                         effort: None,
                         model_missing: Some(wack_core::MODEL_MISSING_MESSAGE.into()),
                         meter: Some(crate::composer::Meter {
@@ -1005,7 +1031,7 @@ pub fn all() -> Vec<Scene> {
                 let missing = |chat_area: bool, text: Option<&str>| ComposerData {
                     chat_area,
                     model: "Choose model".into(),
-                    connection: "".into(),
+                    brand: None,
                     effort: None,
                     model_missing: Some(wack_core::MODEL_MISSING_MESSAGE.into()),
                     meter: Some(crate::composer::Meter {
@@ -3282,7 +3308,7 @@ fn subagents_scene(scene: SubagentsScene, backdrop: Option<crate::backdrop::Pict
         tool_folders: vec!["claude".into()],
         team_default: Some(wack_core::ModelChoice { connection: Some(connections[0].id.clone()), model: connections[0].models.last().map(|model| model.id.clone()), effort: None }),
     };
-    let titles = crate::titles_card::TitlesData::new(&wack_core::AutoTitleConfig { enabled: true, connection: Some(connections[0].id.clone()), model: connections[0].models.last().map(|model| model.id.clone()) }, &connections, false, None);
+    let titles = crate::titles_card::TitlesData::new(&wack_core::AutoTitleConfig { enabled: true, connection: Some(connections[0].id.clone()), model: connections[0].models.last().map(|model| model.id.clone()) }, &connections, true, false, None);
     let form = ProviderForm::new(cx);
     let data = SettingsData {
         section: Section::Subagents,
@@ -3293,7 +3319,7 @@ fn subagents_scene(scene: SubagentsScene, backdrop: Option<crate::backdrop::Pict
         memory: Default::default(),
         skills: Default::default(),
         commands: Default::default(),
-        subagents: state.data(&config, &connections, titles, cx),
+        subagents: state.data(&config, &connections, true, titles, cx),
         git: Default::default(),
         integrations: Default::default(),
         web: Default::default(),
@@ -3335,6 +3361,67 @@ impl Render for ComposerSheet {
                 .child(gpui::div().typography(Type::Label).text_color(theme.text_dim).child(*caption))
                 .child(gpui::div().when(*caption == "Narrow", |row| row.w(px(Self::NARROW))).child(crate::composer::Composer::new(data.clone())))
         }))
+    }
+}
+
+/// All 25 model provider logos, then composer rows showing On, unknown custom model, and Off.
+struct ModelLogosSheet {
+    rows: Vec<(&'static str, ComposerData)>,
+}
+
+impl Render for ModelLogosSheet {
+    fn render(&mut self, _: &mut Window, cx: &mut Context<Self>) -> impl IntoElement {
+        use crate::typography::Typography;
+        let theme = crate::theme::Theme::get(cx).clone();
+        let grid = gpui::div()
+            .p(px(14.))
+            .rounded(px(16.))
+            .bg(theme.surface)
+            .border_1()
+            .border_color(theme.border)
+            .flex()
+            .flex_wrap()
+            .gap(px(8.))
+            .children(crate::brand::Brand::ALL.into_iter().map(|brand| {
+                gpui::div()
+                    .w(px(136.))
+                    .h(px(30.))
+                    .px(px(10.))
+                    .rounded_full()
+                    .bg(theme.window)
+                    .border_1()
+                    .border_color(theme.border)
+                    .flex()
+                    .items_center()
+                    .gap(px(7.))
+                    .child(brand.view(px(14.), &theme))
+                    .child(gpui::div().min_w_0().truncate().typography(Type::Ui).text_color(theme.text_soft).child(brand.name()))
+            }));
+        let composers = gpui::div().flex().flex_col().gap(px(16.)).children(self.rows.iter().enumerate().map(|(index, (caption, data))| {
+            gpui::div()
+                .id(("model-logos-composer", index))
+                .flex()
+                .flex_col()
+                .gap(px(6.))
+                .child(gpui::div().typography(Type::Label).text_color(theme.text_dim).child(*caption))
+                .child(crate::composer::Composer::new(data.clone()))
+        }));
+        gpui::div()
+            .size_full()
+            .bg(theme.window)
+            .p(px(28.))
+            .flex()
+            .flex_col()
+            .gap(px(22.))
+            .child(
+                gpui::div()
+                    .flex()
+                    .flex_col()
+                    .gap(px(8.))
+                    .child(gpui::div().typography(Type::Label).text_color(theme.text_dim).child("All 25 provider logos (14 px)"))
+                    .child(grid),
+            )
+            .child(composers)
     }
 }
 

@@ -229,7 +229,15 @@ fn default_blur() -> u8 {
     DEFAULT_BLUR
 }
 
-#[derive(Clone, Debug, Default, PartialEq, Serialize, Deserialize)]
+fn on() -> bool {
+    true
+}
+
+fn is_on(enabled: &bool) -> bool {
+    *enabled
+}
+
+#[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
 #[serde(from = "Stored")]
 pub struct Appearance {
     pub mode: Mode,
@@ -244,6 +252,22 @@ pub struct Appearance {
     /// Show a different picture from the library each time WackCode opens.
     #[serde(default, skip_serializing_if = "std::ops::Not::not")]
     pub shuffle: bool,
+    /// Show each model provider's logo beside models in the composer and model pickers.
+    #[serde(default = "on", skip_serializing_if = "is_on")]
+    pub model_logos: bool,
+}
+
+impl Default for Appearance {
+    fn default() -> Self {
+        Self {
+            mode: Mode::default(),
+            theme: ThemeName::default(),
+            pictures: Vec::new(),
+            shown: None,
+            shuffle: false,
+            model_logos: true,
+        }
+    }
 }
 
 /// `Appearance` as written, including the single `backdrop` of the files before the library.
@@ -259,6 +283,8 @@ struct Stored {
     shown: Option<String>,
     #[serde(default)]
     shuffle: bool,
+    #[serde(default = "on")]
+    model_logos: bool,
     #[serde(default)]
     backdrop: Option<Backdrop>,
 }
@@ -271,6 +297,7 @@ impl From<Stored> for Appearance {
             pictures: stored.pictures,
             shown: stored.shown,
             shuffle: stored.shuffle,
+            model_logos: stored.model_logos,
         };
         if let Some(backdrop) = stored.backdrop
             && appearance.pictures.is_empty()
@@ -803,5 +830,20 @@ mod tests {
         let on = serde_json::to_string(&appearance).unwrap();
         assert!(on.contains(r#""shuffle":true"#), "{on}");
         assert_eq!(serde_json::from_str::<Appearance>(&on).unwrap(), appearance);
+    }
+
+    #[test]
+    fn model_logos_defaults_on_and_round_trips_when_off() {
+        assert!(Appearance::default().model_logos);
+        // Earlier settings files without the field load with logos on.
+        let earlier: Appearance = serde_json::from_str(r#"{"mode":"dark","theme":"nebula"}"#).unwrap();
+        assert!(earlier.model_logos);
+        // Omitted when on, persisted when off.
+        let on = serde_json::to_string(&Appearance::default()).unwrap();
+        assert!(!on.contains("model_logos"), "{on}");
+        let off_state = Appearance { model_logos: false, ..Appearance::default() };
+        let off = serde_json::to_string(&off_state).unwrap();
+        assert!(off.contains(r#""model_logos":false"#), "{off}");
+        assert_eq!(serde_json::from_str::<Appearance>(&off).unwrap(), off_state);
     }
 }

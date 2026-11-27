@@ -143,7 +143,7 @@ pub fn composer_empty(roomy: bool) -> ComposerData {
         archived: None,
         input: drawn(None, crate::app::NEW_CHAT_PLACEHOLDER),
         model: "GLM-5.3-Flash".into(),
-        connection: "Testing".into(),
+        brand: Some(crate::brand::Brand::Glm),
         effort: Some("Medium".into()),
         ultra_effort: false,
         crew: None,
@@ -245,6 +245,7 @@ pub fn model_menu() -> crate::composer::MenuData {
                 .map(|model| MenuItem {
                     label: crate::shell::model_name(&model.id).into(),
                     detail: model.context_window.map(|window| work::count(window).into()),
+                    brand: crate::brand::resolve_for(model, &connection),
                     selected: model.id == "claude-opus-5-5",
                     choice: Choice::Model { connection: connection.id.clone(), model: model.id.clone() },
                 })
@@ -283,6 +284,7 @@ pub fn crew_menu() -> crate::composer::MenuData {
                 .map(|model| MenuItem {
                     label: crate::shell::model_name(&model.id).into(),
                     detail: model.context_window.map(|window| work::count(window).into()),
+                    brand: crate::brand::resolve_for(model, &connection),
                     selected: model.id == "claude-haiku-5-5",
                     choice: Choice::Crew { connection: connection.id.clone(), model: model.id.clone() },
                 })
@@ -295,7 +297,7 @@ pub fn crew_menu() -> crate::composer::MenuData {
         items: levels
             .iter()
             .enumerate()
-            .map(|(index, label)| MenuItem { label: (*label).into(), detail: None, selected: index == 0, choice: Choice::CrewEffort(None) })
+            .map(|(index, label)| MenuItem { label: (*label).into(), detail: None, brand: None, selected: index == 0, choice: Choice::CrewEffort(None) })
             .collect(),
     });
     MenuData { kind: crate::app::Menu::Crew, groups, team: None }
@@ -1208,6 +1210,7 @@ pub fn appearance(backdrop: Option<crate::backdrop::Picture>, cx: &mut gpui::App
         theme,
         pictures: pictures.collect(),
         shuffle: backdrop.is_some(),
+        model_logos: true,
         backdrop,
         importing: false,
         notice: None,

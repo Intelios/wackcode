@@ -17,7 +17,7 @@ use gpui::{CursorStyle, DispatchPhase, Hsla, MouseButton, MouseMoveEvent, MouseU
 use wack_core::{Mode, ThemeName};
 
 use crate::{
-    actions::{ChooseBackdrop, ChooseBlur, ChooseDim, ChooseMode, ChooseTexture, ChooseTheme, ChooseZoom, CommitCrop, PreviewCrop, RemovePicture, ResetCrop, ShowPicture, ShuffleBackdrop, ToggleBackdropShuffle},
+    actions::{ChooseBackdrop, ChooseBlur, ChooseDim, ChooseMode, ChooseTexture, ChooseTheme, ChooseZoom, CommitCrop, PreviewCrop, RemovePicture, ResetCrop, ShowPicture, ShuffleBackdrop, ToggleBackdropShuffle, ToggleModelLogos},
     backdrop::Picture,
     icon::Icon,
     settings_kit::{card, dispatch, labelled_slider, pill, row, segmented, slider, staged_head},
@@ -42,6 +42,8 @@ pub struct AppearanceData {
     pub pictures: Vec<Thumbnail>,
     /// Show a different picture each time WackCode opens.
     pub shuffle: bool,
+    /// Show each model provider's logo beside models in the composer and model pickers.
+    pub model_logos: bool,
     /// A picture is being read.
     pub importing: bool,
     pub notice: Option<SharedString>,
@@ -63,7 +65,19 @@ pub fn page(data: AppearanceData, theme: &Theme) -> impl IntoElement {
                 .first()
                 .view(theme),
         )
-        .child(row("Light or dark", Some("Matching the system follows macOS as it changes through the day.")).control(modes).view(theme));
+        .child(row("Light or dark", Some("Matching the system follows macOS as it changes through the day.")).control(modes).view(theme))
+        .child(
+            row("Model logos", Some("Show each model provider’s logo beside models in the composer and model pickers."))
+                .control(
+                    div()
+                        .id("model-logos")
+                        .cursor_pointer()
+                        .on_click(dispatch(ToggleModelLogos))
+                        .child(switch(data.model_logos, theme))
+                        .tag("model-logos"),
+                )
+                .view(theme),
+        );
 
     div()
         .flex()

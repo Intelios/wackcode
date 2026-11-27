@@ -26,9 +26,10 @@ use crate::{
         NewAgent, OpenAgent, RevealMemory, SaveAgent, SwitchAgent, SwitchAgentFolder, ToggleHelperModels, ChooseAgentTeam, ChooseTeamDefault, ToggleTeamModels,
     },
     button::{Button, Kind as ButtonKind},
+    brand::{self, Brand},
     icon::Icon,
     settings::{field, text_area, text_input},
-    settings_kit::{card, dispatch, pill, row, segmented, staged_head},
+    settings_kit::{card, dispatch, model_pill, pill, row, segmented, staged_head},
     tags::Tag,
     text_field::TextField,
     theme::Theme,
@@ -207,35 +208,42 @@ pub struct SubagentsState {
 }
 
 impl SubagentsState {
-    pub fn data(&self, config: &AgentsConfig, connections: &[Connection], titles: TitlesData, cx: &App) -> SubagentsData {
+    pub fn data(&self, config: &AgentsConfig, connections: &[Connection], show_logos: bool, titles: TitlesData, cx: &App) -> SubagentsData {
         let models: Vec<TitleModel> = connections
             .iter()
             .filter(|connection| connection.enabled)
             .flat_map(|connection| {
-                connection.models.iter().map(|model| TitleModel {
+                connection.models.iter().map(move |model| TitleModel {
                     connection: connection.id.clone(),
                     connection_name: connection.name.clone().into(),
                     model: model.id.clone().into(),
+                    brand: show_logos.then(|| brand::resolve_for(model, connection)).flatten(),
                 })
             })
             .collect();
         let picked = config.helper.as_ref().and_then(|choice| choice.connection.clone().zip(choice.model.clone()));
-        let helper = picked.as_ref().and_then(|(connection, model)| {
-            models.iter().find(|listed| &listed.connection == connection && listed.model.as_ref() == model).map(|listed| listed.model.clone())
+        let helper_match = picked.as_ref().and_then(|(connection, model)| {
+            models.iter().find(|listed| &listed.connection == connection && listed.model.as_ref() == model)
         });
+        let helper = helper_match.map(|listed| listed.model.clone());
+        let helper_brand = helper_match.and_then(|listed| listed.brand);
         let helper_gone = picked.is_some() && helper.is_none();
         let team_picked = config.team_default.as_ref().and_then(|choice| choice.connection.clone().zip(choice.model.clone()));
-        let team_default = team_picked.as_ref().and_then(|(connection, model)| {
-            models.iter().find(|listed| &listed.connection == connection && listed.model.as_ref() == model).map(|listed| listed.model.clone())
+        let team_match = team_picked.as_ref().and_then(|(connection, model)| {
+            models.iter().find(|listed| &listed.connection == connection && listed.model.as_ref() == model)
         });
+        let team_default = team_match.map(|listed| listed.model.clone());
+        let team_brand = team_match.and_then(|listed| listed.brand);
         let team_gone = team_picked.is_some() && team_default.is_none();
         SubagentsData {
             team_default,
+            team_brand,
             team_gone,
             team_picked,
             team_open: self.team_open,
             delegation: config.delegation,
             helper,
+            helper_brand,
             helper_gone,
             picked,
             models,
@@ -256,6 +264,7 @@ pub struct SubagentsData {
     pub delegation: Delegation,
     /// The helper model's id, when it is still listed.
     pub helper: Option<SharedString>,
+    pub helper_brand: Option<Brand>,
     /// A helper was chosen whose connection or model is gone: helper roles use the chat's model.
     pub helper_gone: bool,
     pub picked: Option<(String, String)>,
@@ -263,6 +272,7 @@ pub struct SubagentsData {
     pub helper_open: bool,
     /// The crew new Teams start with, when it is still listed.
     pub team_default: Option<SharedString>,
+    pub team_brand: Option<Brand>,
     /// The default crew chosen is gone: new Teams start with the first model there is.
     pub team_gone: bool,
     pub team_picked: Option<(String, String)>,
@@ -306,11 +316,11 @@ fn delegation_card(data: &SubagentsData, theme: &Theme) -> impl IntoElement {
         Delegation::Off => "No sub-agents: the agent does all the work in the chat itself.",
     };
     let choices = [(Delegation::Auto, "When it helps"), (Delegation::OnRequest, "Only when I ask"), (Delegation::Off, "Off")];
-    let picker = pill(
+    let picker = model_pill(
         "helper-model",
         data.helper.clone().unwrap_or_else(|| "The chat’s model".into()),
-        Some(if data.helper_open { Icon::ChevronDown } else { Icon::ChevronRight }),
-        false,
+        data.helper_brand,
+        data.helper_open,
         theme,
     )
     .max_w(px(260.))
@@ -335,11 +345,11 @@ fn delegation_card(data: &SubagentsData, theme: &Theme) -> impl IntoElement {
 /// Team: what it is, where it is switched on, and the crew new Teams start with.
 fn team_card(data: &SubagentsData, theme: &Theme) -> impl IntoElement {
     let off = data.delegation == Delegation::Off;
-    let picker = pill(
+    let picker = model_pill(
         "team-model",
         data.team_default.clone().unwrap_or_else(|| "First model available".into()),
-        Some(if data.team_open { Icon::ChevronDown } else { Icon::ChevronRight }),
-        false,
+        data.team_brand,
+        data.team_open,
         theme,
     )
     .max_w(px(260.))
@@ -374,7 +384,7 @@ fn team_card(data: &SubagentsData, theme: &Theme) -> impl IntoElement {
 const TEAM_TAGS: [&str; 6] = ["team-model-0", "team-model-1", "team-model-2", "team-model-3", "team-model-4", "team-model-5"];
 
 fn team_list(data: &SubagentsData, theme: &Theme) -> impl IntoElement {
-    let item = |id: (&'static str, usize), label: SharedString, ticked: bool, action: ChooseTeamDefault, tag: &'static str| {
+    let item = |id: (&'static str, usize), label: SharedString, brand: Option<Brand>, ticked: bool, action: ChooseTeamDefault, tag: &'static str| {
         div()
             .id(id)
             .px(px(10.))
@@ -386,6 +396,7 @@ fn team_list(data: &SubagentsData, theme: &Theme) -> impl IntoElement {
             .cursor_pointer()
             .hover(|row| row.bg(theme.hover))
             .on_click(dispatch(action))
+            .when_some(brand, |row, brand| row.child(brand.view(px(14.), theme)))
             .child(div().flex_1().min_w_0().truncate().typography(Type::Ui).text_color(theme.text).child(label))
             .when(ticked, |row| row.child(Icon::Check.view(px(14.), theme.accent_text)))
             .tag(tag)
@@ -400,7 +411,7 @@ fn team_list(data: &SubagentsData, theme: &Theme) -> impl IntoElement {
         .border_color(theme.border)
         .flex()
         .flex_col()
-        .child(item(("team-model-row", usize::MAX), "First model available".into(), data.team_picked.is_none(), ChooseTeamDefault { connection: None, model: None }, "team-model-first"));
+        .child(item(("team-model-row", usize::MAX), "First model available".into(), None, data.team_picked.is_none(), ChooseTeamDefault { connection: None, model: None }, "team-model-first"));
     let mut last: Option<&str> = None;
     for (index, listed) in data.models.iter().enumerate() {
         if last != Some(listed.connection.as_str()) {
@@ -409,7 +420,7 @@ fn team_list(data: &SubagentsData, theme: &Theme) -> impl IntoElement {
         }
         let ticked = data.team_picked.as_ref().is_some_and(|(connection, model)| connection == &listed.connection && model == listed.model.as_ref());
         let action = ChooseTeamDefault { connection: Some(listed.connection.clone()), model: Some(listed.model.to_string()) };
-        list = list.child(item(("team-model-row", index), listed.model.clone(), ticked, action, TEAM_TAGS.get(index).copied().unwrap_or("team-model-more")));
+        list = list.child(item(("team-model-row", index), listed.model.clone(), listed.brand, ticked, action, TEAM_TAGS.get(index).copied().unwrap_or("team-model-more")));
     }
     list
 }
@@ -418,7 +429,7 @@ fn team_list(data: &SubagentsData, theme: &Theme) -> impl IntoElement {
 const HELPER_TAGS: [&str; 6] = ["helper-model-0", "helper-model-1", "helper-model-2", "helper-model-3", "helper-model-4", "helper-model-5"];
 
 fn helper_list(data: &SubagentsData, theme: &Theme) -> impl IntoElement {
-    let item = |id: (&'static str, usize), label: SharedString, ticked: bool, action: ChooseHelperModel, tag: &'static str| {
+    let item = |id: (&'static str, usize), label: SharedString, brand: Option<Brand>, ticked: bool, action: ChooseHelperModel, tag: &'static str| {
         div()
             .id(id)
             .px(px(10.))
@@ -430,6 +441,7 @@ fn helper_list(data: &SubagentsData, theme: &Theme) -> impl IntoElement {
             .cursor_pointer()
             .hover(|row| row.bg(theme.hover))
             .on_click(dispatch(action))
+            .when_some(brand, |row, brand| row.child(brand.view(px(14.), theme)))
             .child(div().flex_1().min_w_0().truncate().typography(Type::Ui).text_color(theme.text).child(label))
             .when(ticked, |row| row.child(Icon::Check.view(px(14.), theme.accent_text)))
             .tag(tag)
@@ -444,7 +456,7 @@ fn helper_list(data: &SubagentsData, theme: &Theme) -> impl IntoElement {
         .border_color(theme.border)
         .flex()
         .flex_col()
-        .child(item(("helper-model-row", usize::MAX), "The chat’s model".into(), data.picked.is_none(), ChooseHelperModel { connection: None, model: None }, "helper-model-chat"));
+        .child(item(("helper-model-row", usize::MAX), "The chat’s model".into(), None, data.picked.is_none(), ChooseHelperModel { connection: None, model: None }, "helper-model-chat"));
     let mut last: Option<&str> = None;
     for (index, listed) in data.models.iter().enumerate() {
         if last != Some(listed.connection.as_str()) {
@@ -453,7 +465,7 @@ fn helper_list(data: &SubagentsData, theme: &Theme) -> impl IntoElement {
         }
         let ticked = data.picked.as_ref().is_some_and(|(connection, model)| connection == &listed.connection && model == listed.model.as_ref());
         let action = ChooseHelperModel { connection: Some(listed.connection.clone()), model: Some(listed.model.to_string()) };
-        list = list.child(item(("helper-model-row", index), listed.model.clone(), ticked, action, HELPER_TAGS.get(index).copied().unwrap_or("helper-model-more")));
+        list = list.child(item(("helper-model-row", index), listed.model.clone(), listed.brand, ticked, action, HELPER_TAGS.get(index).copied().unwrap_or("helper-model-more")));
     }
     list
 }

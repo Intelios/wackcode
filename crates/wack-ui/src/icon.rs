@@ -255,6 +255,7 @@ impl AssetSource for Assets {
     fn load(&self, path: &str) -> gpui::Result<Option<Cow<'static, [u8]>>> {
         Ok(FILES
             .iter()
+            .chain(crate::brand::FILES.iter())
             .find(|(name, _)| *name == path)
             .map(|(_, bytes)| Cow::Borrowed(*bytes)))
     }
@@ -262,6 +263,7 @@ impl AssetSource for Assets {
     fn list(&self, path: &str) -> gpui::Result<Vec<SharedString>> {
         Ok(FILES
             .iter()
+            .chain(crate::brand::FILES.iter())
             .filter(|(name, _)| name.starts_with(path))
             .map(|(name, _)| SharedString::new_static(name))
             .collect())

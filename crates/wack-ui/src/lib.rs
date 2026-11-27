@@ -9,6 +9,7 @@ pub mod appearance_page;
 #[cfg(feature = "automation")]
 pub mod automation;
 pub mod backdrop;
+pub mod brand;
 pub mod browser;
 pub mod button;
 pub mod canvas_card;

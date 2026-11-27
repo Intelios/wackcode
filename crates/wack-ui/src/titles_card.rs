@@ -11,8 +11,9 @@ use wack_core::{AutoTitleConfig, Connection};
 
 use crate::{
     actions::{ChooseTitleModel, ToggleAutoTitles, ToggleTitleModels},
+    brand::{self, Brand},
     icon::Icon,
-    settings_kit::{card, dispatch, pill, row},
+    settings_kit::{card, dispatch, model_pill, row},
     tags::Tag,
     theme::Theme,
     tools_page::switch,
@@ -26,6 +27,7 @@ pub struct TitleModel {
     pub connection: String,
     pub connection_name: SharedString,
     pub model: SharedString,
+    pub brand: Option<Brand>,
 }
 
 #[derive(Clone, Debug, Default, PartialEq)]
@@ -33,6 +35,8 @@ pub struct TitlesData {
     pub enabled: bool,
     /// The picked model's id, when it is still listed. The list shows its connection.
     pub chosen: Option<SharedString>,
+    /// The picked model's provider logo, when logos are on and recognised.
+    pub chosen_brand: Option<Brand>,
     /// The picked one, to tick in the list.
     pub picked: Option<(String, String)>,
     pub models: Vec<TitleModel>,
@@ -41,26 +45,26 @@ pub struct TitlesData {
 }
 
 impl TitlesData {
-    pub fn new(config: &AutoTitleConfig, connections: &[Connection], open: bool, error: Option<SharedString>) -> Self {
+    pub fn new(config: &AutoTitleConfig, connections: &[Connection], show_logos: bool, open: bool, error: Option<SharedString>) -> Self {
         let models: Vec<TitleModel> = connections
             .iter()
             .filter(|connection| connection.enabled)
             .flat_map(|connection| {
-                connection.models.iter().map(|model| TitleModel {
+                connection.models.iter().map(move |model| TitleModel {
                     connection: connection.id.clone(),
                     connection_name: connection.name.clone().into(),
                     model: model.id.clone().into(),
+                    brand: show_logos.then(|| brand::resolve_for(model, connection)).flatten(),
                 })
             })
             .collect();
         let picked = config.connection.clone().zip(config.model.clone());
-        let chosen = picked.as_ref().and_then(|(connection, model)| {
-            models
-                .iter()
-                .find(|listed| &listed.connection == connection && listed.model.as_ref() == model)
-                .map(|listed| listed.model.clone())
+        let matched = picked.as_ref().and_then(|(connection, model)| {
+            models.iter().find(|listed| &listed.connection == connection && listed.model.as_ref() == model)
         });
-        Self { enabled: config.enabled, chosen, picked, models, open, error }
+        let chosen = matched.map(|listed| listed.model.clone());
+        let chosen_brand = matched.and_then(|listed| listed.brand);
+        Self { enabled: config.enabled, chosen, chosen_brand, picked, models, open, error }
     }
 }
 
@@ -72,11 +76,11 @@ pub fn card_view(data: TitlesData, theme: &Theme) -> impl IntoElement {
         .when(!ready && !data.enabled, |control| control.opacity(0.5).tooltip(tip("Choose a title model first")))
         .child(switch(data.enabled, theme))
         .tag("auto-titles");
-    let picker = pill(
+    let picker = model_pill(
         "title-model",
         data.chosen.clone().unwrap_or_else(|| "Choose…".into()),
-        Some(if data.open { Icon::ChevronDown } else { Icon::ChevronRight }),
-        false,
+        data.chosen_brand,
+        data.open,
         theme,
     )
     .max_w(px(260.))
@@ -130,6 +134,7 @@ fn model_list(data: &TitlesData, theme: &Theme) -> impl IntoElement {
                 .cursor_pointer()
                 .hover(|row| row.bg(theme.hover))
                 .on_click(dispatch(action))
+                .when_some(listed.brand, |row, brand| row.child(brand.view(px(14.), theme)))
                 .child(div().flex_1().min_w_0().truncate().typography(Type::Ui).text_color(theme.text).child(listed.model.clone()))
                 .when(ticked, |row| row.child(Icon::Check.view(px(14.), theme.accent_text)))
                 .tag(ROW_TAGS.get(index).copied().unwrap_or("title-model-more")),
@@ -156,19 +161,27 @@ mod tests {
 
     #[test]
     fn lists_only_models_of_connections_that_are_on() {
-        let connections = [connection("a", true, &["small", "big"]), connection("b", false, &["other"])];
-        let config = AutoTitleConfig { enabled: false, connection: Some("a".into()), model: Some("small".into()) };
-        let data = TitlesData::new(&config, &connections, false, None);
+        let connections = [connection("a", true, &["claude-haiku-5-5", "big"]), connection("b", false, &["other"])];
+        let config = AutoTitleConfig { enabled: false, connection: Some("a".into()), model: Some("claude-haiku-5-5".into()) };
+        let data = TitlesData::new(&config, &connections, true, false, None);
         assert_eq!(data.models.len(), 2);
-        assert_eq!(data.chosen.as_deref(), Some("small"));
+        assert_eq!(data.chosen.as_deref(), Some("claude-haiku-5-5"));
+        assert_eq!(data.chosen_brand, Some(Brand::Claude));
+        assert_eq!(data.models[0].brand, Some(Brand::Claude));
+        assert_eq!(data.models[1].brand, None);
+
+        let hidden = TitlesData::new(&config, &connections, false, false, None);
+        assert_eq!(hidden.chosen_brand, None);
+        assert!(hidden.models.iter().all(|listed| listed.brand.is_none()));
     }
 
     #[test]
     fn a_pick_that_is_gone_shows_as_unchosen() {
         let connections = [connection("a", true, &["small"])];
         let config = AutoTitleConfig { enabled: true, connection: Some("b".into()), model: Some("other".into()) };
-        let data = TitlesData::new(&config, &connections, false, None);
+        let data = TitlesData::new(&config, &connections, true, false, None);
         assert_eq!(data.chosen, None);
+        assert_eq!(data.chosen_brand, None);
         assert!(data.enabled);
     }
 }

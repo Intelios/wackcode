@@ -1,7 +1,7 @@
 //! The composer: where the user writes to the agent. One composer, the same everywhere.
 //!
 //! One card. Its controls read as WackCode 2's did: attach, then what you ask with (the model,
-//! with its connection's mark, and the effort's pill, which opens the slider from Default to
+//! with its optional provider logo, and the effort's pill, which opens the slider from Default to
 //! Ultra), then how (the Build | Plan track) beside Send. Send is the one filled control; while
 //! the agent works it is Stop, with Queue beside it once something is written. Round Send runs a
 //! ring of how full the model's context is: hovering it opens WackCode 2's context popover. Only
@@ -54,6 +54,7 @@ use crate::{
         SlideEffort, Stop, StopTask, ToggleTasks, ToggleTodos, Unqueue, SteerQueued, RemoveQueued, InsertFile, RemoveFile,
     },
     attachments::{FileAttachment, FileSource},
+    brand::Brand,
     chat::ChangeCount,
     app::Menu,
     icon::Icon,
@@ -81,8 +82,9 @@ pub struct ComposerData {
     pub archived: Option<SharedString>,
     pub input: Input,
     pub model: SharedString,
-    /// The model's connection, whose initial marks the model's pill.
-    pub connection: SharedString,
+    /// The model provider's logo, when Settings › Appearance › Model logos is on and the model is
+    /// recognised; `None` draws nothing beside the model name.
+    pub brand: Option<Brand>,
     pub effort: Option<SharedString>,
     /// The effort is Ultra: its word is drawn in the prism.
     pub ultra_effort: bool,
@@ -215,6 +217,8 @@ pub struct MenuGroup {
 pub struct MenuItem {
     pub label: SharedString,
     pub detail: Option<SharedString>,
+    /// The model provider's logo, when enabled and recognised; `None` draws nothing.
+    pub brand: Option<Brand>,
     pub selected: bool,
     pub choice: Choice,
 }
@@ -386,7 +390,7 @@ impl RenderOnce for Composer {
                             pill.tooltip(tip(why)).child(Icon::Alert.view(px(12.), theme.warning))
                         })
                         .when(missing.is_none(), |pill| {
-                            pill.when_some(mark_letter(&data.connection), |pill, letter| pill.child(provider_mark(letter, &theme)))
+                            pill.when_some(data.brand, |pill, brand| pill.child(brand.view(px(14.), &theme)))
                         })
                         .child(div().min_w_0().truncate().typography(Type::Ui).child(data.model.clone()))
                         .child(Icon::ChevronDown.view(px(12.), theme.text_faint)),
@@ -617,27 +621,6 @@ impl RenderOnce for Composer {
         }
         column.child(div().flex_none().child(card)).into_any_element()
     }
-}
-
-/// The first letter of a connection's name, for the mark on the model's pill.
-fn mark_letter(connection: &str) -> Option<SharedString> {
-    connection.trim().chars().find(|c| c.is_alphanumeric()).map(|c| c.to_uppercase().collect::<String>().into())
-}
-
-/// A connection's mark: its initial on a rounded square of the accent's wash.
-fn provider_mark(letter: SharedString, theme: &Theme) -> impl IntoElement {
-    div()
-        .flex_none()
-        .size(px(16.))
-        .rounded(px(5.))
-        .flex()
-        .items_center()
-        .justify_center()
-        .bg(theme.accent_wash)
-        .text_color(theme.accent_text)
-        .typography(Type::Small)
-        .font_weight(gpui::FontWeight::BOLD)
-        .child(letter)
 }
 
 /// How much of each segment the tab shows: everything while there is room, then less, in the
@@ -2197,6 +2180,7 @@ impl RenderOnce for ModelPicker {
                         row(("menu-item", index * 1000 + number))
                             .when(item.selected, |row| row.bg(theme.accent_wash))
                             .on_click(move |_, window, cx| window.dispatch_action(action.boxed_clone(), cx))
+                            .when_some(item.brand, |row, brand| row.child(brand.view(px(14.), &theme)))
                             .child(
                                 div()
                                     .flex_1()
@@ -2389,6 +2373,7 @@ impl RenderOnce for CrewPicker {
                         .hover(|row| row.bg(theme.hover))
                         .when(item.selected, |row| row.bg(theme.accent_wash))
                         .on_click(move |_, window, cx| window.dispatch_action(action.boxed_clone(), cx))
+                        .when_some(item.brand, |row, brand| row.child(brand.view(px(14.), &theme)))
                         .child(
                             div()
                                 .flex_1()

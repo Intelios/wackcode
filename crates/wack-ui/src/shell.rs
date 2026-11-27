@@ -50,7 +50,7 @@ use crate::{
         ClosePaneId, CloseSettings, CloseTab, Compact, DeleteChat, DiscardConnection, EditConnection, ToggleConnectionKey, EqualizeSplit, FocusNext, FocusPrevious, MovePane, AddModelRow, RemoveModelRow, SaveCommandEditor, SaveConnection,
         CloseModelSuggestions, RefreshCatalog, FetchModels, TickAllFetched, AddFetchedModels, CloseFetchedModels, PickModelSuggestion, ToggleFetchedModel,
         NewChat, NewChatIn, SelectDraft, CloseDraft, NewTerminal, NewTerminalWith, TogglePaneMenu, ClosePaneMenu, HideSidePanel, ToggleSidePanel, RevealProject, OpenPaneKind, NextTab, OpenEffortMenu, OpenModelMenu, OpenSettings,
-        OpenSettingsSection, PinProject, PreviousTab, RemoveConnection, RemovePicture, ShowCommandOutput, ShowPicture, ShuffleBackdrop, ToggleBackdropShuffle, RemoveProject, ResetDockSize,
+        OpenSettingsSection, PinProject, PreviousTab, RemoveConnection, RemovePicture, ShowCommandOutput, ShowPicture, ShuffleBackdrop, ToggleBackdropShuffle, ToggleModelLogos, RemoveProject, ResetDockSize,
         PickCommand, RetryWorkspaceFiles, SelectChat, Send, Stop, StopCommand, MoveToBackground, ToggleTasks, ToggleTasksPane, StopTask, ShowTask, ToggleAgentsPane, ShowTeam, ToggleBrowserPane, ToggleCanvasPane, ShowCanvas, WriteInComposer, ShowAgent, StopAgent, ShowChanges, ToggleChanges, ToggleProject, ToggleSidebar, ToggleTerminal, TriggerProjectCommand, Unqueue,
         ToggleAutoTitles, ToggleTitleModels, ChooseTitleModel, RenameChat, RenameChatAt, CancelRename, ToggleProjectPicker, CloseProjectPicker, ChooseNewChatProject, OpenChatMenu, CloseChatMenu, ChatMenuPick, ChatPick, OpenPromptMenu, ClosePromptMenu, CopyPrompt, EditPrompt, CancelEdit, SendEdit, RewindPrompt, RetryPrompt, CancelRewind, ToggleRewindFile, ToggleRewindFiles, ConfirmRewind, UndoRewind, ToggleModelReasoning, ToggleModelRow, ToggleModelVision, AttachPictures, AttachFiles, AttachTerminalSelection, RemoveAttachment, InsertFile, RemoveFile, SteerQueued, RemoveQueued, OpenPicture, ClosePicture, StepPicture,
         StartSuggestion, DismissSuggestion, CopySuggestion, OpenChat,
@@ -67,6 +67,7 @@ use crate::{
     app::{AppState, Menu, RenamePlace, Selection, shown_path},
     appearance_page::AppearanceData,
     backdrop::{self, Picture},
+    brand::{self, Brand},
     edge_fade::faded,
     glass::{GLASS_BLUR, Lit, Under, glass},
     chat::ChatSession,
@@ -2230,6 +2231,9 @@ impl Render for Shell {
                 .on_action(cx.listener(|shell, _: &ToggleBackdropShuffle, _, cx| {
                     shell.with_app(cx, |app, cx| app.set_appearance(|appearance| appearance.shuffle = !appearance.shuffle, cx));
                 }))
+                .on_action(cx.listener(|shell, _: &ToggleModelLogos, _, cx| {
+                    shell.with_app(cx, |app, cx| app.set_appearance(|appearance| appearance.model_logos = !appearance.model_logos, cx));
+                }))
                 .on_action(cx.listener(|shell, _: &ShuffleBackdrop, _, cx| {
                     shell.with_app(cx, |app, cx| {
                         app.crop_preview = None;
@@ -2651,6 +2655,7 @@ fn live_view(app: &AppState, cx: &App) -> (SidebarData, Screen, StripData) {
                     backdrop: app.backdrop(),
                     pictures: app.pictures(),
                     shuffle: appearance.shuffle,
+                    model_logos: appearance.model_logos,
                     importing: app.importing,
                     notice: app.appearance_notice.clone(),
                 },
@@ -2666,7 +2671,8 @@ fn live_view(app: &AppState, cx: &App) -> (SidebarData, Screen, StripData) {
                 subagents: app.subagents.data(
                     store.agents_config(),
                     store.connections(),
-                    crate::titles_card::TitlesData::new(store.auto_title(), store.connections(), app.title_models_open, app.title_error.clone()),
+                    appearance.model_logos,
+                    crate::titles_card::TitlesData::new(store.auto_title(), store.connections(), appearance.model_logos, app.title_models_open, app.title_error.clone()),
                     cx,
                 ),
                 git: crate::git_page::GitData {
@@ -2681,6 +2687,7 @@ fn live_view(app: &AppState, cx: &App) -> (SidebarData, Screen, StripData) {
             }))
         }
         Selection::NewChatArea => {
+            let show_logos = store.appearance().model_logos;
             let resolved = store.resolve_default(ChatKind::Chat);
             let (model, effort) = model_words(resolved.as_ref());
             let hour = wack_core::clock::local(crate::chat::now_millis()).hour;
@@ -2692,7 +2699,7 @@ fn live_view(app: &AppState, cx: &App) -> (SidebarData, Screen, StripData) {
                     archived: None,
                     input: Input::Field(app.draft.clone()),
                     model,
-                    connection: connection_name(resolved.as_ref()),
+                    brand: model_brand(resolved.as_ref(), show_logos),
                     effort,
                     ultra_effort: is_ultra(resolved.as_ref()),
                     crew: None,
@@ -2729,6 +2736,7 @@ fn live_view(app: &AppState, cx: &App) -> (SidebarData, Screen, StripData) {
         }
         Selection::NewChat(project) => match info(project) {
             Some(project) => {
+                let show_logos = store.appearance().model_logos;
                 let resolved = store.resolve_default(ChatKind::Code);
                 let (model, effort) = model_words(resolved.as_ref());
                 let team = team_parts(app, app.new_chat_team.as_ref(), false);
@@ -2739,7 +2747,7 @@ fn live_view(app: &AppState, cx: &App) -> (SidebarData, Screen, StripData) {
                         archived: None,
                         input: Input::Field(app.draft.clone()),
                         model,
-                        connection: connection_name(resolved.as_ref()),
+                        brand: model_brand(resolved.as_ref(), show_logos),
                         effort,
                         ultra_effort: is_ultra(resolved.as_ref()),
                         crew: team.0,
@@ -2796,6 +2804,7 @@ fn live_view(app: &AppState, cx: &App) -> (SidebarData, Screen, StripData) {
                 .map(|tokens| Meter { cache: state.cache_rate(), ..meter(tokens, window, !state.is_empty() && model_missing.is_none(), state.context_parts.clone()) });
             let mut waiting: Vec<Waiting> = state.steering.iter().map(|text| waiting_item(text, true)).collect();
             waiting.extend(state.queue.iter().map(|text| waiting_item(text, false)));
+            let show_logos = store.appearance().model_logos;
             Screen::Chat {
                 title: chat.title.clone().into(),
                 project,
@@ -2805,7 +2814,7 @@ fn live_view(app: &AppState, cx: &App) -> (SidebarData, Screen, StripData) {
                     archived: (chat.is_archived()).then(|| chat.id.clone().into()),
                     input: Input::Field(state.composer.clone()),
                     model,
-                    connection: connection_name(resolved.as_ref()),
+                    brand: model_brand(resolved.as_ref(), show_logos),
                     effort,
                     ultra_effort: is_ultra(resolved.as_ref()),
                     crew: team.as_ref().and_then(|team| team.0.clone()),
@@ -2942,6 +2951,7 @@ fn menu_data(app: &AppState, resolved: Option<&wack_core::Resolved>, team: Optio
     if kind == Menu::Crew {
         return crew_menu(app, team);
     }
+    let show_logos = app.store().appearance().model_logos;
     let groups = match kind {
         Menu::Model => app
             .store()
@@ -2954,6 +2964,7 @@ fn menu_data(app: &AppState, resolved: Option<&wack_core::Resolved>, team: Optio
                     .map(|model| MenuItem {
                         label: model.label().to_string().into(),
                         detail: model.context_window.map(|window| crate::work::count(window).into()),
+                        brand: show_logos.then(|| brand::resolve_for(model, connection)).flatten(),
                         selected: resolved.is_some_and(|resolved| {
                             resolved.connection.id == connection.id && resolved.model.id == model.id
                         }),
@@ -2981,6 +2992,7 @@ fn crew_menu(app: &AppState, team: Option<TeamRow>) -> Option<MenuData> {
         _ => None,
     }?;
     let store = app.store();
+    let show_logos = store.appearance().model_logos;
     let mut groups: Vec<MenuGroup> = store
         .enabled_connections()
         .filter(|connection| !connection.models.is_empty())
@@ -2992,6 +3004,7 @@ fn crew_menu(app: &AppState, team: Option<TeamRow>) -> Option<MenuData> {
                 .map(|model| MenuItem {
                     label: model.label().to_string().into(),
                     detail: model.context_window.map(|window| crate::work::count(window).into()),
+                    brand: show_logos.then(|| brand::resolve_for(model, connection)).flatten(),
                     selected: crew.connection.as_deref() == Some(connection.id.as_str()) && crew.model.as_deref() == Some(model.id.as_str()),
                     choice: Choice::Crew { connection: connection.id.clone(), model: model.id.clone() },
                 })
@@ -3001,10 +3014,11 @@ fn crew_menu(app: &AppState, team: Option<TeamRow>) -> Option<MenuData> {
     if let Some(resolved) = store.resolve_crew(&crew) {
         let levels: Vec<wack_core::Reasoning> = resolved.model.choices().into_iter().filter(|level| !level.is_ultra()).collect();
         if levels.len() > 1 {
-            let mut items = vec![MenuItem { label: "Default".into(), detail: None, selected: crew.effort.is_none(), choice: Choice::CrewEffort(None) }];
+            let mut items = vec![MenuItem { label: "Default".into(), detail: None, brand: None, selected: crew.effort.is_none(), choice: Choice::CrewEffort(None) }];
             items.extend(levels.into_iter().map(|level| MenuItem {
                 label: level.label().into(),
                 detail: None,
+                brand: None,
                 selected: crew.effort == Some(level),
                 choice: Choice::CrewEffort(Some(level)),
             }));
@@ -3031,6 +3045,7 @@ pub fn effort_groups(choices: &[wack_core::Reasoning], current: wack_core::Reaso
             .map(|&effort| MenuItem {
                 label: effort.label().into(),
                 detail: detail(effort).map(Into::into),
+                brand: None,
                 selected: current == effort,
                 choice: Choice::Effort(Some(effort)),
             })
@@ -3145,7 +3160,12 @@ fn meter(tokens: u64, window: Option<u64>, has_messages: bool, parts: Vec<wack_c
     Meter { tokens, window, high, can_compact, parts, cache: None }
 }
 
-/// The connection's name, for the mark on the model's pill.
+/// The model provider's logo for the composer's pill, when logos are enabled and recognised.
+fn model_brand(resolved: Option<&wack_core::Resolved>, show_logos: bool) -> Option<Brand> {
+    show_logos.then(|| resolved.and_then(brand::resolve_resolved)).flatten()
+}
+
+/// The connection's name, for the crew's pill.
 fn connection_name(resolved: Option<&wack_core::Resolved>) -> SharedString {
     resolved.map(|resolved| resolved.connection.name.clone().into()).unwrap_or_default()
 }

@@ -206,6 +206,8 @@ actions!(
         ChooseBackdrop,
         /// Settings › Appearance: turns shuffle-on-open for backdrop pictures on or off.
         ToggleBackdropShuffle,
+        /// Settings › Appearance: shows or hides model provider logos beside models.
+        ToggleModelLogos,
         /// Settings › Appearance: shows a different picture from the library at random.
         ShuffleBackdrop,
         /// Settings › Memory: the master switch.

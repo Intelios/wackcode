@@ -132,6 +132,7 @@ fn mark(label: &str) -> Option<Icon> {
     Some(match label {
         "Theme" => Icon::Palette,
         "Light or dark" => Icon::Eye,
+        "Model logos" => Icon::Spark,
         "Pictures" => Icon::Board,
         "Shuffle" => Icon::Shuffle,
         "Texture" => Icon::Sliders,
@@ -238,6 +239,35 @@ pub fn pill(id: impl Into<gpui::ElementId>, label: impl Into<SharedString>, icon
         .when(!strong, |pill| pill.border_1().border_color(theme.border_strong).hover(|pill| pill.bg(theme.hover)))
         .children(icon.map(|icon| icon.view(px(14.), ink)))
         .child(div().typography(Type::UiStrong).text_color(ink).child(label.into()))
+}
+
+/// A round picker pill for choosing a model: disclosure chevron, optional provider logo, and a
+/// truncated model label.
+pub fn model_pill(
+    id: impl Into<gpui::ElementId>,
+    label: impl Into<SharedString>,
+    brand: Option<crate::brand::Brand>,
+    open: bool,
+    theme: &Theme,
+) -> gpui::Stateful<gpui::Div> {
+    let chevron = if open { Icon::ChevronDown } else { Icon::ChevronRight };
+    div()
+        .id(id)
+        .flex_none()
+        .h(px(32.))
+        .pl(px(11.))
+        .pr(px(14.))
+        .rounded_full()
+        .flex()
+        .items_center()
+        .gap(px(7.))
+        .cursor_pointer()
+        .border_1()
+        .border_color(theme.border_strong)
+        .hover(|pill| pill.bg(theme.hover))
+        .child(chevron.view(px(14.), theme.text_soft))
+        .children(brand.map(|brand| brand.view(px(14.), theme)))
+        .child(div().min_w_0().truncate().typography(Type::UiStrong).text_color(theme.text_soft).child(label.into()))
 }
 
 /// A choice of a few words in a round track; the chosen one is a raised pill.

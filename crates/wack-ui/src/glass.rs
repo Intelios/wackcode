@@ -4,10 +4,11 @@
 //! Over a picture the glass is thin and vibrant, as WackCode 2's was: the picture shows through
 //! as colour and shape, tinted by the theme, and only as soft as the user's Blur makes it. Where
 //! the only thing beneath a pane is the picture, the pane paints a copy of the picture itself
-//! ([`Under`]): its colour boosted (`backdrop::vibrant`), cropped to the pane's rounded shape, and
-//! blurred as the user chose (a heavy blur starts from the copy softened on import). That is what
-//! gives the glass its colour (GPUI's blur cannot saturate). Until that copy is ready, the pane
-//! blurs what was painted beneath it instead.
+//! ([`Under`]): its colour boosted, cropped to the pane's rounded shape, and blurred as the user
+//! chose. That is what gives the glass its colour (GPUI's blur cannot saturate). The copy comes
+//! already blurred (`backdrop::baked`), so a pane costs the GPU no blur of its own while it draws;
+//! until that is ready, a boosted copy is blurred live (`backdrop::vibrant`), and before even that,
+//! the pane blurs what was painted beneath it.
 //!
 //! A lit pane ([`Lit`]) catches the light: a sheen down from its top, a bright top edge, and a
 //! soft shadow beneath.

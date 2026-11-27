@@ -27,6 +27,17 @@ When you change a view: add or update its scene, render it in both themes, and l
 
 Elements that matter to tests carry a tag: end the element's builder chain with `.tag("title-strip")` (`crates/wack-ui/src/tags.rs`). `cargo snap <scene> --tags` prints each tag's bounds, and the automation socket aims clicks by tag, so tag anything a test needs to find.
 
+## Frame rate
+
+The gallery's pictures say nothing about smoothness, and much of a frame's cost is the GPU's, which only a real window shows. `scroll_window` opens one, scrolls a saved chat in it as a trackpad would, and reports the frames the screen got:
+
+```sh
+cargo run -p gallery --example scroll_window -- <session.jsonl> 6 10   # 6 seconds over a backdrop blurred 10 points
+cargo run -p gallery --example scroll_window -- <session.jsonl> 6      # no backdrop
+```
+
+Use it after touching anything drawn on every frame (glass, the backdrop, the transcript), on the owner's own Mac if you can: an M1 is where a live blur cost the most (2026-11-27: 36 frames a second and a hundred late frames in six seconds, against 99 and none once the blur was baked).
+
 ## The dev app
 
 `cargo dev` runs the app with the `automation` feature. Use it for what the gallery cannot show: real windows, focus, typing, IME, resizing, animation.

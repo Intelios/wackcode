@@ -1153,9 +1153,15 @@ impl Render for Shell {
             window.request_animation_frame();
         }
         let whole = Rect { x: 0., y: 0., width: window_width, height: window_height };
+        // The picture blurred once, for behind everything and under the glass, once that is ready:
+        // a live blur over the window and each pane every frame cost more than a frame's time.
+        let baked = picture.as_ref().and_then(|picture| {
+            let drawn = backdrop::cover(whole, (picture.width, picture.height), picture.focus, picture.zoom);
+            backdrop::baked(picture, drawn.width, cx)
+        });
         let (behind, hero) = match &picture {
             Some(picture) => {
-                let behind = backdrop::behind(picture, whole, theme.window, theme.veil);
+                let behind = backdrop::behind(picture, whole, theme.window, theme.veil, baked.as_ref().map(|baked| baked.plain.clone()));
                 let light = theme.appearance == crate::theme::Appearance::Light;
                 let artwork = (clearness > 0.001).then(|| backdrop::artwork(picture, light, cx)).flatten();
                 let hero = artwork.map(|artwork| {
@@ -1178,8 +1184,13 @@ impl Render for Shell {
         // beside the lit stage.
         let pane_blur = picture.as_ref().map_or(GLASS_BLUR, |picture| picture.blur);
         let under = picture.as_ref().and_then(|picture| {
-            let (soft, blur) = backdrop::blur_plan(picture.blur);
-            let image = backdrop::vibrant(picture, soft, cx)?;
+            let (image, blur) = match &baked {
+                Some(baked) => (baked.vibrant.clone(), 0.),
+                None => {
+                    let (soft, blur) = backdrop::blur_plan(picture.blur);
+                    (backdrop::vibrant(picture, soft, cx)?, blur)
+                }
+            };
             let fitted = backdrop::cover(whole, (picture.width, picture.height), picture.focus, picture.zoom);
             Some(Under {
                 image,

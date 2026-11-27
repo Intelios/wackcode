@@ -139,20 +139,29 @@ pub fn fade_in<E: IntoElement + Styled + 'static>(id: impl Into<ElementId>, elem
     element.with_animation(id, Animation::new(FADE).with_easing(spring), |element, t| element.opacity(t))
 }
 
-/// A value that eases to each new target over [`FADE`], for a change that outlives any one
-/// element, such as the picture clearing on a new chat and frosting over when it is sent. The
-/// holder calls [`Ease::toward`] as it renders and asks for another frame while
-/// [`Ease::moving`]. Nothing moves the first time, or with Reduce Motion on.
+/// A value that eases to each new target over [`FADE`] (or [`Ease::lasting`] its own time), for
+/// a change that outlives any one element, such as the picture clearing on a new chat and
+/// frosting over when it is sent. The holder calls [`Ease::toward`] as it renders and asks for
+/// another frame while [`Ease::moving`]. Nothing moves the first time, or with Reduce Motion on.
+///
+/// Its clock starts when the target changes, not when the next frame is drawn, so a move made
+/// in answer to a click is already under way in the first frame that shows it.
 #[derive(Clone, Copy, Debug)]
 pub struct Ease {
     from: f32,
     to: f32,
     since: Option<Instant>,
+    length: Duration,
 }
 
 impl Ease {
     pub fn at(value: f32) -> Self {
-        Self { from: value, to: value, since: None }
+        Self { from: value, to: value, since: None, length: FADE }
+    }
+
+    /// The same, taking `length` for each move.
+    pub fn lasting(self, length: Duration) -> Self {
+        Self { length, ..self }
     }
 
     /// Where the value is now.
@@ -163,7 +172,7 @@ impl Ease {
     fn value_at(&self, now: Instant) -> f32 {
         match self.since {
             Some(since) => {
-                let t = now.saturating_duration_since(since).as_secs_f32() / FADE.as_secs_f32();
+                let t = now.saturating_duration_since(since).as_secs_f32() / self.length.as_secs_f32();
                 self.from + (self.to - self.from) * spring(t)
             }
             None => self.to,
@@ -171,7 +180,7 @@ impl Ease {
     }
 
     pub fn moving(&self) -> bool {
-        self.since.is_some_and(|since| since.elapsed() < FADE)
+        self.since.is_some_and(|since| since.elapsed() < self.length)
     }
 
     /// Heads for `to` from wherever the value is now; `still` jumps straight there.
@@ -180,7 +189,7 @@ impl Ease {
             return;
         }
         let now = Instant::now();
-        *self = Self { from: self.value_at(now), to, since: (!still).then_some(now) };
+        *self = Self { from: self.value_at(now), to, since: (!still).then_some(now), length: self.length };
     }
 }
 
@@ -463,6 +472,18 @@ mod tests {
         ease.toward(1., true);
         assert_eq!(ease.value(), 1.);
         assert!(!ease.moving(), "Reduce Motion lands at once");
+    }
+
+    #[test]
+    fn an_ease_can_take_its_own_time() {
+        let length = Duration::from_millis(200);
+        let mut ease = Ease::at(0.).lasting(length);
+        ease.toward(1., false);
+        let start = ease.since.unwrap();
+        assert_eq!(ease.value_at(start + length), 1.);
+        assert!(ease.value_at(start + length / 2) < 1.);
+        ease.toward(0., false);
+        assert_eq!(ease.length, length, "each later move keeps its time");
     }
 }
 

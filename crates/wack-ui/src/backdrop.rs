@@ -21,8 +21,11 @@
 //!   and kept ([`artwork`]). Until it is ready the hero is simply not drawn. The plain picture is
 //!   kept larger than a textured one ([`PLAIN_EDGE`]), since it is shown clear across a Retina
 //!   stage.
-//! - A heavy blur starts from the softened copy made on import, so the GPU only blurs the rest
-//!   of the way ([`SOFT_COPY_BLUR`]).
+//! - Behind a conversation the picture is drawn already blurred ([`baked`]): two small copies,
+//!   plain and vibrant, made once off the UI thread for the blur chosen and the window's size. The
+//!   GPU blurs live only until they are ready, so a scrolling chat costs it no blur at all. Until
+//!   then a heavy blur starts from the softened copy made on import, so the GPU only blurs the
+//!   rest of the way ([`SOFT_COPY_BLUR`]).
 //!
 //! The textures and the hero's mask are adapted from Zeron (MIT, github.com/zeronsh/zeron,
 //! `crates/ui/src/new_thread_background_effects.rs` and `new_thread_background_mask.rs`).
@@ -30,7 +33,7 @@
 use std::{path::PathBuf, sync::Arc};
 
 use gpui::{
-    App, Bounds, Corners, Global, Hsla, ObjectFit, Pixels, RenderImage, SharedString, Window, canvas,
+    App, Bounds, Corners, Global, Hsla, ImageSource, ObjectFit, Pixels, RenderImage, SharedString, Window, canvas,
     div, img, point, prelude::*, px, size,
 };
 use wack_core::Texture;
@@ -131,11 +134,16 @@ pub fn blur_plan(blur: f32) -> (bool, f32) {
 }
 
 /// The picture across the whole `window`, blurred and dimmed as the user chose: `dim` of
-/// `ground` (the window's colour) over it.
-pub fn behind(picture: &Picture, window: Rect, ground: Hsla, dim: f32) -> impl IntoElement + use<> {
+/// `ground` (the window's colour) over it. Drawn from the `baked` copy when there is one;
+/// otherwise the GPU blurs it, starting from the softened copy for a heavy blur.
+pub fn behind(picture: &Picture, window: Rect, ground: Hsla, dim: f32, baked: Option<Arc<RenderImage>>) -> impl IntoElement + use<> {
     let drawn = cover(window, (picture.width, picture.height), picture.focus, picture.zoom);
     let (soft, blur) = blur_plan(picture.blur);
-    let path = if soft { &picture.soft_path } else { &picture.path };
+    let blur = if baked.is_some() { 0. } else { blur };
+    let source: ImageSource = match baked {
+        Some(baked) => baked.into(),
+        None => PathBuf::from(if soft { picture.soft_path.as_ref() } else { picture.path.as_ref() }).into(),
+    };
     div()
         .absolute()
         .left_0()
@@ -144,7 +152,7 @@ pub fn behind(picture: &Picture, window: Rect, ground: Hsla, dim: f32) -> impl I
         .h(px(window.height))
         .overflow_hidden()
         .child(
-            img(PathBuf::from(path.as_ref()))
+            img(source)
                 .absolute()
                 .left(px(drawn.x))
                 .top(px(drawn.y))
@@ -327,6 +335,149 @@ fn boost([r, g, b]: [u8; 3], amount: f32) -> [u8; 3] {
     [channel(r), channel(g), channel(b)]
 }
 
+/// The picture already blurred as the user chose, made once off the UI thread: a copy for behind
+/// everything ([`behind`]) and a vibrant one for the glass (`glass::Under`). The window draws these
+/// as plain images. A live blur instead costs the GPU a pass over the framebuffer for the window
+/// and for each pane, every frame: on an M1 that held a scrolling chat well under 60 frames a
+/// second, though the picture never changes while it scrolls.
+///
+/// A copy is small, since it is blurred ([`BAKE_SIGMA`] of its own pixels at most), and its blur
+/// depends on how wide the picture is drawn, so its width moves in steps of [`BAKE_STEP`]: resizing
+/// the window makes a new copy only now and then, and a copy within [`BAKE_SLACK`] of the blur
+/// wanted stands in while the exact one is made.
+#[derive(Clone)]
+pub struct Baked {
+    pub plain: Arc<RenderImage>,
+    pub vibrant: Arc<RenderImage>,
+    /// The copies' width, and their blur in their own pixels.
+    width: u32,
+    sigma: f32,
+}
+
+impl Baked {
+    /// How soft the copies look drawn `drawn` points wide, in points.
+    fn blur_at(&self, drawn: f32) -> f32 {
+        self.sigma * drawn / self.width as f32
+    }
+}
+
+/// A baked copy's blur in its own pixels: soft enough that drawing it larger shows no steps.
+const BAKE_SIGMA: f32 = 4.;
+/// The widest a baked copy is made, for the lightest blurs.
+const BAKE_EDGE: u32 = 2048;
+/// Each width a baked copy can have is this much wider than the one before.
+const BAKE_STEP: f32 = 1.08;
+/// How far a ready copy's blur may be from the one wanted, as a share, to stand in for it.
+const BAKE_SLACK: f32 = 0.2;
+
+/// A baked copy's key: the picture, the copy's width, and its blur in quarter pixels.
+type BakeKey = (SharedString, u32, u32);
+
+/// Baked copies by key; `None` while one is being made. Beside them, each picture decoded once at
+/// no more than [`BAKE_EDGE`], so a new copy (the window resized, the blur changed) starts from
+/// that rather than from the file.
+#[derive(Default)]
+struct BakedCopies {
+    copies: Vec<(BakeKey, Option<Baked>)>,
+    sources: Vec<(SharedString, Arc<image::DynamicImage>)>,
+}
+
+impl Global for BakedCopies {}
+
+/// What to bake for `picture` drawn `drawn` points wide: the copy's width and blur, or `None` when
+/// the picture is not blurred at all.
+fn bake_plan(picture: &Picture, drawn: f32) -> Option<(u32, f32)> {
+    if picture.blur < 0.5 || drawn < 1. || picture.width == 0 || picture.height == 0 {
+        return None;
+    }
+    let ideal = BAKE_SIGMA * drawn / picture.blur;
+    let stepped = BAKE_STEP.powf((ideal.ln() / BAKE_STEP.ln()).round());
+    // The long side no more than BAKE_EDGE, and never more than the picture has.
+    let widest = (BAKE_EDGE as f32 * picture.width as f32 / picture.width.max(picture.height) as f32) as u32;
+    let width = (stepped.round() as u32).clamp(16, widest.min(picture.width).max(16));
+    Some((width, picture.blur * width as f32 / drawn))
+}
+
+/// The picture baked for drawing `drawn` points wide, or `None` when it needs no blur or no copy
+/// close enough is ready yet (the windows redraw when it is): blur live meanwhile.
+pub fn baked(picture: &Picture, drawn: f32, cx: &mut App) -> Option<Baked> {
+    let (width, sigma) = bake_plan(picture, drawn)?;
+    let key: BakeKey = (picture.path.clone(), width, (sigma * 4.).round() as u32);
+    let copies = cx.default_global::<BakedCopies>();
+    if let Some((_, Some(copy))) = copies.copies.iter().find(|(cached, _)| *cached == key) {
+        return Some(copy.clone());
+    }
+    let near = copies
+        .copies
+        .iter()
+        .filter(|((path, _, _), _)| *path == picture.path)
+        .filter_map(|(_, copy)| copy.as_ref())
+        .map(|copy| (copy, (copy.blur_at(drawn) / picture.blur - 1.).abs()))
+        .filter(|(_, off)| *off <= BAKE_SLACK)
+        .min_by(|a, b| a.1.total_cmp(&b.1))
+        .map(|(copy, _)| copy.clone());
+    if copies.copies.iter().any(|(cached, _)| *cached == key) {
+        return near;
+    }
+    copies.copies.push((key.clone(), None));
+    if copies.copies.len() > KEPT {
+        copies.copies.remove(0);
+    }
+    let source = copies.sources.iter().find(|(path, _)| *path == picture.path).map(|(_, source)| source.clone());
+    let path = picture.path.clone();
+    let height = ((width as f32 * picture.height as f32 / picture.width as f32).round() as u32).max(1);
+    cx.spawn(async move |cx| {
+        let made = cx
+            .background_executor()
+            .spawn(async move {
+                let source = match source {
+                    Some(source) => source,
+                    None => Arc::new(image::open(path.as_ref()).ok()?.thumbnail(BAKE_EDGE, BAKE_EDGE)),
+                };
+                let baked = bake(&source, width, height, sigma);
+                Some((path, source, baked))
+            })
+            .await;
+        cx.update(|cx| {
+            // A picture that cannot be read leaves the panes blurring live, and is not retried.
+            let Some((path, source, made)) = made else { return };
+            let copies = cx.default_global::<BakedCopies>();
+            if !copies.sources.iter().any(|(kept, _)| *kept == path) {
+                copies.sources.push((path, source));
+                if copies.sources.len() > 2 {
+                    copies.sources.remove(0);
+                }
+            }
+            if let Some(entry) = copies.copies.iter_mut().find(|(cached, _)| *cached == key) {
+                entry.1 = Some(made);
+            }
+            cx.refresh_windows();
+        });
+    })
+    .detach();
+    near
+}
+
+/// `source` brought down to `width` by `height` and blurred `sigma` of those pixels, as it is and
+/// with its colour boosted by [`VIBRANCY`] first, in the BGRA order GPUI draws.
+fn bake(source: &image::DynamicImage, width: u32, height: u32, sigma: f32) -> Baked {
+    let small = source.thumbnail_exact(width, height).to_rgba8();
+    let mut boosted = small.clone();
+    for pixel in boosted.pixels_mut() {
+        let [r, g, b, a] = pixel.0;
+        let [r, g, b] = boost([r, g, b], VIBRANCY);
+        pixel.0 = [r, g, b, a];
+    }
+    let finish = |pixels: &image::RgbaImage| {
+        let mut blurred = image::imageops::fast_blur(pixels, sigma);
+        for pixel in blurred.pixels_mut() {
+            pixel.0.swap(0, 2);
+        }
+        Arc::new(RenderImage::new([image::Frame::new(blurred)]))
+    };
+    Baked { plain: finish(&small), vibrant: finish(&boosted), width, sigma }
+}
+
 /// The picture as it is, up to [`PLAIN_EDGE`] on its long side, in the BGRA order GPUI draws.
 fn plain(path: &str) -> Option<RenderImage> {
     let picture = image::open(path).ok()?;
@@ -494,6 +645,63 @@ mod tests {
         };
         let [r, g, b, a] = source.colour(5, 3);
         assert_eq!(plain.get_pixel(5, 3).0, [b, g, r, a]);
+    }
+
+    fn picture(width: u32, height: u32, blur: f32) -> Picture {
+        Picture {
+            path: "a.jpg".into(),
+            soft_path: "a-soft.jpg".into(),
+            width,
+            height,
+            focus: (0.5, 0.5),
+            zoom: 1.,
+            dim: 0.2,
+            blur,
+            texture: Texture::None,
+            shade: [0, 255],
+        }
+    }
+
+    #[test]
+    fn a_baked_copy_is_small_and_as_soft_as_the_blur_chosen() {
+        let landscape = picture(4096, 2304, 10.);
+        assert_eq!(bake_plan(&picture(4096, 2304, 0.), 1680.), None, "no blur, nothing to bake");
+        let (width, sigma) = bake_plan(&landscape, 2016.).unwrap();
+        assert!(width < 1024, "blurred, so small: {width}");
+        assert!((sigma - BAKE_SIGMA).abs() / BAKE_SIGMA < 0.05, "{sigma}");
+        let blank = || Arc::new(RenderImage::new([image::Frame::new(image::RgbaImage::new(1, 1))]));
+        let shown = Baked { plain: blank(), vibrant: blank(), width, sigma };
+        assert!((shown.blur_at(2016.) - 10.).abs() < 0.01, "as soft as chosen at the window's size");
+        // A window a little wider keeps the same copy; one much wider makes another.
+        assert_eq!(bake_plan(&landscape, 2040.).unwrap().0, width);
+        assert_ne!(bake_plan(&landscape, 2400.).unwrap().0, width);
+        assert!((shown.blur_at(2040.) / 10. - 1.).abs() < BAKE_SLACK, "and stands in while it is made");
+        // The lightest blur needs a large copy, but never beyond BAKE_EDGE on its long side.
+        let (light, light_sigma) = bake_plan(&picture(4096, 2304, 1.), 2016.).unwrap();
+        assert_eq!(light, BAKE_EDGE);
+        assert!((light_sigma - 2048. / 2016.).abs() < 0.01);
+        assert_eq!(bake_plan(&picture(1000, 4000, 1.), 2016.).unwrap().0, 512, "a tall picture's height is its long side");
+        assert_eq!(bake_plan(&picture(800, 450, 1.), 2016.).unwrap().0, 800, "never wider than the picture");
+    }
+
+    #[test]
+    fn baking_softens_both_copies_and_boosts_only_the_vibrant_one() {
+        let mut sharp = image::RgbaImage::from_pixel(64, 36, image::Rgba([40, 90, 160, 255]));
+        for y in 0..36 {
+            for x in 32..64 {
+                sharp.put_pixel(x, y, image::Rgba([220, 200, 60, 255]));
+            }
+        }
+        let baked = bake(&image::DynamicImage::ImageRgba8(sharp), 32, 18, 2.);
+        let pixels = |image: &RenderImage| image::RgbaImage::from_raw(32, 18, image.as_bytes(0).unwrap().to_vec()).unwrap();
+        let (plain, vibrant) = (pixels(&baked.plain), pixels(&baked.vibrant));
+        // GPUI's order: blue first. Far from the edge it is the picture's own colour…
+        assert_eq!(plain.get_pixel(1, 9).0, [160, 90, 40, 255]);
+        // …and across the edge it blends.
+        let [b, ..] = plain.get_pixel(15, 9).0;
+        assert!(b > 60 && b < 160, "softened across the edge: {b}");
+        let [vb, vg, vr, _] = vibrant.get_pixel(1, 9).0;
+        assert!(vb > 160 && vr < 40, "the vibrant copy has more colour: {:?}", [vr, vg, vb]);
     }
 
     #[test]

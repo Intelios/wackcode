@@ -2071,24 +2071,43 @@ impl RenderOnce for EffortSlider {
 const STOP_LABEL: f32 = 46.;
 
 /// The model picker, after version 2's: two panels side by side in one card. The first lists the
-/// providers (each connection, with how many models it offers); choosing one slides across to
-/// its models, with a back button to the list. It opens on the provider of the model in use.
+/// providers (each connection, with how many models it offers); choosing one slides the pair
+/// across to its models, with a back button to the list. It opens on the provider of the model
+/// in use.
+///
+/// Both panels are drawn whole while they slide, and the card's height eases from one list's to
+/// the other's, so the next list reads from the first frame. (A panel that faded in from nothing
+/// under a card that had already jumped to its new size read as lag.) The slide is timed from the
+/// click, not from the next frame drawn, and a click mid-slide turns it round from where it is.
+/// Each panel scrolls on its own past [`PICKER_LIST_MAX`]; row heights are fixed, which is what
+/// lets the card know each list's height before it lays them out.
 #[derive(IntoElement)]
 struct ModelPicker {
     menu: MenuData,
 }
 
-/// Which provider the picker shows (`None`: the list of providers), and how many times it has
-/// slid, so each slide plays afresh.
+/// Where the picker is: which provider's models it shows (`None`: the list of providers), whose
+/// models the second panel holds (kept while it slides back out), and how far across it is, from
+/// 0 (the providers) to 1 (the models).
 struct PickerView {
     provider: Option<usize>,
-    slides: usize,
-    /// The way the last slide went: towards a provider's models, or back.
-    forward: bool,
+    models: usize,
+    across: crate::motion::Ease,
 }
 
 const PICKER_WIDTH: f32 = 280.;
-const PICKER_SLIDE: f32 = 36.;
+/// One panel's width: the card's, inside its hairline.
+const PICKER_PANEL: f32 = PICKER_WIDTH - 2.;
+/// How long a slide between the panels takes.
+const PICKER_SLIDE: Duration = Duration::from_millis(240);
+/// Past this a panel's list scrolls inside it.
+const PICKER_LIST_MAX: f32 = 380.;
+/// A provider's or a model's row.
+const PICKER_ROW: f32 = 32.;
+/// The providers panel's "Providers" heading.
+const PICKER_PROVIDERS_HEAD: f32 = 28.;
+/// The models panel's back row (30 and a 4 gap) and the hairline under it (1 and a 4 gap).
+const PICKER_MODELS_HEAD: f32 = 39.;
 
 impl RenderOnce for ModelPicker {
     fn render(self, window: &mut Window, cx: &mut App) -> impl IntoElement {
@@ -2097,131 +2116,161 @@ impl RenderOnce for ModelPicker {
         let groups = self.menu.groups;
         let current = groups.iter().position(|group| group.items.iter().any(|item| item.selected));
         let initial = current.or_else(|| (groups.len() == 1).then_some(0));
-        let state = window.use_keyed_state("model-picker", cx, move |_, _| PickerView { provider: initial, slides: 0, forward: true });
-        let (shown, slides, forward) = {
+        let state = window.use_keyed_state("model-picker", cx, move |_, _| PickerView {
+            provider: initial,
+            models: initial.unwrap_or(0),
+            across: crate::motion::Ease::at(if initial.is_some() { 1. } else { 0. }).lasting(PICKER_SLIDE),
+        });
+        let (models_of, across) = {
             let view = state.read(cx);
-            (view.provider.filter(|&index| index < groups.len()), view.slides, view.forward)
+            if view.across.moving() {
+                window.request_animation_frame();
+            }
+            (view.models.min(groups.len().saturating_sub(1)), view.across.value())
         };
         let go = move |to: Option<usize>| {
             let state = state.clone();
             move |_: &gpui::ClickEvent, window: &mut Window, cx: &mut App| {
                 cx.stop_propagation();
                 state.update(cx, |view, _| {
-                    view.forward = to.is_some();
                     view.provider = to;
-                    view.slides += 1;
+                    if let Some(index) = to {
+                        view.models = index;
+                    }
+                    view.across.toward(if to.is_some() { 1. } else { 0. }, still);
                 });
                 window.refresh();
             }
         };
         let row = |id: (&'static str, usize)| {
-            div().id(id).mx(px(6.)).px(px(8.)).h(px(32.)).rounded(px(8.)).flex().items_center().gap(px(8.)).cursor_pointer().hover(|row| row.bg(theme.hover))
+            div()
+                .id(id)
+                .flex_none()
+                .mx(px(6.))
+                .px(px(8.))
+                .h(px(PICKER_ROW))
+                .rounded(px(8.))
+                .flex()
+                .items_center()
+                .gap(px(8.))
+                .cursor_pointer()
+                .hover(|row| row.bg(theme.hover))
         };
-        let panel = match shown {
-            None => {
-                let mut list = div()
-                    .flex()
-                    .flex_col()
-                    .child(div().px(px(14.)).pt(px(4.)).pb(px(6.)).typography(Type::Label).text_color(theme.text_dim).child("Providers"));
-                if groups.is_empty() {
-                    list = list.child(
+        let panel = |id: &'static str| div().id(id).flex_none().w(px(PICKER_PANEL)).max_h(px(PICKER_LIST_MAX)).overflow_y_scroll().flex().flex_col();
+
+        let mut providers = panel("picker-providers").child(
+            div()
+                .flex_none()
+                .h(px(PICKER_PROVIDERS_HEAD))
+                .px(px(14.))
+                .pb(px(6.))
+                .flex()
+                .items_end()
+                .typography(Type::Label)
+                .text_color(theme.text_dim)
+                .child("Providers"),
+        );
+        if groups.is_empty() {
+            providers = providers.child(
+                div()
+                    .px(px(14.))
+                    .py(px(6.))
+                    .typography(Type::Small)
+                    .text_color(theme.text_dim)
+                    .child("No enabled connections in Settings › Providers."),
+            );
+        }
+        for (index, group) in groups.iter().enumerate() {
+            let holds_current = current == Some(index);
+            let name = group.title.clone().unwrap_or_else(|| "Models".into());
+            providers = providers.child(
+                row(("picker-provider", index))
+                    .on_click(go(Some(index)))
+                    .child(Icon::Key.view(px(13.), if holds_current { theme.accent_text } else { theme.text_dim }))
+                    .child(
                         div()
-                            .px(px(14.))
-                            .py(px(6.))
-                            .typography(Type::Small)
-                            .text_color(theme.text_dim)
-                            .child("No enabled connections in Settings › Providers."),
-                    );
-                }
-                for (index, group) in groups.iter().enumerate() {
-                    let holds_current = current == Some(index);
-                    let name = group.title.clone().unwrap_or_else(|| "Models".into());
-                    list = list.child(
-                        row(("picker-provider", index))
-                            .on_click(go(Some(index)))
-                            .child(Icon::Key.view(px(13.), if holds_current { theme.accent_text } else { theme.text_dim }))
-                            .child(
-                                div()
-                                    .flex_1()
-                                    .min_w_0()
-                                    .truncate()
-                                    .typography(if holds_current { Type::UiStrong } else { Type::Ui })
-                                    .text_color(theme.text)
-                                    .child(name),
-                            )
-                            .child(div().flex_none().typography(Type::Small).text_color(theme.text_faint).child(group.items.len().to_string()))
-                            .child(Icon::ChevronRight.view(px(12.), theme.text_faint)),
-                    );
-                }
-                list.into_any_element()
-            }
-            Some(index) => {
-                let group = &groups[index];
-                let back = div()
-                    .id("picker-back")
-                    .mx(px(6.))
-                    .mb(px(4.))
-                    .px(px(6.))
-                    .h(px(30.))
-                    .rounded(px(8.))
-                    .flex()
-                    .items_center()
-                    .gap(px(6.))
-                    .cursor_pointer()
-                    .hover(|row| row.bg(theme.hover))
-                    .on_click(go(None))
-                    .child(Icon::ChevronRight.view(px(12.), theme.text_dim).with_transformation(gpui::Transformation::rotate(gpui::radians(std::f32::consts::PI))))
-                    .child(div().flex_1().min_w_0().truncate().typography(Type::UiStrong).text_color(theme.text).child(group.title.clone().unwrap_or_else(|| "Models".into())))
-                    .tag("picker-back");
-                let mut list = div().flex().flex_col().child(back).child(div().mx(px(12.)).mb(px(4.)).h(px(1.)).bg(theme.border));
-                for (number, item) in group.items.iter().enumerate() {
-                    let action = item.choice.action();
-                    list = list.child(
-                        row(("menu-item", index * 1000 + number))
-                            .when(item.selected, |row| row.bg(theme.accent_wash))
-                            .on_click(move |_, window, cx| window.dispatch_action(action.boxed_clone(), cx))
-                            .when_some(item.brand, |row, brand| row.child(brand.view(px(14.), &theme)))
-                            .child(
-                                div()
-                                    .flex_1()
-                                    .min_w_0()
-                                    .truncate()
-                                    .typography(if item.selected { Type::UiStrong } else { Type::Ui })
-                                    .text_color(if item.selected { theme.accent_text } else { theme.text })
-                                    .child(item.label.clone()),
-                            )
-                            .when_some(item.detail.clone(), |row, detail| {
-                                row.child(div().flex_none().typography(Type::Small).text_color(theme.text_faint).child(detail))
-                            })
-                            .when(item.selected, |row| row.child(Icon::Check.view(px(13.), theme.accent_text))),
-                    );
-                }
-                list.into_any_element()
-            }
-        };
-        // Each slide comes in from the side it was asked for: a provider's models from the right,
-        // the list from the left.
-        let from = if forward { PICKER_SLIDE } else { -PICKER_SLIDE };
-        let panel = div().w_full().child(panel);
-        let panel = if slides == 0 || still {
-            panel.into_any_element()
-        } else {
-            crate::motion::slide_in(ElementId::NamedInteger("picker-slide".into(), slides as u64), panel, from, 0.).into_any_element()
-        };
-        div()
+                            .flex_1()
+                            .min_w_0()
+                            .truncate()
+                            .typography(if holds_current { Type::UiStrong } else { Type::Ui })
+                            .text_color(theme.text)
+                            .child(name),
+                    )
+                    .child(div().flex_none().typography(Type::Small).text_color(theme.text_faint).child(group.items.len().to_string()))
+                    .child(Icon::ChevronRight.view(px(12.), theme.text_faint)),
+            );
+        }
+
+        let card = div()
             .id("menu")
             .occlude()
             .w(px(PICKER_WIDTH))
-            .max_h(px(420.))
-            .overflow_y_scroll()
-            .overflow_x_hidden()
+            .overflow_hidden()
             .py(px(6.))
             .rounded(px(14.))
             .bg(theme.raised)
             .border_1()
             .border_color(theme.border_strong)
-            .shadow_lg()
-            .child(panel)
+            .shadow_lg();
+        // With no connection there is nowhere to slide to.
+        let Some(group) = groups.get(models_of) else {
+            return card.child(providers).when_some(self.menu.team, |card, team| card.child(team_row(team, &theme)));
+        };
+
+        let back = div()
+            .id("picker-back")
+            .flex_none()
+            .mx(px(6.))
+            .mb(px(4.))
+            .px(px(6.))
+            .h(px(30.))
+            .rounded(px(8.))
+            .flex()
+            .items_center()
+            .gap(px(6.))
+            .cursor_pointer()
+            .hover(|row| row.bg(theme.hover))
+            .on_click(go(None))
+            .child(Icon::ChevronRight.view(px(12.), theme.text_dim).with_transformation(gpui::Transformation::rotate(gpui::radians(std::f32::consts::PI))))
+            .child(div().flex_1().min_w_0().truncate().typography(Type::UiStrong).text_color(theme.text).child(group.title.clone().unwrap_or_else(|| "Models".into())))
+            .tag("picker-back");
+        let mut models = panel("picker-models").child(back).child(div().flex_none().mx(px(12.)).mb(px(4.)).h(px(1.)).bg(theme.border));
+        for (number, item) in group.items.iter().enumerate() {
+            let action = item.choice.action();
+            models = models.child(
+                row(("menu-item", models_of * 1000 + number))
+                    .when(item.selected, |row| row.bg(theme.accent_wash))
+                    .on_click(move |_, window, cx| window.dispatch_action(action.boxed_clone(), cx))
+                    .when_some(item.brand, |row, brand| row.child(brand.view(px(14.), &theme)))
+                    .child(
+                        div()
+                            .flex_1()
+                            .min_w_0()
+                            .truncate()
+                            .typography(if item.selected { Type::UiStrong } else { Type::Ui })
+                            .text_color(if item.selected { theme.accent_text } else { theme.text })
+                            .child(item.label.clone()),
+                    )
+                    .when_some(item.detail.clone(), |row, detail| {
+                        row.child(div().flex_none().typography(Type::Small).text_color(theme.text_faint).child(detail))
+                    })
+                    .when(item.selected, |row| row.child(Icon::Check.view(px(13.), theme.accent_text))),
+            );
+        }
+
+        // The pair of panels in a window as tall as the list in view, sliding across together.
+        let height = |content: f32| content.min(PICKER_LIST_MAX);
+        let providers_height = height(PICKER_PROVIDERS_HEAD + PICKER_ROW * groups.len() as f32);
+        let models_height = height(PICKER_MODELS_HEAD + PICKER_ROW * group.items.len() as f32);
+        let track = div()
+            .relative()
+            .left(px(-PICKER_PANEL * across))
+            .w(px(PICKER_PANEL * 2.))
+            .flex()
+            .items_start()
+            .child(providers)
+            .child(models);
+        card.child(div().w_full().h(px(providers_height + (models_height - providers_height) * across)).overflow_hidden().child(track))
             .when_some(self.menu.team, |card, team| card.child(team_row(team, &theme)))
     }
 }

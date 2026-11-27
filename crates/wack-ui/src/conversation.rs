@@ -562,6 +562,17 @@ impl Conversation {
         }
     }
 
+    /// The share of the prompt tokens the provider served from its cache, over every turn: what
+    /// was read from cache against everything sent (read, written and uncached). `None` until a
+    /// reply reports its usage.
+    pub fn cache_rate(&self) -> Option<f32> {
+        let (read, sent) = self.entries.iter().fold((0u64, 0u64), |(read, sent), entry| match entry {
+            Entry::Turn(turn) => (read + turn.usage.cache_read, sent + turn.usage.input + turn.usage.cache_read + turn.usage.cache_write),
+            _ => (read, sent),
+        });
+        (sent > 0).then(|| read as f32 / sent as f32)
+    }
+
     pub fn last_turn(&self) -> Option<&Turn> {
         self.entries.iter().rev().find_map(|entry| match entry {
             Entry::Turn(turn) => Some(turn),
@@ -1240,5 +1251,16 @@ mod tests {
             Some(Entry::Prompt { text, files: parsed, .. })
                 if text == "Check @\"Earlier chat\" with these" && parsed == &files
         ));
+    }
+
+    #[test]
+    fn the_cache_rate_counts_every_prompt_token_sent() {
+        let mut conversation = Conversation::default();
+        assert_eq!(conversation.cache_rate(), None);
+        conversation.send("go", 1);
+        conversation.apply(&Event::Reply { usage: Some(Usage { input: 1_000, output: 50, cache_read: 0, cache_write: 9_000 }) }, 2);
+        conversation.apply(&Event::Reply { usage: Some(Usage { input: 500, output: 50, cache_read: 9_000, cache_write: 500 }) }, 3);
+        // 9,000 read of 20,000 sent.
+        assert_eq!(conversation.cache_rate(), Some(0.45));
     }
 }

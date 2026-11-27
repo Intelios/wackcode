@@ -1007,33 +1007,18 @@ impl ChatSession {
         cx.notify();
     }
 
-    /// While a run is going: how long it has run ("Working · 8s", or the retry it is waiting on)
-    /// and what it is doing now (`work::activity`), from its live work log; or the MCP servers it
-    /// is waiting for.
-    pub fn activity(&self) -> Option<(SharedString, Option<SharedString>)> {
+    /// While a run is going: how long it has run ("Working for 8s", or the retry it is waiting
+    /// on), or the MCP servers it is waiting for. Never what it is doing: the transcript shows
+    /// that, and the owner found it noise beside the time.
+    pub fn activity(&self) -> Option<SharedString> {
         // Waiting for an MCP server that has never listed its tools (or for one a tool needs).
         if !self.mcp_starting.is_empty() {
-            return Some(("Starting MCP servers…".into(), Some(self.mcp_starting.join(", ").into())));
+            return Some(format!("Starting {}…", self.mcp_starting.join(", ")).into());
         }
-        if let Some(found) = self.items.iter().rev().find_map(|item| match item {
-            Item::Work(work) if work.live => Some((work.summary.clone(), crate::work::activity(&work.rows).map(Into::into))),
-            _ => None,
-        }) {
-            return Some(found);
-        }
-        // A live turn whose work ended on a commit (no trailing work group) still reports its
-        // elapsed time and, while the commit runs, what it is committing.
         let Entry::Turn(turn) = self.conversation.entries.last()? else {
             return None;
         };
-        if !turn.live {
-            return None;
-        }
-        let step = self.items.iter().rev().find_map(|item| match item {
-            Item::Commit(commit) => commit.activity().map(Into::into),
-            _ => None,
-        });
-        Some((crate::work::summary(turn, now_millis()).into(), step))
+        turn.live.then(|| crate::work::summary(turn, now_millis()).into())
     }
 
     /// Moves the command or the sub-agents the agent is waiting on to the background (⌘B).
@@ -1067,6 +1052,11 @@ impl ChatSession {
 
     pub fn todos(&self) -> &wack_core::todo::TodoList {
         &self.conversation.todos
+    }
+
+    /// The share of the chat's prompt tokens served from the provider's cache (`Conversation::cache_rate`).
+    pub fn cache_rate(&self) -> Option<f32> {
+        self.conversation.cache_rate()
     }
 
     /// Every token the chat's own model used since the user's latest message: its turns,

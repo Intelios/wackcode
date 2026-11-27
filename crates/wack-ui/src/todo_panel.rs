@@ -1,5 +1,5 @@
-//! The todo list, opened above the composer from its status pill ("2 of 4 tasks", `composer.rs`)
-//! while the agent keeps one. Ported from version 2's `TodoPanel.tsx`.
+//! The todo list, rising from its segment of the composer's tab ("2/4 Write the tests",
+//! `composer.rs`) while the agent keeps one. Ported from version 2's `TodoPanel.tsx`.
 //!
 //! Tasks done in the current run stay in view; when the next run starts they fold behind
 //! "+N done" ([`view`]), so the list shows what is left. `#id`s appear only once some task
@@ -97,22 +97,21 @@ pub fn todo_panel(data: TodoData, theme: &Theme) -> impl IntoElement {
         .gap(px(3.))
         .children(view.shown.iter().map(|task| row(task, view.show_ids, theme)));
 
-    div()
-        .mx(px(4.))
-        .px(px(14.))
-        .py(px(10.))
-        .min_h_0()
-        .overflow_hidden()
-        .flex()
-        .flex_col()
-        .gap(px(6.))
-        .rounded(px(14.))
-        .bg(theme.surface)
-        .border_1()
-        .border_color(theme.border)
-        .child(head.flex_none())
-        .child(rows)
-        .tag("todo-panel")
+    // The frame is the popover's (`composer::list_frame`).
+    div().min_h_0().flex().flex_col().gap(px(8.)).child(head.flex_none()).child(rows).tag("todo-panel")
+}
+
+/// The task in hand, as the tab names it: the one in progress (in its own present-continuous
+/// words when it has them), else the next one waiting; "All done" once every task is.
+pub fn in_hand(view: &TodoView) -> Option<SharedString> {
+    if !view.active {
+        return (view.total > 0).then(|| "All done".into());
+    }
+    let working = view.shown.iter().find(|task| task.status == Status::InProgress);
+    if let Some(task) = working {
+        return Some(task.active_form.clone().unwrap_or_else(|| task.subject.clone()).into());
+    }
+    view.shown.iter().find(|task| task.status == Status::Pending).map(|task| task.subject.clone().into())
 }
 
 /// How long a tick takes to land.
@@ -210,6 +209,18 @@ mod tests {
         assert!(!plain.show_ids);
         let linked = list(vec![task(1, Status::Pending, vec![]), task(2, Status::Pending, vec![1])]);
         assert!(view(&linked, &HashSet::new(), false).show_ids);
+    }
+
+    #[test]
+    fn the_tab_names_the_task_in_hand() {
+        let mut doing = task(2, Status::InProgress, vec![]);
+        doing.active_form = Some("Writing the tests".into());
+        let tasks = list(vec![task(1, Status::Completed, vec![]), doing, task(3, Status::Pending, vec![])]);
+        assert_eq!(in_hand(&view(&tasks, &HashSet::new(), false)).as_deref(), Some("Writing the tests"));
+        let waiting = list(vec![task(1, Status::Completed, vec![]), task(2, Status::Pending, vec![])]);
+        assert_eq!(in_hand(&view(&waiting, &HashSet::new(), false)).as_deref(), Some("Task 2"));
+        let done = list(vec![task(1, Status::Completed, vec![])]);
+        assert_eq!(in_hand(&view(&done, &HashSet::new(), false)).as_deref(), Some("All done"));
     }
 
     #[test]

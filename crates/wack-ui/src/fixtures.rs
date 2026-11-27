@@ -94,7 +94,7 @@ fn drawn(text: Option<&'static str>, placeholder: &'static str) -> Input {
 /// from a quarter full (shell::meter), so not at these levels.
 fn meter(percent: u64) -> Option<Meter> {
     let tokens = CONTEXT_WINDOW * percent / 100;
-    Some(Meter { tokens, window: Some(CONTEXT_WINDOW), high: percent >= 80, can_compact: percent >= 25, parts: context_parts(tokens) })
+    Some(Meter { tokens, window: Some(CONTEXT_WINDOW), high: percent >= 80, can_compact: percent >= 25, parts: context_parts(tokens), cache: Some(0.924) })
 }
 
 pub const CONTEXT_WINDOW: u64 = 200_000;
@@ -172,7 +172,7 @@ pub fn composer_working() -> ComposerData {
         input: drawn(None, crate::chat::FOLLOW_UP_PLACEHOLDER),
         meter: meter(21),
         working: true,
-        activity: Some(("Working  ·  8s".into(), Some("Running cargo test -p wack-llm retry".into()))),
+        activity: Some("Working for 8s".into()),
         waiting: vec![
             Waiting { text: "Check the date form against RFC 9110 too.".into(), files: Vec::new(), steering: true },
             Waiting {
@@ -526,7 +526,7 @@ pub fn composer_foreground() -> ComposerData {
         archived: None,
         working: true,
         foreground: true,
-        activity: Some(("Working  ·  2m 04s".into(), Some("Running cargo build --release".into()))),
+        activity: Some("Working for 2m 04s".into()),
         tasks: crate::shell::task_lines(&tasks()),
         ..composer_after_turn(drawn(None, crate::chat::FOLLOW_UP_PLACEHOLDER))
     }
@@ -1343,7 +1343,7 @@ pub fn composer_team(lead_idle: bool) -> ComposerData {
     ComposerData {
         crew: Some(crew_pill(false)),
         crew_at_work,
-        activity: Some(("Working  ·  3m 20s".into(), Some("Waiting on General · Parse both Retry-After forms".into()))),
+        activity: Some("Working for 3m 20s".into()),
         ..composer_agents()
     }
 }
@@ -1355,7 +1355,7 @@ pub fn composer_agents() -> ComposerData {
         archived: None,
         working: true,
         foreground: true,
-        activity: Some(("Working  ·  1m 30s".into(), Some("Waiting on Explore · Find the backoff ceilings".into()))),
+        activity: Some("Working for 1m 30s".into()),
         ..composer_after_turn(drawn(None, crate::chat::FOLLOW_UP_PLACEHOLDER))
     }
 }

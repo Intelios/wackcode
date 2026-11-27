@@ -117,7 +117,7 @@ pub fn all() -> Vec<Scene> {
                     composer: ComposerData {
                         chat_area: true,
                         input: Input::Drawn { text: None, placeholder: crate::app::CHAT_FOLLOW_UP_PLACEHOLDER.into() },
-                        activity: Some(("Working · 6s".into(), Some("Searching the web".into()))),
+                        activity: Some("Working for 6s".into()),
                         waiting: Vec::new(),
                         ..fixtures::composer_working()
                     },
@@ -323,7 +323,7 @@ pub fn all() -> Vec<Scene> {
                             project: fixtures::project(),
                             body: Body::Items(fixtures::commits_states_turn()),
                             composer: ComposerData {
-                                activity: Some(("Working  ·  6s".into(), Some("Committing Add Retry-After ceiling test".into()))),
+                                activity: Some("Working for 6s".into()),
                                 waiting: Vec::new(),
                                 ..fixtures::composer_working()
                             },
@@ -823,7 +823,7 @@ pub fn all() -> Vec<Scene> {
         },
         Scene {
             name: "composer-states",
-            description: "The composer's tab and status line between runs, Queue beside Stop while the agent works, and a long paste attached as a file.",
+            description: "The composer's tab between runs (todos, commands, changes) and while working (the time, ⌘B), Queue beside Stop, and a long paste attached as a file.",
             size: size(px(760.), px(760.)),
             build: |_, cx| {
                 let drawn = |text: Option<&str>| Input::Drawn { text: text.map(|text| text.to_string().into()), placeholder: crate::chat::FOLLOW_UP_PLACEHOLDER.into() };
@@ -870,6 +870,7 @@ pub fn all() -> Vec<Scene> {
                         high: false,
                         can_compact: true,
                         parts: fixtures::context_parts(tokens),
+                        cache: Some(0.924),
                     }),
                     context_open: true,
                     ..fixtures::composer_after_turn(drawn)
@@ -894,6 +895,7 @@ pub fn all() -> Vec<Scene> {
                             high: false,
                             can_compact: false,
                             parts: fixtures::context_parts(68_000),
+                            cache: Some(0.924),
                         }),
                         ..fixtures::composer_after_turn(Input::Drawn {
                             text: Some("Run the retry tests now.".into()),
@@ -931,6 +933,7 @@ pub fn all() -> Vec<Scene> {
                             high: false,
                             can_compact: false,
                             parts: fixtures::context_parts(68_000),
+                            cache: Some(0.924),
                         }),
                         ..fixtures::composer_after_turn(Input::Drawn {
                             text: Some("Run the retry tests now.".into()),
@@ -969,6 +972,7 @@ pub fn all() -> Vec<Scene> {
                         high: false,
                         can_compact: false,
                         parts: fixtures::context_parts(68_000),
+                        cache: Some(0.924),
                     }),
                     ..fixtures::composer_after_turn(Input::Drawn {
                         text: text.map(Into::into),
@@ -1186,7 +1190,7 @@ pub fn all() -> Vec<Scene> {
         },
         Scene {
             name: "todo-list",
-            description: "A Build run keeping a todo list, opened from its pill: one task folded, one under way, dependencies shown.",
+            description: "A Build run keeping a todo list, risen from its segment of the tab: one task folded, one under way, dependencies shown.",
             size: WINDOW,
             build: |_, cx| {
                 cx.new(|_| {
@@ -2026,7 +2030,7 @@ pub fn all() -> Vec<Scene> {
         },
         Scene {
             name: "chat-tasks",
-            description: "Commands in the background: started, a failed suite waking the chat, the list open above the composer.",
+            description: "Commands in the background: started, a failed suite waking the chat, their list risen from the tab with each one's newest output.",
             size: WINDOW,
             build: |_, cx| {
                 cx.new(|_| {
@@ -2046,7 +2050,7 @@ pub fn all() -> Vec<Scene> {
         },
         Scene {
             name: "chat-tasks-foreground",
-            description: "The agent waiting on a slow command: Background ⌘B beside what it is doing, and the tasks pill.",
+            description: "The agent waiting on a slow command: the tab's time, the running commands and ⌘B Background.",
             size: WINDOW,
             build: |_, cx| {
                 cx.new(|_| {
@@ -2127,7 +2131,7 @@ pub fn all() -> Vec<Scene> {
         },
         Scene {
             name: "chat-team-idle-lead",
-            description: "A Team whose lead has stopped with its crew still out in the background: the status line stays up for them.",
+            description: "A Team whose lead has stopped with its crew still out in the background: the crew's segment of the tab stays up for them.",
             size: size(px(1180.), px(1000.)),
             build: |_, cx| team_chat_scene(true, cx),
         },

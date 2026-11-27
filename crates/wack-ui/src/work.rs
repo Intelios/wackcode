@@ -399,7 +399,7 @@ pub fn summary(turn: &Turn, now: u64) -> String {
             return retrying.clone();
         }
         return match turn.started {
-            Some(started) => format!("Working  ·  {}", duration(now.saturating_sub(started))),
+            Some(started) => format!("Working for {}", duration(now.saturating_sub(started))),
             None => "Working".into(),
         };
     }

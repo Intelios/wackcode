@@ -2680,7 +2680,7 @@ fn live_view(app: &AppState, cx: &App) -> (SidebarData, Screen, StripData) {
             let window = resolved.as_ref().and_then(|resolved| resolved.model.context_window);
             let meter = state
                 .context_tokens
-                .map(|tokens| meter(tokens, window, !state.is_empty() && model_missing.is_none(), state.context_parts.clone()));
+                .map(|tokens| Meter { cache: state.cache_rate(), ..meter(tokens, window, !state.is_empty() && model_missing.is_none(), state.context_parts.clone()) });
             let mut waiting: Vec<Waiting> = state.steering.iter().map(|text| waiting_item(text, true)).collect();
             waiting.extend(state.queue.iter().map(|text| waiting_item(text, false)));
             Screen::Chat {
@@ -3010,7 +3010,7 @@ fn meter(tokens: u64, window: Option<u64>, has_messages: bool, parts: Vec<wack_c
         }
         None => (false, has_messages && tokens >= 50_000),
     };
-    Meter { tokens, window, high, can_compact, parts }
+    Meter { tokens, window, high, can_compact, parts, cache: None }
 }
 
 /// The connection's name, for the mark on the model's pill.

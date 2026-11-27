@@ -72,7 +72,7 @@ pub enum CommitState {
 }
 
 impl CommitRow {
-    /// What the composer's live status line says while this commit is running; `None` once settled.
+    /// What this commit is doing while it runs ("Committing Fix upload"); `None` once settled.
     pub fn activity(&self) -> Option<String> {
         if !matches!(self.state, CommitState::Running) {
             return None;

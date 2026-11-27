@@ -8,13 +8,16 @@
 //! hovering: a click on the ring is Send's or Stop's, so reaching for the popover never stops a
 //! run. In Ultra Plan the card wears the prism's edge.
 //!
-//! Inside the card's top, while there is something to say, one status line: the run's time and
-//! what it is doing, the todo list's count (which opens the list above the card) and ⌘B when the
-//! agent waits on something it could leave running. On the card's top edge, a tab of what
-//! outlives a run: commands still running (opening their list) and the project's changed files
-//! (opening Changes). Messages written while the agent works wait above the card as faint
-//! bubbles, at the foot of the chat, with Steer now, Edit and Remove. An open question comes
-//! first: it stacks above the card, and while it is open the status line and the tab only report.
+//! On the card's top edge, one piece with it, a tab of segments, as version 2's pills were: the
+//! run's time ("Working for 8s", the duck paddling; never what it is doing, which the transcript
+//! shows), the todo list's count and its task in hand, a Team's crew at work, commands still
+//! running, the project's changed files (opening Changes), and ⌘B while the agent waits on
+//! something it could leave running. The todo list and the commands open as popovers rising from
+//! their segment, over the transcript, so opening one never moves the page; in a chat the tab's
+//! room is always kept, so a run starting never moves it either. Messages written while the agent
+//! works wait above the card as faint bubbles, at the foot of the chat, with Steer now, Edit and
+//! Remove. An open question comes first: it stacks above the card, and while it is open the tab
+//! only reports.
 //!
 //! A chat with its Team on splits the model's pill: the lead (the chat's model) and, sliding in
 //! beside it, the crew, which opens its own picker. The model picker's foot switches Team on or
@@ -83,7 +86,7 @@ pub struct ComposerData {
     pub ultra_effort: bool,
     /// The chat's Team, while it is on: the crew's half of the model's pill.
     pub crew: Option<CrewPill>,
-    /// A Team's workers on this message, while any of them works: the status line stays up for
+    /// A Team's workers on this message, while any of them works: the tab's crew segment stays up for
     /// them even while the lead waits.
     pub crew_at_work: Option<CrewAtWork>,
     /// Build, Plan or Ultra Plan.
@@ -112,9 +115,9 @@ pub struct ComposerData {
     pub access: Option<crate::computer_card::CardData>,
     /// The agent's todo list, at the top of the column.
     pub todos: Option<crate::todo_panel::TodoData>,
-    /// While a run is going: how long, and what it is doing now (`ChatSession::activity`).
-    pub activity: Option<(SharedString, Option<SharedString>)>,
-    /// The todo list is open above the card.
+    /// While a run is going: how long it has run ("Working for 8s", `ChatSession::activity`).
+    pub activity: Option<SharedString>,
+    /// The todo list is open, rising from its segment of the tab.
     pub todos_open: bool,
     /// Commands the agent started in the background: running ones first, then a few that ended.
     pub tasks: Vec<TaskLine>,
@@ -141,7 +144,7 @@ pub struct ComposerData {
     pub sent_at: Option<Instant>,
 }
 
-/// A background command as its list above the composer shows it.
+/// A background command as its list, rising from the tab, shows it.
 #[derive(Clone, Debug)]
 pub struct TaskLine {
     pub id: SharedString,
@@ -236,6 +239,9 @@ pub struct Meter {
     pub can_compact: bool,
     /// Part by part, as the last run left it; empty before one has ended in this window.
     pub parts: Vec<wack_core::context::Part>,
+    /// The share of the chat's prompt tokens the provider served from its cache, once a reply
+    /// has said (`ChatSession::cache_rate`).
+    pub cache: Option<f32>,
 }
 
 impl Meter {
@@ -455,7 +461,6 @@ impl RenderOnce for Composer {
             .rounded(px(CARD_RADIUS))
             .bg(theme.surface)
             .when(!ultra_plan, |card| card.border_1().border_color(theme.border))
-            .children(status_line(&data, asking, &theme))
             .when_some(data.comments.clone(), |card, (count, canvas)| card.child(comments_chip(count, canvas, data.model_missing.is_none(), &theme)))
             .when(!data.attachments.is_empty() || !data.files.is_empty(), |card| card.child(tray(&data.attachments, &data.files, &theme)))
             .when_some(data.model_missing.clone(), |card, missing| {
@@ -533,12 +538,13 @@ impl RenderOnce for Composer {
         if moment.is_some() {
             window.request_animation_frame();
         }
-        // The tab of what stays running (commands, changed files) sits on the card's top edge,
-        // drawn over the edge so the two read as one piece.
-        let tab = tab(running_tasks, data.tasks_open && !asking, !asking, data.changes, &theme);
+        // The tab sits on the card's top edge, drawn over the edge so the two read as one piece.
+        // In a chat its room is kept even while it is empty, so it coming and going never moves
+        // the transcript.
+        let tab = tab(&data, running_tasks, asking, viewport, &theme);
         let card = div()
             .relative()
-            .when(tab.is_some(), |card| card.mt(px(TAB_HEIGHT - 1.)))
+            .when(tab.is_some() || !data.roomy, |card| card.mt(px(TAB_HEIGHT - 1.)))
             .when_some(moment, |card, moment| card.top(px(-moment.lift)))
             .child(card)
             .children(moment.map(|moment| send_glint(moment, &theme)))
@@ -571,19 +577,6 @@ impl RenderOnce for Composer {
                 bubbles = bubbles.child(div().flex_none().child(waiting_bubble(index, queued, waiting, data.working, &theme)));
             }
             column = column.child(bubbles.tag("waiting"));
-        }
-        if let Some(todos) = data.todos.clone()
-            && data.todos_open
-            && !asking
-        {
-            column = column.child(div().flex_shrink(1.).min_h(px(40.)).flex().flex_col().child(crate::todo_panel::todo_panel(todos, &theme)));
-        }
-        if data.tasks_open && !asking && running_tasks > 0 {
-            let mut rows = div().id("tasks").flex_shrink(1.).min_h(px(36.)).max_h(px(TASKS_MAX_HEIGHT)).overflow_y_scroll().flex().flex_col().gap(px(6.));
-            for task in data.tasks {
-                rows = rows.child(div().flex_none().child(task_row(task, &theme)));
-            }
-            column = column.child(rows);
         }
         if let Some(access) = data.access {
             column = column.child(div().flex_none().pb(px(4.)).child(crate::computer_card::ComputerCard::new(access)));
@@ -618,169 +611,227 @@ fn provider_mark(letter: SharedString, theme: &Theme) -> impl IntoElement {
         .child(letter)
 }
 
-/// Inside the card's top: the run's time and what it is doing, the todo list's count (which
-/// opens the list) and ⌘B when there is something to move to the background. Only while there
-/// is something to say.
-fn status_line(data: &ComposerData, asking: bool, theme: &Theme) -> Option<impl IntoElement + use<>> {
-    if data.activity.is_none() && data.todos.is_none() && data.crew_at_work.is_none() {
-        return None;
-    }
-    let mut line = div().h(px(STATUS_HEIGHT)).mr(px(4.)).flex().items_center().gap(px(8.));
+/// The tab on the card's top edge: a segment for each thing worth saying (see the module's
+/// header), joined by hairlines. `None` when there is nothing to say.
+fn tab(data: &ComposerData, running: usize, asking: bool, viewport: gpui::Size<Pixels>, theme: &Theme) -> Option<gpui::AnyElement> {
+    let opens = !asking;
+    let segment = |id: &'static str| div().id(id).flex_none().h_full().px(px(8.)).rounded(px(8.)).flex().items_center().gap(px(6.));
+    let words = |text: SharedString, colour: Hsla| div().flex_none().typography(Type::Small).text_color(colour).child(text);
+    // Closed it points up, where the list rises; open, down, where it goes back.
+    let chevron = |open: bool| {
+        let down = Icon::ChevronDown.view(px(10.), theme.text_faint);
+        if open { down } else { down.with_transformation(gpui::Transformation::rotate(gpui::radians(std::f32::consts::PI))) }
+    };
     let lead_idle = data.activity.is_none();
-    if let (true, Some(_)) = (lead_idle, data.crew_at_work) {
-        // The lead's run ended with its crew still out: it wakes as their reports come in.
-        line = line.child(
-            div()
-                .flex_1()
-                .min_w_0()
-                .flex()
-                .items_center()
-                .gap(px(8.))
-                .child(div().flex_none().child(Icon::Duck.view(px(13.), theme.text_dim)))
-                .child(div().flex_1().min_w_0().truncate().typography(Type::Small).text_color(theme.text_dim).child("The lead picks up as reports come in"))
-                .tag("lead-waiting"),
-        );
-    }
-    if let Some((time, doing)) = data.activity.clone() {
-        line = line.child(
-            div()
-                .flex_1()
-                .min_w_0()
-                .flex()
-                .items_center()
-                .gap(px(8.))
+    let mut segments: Vec<gpui::AnyElement> = Vec::new();
+
+    if let Some(time) = data.activity.clone() {
+        segments.push(
+            segment("activity")
                 .child(crate::motion::paddling(div().flex_none().child(Icon::Duck.view(px(13.), theme.accent_text))))
-                .child(div().flex_none().typography(Type::Small).text_color(theme.text).child(time))
-                .child(div().flex_1().min_w_0().truncate().typography(Type::Small).text_color(theme.text_dim).children(doing))
-                .tag("activity"),
+                .child(words(time, theme.text_soft))
+                .tag("activity")
+                .into_any_element(),
         );
     }
     if let Some(crew) = data.crew_at_work {
-        let duck = Icon::Duck.view(px(11.), if crew.working > 0 { theme.accent_text } else { theme.text_faint });
-        line = line.child(
-            div()
-                .id("crew-pill")
-                .flex_none()
-                .h(px(22.))
-                .px(px(8.))
-                .rounded_full()
-                .flex()
-                .items_center()
-                .gap(px(5.))
+        let duck = Icon::Duck.view(px(12.), if crew.working > 0 { theme.accent_text } else { theme.text_faint });
+        segments.push(
+            segment("crew-pill")
                 .cursor_pointer()
-                .hover(|button| button.bg(theme.hover))
-                .tooltip(tip("Show the team (⌘⇧A)"))
+                .hover(|segment| segment.bg(theme.hover))
+                // The lead's run ended with its crew still out: it wakes as their reports come in.
+                .tooltip(tip(if lead_idle { "The lead picks up as reports come in. Show the team (⌘⇧A)" } else { "Show the team (⌘⇧A)" }))
                 .on_click(dispatch(crate::actions::ShowTeam))
                 // One duck paddles at a time: the lead's while it works, else the crew's.
                 .child(if lead_idle && crew.working > 0 { crate::motion::paddling(div().child(duck)).into_any_element() } else { duck.into_any_element() })
-                .child(div().typography(Type::Small).text_color(theme.text_soft).child(crew.words()))
-                .tag("crew-pill"),
+                .child(words(crew.words().into(), theme.text_soft))
+                .tag("crew-pill")
+                .into_any_element(),
         );
     }
-    if let Some(todos) = &data.todos {
+    if let Some(todos) = data.todos.clone() {
+        let open = data.todos_open && opens;
         let view = &todos.view;
-        let open = data.todos_open && !asking;
-        line = line.child(
+        let live = todos.busy && view.active;
+        let mark = if view.active {
             div()
-                .id("todos-pill")
                 .flex_none()
-                .h(px(22.))
-                .px(px(8.))
+                .size(px(11.))
                 .rounded_full()
-                .flex()
-                .items_center()
-                .gap(px(5.))
-                .when(open, |button| button.bg(theme.hover))
-                .when(!asking, |button| button.cursor_pointer().hover(|button| button.bg(theme.hover)).on_click(dispatch(ToggleTodos)))
-                .tooltip(tip("The agent's todo list"))
-                .child(Icon::Tasks.view(px(12.), if todos.busy && view.active { theme.accent_text } else { theme.text_faint }))
-                .child(div().typography(Type::Small).text_color(theme.text_soft).child(format!("{} of {}", view.done, view.total)))
-                .when(!asking, |button| button.child(if open { Icon::ChevronDown } else { Icon::ChevronRight }.view(px(10.), theme.text_faint)))
-                .tag("todos-pill"),
-        );
+                .border_1()
+                .border_color(if live { theme.accent_text } else { theme.text_faint })
+                .when(live, |mark| mark.child(div().m(px(2.)).size(px(5.)).rounded_full().bg(theme.accent_text)))
+                .into_any_element()
+        } else {
+            Icon::Check.view(px(12.), theme.success).into_any_element()
+        };
+        let button = segment("todos-pill")
+            .when(open, |segment| segment.bg(theme.hover))
+            .when(opens, |segment| segment.cursor_pointer().hover(|segment| segment.bg(theme.hover)).on_click(dispatch(ToggleTodos)))
+            .tooltip(tip("The agent's todo list"))
+            .child(mark)
+            .child(words(format!("{}/{}", view.done, view.total).into(), theme.text_soft))
+            .children(crate::todo_panel::in_hand(view).map(|task| div().flex_none().max_w(px(TODO_WORDS)).truncate().typography(Type::Small).text_color(theme.text_dim).child(task)))
+            .when(opens, |segment| segment.child(chevron(open)))
+            .tag("todos-pill");
+        let list = open.then(|| todos_popover(todos, theme));
+        segments.push(rising(button, "todos", Box::new(ToggleTodos), list, viewport));
     }
-    // Between runs the count leads the line.
-    if lead_idle && data.crew_at_work.is_none() {
-        line = line.child(div().flex_1());
-    }
-    if data.working && data.foreground {
-        line = line.child(
-            div()
-                .id("background-pill")
-                .flex_none()
-                .h(px(22.))
-                .px(px(8.))
-                .rounded_full()
-                .flex()
-                .items_center()
-                .gap(px(5.))
-                .cursor_pointer()
-                .hover(|button| button.bg(theme.hover))
-                .tooltip(tip("Keep it working in the background and let the agent carry on"))
-                .on_click(dispatch(MoveToBackground))
-                .child(div().typography(Type::Small).text_color(theme.text_faint).child("⌘B"))
-                .child(div().typography(Type::Small).text_color(theme.text_dim).child("Background"))
-                .tag("background-pill"),
-        );
-    }
-    Some(line)
-}
-
-/// The tab on the card's top edge: commands still running (opening their list) and the
-/// project's changed files (opening Changes). `None` when there is neither.
-fn tab(running: usize, tasks_open: bool, opens: bool, changes: Option<ChangeCount>, theme: &Theme) -> Option<gpui::AnyElement> {
-    let changes = changes.filter(|changes| changes.files > 0);
-    if running == 0 && changes.is_none() {
-        return None;
-    }
-    let segment = |id: &'static str| div().id(id).flex_none().h_full().px(px(8.)).rounded(px(8.)).flex().items_center().gap(px(6.));
-    let tasks = (running > 0).then(|| {
-        segment("tasks-pill")
-            .when(tasks_open, |segment| segment.bg(theme.hover))
+    if running > 0 {
+        let open = data.tasks_open && opens;
+        let button = segment("tasks-pill")
+            .when(open, |segment| segment.bg(theme.hover))
             .when(opens, |segment| segment.cursor_pointer().hover(|segment| segment.bg(theme.hover)).on_click(dispatch(ToggleTasks)))
             .tooltip(tip("Commands the agent left running"))
             .child(Icon::Terminal.view(px(12.), theme.accent_text))
-            .child(div().typography(Type::Small).text_color(theme.text_soft).child(format!("{running} running")))
-            .when(opens, |segment| segment.child(if tasks_open { Icon::ChevronDown } else { Icon::ChevronRight }.view(px(10.), theme.text_faint)))
-            .tag("tasks-pill")
-    });
-    let files = changes.map(|changes| {
+            .child(words(format!("{running} running").into(), theme.text_soft))
+            .when(opens, |segment| segment.child(chevron(open)))
+            .tag("tasks-pill");
+        let list = open.then(|| tasks_popover(&data.tasks, running, theme));
+        segments.push(rising(button, "tasks", Box::new(ToggleTasks), list, viewport));
+    }
+    if let Some(changes) = data.changes.filter(|changes| changes.files > 0) {
         let noun = if changes.files == 1 { "file" } else { "files" };
-        segment("changes-pill")
-            .cursor_pointer()
-            .hover(|segment| segment.bg(theme.hover))
-            .tooltip(tip("Show the changes (⌘⇧C)"))
-            .on_click(dispatch(crate::actions::ToggleChanges))
-            .child(Icon::Branch.view(px(12.), theme.accent_text))
-            .child(div().typography(Type::Small).text_color(theme.text_soft).child(format!("{} {noun}", changes.files)))
-            .when(changes.added > 0, |segment| segment.child(div().typography(Type::Small).text_color(theme.diff_added).child(format!("+{}", changes.added))))
-            .when(changes.removed > 0, |segment| {
-                segment.child(div().typography(Type::Small).text_color(theme.diff_removed).child(format!("−{}", changes.removed)))
-            })
-            .tag("changes-pill")
-    });
-    let both = tasks.is_some() && files.is_some();
-    Some(
-        div()
-            .h(px(TAB_HEIGHT))
-            .px(px(4.))
-            .py(px(3.))
-            .flex()
-            .items_center()
-            .gap(px(2.))
-            .bg(theme.surface)
-            .rounded_tl(px(12.))
-            .rounded_tr(px(12.))
-            .border_t_1()
-            .border_l_1()
-            .border_r_1()
-            .border_color(theme.border)
-            .children(tasks)
-            .when(both, |tab| tab.child(div().flex_none().w(px(1.)).h(px(12.)).bg(theme.border)))
-            .children(files)
-            .tag("composer-tab")
-            .into_any_element(),
-    )
+        segments.push(
+            segment("changes-pill")
+                .cursor_pointer()
+                .hover(|segment| segment.bg(theme.hover))
+                .tooltip(tip("Show the changes (⌘⇧C)"))
+                .on_click(dispatch(crate::actions::ToggleChanges))
+                .child(Icon::Branch.view(px(12.), theme.accent_text))
+                .child(words(format!("{} {noun}", changes.files).into(), theme.text_soft))
+                .when(changes.added > 0, |segment| segment.child(words(format!("+{}", changes.added).into(), theme.diff_added)))
+                .when(changes.removed > 0, |segment| segment.child(words(format!("−{}", changes.removed).into(), theme.diff_removed)))
+                .tag("changes-pill")
+                .into_any_element(),
+        );
+    }
+    if data.working && data.foreground {
+        segments.push(
+            segment("background-pill")
+                .cursor_pointer()
+                .hover(|segment| segment.bg(theme.hover))
+                .tooltip(tip("Keep it working in the background and let the agent carry on"))
+                .on_click(dispatch(MoveToBackground))
+                .child(words("⌘B".into(), theme.text_faint))
+                .child(words("Background".into(), theme.text_dim))
+                .tag("background-pill")
+                .into_any_element(),
+        );
+    }
+    if segments.is_empty() {
+        return None;
+    }
+    let mut tab = div()
+        .h(px(TAB_HEIGHT))
+        .px(px(4.))
+        .py(px(3.))
+        .flex()
+        .items_center()
+        .gap(px(2.))
+        .bg(theme.surface)
+        .rounded_tl(px(12.))
+        .rounded_tr(px(12.))
+        .border_t_1()
+        .border_l_1()
+        .border_r_1()
+        .border_color(theme.border);
+    for (index, segment) in segments.into_iter().enumerate() {
+        if index > 0 {
+            tab = tab.child(div().flex_none().w(px(1.)).h(px(12.)).bg(theme.border));
+        }
+        tab = tab.child(segment);
+    }
+    Some(tab.tag("composer-tab").into_any_element())
+}
+
+/// The longest a todo's words run on the tab before they truncate.
+const TODO_WORDS: f32 = 220.;
+
+/// A segment of the tab with its list, when open, rising from it over everything; a click
+/// anywhere else closes the list (`close`), as the pickers' menus close.
+fn rising(segment: impl IntoElement, name: &'static str, close: Box<dyn gpui::Action>, list: Option<gpui::AnyElement>, viewport: gpui::Size<Pixels>) -> gpui::AnyElement {
+    div()
+        .relative()
+        .h_full()
+        .flex_none()
+        .child(segment)
+        .when_some(list, |wrap, list| {
+            let backdrop = anchored().position_mode(AnchoredPositionMode::Window).position(point(px(0.), px(0.))).child(
+                div().id(SharedString::from(format!("{name}-backdrop"))).w(viewport.width).h(viewport.height).on_mouse_down(MouseButton::Left, move |_, window, cx| {
+                    cx.stop_propagation();
+                    window.dispatch_action(close.boxed_clone(), cx);
+                }),
+            );
+            let card = div().absolute().top_0().left_0().child(
+                anchored()
+                    .anchor(gpui::Anchor::BottomLeft)
+                    .offset(point(px(-4.), px(-PICKER_GAP)))
+                    .snap_to_window_with_margin(px(8.))
+                    .child(crate::motion::enter(ElementId::Name(format!("arrive-{name}-list").into()), div().child(list))),
+            );
+            wrap.child(deferred(backdrop).with_priority(1)).child(deferred(card).with_priority(2))
+        })
+        .into_any_element()
+}
+
+/// The frame of a list rising from the tab: raised over the transcript, as the pickers are.
+fn list_frame(id: &'static str, theme: &Theme) -> gpui::Stateful<gpui::Div> {
+    div()
+        .id(id)
+        // Presses inside stay inside: the click-away layer beneath must not close the list.
+        .occlude()
+        .w(px(LIST_WIDTH))
+        .px(px(14.))
+        .py(px(12.))
+        .flex()
+        .flex_col()
+        .gap(px(8.))
+        .rounded(px(16.))
+        .bg(theme.raised)
+        .border_1()
+        .border_color(theme.border_strong)
+        .shadow_lg()
+}
+
+const LIST_WIDTH: f32 = 460.;
+
+fn todos_popover(todos: crate::todo_panel::TodoData, theme: &Theme) -> gpui::AnyElement {
+    list_frame("todos-list", theme).child(crate::todo_panel::todo_panel(todos, theme)).into_any_element()
+}
+
+/// The commands the agent left running, each with its newest output, Output and Stop; then a
+/// few that ended. Its foot opens the Tasks pane, where every command's whole output is.
+fn tasks_popover(tasks: &[TaskLine], running: usize, theme: &Theme) -> gpui::AnyElement {
+    let head = div()
+        .flex()
+        .items_center()
+        .gap(px(8.))
+        .child(Icon::Terminal.view(px(13.), theme.accent_text))
+        .child(div().typography(Type::UiStrong).text_color(theme.text_soft).child("Background commands"))
+        .child(div().typography(Type::Small).text_color(theme.text_faint).child(format!("{running} running")))
+        .child(div().flex_1())
+        .child(
+            div()
+                .id("tasks-all")
+                .typography(Type::Small)
+                .text_color(theme.text_dim)
+                .cursor_pointer()
+                .hover(|word| word.text_color(theme.accent_text))
+                .on_click(dispatch(crate::actions::ToggleTasksPane))
+                .child("Tasks pane")
+                .tag("tasks-all"),
+        );
+    let rows = div()
+        .id("tasks")
+        .max_h(px(TASKS_MAX_HEIGHT))
+        .overflow_y_scroll()
+        .flex()
+        .flex_col()
+        .gap(px(2.))
+        .children(tasks.iter().cloned().map(|task| task_row(task, theme)));
+    list_frame("tasks-list", theme).child(head).child(rows).tag("tasks-list").into_any_element()
 }
 
 /// What the ring round Send keeps between frames: whether the pointer is over the ring or its
@@ -870,6 +921,8 @@ fn send_ring(data: &ComposerData, has_text: bool, viewport: gpui::Size<Pixels>, 
                 .child(
                     div()
                         .id("context-popover")
+                        // A press on the popover stays there: it never reaches the chat beneath.
+                        .occlude()
                         .pb(px(PICKER_GAP + 2.))
                         .on_hover(move |hovered, _, cx| {
                             let hovered = *hovered;
@@ -1035,6 +1088,25 @@ fn context_card(meter: &Meter, working: bool, model_missing: bool, open: &[Kind]
     } else {
         ("Compacting summarises older turns to free room.", theme.text_faint)
     };
+    // How much of what the chat sent the provider read from its cache: cheap and fast when high.
+    let cache = div()
+        .mt(px(10.))
+        .pt(px(10.))
+        .border_t_1()
+        .border_color(theme.border)
+        .flex()
+        .items_center()
+        .gap(px(10.))
+        .child(div().flex_1().min_w_0().typography(Type::Small).text_color(theme.text_dim).child("Prompt cache hits"))
+        .child(
+            div()
+                .flex_none()
+                .typography(Type::Small)
+                .font_weight(gpui::FontWeight::SEMIBOLD)
+                .text_color(if meter.cache.is_some() { theme.text } else { theme.text_faint })
+                .child(meter.cache.map(|rate| format!("{:.1}%", rate * 100.)).unwrap_or_else(|| "—".into())),
+        )
+        .tag("context-cache");
     let foot = div()
         .mt(px(10.))
         .pt(px(10.))
@@ -1085,6 +1157,7 @@ fn context_card(meter: &Meter, working: bool, model_missing: bool, open: &[Kind]
         .child(hero)
         .child(bar)
         .child(rows)
+        .child(cache)
         .child(foot)
         .tag("context-popover")
 }
@@ -1128,9 +1201,6 @@ const CARD_GAP: f32 = 10.;
 const MODEL_MIN: f32 = 64.;
 /// How far above its pill a picker's popover opens.
 const PICKER_GAP: f32 = 6.;
-/// The status line's height inside the card.
-const STATUS_HEIGHT: f32 = 22.;
-
 /// A thumbnail's side in the tray.
 const THUMB: f32 = 56.;
 
@@ -1380,30 +1450,13 @@ fn task_row(task: TaskLine, theme: &Theme) -> impl IntoElement {
     let running = task.status.running();
     let colour = crate::panes::tasks::status_colour(&task.status, theme);
     let (show, stop) = (task.id.clone(), task.id.clone());
-    div()
-        .id(SharedString::from(format!("task-{}", task.id)))
-        .mx(px(4.))
-        .px(px(14.))
-        .py(px(6.))
+    let top = div()
         .flex()
         .items_center()
         .gap(px(10.))
-        .rounded(px(14.))
-        .bg(theme.surface)
-        .border_1()
-        .border_color(theme.border)
         .child(div().flex_none().size(px(6.)).rounded_full().bg(colour))
-        .child(
-            div()
-                .flex_1()
-                .min_w_0()
-                .flex()
-                .items_baseline()
-                .gap(px(8.))
-                .child(div().flex_none().max_w(gpui::relative(0.5)).truncate().typography(Type::Ui).text_color(theme.text_soft).child(task.label))
-                .child(div().flex_none().typography(Type::Small).text_color(if running { theme.text_faint } else { colour }).child(task.words))
-                .child(div().flex_1().min_w_0().truncate().typography(Type::Mono).text_color(theme.text_faint).child(task.last)),
-        )
+        .child(div().flex_1().min_w_0().truncate().typography(Type::Ui).text_color(if running { theme.text } else { theme.text_dim }).child(task.label))
+        .child(div().flex_none().typography(Type::Small).text_color(if running { theme.text_faint } else { colour }).child(task.words))
         .child(
             div()
                 .id(SharedString::from(format!("show-task-{}", task.id)))
@@ -1434,13 +1487,27 @@ fn task_row(task: TaskLine, theme: &Theme) -> impl IntoElement {
                     .child(Icon::Stop.view(px(9.), theme.danger))
                     .tag("task-stop"),
             )
+        });
+    div()
+        .id(SharedString::from(format!("task-{}", task.id)))
+        .px(px(8.))
+        .py(px(6.))
+        .rounded(px(10.))
+        .hover(|row| row.bg(theme.hover))
+        .flex()
+        .flex_col()
+        .gap(px(3.))
+        .child(top)
+        // What it printed last, so progress shows without opening it.
+        .when(!task.last.trim().is_empty(), |row| {
+            row.child(div().pl(px(16.)).truncate().typography(Type::Mono).text_color(theme.text_faint).child(SharedString::from(task.last.trim().to_string())))
         })
 }
 
 /// About three waiting messages; more scroll.
 const WAITING_MAX_HEIGHT: f32 = 176.;
-/// About three running commands; more scroll.
-const TASKS_MAX_HEIGHT: f32 = 118.;
+/// About five commands; more scroll.
+const TASKS_MAX_HEIGHT: f32 = 280.;
 /// The tab on the card's top edge: its height, and how far in from the card's left it sits.
 const TAB_HEIGHT: f32 = 30.;
 const TAB_INSET: f32 = 16.;

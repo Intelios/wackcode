@@ -294,6 +294,8 @@ pub struct AppState {
     pub title_error: Option<SharedString>,
     /// The chat being renamed in place, if any.
     pub renaming: Option<Renaming>,
+    /// A chat's right-click menu, while open.
+    pub chat_menu: Option<ChatMenu>,
     /// The `/` menu, open over one composer.
     pub slash: Option<Slash>,
     /// Where ⎋ closed the menu (whose composer, the word's start): it stays shut for that word.
@@ -335,10 +337,18 @@ struct WorkspaceFilesCache {
     request: u64,
 }
 
-/// A chat's title being edited where it is shown: on its tab or its sidebar row.
+/// A chat's right-click menu: whose, where the pointer was, and whether its sidebar row opened it.
+#[derive(Clone, Debug)]
+pub struct ChatMenu {
+    pub chat: String,
+    pub position: gpui::Point<gpui::Pixels>,
+    pub sidebar: bool,
+}
+
+/// A chat's title being edited where it is shown: in its header or on its sidebar row.
 pub struct Renaming {
     pub chat: String,
-    /// Where the field is drawn: the sidebar row or the tab.
+    /// Where the field is drawn: the sidebar row or the chat's header.
     pub place: RenamePlace,
     pub field: Entity<TextField>,
     /// What had focus before, to give it back.
@@ -348,7 +358,10 @@ pub struct Renaming {
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub enum RenamePlace {
-    Tab,
+    /// The chat's header, at the title's own size: from the title, its tab or File › Rename
+    /// Chat…. (Once it was the 28-point tab, which the owner found cramped.) The tab of the chat
+    /// being renamed carries the field (`TitleLook::Editing`) for the header to draw.
+    Header,
     Sidebar,
 }
 
@@ -530,6 +543,7 @@ impl AppState {
             title_models_open: false,
             title_error: None,
             renaming: None,
+            chat_menu: None,
             _subscriptions: subscriptions,
         };
         app.watch_form(cx);
@@ -1467,6 +1481,64 @@ impl AppState {
         let Selection::Chat(id) = &self.selection else { return None };
         let chat = self.store.chat(id).filter(|chat| chat.is_chat_area())?;
         Some(self.store.scratch_folder(chat))
+    }
+
+    /// What a chat's right-click menu needs to know of it.
+    pub fn chat_facts(&self, menu: &ChatMenu) -> Option<crate::context_menu::ChatFacts> {
+        let chat = self.store.chat(&menu.chat)?;
+        Some(crate::context_menu::ChatFacts {
+            chat: menu.chat.clone(),
+            chat_area: chat.is_chat_area(),
+            has_file: self.store.session_path(chat).exists(),
+            tab_open: self.tabs.contains(&menu.chat),
+            sidebar: menu.sidebar,
+        })
+    }
+
+    /// The folder a chat works in: its project's, or a Chat area chat's scratchpad.
+    fn chat_folder(&self, id: &str) -> Option<PathBuf> {
+        let chat = self.store.chat(id)?;
+        if chat.is_chat_area() {
+            return Some(self.store.scratch_folder(chat));
+        }
+        chat.project.as_deref().and_then(|project| self.store.project(project)).map(|project| project.path.clone())
+    }
+
+    pub fn open_chat_menu(&mut self, menu: ChatMenu, cx: &mut Context<Self>) {
+        self.chat_menu = Some(menu);
+        cx.notify();
+    }
+
+    pub fn close_chat_menu(&mut self, cx: &mut Context<Self>) {
+        if self.chat_menu.take().is_some() {
+            cx.notify();
+        }
+    }
+
+    /// A chat menu's row, but Rename, which the shell starts where there is a window.
+    pub fn chat_menu_pick(&mut self, chat: &str, pick: crate::actions::ChatPick, cx: &mut Context<Self>) {
+        use crate::actions::ChatPick;
+        match pick {
+            ChatPick::Rename => {}
+            ChatPick::Reveal => {
+                if let Some(folder) = self.chat_folder(chat) {
+                    let _ = std::fs::create_dir_all(&folder);
+                    crate::memory_page::reveal(&folder);
+                }
+            }
+            ChatPick::RevealFile => {
+                if let Some(listed) = self.store.chat(chat) {
+                    crate::memory_page::reveal(&self.store.session_path(listed));
+                }
+            }
+            ChatPick::CopyPath => {
+                if let Some(folder) = self.chat_folder(chat) {
+                    cx.write_to_clipboard(gpui::ClipboardItem::new_string(folder.display().to_string()));
+                }
+            }
+            ChatPick::CloseTab => self.close_tab(chat, cx),
+            ChatPick::Archive => self.archive_chat(chat, false, cx),
+        }
     }
 
     pub fn reveal_project(&self) {
@@ -2621,7 +2693,7 @@ impl AppState {
             return;
         };
         let field = cx.new(|cx| {
-            let mut field = TextField::new(Type::Ui, "Chat name", cx);
+            let mut field = TextField::new(if place == RenamePlace::Header { Type::Heading } else { Type::Ui }, "Chat name", cx);
             field.set_text(&title, cx);
             field.select_all_text(cx);
             field

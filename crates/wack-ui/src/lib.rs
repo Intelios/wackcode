@@ -24,6 +24,7 @@ pub mod subagents_page;
 pub mod composer;
 pub mod computer_card;
 pub mod computer_page;
+pub mod context_menu;
 pub mod conversation;
 pub mod copy;
 pub mod edge_fade;

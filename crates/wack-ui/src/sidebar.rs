@@ -527,6 +527,13 @@ fn chat_row_body(chat: ChatRow, theme: &Theme) -> impl IntoElement {
         .items_center()
         .gap(px(6.))
         .map(|row| if chat.selected { row.bg(theme.accent_wash) } else { row.hover(|row| row.bg(theme.hover)) })
+        .on_mouse_down(MouseButton::Right, {
+            let id = id.clone();
+            move |event, window, cx| {
+                cx.stop_propagation();
+                window.dispatch_action(Box::new(crate::actions::OpenChatMenu { chat: id.clone(), position: event.position, sidebar: true }), cx);
+            }
+        })
         .on_click({
             let id = id.clone();
             move |event, window, cx| {

@@ -275,8 +275,10 @@ actions!(
         AskRestoreAllPrompts,
         ConfirmRestoreAllPrompts,
         CancelRestoreAllPrompts,
-        /// Renames the chat on screen, on its tab (File › Rename Chat…).
+        /// Renames the chat on screen, in its header (File › Rename Chat…).
         RenameChat,
+        /// Closes a chat's right-click menu.
+        CloseChatMenu,
         /// Esc in a rename field: the chat keeps its name.
         CancelRename,
     ]
@@ -327,6 +329,36 @@ pub struct OpenChat {
 pub struct ChooseTitleModel {
     pub connection: String,
     pub model: String,
+}
+
+/// Opens a chat's right-click menu (`context_menu::chat_entries`) at the pointer.
+#[derive(Clone, Debug, PartialEq, Action)]
+#[action(namespace = wackcode, no_json)]
+pub struct OpenChatMenu {
+    pub chat: String,
+    pub position: gpui::Point<gpui::Pixels>,
+    /// Opened from its sidebar row.
+    pub sidebar: bool,
+}
+
+/// What a chat's right-click menu does.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum ChatPick {
+    Rename,
+    Reveal,
+    RevealFile,
+    CopyPath,
+    CloseTab,
+    Archive,
+}
+
+/// A row of a chat's right-click menu.
+#[derive(Clone, Debug, PartialEq, Action)]
+#[action(namespace = wackcode, no_json)]
+pub struct ChatMenuPick {
+    pub chat: String,
+    pub pick: ChatPick,
+    pub sidebar: bool,
 }
 
 /// Opens a rename field over a chat's title where it was double-clicked.

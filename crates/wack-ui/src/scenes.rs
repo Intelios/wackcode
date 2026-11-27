@@ -1314,8 +1314,26 @@ pub fn all() -> Vec<Scene> {
             build: |_, cx| title_scene(TitleScene::Backdrop, cx),
         },
         Scene {
+            name: "chat-menu",
+            description: "A chat's right-click menu from its sidebar row: Rename, its folder and file, its path, Close tab and Archive.",
+            size: WINDOW,
+            build: |_, cx| {
+                let composer = fixtures::composer_after_turn(crate::composer::Input::Drawn { text: None, placeholder: "Reply, or ask for the next change".into() });
+                let facts = crate::context_menu::ChatFacts { chat: fixtures::FINISHED_TITLE.into(), chat_area: false, has_file: true, tab_open: true, sidebar: true };
+                cx.new(|_| {
+                    Shell::showing_tabs(
+                        fixtures::sidebar(Selected::Working),
+                        Screen::Chat { title: fixtures::WORKING_TITLE.into(), project: fixtures::project(), body: Body::Items(fixtures::grouped_turn(&[])), composer },
+                        fixtures::strip(Some(fixtures::WORKING_TITLE)),
+                    )
+                    .with_chat_menu(gpui::point(px(150.), px(184.)), facts)
+                })
+                .into()
+            },
+        },
+        Scene {
             name: "chat-rename-tab",
-            description: "Renaming a chat on its tab (double-click, or File › Rename Chat…).",
+            description: "Renaming a chat in its header, at the title's size (double-click the title or its tab, or File › Rename Chat…).",
             size: WINDOW,
             build: |_, cx| title_scene(TitleScene::RenameTab, cx),
         },
@@ -3386,8 +3404,9 @@ fn title_scene(state: TitleScene, cx: &mut App) -> AnyView {
             }
         }
         TitleScene::RenameTab | TitleScene::RenameSidebar => {
+            let kind = if matches!(state, TitleScene::RenameSidebar) { Type::Ui } else { Type::Heading };
             let field = cx.new(|cx| {
-                let mut field = TextField::new(Type::Ui, "Chat name", cx);
+                let mut field = TextField::new(kind, "Chat name", cx);
                 field.set_text(fixtures::FINISHED_TITLE, cx);
                 field.select_all_text(cx);
                 field

@@ -52,7 +52,7 @@ use crate::{
         NewChat, NewChatIn, SelectDraft, CloseDraft, NewTerminal, NewTerminalWith, TogglePaneMenu, ClosePaneMenu, HideSidePanel, ToggleSidePanel, RevealProject, OpenPaneKind, NextTab, OpenEffortMenu, OpenModelMenu, OpenSettings,
         OpenSettingsSection, PinProject, PreviousTab, RemoveConnection, RemovePicture, ShowCommandOutput, ShowPicture, ShuffleBackdrop, ToggleBackdropShuffle, RemoveProject, ResetDockSize,
         PickCommand, RetryWorkspaceFiles, SelectChat, Send, Stop, StopCommand, MoveToBackground, ToggleTasks, ToggleTasksPane, StopTask, ShowTask, ToggleAgentsPane, ShowTeam, ToggleBrowserPane, ToggleCanvasPane, ShowCanvas, WriteInComposer, ShowAgent, StopAgent, ShowChanges, ToggleChanges, ToggleProject, ToggleSidebar, ToggleTerminal, TriggerProjectCommand, Unqueue,
-        ToggleAutoTitles, ToggleTitleModels, ChooseTitleModel, RenameChat, RenameChatAt, CancelRename, ToggleModelReasoning, ToggleModelRow, ToggleModelVision, AttachPictures, AttachFiles, AttachTerminalSelection, RemoveAttachment, InsertFile, RemoveFile, SteerQueued, RemoveQueued, OpenPicture, ClosePicture, StepPicture, ZoomPicture,
+        ToggleAutoTitles, ToggleTitleModels, ChooseTitleModel, RenameChat, RenameChatAt, CancelRename, OpenChatMenu, CloseChatMenu, ChatMenuPick, ChatPick, ToggleModelReasoning, ToggleModelRow, ToggleModelVision, AttachPictures, AttachFiles, AttachTerminalSelection, RemoveAttachment, InsertFile, RemoveFile, SteerQueued, RemoveQueued, OpenPicture, ClosePicture, StepPicture, ZoomPicture,
         StartSuggestion, DismissSuggestion, CopySuggestion, OpenChat,
         ArchiveChat, ArchiveCurrentChat, ClearSearch, RevealScratchpadFile, DeleteAllArchived, DeleteArchivedChat, ToggleArchived, UnarchiveChat,
         ToggleModelEffort, SwitchSkill, SwitchSkillFolder, RemoveSkillFolder, OpenSkill, CopySkill, ChooseSkillUse, NewSkill, SaveSkill,
@@ -81,7 +81,7 @@ use crate::{
     settings::{self, ProvidersData, Section, SettingsData},
     icon::Icon,
     sidebar::{
-        ArchivedData, ArchivedRow, AreaSwitch, ChatGroup, ChatRow, ChatState, ProjectRow, RowConfirm, SIDEBAR_WIDTH, Sidebar, SidebarData, TitleLook, rename_field,
+        ArchivedData, ArchivedRow, AreaSwitch, ChatGroup, ChatRow, ChatState, ProjectRow, RowConfirm, SIDEBAR_WIDTH, Sidebar, SidebarData, TitleLook,
     },
     tags::{self, Tag},
     theme::Theme,
@@ -186,6 +186,8 @@ pub struct Shell {
     /// A scene's panes and sidebar preference; the app's come from the chat and the store.
     scene_panes: Option<ChatPanes>,
     scene_sidebar_hidden: bool,
+    /// A scene's open chat menu: where, and what it lists.
+    scene_chat_menu: Option<(gpui::Point<Pixels>, crate::context_menu::ChatFacts)>,
     /// A scene's backdrop; the app's comes from the store.
     scene_backdrop: Option<Picture>,
     _activation: Option<Subscription>,
@@ -261,6 +263,7 @@ impl Shell {
             sidebar_open: None,
             scene_panes: None,
             scene_sidebar_hidden: false,
+            scene_chat_menu: None,
             scene_backdrop: None,
             _activation: Some(activation),
             _bounds: Some(bounds),
@@ -310,6 +313,7 @@ impl Shell {
             sidebar_open: None,
             scene_panes: None,
             scene_sidebar_hidden: false,
+            scene_chat_menu: None,
             scene_backdrop: None,
             _activation: None,
             _bounds: None,
@@ -337,6 +341,12 @@ impl Shell {
             app.update(cx, |app, _| app.flush_window());
             app.read(cx).shutdown_runs();
         }
+    }
+
+    /// A scene with a chat's right-click menu open at `position`.
+    pub fn with_chat_menu(mut self, position: gpui::Point<Pixels>, facts: crate::context_menu::ChatFacts) -> Self {
+        self.scene_chat_menu = Some((position, facts));
+        self
     }
 
     /// A scene with its sidebar put away.
@@ -392,10 +402,10 @@ impl Shell {
         self.with_app(cx, |app, cx| app.begin_rename(chat, place, window, cx));
     }
 
-    /// File › Rename Chat…: the chat on screen, on its tab.
+    /// File › Rename Chat…: the chat on screen, in its header.
     fn rename_on_screen(&mut self, window: &mut Window, cx: &mut Context<Self>) {
         if let Some(chat) = self.selected_chat(cx) {
-            self.begin_rename(&chat, RenamePlace::Tab, window, cx);
+            self.begin_rename(&chat, RenamePlace::Header, window, cx);
         }
     }
 
@@ -972,6 +982,19 @@ impl Render for Shell {
             Source::Failed(message) => (SidebarData::default(), Screen::Failed(message.clone()), StripData::default()),
         };
         self.paddle(&sidebar_data, cx);
+        // A chat's right-click menu, over everything.
+        let chat_menu = match &self.source {
+            Source::Live(app) => {
+                let app = app.read(cx);
+                app.chat_menu.as_ref().and_then(|menu| app.chat_facts(menu).map(|facts| (menu.position, facts)))
+            }
+            _ => self.scene_chat_menu.as_ref().map(|(position, facts)| {
+                (*position, crate::context_menu::ChatFacts { chat: facts.chat.clone(), sidebar: facts.sidebar, ..*facts })
+            }),
+        }
+        .map(|(position, facts)| {
+            crate::context_menu::menu("chat-menu", position, crate::context_menu::chat_entries(&facts), Box::new(CloseChatMenu), window.viewport_size(), &theme)
+        });
         // An area hop: Chat sits to the right of Code on the switch, so its page comes in from the
         // right and Code's from the left. Nothing moves at launch.
         if self.area.is_some_and(|last| last != sidebar_data.area) {
@@ -1399,6 +1422,24 @@ impl Render for Shell {
                     let id = action.id.clone();
                     shell.with_app(cx, |app, cx| app.select(Selection::Chat(id), cx));
                 }))
+                .on_action(cx.listener(|shell, action: &OpenChatMenu, _, cx| {
+                    let menu = crate::app::ChatMenu { chat: action.chat.clone(), position: action.position, sidebar: action.sidebar };
+                    shell.with_app(cx, |app, cx| app.open_chat_menu(menu, cx));
+                }))
+                .on_action(cx.listener(|shell, _: &CloseChatMenu, _, cx| shell.with_app(cx, |app, cx| app.close_chat_menu(cx))))
+                .on_action(cx.listener(|shell, action: &ChatMenuPick, window, cx| {
+                    let chat = action.chat.clone();
+                    match action.pick {
+                        // Renamed where it was asked for: its sidebar row, or the header of the chat
+                        // brought on screen.
+                        ChatPick::Rename if action.sidebar => shell.begin_rename(&chat, RenamePlace::Sidebar, window, cx),
+                        ChatPick::Rename => {
+                            shell.with_app(cx, |app, cx| app.select(Selection::Chat(chat.clone()), cx));
+                            shell.begin_rename(&chat, RenamePlace::Header, window, cx);
+                        }
+                        pick => shell.with_app(cx, |app, cx| app.chat_menu_pick(&chat, pick, cx)),
+                    }
+                }))
                 .on_action(cx.listener(|shell, action: &ToggleProject, _, cx| {
                     let id = action.id.clone();
                     shell.with_app(cx, |app, cx| app.toggle_project(&id, cx));
@@ -1490,7 +1531,7 @@ impl Render for Shell {
                 }))
                 .on_action(cx.listener(|shell, _: &RenameChat, window, cx| shell.rename_on_screen(window, cx)))
                 .on_action(cx.listener(|shell, action: &RenameChatAt, window, cx| {
-                    let (chat, place) = (action.chat.clone(), if action.sidebar { RenamePlace::Sidebar } else { RenamePlace::Tab });
+                    let (chat, place) = (action.chat.clone(), if action.sidebar { RenamePlace::Sidebar } else { RenamePlace::Header });
                     shell.begin_rename(&chat, place, window, cx);
                 }))
                 .on_action(cx.listener(|shell, _: &CancelRename, window, cx| {
@@ -2354,6 +2395,7 @@ impl Render for Shell {
                 .children(side)
                 .child(over)
                 .children(lights)
+                .children(chat_menu)
                 .children(lightbox.map(|lightbox| crate::pictures::LightboxView { lightbox }))
                 .child(present_mark(crate::browser::end_frame)),
         )
@@ -2751,7 +2793,7 @@ fn live_view(app: &AppState, cx: &App) -> (SidebarData, Screen, StripData) {
                 Some(TabData {
                     id: id.clone().into(),
                     title: chat.title.clone().into(),
-                    look: look(id, RenamePlace::Tab),
+                    look: look(id, RenamePlace::Header),
                     active: *app.selection() == Selection::Chat(id.clone()),
                     state: match session {
                         Some(session) if session.running() => ChatState::Working,
@@ -3467,6 +3509,12 @@ fn tab_strip(strip: &StripData, tray: &Tray, theme: &Theme) -> gpui::Div {
             .when(id.is_none() && !active, |tab| {
                 tab.on_click(move |_, window, cx| window.dispatch_action(Box::new(SelectDraft { key: draft }), cx))
             })
+            .when_some(select.clone(), |tab, select| {
+                tab.on_mouse_down(MouseButton::Right, move |event, window, cx| {
+                    cx.stop_propagation();
+                    window.dispatch_action(Box::new(OpenChatMenu { chat: select.id.clone(), position: event.position, sidebar: false }), cx);
+                })
+            })
             .when_some(select, |tab, select| {
                 tab.on_click(move |event, window, cx| {
                     let action: Box<dyn gpui::Action> = if event.click_count() == 2 {
@@ -3500,7 +3548,8 @@ fn tab_strip(strip: &StripData, tray: &Tray, theme: &Theme) -> gpui::Div {
                         .child(text)
                 };
                 match look {
-                    TitleLook::Editing(field) => rename_field(field, theme).into_any_element(),
+                    // Being renamed: the field is in the chat's header, where there is room.
+                    TitleLook::Editing(_) => words(title.into_any_element()).into_any_element(),
                     // The model's title: the old one leaves to the left as the new one arrives from
                     // the right, then the accent glints across it.
                     TitleLook::Swap(swap) => {
@@ -3646,6 +3695,11 @@ fn chat_header(
     viewport: Size<Pixels>,
     theme: &Theme,
 ) -> impl IntoElement {
+    // The chat on screen being renamed: its field, which its tab carries.
+    let renaming = strip.tabs.iter().find(|tab| tab.active).and_then(|tab| match &tab.look {
+        TitleLook::Editing(field) => Some(field.clone()),
+        _ => None,
+    });
     // Where the chat lives, as small pills under its title, after version 2: the folder (which
     // shows it in the Finder) and the branch. In a narrow header they give way before the
     // buttons, their words cut short.
@@ -3717,8 +3771,28 @@ fn chat_header(
                 .flex()
                 .flex_col()
                 .gap(px(4.))
-                .child(
-                    div()
+                .child(match renaming {
+                    // Renamed in place, at the title's own size.
+                    Some(field) => div()
+                        .key_context(crate::actions::RENAME_CONTEXT)
+                        .min_w(px(220.))
+                        .max_w(px(560.))
+                        .h(px(30.))
+                        .ml(px(-8.))
+                        .px(px(8.))
+                        .rounded(px(8.))
+                        .bg(theme.surface)
+                        .border_1()
+                        .border_color(theme.accent_line)
+                        .flex()
+                        .items_center()
+                        .overflow_hidden()
+                        .on_mouse_down(MouseButton::Left, |_, _, cx| cx.stop_propagation())
+                        .on_mouse_up(MouseButton::Left, |_, _, cx| cx.stop_propagation())
+                        .child(field)
+                        .tag("rename-field")
+                        .into_any_element(),
+                    None => div()
                         .id("chat-title")
                         .min_w_0()
                         .truncate()
@@ -3730,8 +3804,15 @@ fn chat_header(
                                 window.dispatch_action(Box::new(RenameChat), cx);
                             }
                         })
-                        .child(title),
-                )
+                        .when_some(strip.tabs.iter().find(|tab| tab.active).map(|tab| tab.id.to_string()), |title, chat| {
+                            title.on_mouse_down(MouseButton::Right, move |event, window, cx| {
+                                cx.stop_propagation();
+                                window.dispatch_action(Box::new(OpenChatMenu { chat: chat.clone(), position: event.position, sidebar: false }), cx);
+                            })
+                        })
+                        .child(title)
+                        .into_any_element(),
+                })
                 .when(!project.name.is_empty(), |text| {
                     text.child(
                         div()

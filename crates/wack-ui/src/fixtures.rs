@@ -716,7 +716,7 @@ pub fn grouped_turn(open: &[&str]) -> Vec<Item> {
 }
 
 /// A turn whose model is reasoning now: a folded line of what it read, its words, and the
-/// thought still coming, its newest words running into the caret.
+/// thought still coming.
 pub fn thinking_turn(open: &[&str]) -> Vec<Item> {
     let mut conversation = Conversation::default();
     let now = START + 90_000;

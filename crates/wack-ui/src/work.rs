@@ -151,7 +151,19 @@ pub fn entry_items(
             }
             Entry::Turn(turn) => {
                 let key = format!("turn-{index}");
-                turn_work_items(conversation, index, cwd, open, now, cache, items);
+                // A turn the user has since answered folds its work behind one line; the latest
+                // stays open. A steered message is part of the turn it steered, so not an answer.
+                let earlier = !turn.steps.is_empty()
+                    && conversation.entries[index + 1..].iter().any(|entry| matches!(entry, Entry::Prompt { steered: false, .. }));
+                let shown = !earlier || {
+                    let fold = format!("{key}-fold");
+                    let unfolded = open.contains(&fold);
+                    items.push(Item::Earlier { label: earlier_label(turn).into(), open: unfolded, key: fold.into() });
+                    unfolded
+                };
+                if shown {
+                    turn_work_items(conversation, index, cwd, open, now, cache, items);
+                }
                 let outcomes: Vec<wack_canvas::tools::Outcome> = turn
                     .steps
                     .iter()
@@ -394,6 +406,18 @@ fn turn_work_items(
     }
 }
 
+/// What an earlier turn's folded line says: "Worked for 1m 12s", or how many steps it took when
+/// its times were not saved.
+fn earlier_label(turn: &Turn) -> String {
+    match (turn.started, turn.ended) {
+        (Some(started), Some(ended)) if ended > started => format!("Worked for {}", duration(ended - started)),
+        _ => match turn.steps.iter().filter(|step| matches!(step, Step::Tool(_))).count() {
+            0 => "Worked".into(),
+            steps => format!("Worked through {}", plural(steps, "step", "steps")),
+        },
+    }
+}
+
 /// "Working · 8s", "Worked for 19s", or "Worked" when the times were not saved.
 pub fn summary(turn: &Turn, now: u64) -> String {
     if turn.live {
@@ -445,7 +469,51 @@ pub fn tally(rows: &[WorkRow]) -> String {
 /// `None` between steps.
 pub fn activity(rows: &[WorkRow]) -> Option<String> {
     let row = rows.iter().rev().find(|row| row.meta.running())?;
-    let verb = match row.verb.as_ref() {
+    let verb = present(&row.verb);
+    let target = match &row.target {
+        Target::Code(text) if row.verb.as_ref() == "Fetched" => text.split('/').next().unwrap_or(text).to_string(),
+        Target::Code(text) if row.verb.as_ref() != "Ran" => text.rsplit('/').next().unwrap_or(text).to_string(),
+        Target::Code(text) | Target::Words(text) | Target::Note(text) => text.to_string(),
+        Target::Thought(_) | Target::Stream(_) => String::new(),
+    };
+    Some(if target.is_empty() {
+        verb.to_string()
+    } else if verb.is_empty() {
+        target
+    } else {
+        format!("{verb} {target}")
+    })
+}
+
+/// What a live group's line says it is doing: the kind of work its step under way is, not the
+/// step (its row says that): "Exploring the code", "Editing files", "Running a command".
+/// "Working" between steps and while the model thinks, which its thought's row says itself.
+pub fn doing_now(rows: &[WorkRow]) -> &'static str {
+    let Some(row) = rows.iter().rev().find(|row| row.meta.running()) else { return "Working" };
+    if row.is_thought() {
+        return "Working";
+    }
+    if row.agent.is_some() {
+        return "Waiting on agents";
+    }
+    match row.verb.as_ref() {
+        "Read" | "Listed" | "Searched" | "Found" | "Looked for" => "Exploring the code",
+        "Edited" | "Wrote" | "Editing" | "Writing" => "Editing files",
+        "Ran" | "Watching" | "Watch" | "Waited" | "Batched" => "Running a command",
+        "Searched the web" | "Fetched" => "Searching the web",
+        "Asked" => "Waiting for your answer",
+        "Used skill" => "Using a skill",
+        "Saved memory" | "Updated memory" | "Recalled memory" | "Forgot memory" => "Minding its memory",
+        verb if CANVAS_VERBS.contains(&verb) => "Drawing on the canvas",
+        verb if BROWSER_VERBS.contains(&verb) => "Using the browser",
+        verb if COMPUTER_VERBS.contains(&verb) => "Using your Mac",
+        _ => "Working",
+    }
+}
+
+/// A step's verb in the present tense, for a step under way: "Edited" is "Editing".
+pub fn present(verb: &str) -> &str {
+    match verb {
         "Read" => "Reading",
         "Fetched" => "Fetching",
         "Wrote" => "Writing",
@@ -505,20 +573,7 @@ pub fn activity(rows: &[WorkRow]) -> Option<String> {
         "Viewed" => "Viewing",
         "Studied" => "Reading",
         other => other,
-    };
-    let target = match &row.target {
-        Target::Code(text) if row.verb.as_ref() == "Fetched" => text.split('/').next().unwrap_or(text).to_string(),
-        Target::Code(text) if row.verb.as_ref() != "Ran" => text.rsplit('/').next().unwrap_or(text).to_string(),
-        Target::Code(text) | Target::Words(text) | Target::Note(text) => text.to_string(),
-        Target::Thought(_) | Target::Stream(_) => String::new(),
-    };
-    Some(if target.is_empty() {
-        verb.to_string()
-    } else if verb.is_empty() {
-        target
-    } else {
-        format!("{verb} {target}")
-    })
+    }
 }
 
 /// A web search's results as "Title — site" lines, read back from the tool's text.
@@ -2391,6 +2446,62 @@ mod tests {
         assert_eq!(card.heading.as_ref(), "Edited 1 file");
         assert_eq!((card.added, card.removed), (2, 1));
         assert_eq!(settled.len(), 4);
+    }
+
+    /// A turn with a file edited and an answer, settled.
+    fn edited_turn(conversation: &mut Conversation, at: u64) {
+        conversation.send("Update sse.rs.", at);
+        conversation.apply(
+            &wack_core::Event::ToolCall {
+                id: format!("e{at}"),
+                name: "edit".into(),
+                input: json!({ "path": "/repo/src/sse.rs", "edits": [{ "old_text": "a", "new_text": "b" }] }),
+            },
+            at + 1_000,
+        );
+        conversation.apply(
+            &wack_core::Event::ToolResult {
+                id: format!("e{at}"),
+                name: "edit".into(),
+                content: "Edited src/sse.rs (1 change).".into(),
+                is_error: false,
+                images: Vec::new(),
+            },
+            at + 2_000,
+        );
+        conversation.apply(&wack_core::Event::Text("Done.".into()), at + 3_000);
+        conversation.finish(&Ok(wack_core::Outcome::Done), at + 9_000);
+    }
+
+    #[test]
+    fn an_answered_turn_folds_its_work_behind_one_line_over_its_answer() {
+        let mut conversation = Conversation::default();
+        edited_turn(&mut conversation, 1_000);
+        edited_turn(&mut conversation, 20_000);
+        let folded = items(&conversation, Path::new("/repo"), &HashSet::new(), 40_000, &mut ReplyCache::default());
+        assert!(matches!(&folded[0], Item::Prompt { .. }));
+        let Item::Earlier { key, label, open: false } = &folded[1] else { panic!("expected the fold: {folded:?}") };
+        assert_eq!((key.as_ref(), label.as_ref()), ("turn-1-fold", "Worked for 9s"));
+        // Its answer and what it changed stay in view.
+        assert!(matches!(&folded[2], Item::Reply { .. }));
+        assert!(matches!(&folded[3], Item::Changes(_)));
+        // The latest turn stays as it was.
+        assert!(matches!(&folded[4], Item::Prompt { .. }));
+        assert!(matches!(&folded[5], Item::Work(_)));
+
+        let opened = items(&conversation, Path::new("/repo"), &HashSet::from(["turn-1-fold".to_string()]), 40_000, &mut ReplyCache::default());
+        assert!(matches!(&opened[1], Item::Earlier { open: true, .. }));
+        assert!(matches!(&opened[2], Item::Work(_)));
+        assert!(matches!(&opened[3], Item::Reply { .. }));
+    }
+
+    #[test]
+    fn a_steered_message_leaves_the_turn_it_steered_open() {
+        let mut conversation = Conversation::default();
+        edited_turn(&mut conversation, 1_000);
+        conversation.apply(&wack_core::Event::Steered("And the tests.".into()), 11_000);
+        let items = items(&conversation, Path::new("/repo"), &HashSet::new(), 12_000, &mut ReplyCache::default());
+        assert!(!items.iter().any(|item| matches!(item, Item::Earlier { .. })), "{items:?}");
     }
 
     #[test]

@@ -19,7 +19,7 @@ use std::{
     path::Path,
 };
 
-use gpui::{ElementId, FontWeight, Hsla, SharedString, div, prelude::*, px};
+use gpui::{ElementId, FontWeight, SharedString, div, prelude::*, px};
 use serde_json::Value;
 
 use crate::{
@@ -397,35 +397,27 @@ fn stats_view(added: usize, removed: usize, theme: &Theme) -> Option<gpui::Div> 
             .flex_none()
             .flex()
             .items_center()
-            .gap(px(6.))
+            .gap(px(5.))
             .typography(Type::Small)
-            .font_family(MONO_FONT)
             .when(added > 0, |row| row.child(div().text_color(theme.diff_added).child(format!("+{added}"))))
             .when(removed > 0, |row| row.child(div().text_color(theme.diff_removed).child(format!("−{removed}")))),
     )
 }
 
+/// The card, quiet: a hairline round what changed, no fill. Its line says how much, its one
+/// action in the accent; each file is its name, its folder faint, its lines in the diff colours.
 pub fn view(card: &ChangesCard, theme: &Theme, handlers: &Handlers) -> impl IntoElement {
     let head = div()
-        .min_h(px(40.))
-        .px(px(14.))
-        .py(px(8.))
+        .min_h(px(38.))
+        .pl(px(14.))
+        .pr(px(8.))
+        .py(px(6.))
         .flex()
         .items_center()
-        .gap(px(10.))
-        .child(
-            div()
-                .flex_none()
-                .size(px(24.))
-                .rounded_full()
-                .bg(theme.accent_wash)
-                .flex()
-                .items_center()
-                .justify_center()
-                .child(Icon::Branch.view(px(12.), theme.accent_text)),
-        )
-        .child(div().flex_1().min_w_0().truncate().typography(Type::UiStrong).text_color(theme.text).child(card.heading.clone()))
+        .gap(px(8.))
+        .child(div().flex_none().min_w_0().truncate().typography(Type::Ui).text_color(theme.text_soft).child(card.heading.clone()))
         .children(stats_view(card.added, card.removed, theme).map(|stats| stats.tag("turn-changes-totals")))
+        .child(div().flex_1())
         .child(
             div()
                 .id(ElementId::Name(format!("{}-open", card.key).into()))
@@ -433,20 +425,17 @@ pub fn view(card: &ChangesCard, theme: &Theme, handlers: &Handlers) -> impl Into
                 .h(px(24.))
                 .px(px(10.))
                 .rounded_full()
-                .bg(theme.accent_wash)
-                .border_1()
-                .border_color(Hsla { a: 0.4, ..theme.accent_line })
-                .hover(|button| button.border_color(theme.accent_line))
+                .hover(|button| button.bg(theme.accent_wash))
                 .cursor_pointer()
                 .flex()
                 .items_center()
                 .gap(px(4.))
                 .typography(Type::Small)
-                .font_weight(FontWeight::MEDIUM)
+                .font_weight(FontWeight::SEMIBOLD)
                 .text_color(theme.accent_text)
                 .tooltip(tip("Open Changes pane (⌘⇧G)"))
                 .on_click(|_, window, cx| window.dispatch_action(Box::new(ShowChanges { path: None }), cx))
-                .child("Changes")
+                .child("Review")
                 .child(Icon::ChevronRight.view(px(10.), theme.accent_text))
                 .tag("turn-changes-open"),
         );
@@ -465,28 +454,27 @@ pub fn view(card: &ChangesCard, theme: &Theme, handlers: &Handlers) -> impl Into
         let label = if card.expanded { "Show less".to_string() } else { format!("Show {hidden} more") };
         div()
             .id(ElementId::Name(format!("{}-more-btn", card.key).into()))
-            .h(px(32.))
+            .h(px(30.))
             .px(px(14.))
             .border_t_1()
             .border_color(theme.border)
             .flex()
             .items_center()
-            .gap(px(6.))
+            .gap(px(5.))
             .cursor_pointer()
             .typography(Type::Small)
             .text_color(theme.text_dim)
-            .hover(|row| row.bg(theme.hover).text_color(theme.text))
+            .hover(|row| row.bg(theme.hover).text_color(theme.text_soft))
             .on_click(move |_, window, cx| toggle(more_key.clone(), window, cx))
-            .child(if card.expanded { Icon::ChevronDown } else { Icon::ChevronRight }.view(px(10.), theme.text_faint))
             .child(label)
+            .child(if card.expanded { Icon::ChevronDown } else { Icon::ChevronRight }.view(px(10.), theme.text_faint))
             .tag("turn-changes-more")
     });
 
     motion::enter(
         card.key.clone(),
         div()
-            .rounded(px(14.))
-            .bg(theme.surface)
+            .rounded(px(12.))
             .border_1()
             .border_color(theme.border)
             .overflow_hidden()
@@ -504,15 +492,16 @@ fn file_row(file: &ChangedFile, theme: &Theme, handlers: &Handlers) -> impl Into
     let key = file.key.clone();
     let hover = theme.hover;
     let icon = match file.kind {
-        FileKind::Create => Icon::FilePlus.view(px(13.), theme.diff_added),
-        FileKind::Edit => Icon::File.view(px(13.), if file.open { theme.accent_text } else { theme.text_dim }),
-    };
+        FileKind::Create => Icon::FilePlus,
+        FileKind::Edit => Icon::File,
+    }
+    .view(px(13.), theme.text_faint);
 
     let head = div()
         .id(file.key.clone())
-        .min_h(px(34.))
+        .min_h(px(30.))
         .px(px(14.))
-        .py(px(6.))
+        .py(px(4.))
         .flex()
         .items_center()
         .gap(px(8.))
@@ -526,12 +515,13 @@ fn file_row(file: &ChangedFile, theme: &Theme, handlers: &Handlers) -> impl Into
                 .flex_1()
                 .min_w_0()
                 .flex()
-                .items_baseline()
+                .items_center()
+                .gap(px(6.))
                 .overflow_hidden()
+                .child(div().flex_none().typography(Type::Ui).text_color(theme.text_soft).child(file.name.clone()))
                 .when(!file.dir.is_empty(), |path| {
-                    path.child(div().min_w_0().truncate().typography(Type::Mono).text_color(theme.text_faint).child(file.dir.clone()))
-                })
-                .child(div().flex_none().typography(Type::Mono).text_color(theme.text).child(file.name.clone())),
+                    path.child(div().min_w_0().truncate().typography(Type::Ui).text_color(theme.text_faint).child(file.dir.clone().trim_end_matches('/').to_string()))
+                }),
         )
         .children(stats_view(file.added, file.removed, theme))
         .child(if file.open { Icon::ChevronDown } else { Icon::ChevronRight }.view(px(11.), theme.text_faint))
@@ -549,10 +539,8 @@ fn file_row(file: &ChangedFile, theme: &Theme, handlers: &Handlers) -> impl Into
             .flex_none()
             .h(px(30.))
             .px(px(12.))
-            .bg(theme.hover)
             .border_b_1()
-            .border_dashed()
-            .border_color(theme.border_strong)
+            .border_color(theme.border)
             .flex()
             .items_center()
             .gap(px(8.))

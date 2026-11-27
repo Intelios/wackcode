@@ -2,24 +2,23 @@
 //!
 //! Ported from version 2's commit milestone logic (`isGitCommit`, `commitMessageSubject`,
 //! `parseCommit`, `CommitWords`). A commit is the one command that lands something on a branch,
-//! so it breaks the work group around it and stands on its own in the transcript:
-//!
-//! - While running: wears the accent wash, a breathing commit mark, `"Committing"`, and the
-//!   subject line read from the first `-m` (falling back to the command itself when `-m` isn't
-//!   used, as in `--amend --no-edit`).
-//! - Once git prints its summary line (`[branch hash] subject` and optional stats): wears the
-//!   accent wash, the abbreviated hash in a mono pill, git's own subject line, and file / `±`
-//!   stats. If a later chained command failed (such as `git push`), it keeps the milestone face
-//!   and adds a `"failed"` tag in the danger colour.
-//! - If it failed without landing a commit: drops the accent wash for the plain error surface,
-//!   uses the danger mark and `"Couldn't commit"`, with no hash pill or redundant `"failed"` tag.
-//! - Clicking expands the command and git's output inside the same frame.
+//! so it breaks the work group around it and stands on its own in the transcript, as one line
+//! like the lines about the work around it: the commit's mark, then what it did.
+//! - While running: the mark breathes, `"Committing"` shines, and the subject is read from the
+//!   first `-m` (falling back to the command itself when `-m` isn't used, as in
+//!   `--amend --no-edit`).
+//! - Once git prints its summary line (`[branch hash] subject` and optional stats): the
+//!   abbreviated hash in the accent's mono, git's own subject line, and file / `±` stats. If a
+//!   later chained command failed (such as `git push`), it says `"failed"` in danger's colour.
+//! - If it failed without landing a commit: the mark and `"Couldn't commit"` in danger's colour,
+//!   with no hash or redundant `"failed"`.
+//! - Clicking opens the command and git's output in a sheet under the line.
 //!
 //! Shell parsing here is presentation only — it decides what the transcript draws, never what may
 //! run — so anything it does not model exactly (command substitution, unknown pre-subcommand flags,
 //! non-git chained commands other than `cd`) stays an ordinary command row inside the work log.
 
-use gpui::{BoxShadow, ElementId, Hsla, SharedString, div, point, prelude::*, px};
+use gpui::{ElementId, SharedString, div, prelude::*, px};
 use serde_json::Value;
 
 use crate::{
@@ -29,7 +28,7 @@ use crate::{
     tags::Tag,
     theme::Theme,
     transcript::Handlers,
-    typography::{MONO_FONT, Type, Typography},
+    typography::{Type, Typography},
     work::{DETAIL_LINES, background_note, first_line, plural, tail},
 };
 
@@ -497,12 +496,12 @@ fn parse_count_suffix(part: &str, suffixes: &[&str]) -> Option<u32> {
 // -------------------------------------------------------------------------------------------------
 // View
 
-const MARK_SIZE: f32 = 22.;
 const DETAIL_MAX_HEIGHT: f32 = 320.;
 
-/// Renders a commit milestone row: the accent-washed milestone bar (or plain error surface for a
-/// commit that never landed), hash pill, subject line, file and `±` stats, and expandable
-/// command + output sheet.
+/// A commit as D draws it: one line, like the lines about the work around it, with the commit's
+/// mark and hash in the accent (it is the turn's milestone), its subject in the reply's ink and
+/// its lines in the diff colours. A refused commit says so in danger's colour. Opens to the
+/// command and git's output in a sheet under it.
 pub fn view(commit: &CommitRow, theme: &Theme, handlers: &Handlers) -> gpui::AnyElement {
     let failed_only = matches!(commit.state, CommitState::Failed);
     let running = matches!(commit.state, CommitState::Running);
@@ -511,36 +510,7 @@ pub fn view(commit: &CommitRow, theme: &Theme, handlers: &Handlers) -> gpui::Any
         _ => None,
     };
 
-    let (ground, border, hover_border) = if failed_only {
-        (theme.surface, Hsla { a: 0.4, ..theme.danger }, Hsla { a: 0.65, ..theme.danger })
-    } else {
-        (theme.accent_wash, Hsla { a: 0.45, ..theme.accent_line }, theme.accent_line)
-    };
-
-    let (mark_ink, mark_ring, mark_glow) = if failed_only {
-        (theme.danger, Hsla { a: 0.6, ..theme.danger }, theme.danger)
-    } else {
-        (theme.accent_text, theme.accent_line, theme.accent)
-    };
-
-    let mark = div()
-        .flex_none()
-        .size(px(MARK_SIZE))
-        .rounded_full()
-        .flex()
-        .items_center()
-        .justify_center()
-        .bg(theme.glass_tone)
-        .border_1()
-        .border_color(mark_ring)
-        .shadow(vec![BoxShadow {
-            color: Hsla { a: 0.3, ..mark_glow },
-            offset: point(px(0.), px(0.)),
-            blur_radius: px(10.),
-            spread_radius: px(-2.),
-            inset: false,
-        }])
-        .child(Icon::Commit.view(px(12.), mark_ink));
+    let mark = div().flex_none().child(Icon::Commit.view(px(14.), if failed_only { theme.danger } else { theme.accent_text }));
     let mark = if running {
         motion::breathing(SharedString::from(format!("{}-breath", commit.key)), mark, handlers.still)
     } else if commit.live {
@@ -550,37 +520,23 @@ pub fn view(commit: &CommitRow, theme: &Theme, handlers: &Handlers) -> gpui::Any
     };
 
     let (verb_text, verb_colour) = match &commit.state {
-        CommitState::Running | CommitState::Background(_) => ("Committing", theme.accent_text),
+        CommitState::Running | CommitState::Background(_) => ("Committing", theme.text_dim),
         CommitState::Stopped => ("Commit", theme.text_dim),
-        CommitState::Landed { .. } | CommitState::Quiet => ("Committed", theme.text),
+        CommitState::Landed { .. } | CommitState::Quiet => ("Committed", theme.text_soft),
         CommitState::Failed => ("Couldn't commit", theme.danger),
     };
     let verb = if running {
-        motion::shining_text(SharedString::from(format!("{}-shine", commit.key)), verb_text.into(), theme.accent_text, theme.text, handlers.still)
+        motion::shining_text(SharedString::from(format!("{}-shine", commit.key)), verb_text.into(), theme.text_dim, theme.accent_text, handlers.still)
     } else {
         verb_text.into_any_element()
     };
 
-    let hash_pill = hash.map(|hash| {
-        div()
-            .flex_none()
-            .h(px(20.))
-            .px(px(7.))
-            .rounded_full()
-            .bg(theme.glass_tone)
-            .border_1()
-            .border_color(Hsla { a: 0.65, ..theme.accent_line })
-            .flex()
-            .items_center()
-            .typography(Type::Small)
-            .font_family(MONO_FONT)
-            .text_color(theme.accent_text)
-            .child(hash)
-            .tag("commit-hash")
+    let hash = hash.map(|hash| {
+        div().flex_none().typography(Type::Mono).text_color(theme.accent_text).child(hash).tag("commit-hash")
     });
 
     let subject = (!commit.subject.is_empty()).then(|| {
-        let label = div().flex_1().min_w_0().truncate();
+        let label = div().min_w_0().truncate();
         if commit.subject_is_command {
             label.typography(Type::Mono).text_color(theme.text_soft).child(commit.subject.clone())
         } else {
@@ -597,73 +553,63 @@ pub fn view(commit: &CommitRow, theme: &Theme, handlers: &Handlers) -> gpui::Any
             .flex_none()
             .flex()
             .items_center()
-            .gap(px(6.))
+            .gap(px(5.))
             .typography(Type::Small)
             .when_some(commit.files, |row, files| {
-                row.child(div().text_color(theme.text_dim).child(plural(files as usize, "file", "files")))
+                row.child(div().text_color(theme.text_faint).child(plural(files as usize, "file", "files")))
             })
             .when_some(commit.additions.filter(|&count| count > 0), |row, added| {
-                row.child(div().font_family(MONO_FONT).text_color(theme.diff_added).child(format!("+{added}")))
+                row.child(div().text_color(theme.diff_added).child(format!("+{added}")))
             })
             .when_some(commit.deletions.filter(|&count| count > 0), |row, removed| {
-                row.child(div().font_family(MONO_FONT).text_color(theme.diff_removed).child(format!("−{removed}")))
+                row.child(div().text_color(theme.diff_removed).child(format!("−{removed}")))
             })
     });
 
     let status = match &commit.state {
-        CommitState::Running => Some(div().flex_none().typography(Type::Small).text_color(theme.accent_text).child("running")),
-        CommitState::Background(how) => Some(div().flex_none().typography(Type::Small).text_color(theme.text_dim).child(how.clone())),
+        CommitState::Background(how) => Some(div().flex_none().typography(Type::Small).text_color(theme.text_faint).child(how.clone()).into_any_element()),
         CommitState::Landed { failed: true, .. } => Some(
             div()
                 .flex_none()
-                .h(px(19.))
-                .px(px(6.))
-                .rounded_full()
-                .bg(Hsla { a: 0.14, ..theme.danger })
-                .border_1()
-                .border_color(Hsla { a: 0.38, ..theme.danger })
                 .flex()
                 .items_center()
-                .typography(Type::Small)
-                .text_color(theme.danger)
-                .child("failed"),
+                .gap(px(4.))
+                .child(Icon::Close.view(px(11.), theme.danger))
+                .child(div().typography(Type::Small).text_color(theme.danger).child("failed"))
+                .into_any_element(),
         ),
         _ => None,
     };
 
     let toggle = handlers.toggle.clone();
     let key = commit.key.clone();
-    let head = div()
+    let hover = theme.hover;
+    let line = div()
         .id(ElementId::Name(format!("{}-head", commit.key).into()))
-        .min_h(px(38.))
-        .pl(px(10.))
-        .pr(px(12.))
-        .py(px(7.))
+        .h(px(26.))
+        .min_w_0()
+        .ml(px(-6.))
+        .px(px(6.))
+        .rounded(px(7.))
         .flex()
         .items_center()
-        .gap(px(8.))
+        .gap(px(7.))
         .cursor_pointer()
+        .hover(move |line| line.bg(hover))
         .on_click(move |_, window, cx| toggle(key.clone(), window, cx))
         .child(mark)
-        .child(div().flex_none().typography(Type::UiStrong).text_color(verb_colour).child(verb))
-        .children(hash_pill)
+        .child(div().flex_none().typography(Type::Ui).text_color(verb_colour).child(verb))
+        .children(hash)
         .children(subject)
-        .when(commit.subject.is_empty(), |bar| bar.child(div().flex_1()))
         .children(stats)
         .children(status)
-        .child(if commit.open { Icon::ChevronDown } else { Icon::ChevronRight }.view(px(11.), theme.text_faint));
-
-    let detail_border = if failed_only { Hsla { a: 0.3, ..theme.danger } } else { Hsla { a: 0.35, ..theme.accent_line } };
+        .child(div().flex_none().child(if commit.open { Icon::ChevronDown } else { Icon::ChevronRight }.view(px(11.), theme.text_faint)));
 
     let body = commit.open.then(|| {
         let mut content = div()
             .id(ElementId::Name(format!("{}-output", commit.key).into()))
             .max_h(px(DETAIL_MAX_HEIGHT))
             .overflow_y_scroll()
-            .bg(theme.code_ground)
-            .border_t_1()
-            .border_dashed()
-            .border_color(detail_border)
             .px(px(14.))
             .py(px(10.))
             .flex()
@@ -677,23 +623,25 @@ pub fn view(commit: &CommitRow, theme: &Theme, handlers: &Handlers) -> gpui::Any
                     .pt(px(8.))
                     .border_t_1()
                     .border_color(theme.border)
-                    .text_color(theme.text_soft)
+                    .text_color(if failed_only { theme.danger } else { theme.text_soft })
                     .child(output.clone()),
             );
         }
-        content.tag("commit-output")
+        div()
+            .mt(px(4.))
+            .rounded(px(10.))
+            .border_1()
+            .border_color(theme.border)
+            .bg(theme.code_ground)
+            .overflow_hidden()
+            .child(content)
+            .tag("commit-output")
     });
 
     div()
-        .rounded(px(12.))
-        .bg(ground)
-        .border_1()
-        .border_color(border)
-        .hover(move |row| row.border_color(hover_border))
-        .overflow_hidden()
         .flex()
         .flex_col()
-        .child(head)
+        .child(div().flex().child(line))
         .children(body)
         .tag("commit-row")
         .into_any_element()

@@ -270,7 +270,7 @@ pub fn all() -> Vec<Scene> {
         },
         Scene {
             name: "chat-thinking",
-            description: "The model reasoning now: \"Thinking\", how long, and its newest words running into the caret.",
+            description: "The model reasoning now: the duck paddling, \"Thinking\" shining and how long, the line opening to its words.",
             size: WINDOW,
             build: |_, cx| chat_scene(fixtures::thinking_turn(&[]), cx),
         },
@@ -308,7 +308,7 @@ pub fn all() -> Vec<Scene> {
         },
         Scene {
             name: "chat-commits",
-            description: "Commit milestone rows breaking work groups: a landed commit with hash pill and ±stats, and a second commit expanded to its command and output.",
+            description: "Commit milestone rows breaking work groups: a landed commit with its hash and ±stats, and a second commit expanded to its command and output.",
             size: size(px(1180.), px(900.)),
             build: |_, cx| {
                 cx.new(|_| {

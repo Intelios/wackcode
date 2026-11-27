@@ -566,7 +566,9 @@ impl ChatSession {
             }
         });
         self.run = Some(Running { number, control, compacting, events, _tick: tick });
-        self.refresh_from(from.saturating_sub(1));
+        // From the turn before the message, which folds now it has been answered.
+        let answered = self.conversation.entries[..from.min(self.conversation.entries.len())].iter().rposition(|entry| matches!(entry, Entry::Turn(_)));
+        self.refresh_from(answered.unwrap_or(from).min(from.saturating_sub(1)));
         cx.notify();
     }
 
@@ -1235,6 +1237,7 @@ impl ChatSession {
             let holds = self.items[start..start + span].iter().any(|item| match item {
                 Item::Work(work) => work.key.as_ref() == key || work.rows.iter().any(|row| row.key.as_ref() == key),
                 Item::Commit(commit) => commit.key.as_ref() == key,
+                Item::Earlier { key: fold, .. } => fold.as_ref() == key,
                 Item::News(row) => row.key.as_ref() == key,
                 Item::Prompt { command, files, .. } => {
                     command.as_ref().is_some_and(|command| command.key.as_ref() == key)

@@ -1,24 +1,30 @@
-//! The transcript: one chat read as a document.
+//! The transcript: one chat read as a document, quietly (direction D, chosen with the owner on
+//! 2026-11-27 after Claude Desktop and Antigravity).
 //!
-//! - The user's message is a bubble on the right, its tail corner tucked in. Under it, while the
-//!   pointer is over it, Copy, Edit, Rewind and Retry (`rewind.rs`); right-clicking it offers the
-//!   same. Being edited, it is a field in place of the bubble.
-//! - A turn reads as the model wrote it, after Claude Desktop's: its words between steps are
-//!   running text, never folded away, and each run of steps between them is a group. Settled, a
-//!   group is one line of what it did ("Read 3 files and ran a command"), which opens; live, it
-//!   is its newest rows as they come, older ones behind "N earlier steps". Opened, a group is a
-//!   lit log of compact rows strung on a rail in the accent's sweep: a round mark lit in the
-//!   accent (a command that passed in the success colour, a failure in danger's, a step under way
-//!   breathing), the verb, what it acted on (in mono for paths and commands), its meta (a step
-//!   under way says how long). A row with more to show (a diff, a command's output) opens in
-//!   place.
-//! - A thought is version 2.5.3's row: live, "Thinking", its time and its newest words running
-//!   into a caret; settled, "Thought for 12s". Opened, its body has a capped height and scrolls
-//!   inside, so a long thought never runs the page on (and is never laid out whole per word).
+//! - Two inks: the model's words in the body ink; everything about the work in grey. Nothing
+//!   about a step has a box: only the user's bubble and code, diffs and output have a ground.
+//! - The user's message is a bubble on the right, evenly rounded. Under it, while the pointer is
+//!   over it, Copy, Edit, Rewind and Retry (`rewind.rs`); right-clicking it offers the same.
+//!   Being edited, it is a field in place of the bubble.
+//! - A turn reads as the model wrote it: its words between steps are running text, never folded
+//!   away, and each run of steps between them is a group. Settled, a group is one grey line of
+//!   what it did, its chevron after the words ("Read 3 files and ran a command ›"); opened, its
+//!   rows hang under it, indented: a faint icon, the verb in grey, what it acted on a shade
+//!   lighter (a file's name, then its folder faint; a command in mono), then what came of it
+//!   (+/− in the diff colours, a pass in success's, a failure in danger's). A row with more to
+//!   show (a diff, a command's output) opens in place.
+//! - Live, a group's line is a breathing dot and what it is doing now, shining; its newest rows
+//!   come under it, older ones behind "N earlier steps", the step under way shining in the
+//!   present tense. The accent is only ever on what is live and on actions.
+//! - A thought is the duck and "Thought for 12.3s ›"; live, the duck paddles and "Thinking"
+//!   shines, its clock counting. Opened, its words are plain grey text under the line in a body
+//!   of capped height that scrolls inside, so a long thought never runs the page on.
+//! - A turn the user has since answered folds all its work behind "Worked for 1m 12s ›" over
+//!   its answer (`Item::Earlier`); the latest turn stays open.
 //! - A call still being written says what is coming ("Writing the plan · 6.4k characters").
-//! - Diffs, output and code are sheets: rounded, with a head band naming what they hold (and a
-//!   copy button on code) over the code's own ground.
-//! - The reply is running text in the UI face, with code in mono.
+//! - Diffs, output and code are sheets: rounded, a hairline round the code's own ground. A
+//!   reply's code adds a head naming its language, with a copy button.
+//! - The reply is running text in the UI face, with code in mono on a faint wash.
 //!
 //! Everything sits on the stage's glass, so grounds are the theme's washes (`hover`, `border`),
 //! never solid fills that would cut a hole in the picture.
@@ -58,6 +64,9 @@ pub enum Item {
         files: Vec<AttachedFileShown>,
     },
     Work(Work),
+    /// A turn the user has since answered, its work folded to one line ("Worked for 1m 12s")
+    /// over its answer. Opened, its work follows the line as it was.
+    Earlier { key: SharedString, label: SharedString, open: bool },
     /// A `git commit` call, lifted out of the work log as its own milestone row.
     Commit(crate::commit::CommitRow),
     /// A reply's prose. `live`: still streaming in, so its newest words are fresh ink.
@@ -403,20 +412,26 @@ fn gap_above(item: &Item, previous: Option<&Item>) -> f32 {
     match (previous, item) {
         (None, _) => 0.,
         (_, Item::Prompt { steered: true, .. }) => 24.,
-        (_, Item::Prompt { .. }) => 44.,
+        (_, Item::Prompt { .. }) => 40.,
         (_, Item::Footer(_)) => 12.,
-        (_, Item::Changes(_)) => 14.,
+        (_, Item::Changes(_)) => 16.,
         (_, Item::Suggestions(_)) => 14.,
         (_, Item::Canvas(_)) => 12.,
-        (Some(Item::Commit(_)), Item::Commit(_)) => 8.,
-        (Some(Item::Work(_)), Item::Commit(_)) => 10.,
-        (Some(Item::Commit(_)), Item::Work(_)) => 12.,
+        (Some(Item::Commit(_)), Item::Commit(_)) => 6.,
+        (Some(Item::Work(_)), Item::Commit(_)) => 8.,
+        (Some(Item::Commit(_)), Item::Work(_)) => 8.,
+        (Some(Item::Work(_)), Item::Work(_)) => 6.,
+        (Some(Item::Earlier { .. }), Item::Reply { .. }) => 10.,
+        (Some(Item::Earlier { .. }), _) => 6.,
         (Some(Item::Work(_)), Item::Compacted(_)) => 12.,
         (Some(Item::Compacted(_)), Item::Work(_)) => 12.,
         // Under the row of actions every message keeps.
         (Some(Item::Prompt { .. }), _) => 2.,
         (_, Item::Rewound { .. }) => 20.,
-        _ => 18.,
+        // A line about the work sits close to the words around it.
+        (Some(Item::Reply { .. }), Item::Work(_)) => 12.,
+        (Some(Item::Work(_)), Item::Reply { .. }) => 10.,
+        _ => 16.,
     }
 }
 
@@ -438,12 +453,9 @@ pub fn item(item: &Item, previous: Option<&Item>, theme: &Theme, handlers: &Hand
             };
             let bubble = div()
                 .max_w(relative(BUBBLE_SHARE))
-                .px(px(14.))
+                .px(px(16.))
                 .py(px(10.))
-                .rounded_tl(px(BUBBLE_RADIUS))
-                .rounded_tr(px(BUBBLE_RADIUS))
-                .rounded_bl(px(BUBBLE_RADIUS))
-                .rounded_br(px(6.))
+                .rounded(px(BUBBLE_RADIUS))
                 .bg(theme.hover)
                 .border_1()
                 .border_color(theme.border)
@@ -512,6 +524,7 @@ pub fn item(item: &Item, previous: Option<&Item>, theme: &Theme, handlers: &Hand
         }
         Item::Rewound { files } => crate::rewind::rewound(*files, theme),
         Item::Work(work) => work_log(work, theme, handlers),
+        Item::Earlier { key, label, open } => fold_line(key, label, *open, theme, handlers),
         Item::Commit(commit) => crate::commit::view(commit, theme, handlers),
         Item::Reply { blocks, live } => reply_inked(blocks, *live && !handlers.still, theme, handlers).into_any_element(),
         Item::ReplyPictures { key, pictures, missing } => div()
@@ -531,8 +544,7 @@ pub fn item(item: &Item, previous: Option<&Item>, theme: &Theme, handlers: &Hand
             .text_color(if *failed { theme.danger } else { theme.text_dim })
             .child(text.clone())
             .into_any_element(),
-        // Lined up with the work log's marks, which hang on its rail.
-        Item::News(row) => div().pl(px(RAIL - ICON / 2.)).child(log_row(row, false, false, theme, handlers)).into_any_element(),
+        Item::News(row) => log_row(row, false, theme, handlers),
         // Drawn above by `chat_transcript::item`.
         Item::ChatDivider(_)
         | Item::ChatSpeaker { .. }
@@ -552,87 +564,126 @@ const CLOCK_WIDTH: f32 = 34.;
 
 /// The most of the column a prompt's bubble takes, and its corners.
 const BUBBLE_SHARE: f32 = 0.78;
-const BUBBLE_RADIUS: f32 = 16.;
-/// A log row's round icon, and the space after it and after the verb.
-const ICON: f32 = 22.;
-const ROW_GAP: f32 = 10.;
-const VERB_WIDTH: f32 = 62.;
-/// Where a row's sheet starts (past its icon), and where its words start (past the verb too).
-const SHEET_INDENT: f32 = ICON + ROW_GAP;
-const WORDS_INDENT: f32 = ICON + ROW_GAP + VERB_WIDTH + ROW_GAP;
-/// The log's rail drops from the middle of the chip's duck: the chip's padding and edge, then half
-/// the duck. The rows' marks are strung on it.
-const RAIL: f32 = 8. + 1. + 7.;
-/// The middle of a row's mark, down from the row's top: its line is 28 points.
-const MARK_MIDDLE: f32 = 14.;
+const BUBBLE_RADIUS: f32 = 20.;
+/// A step's icon, and the space after it.
+const GLYPH: f32 = 14.;
+const GLYPH_GAP: f32 = 8.;
+/// How far an opened group's rows sit in from its line.
+const INDENT: f32 = 20.;
+/// A line about the work, and a row under an opened one.
+const LINE: f32 = 24.;
+const ROW: f32 = 27.;
+/// An openable line's hover ground reaches this far past its words, without moving them.
+const HOVER_PAD: f32 = 6.;
 
-/// A group of steps. Live, it is its newest rows on the rail as they come, the older ones
-/// behind "N earlier steps"; settled, one line of what it did ("Read 3 files and ran a
-/// command"), which opens to its rows. A group of reasoning alone is just its thoughts.
+/// A group of steps. Settled, one grey line of what it did ("Read 3 files and ran a command"),
+/// its chevron after the words, which opens to its rows; live, a line saying what it is doing
+/// now over its newest rows as they come, the older ones behind "N earlier steps". Reasoning
+/// alone is just its thoughts, flush with the words around them.
 fn work_log(work: &Work, theme: &Theme, handlers: &Handlers) -> AnyElement {
     if work.live && work.rows.is_empty() {
         return starting(work, theme, handlers);
     }
-    if work.live || work.only_thoughts() || work.label.is_empty() {
+    if work.only_thoughts() {
         return div()
             .flex()
             .flex_col()
-            .when(work.hidden > 0, |log| log.child(earlier_steps(work, theme, handlers)))
-            .child(rail_rows(&work.rows[work.hidden.min(work.rows.len())..], work.live, work.thinking, theme, handlers))
+            .children(work.rows.iter().map(|row| log_row(row, work.live, theme, handlers)))
             .into_any_element();
     }
-    let toggle = handlers.toggle.clone();
-    let key = work.key.clone();
-    let hover = theme.hover;
-    let header = div()
-        .id(work.key.clone())
-        .h(px(28.))
-        .pr(px(12.))
-        .flex()
-        .items_center()
-        .gap(px(ROW_GAP))
-        .rounded_full()
-        .cursor_pointer()
-        .hover(move |line| line.bg(hover))
-        .on_click(move |_, window, cx| toggle(key.clone(), window, cx))
-        .child(
-            div()
-                .flex_none()
-                .ml(px(RAIL - ICON / 2.))
-                .size(px(ICON))
-                .flex()
-                .items_center()
-                .justify_center()
-                .child(if work.open { Icon::ChevronDown } else { Icon::ChevronRight }.view(px(12.), theme.text_faint)),
-        )
-        .child(div().min_w_0().truncate().typography(Type::Ui).text_color(theme.text_dim).child(work.label.clone()));
+    let shown = &work.rows[work.hidden.min(work.rows.len())..];
+    let head = if work.live {
+        Some(live_line(work, theme, handlers))
+    } else if work.label.is_empty() {
+        None
+    } else {
+        Some(fold_line(&work.key, &work.label, work.open, theme, handlers))
+    };
+    let indented = head.is_some();
     div()
         .flex()
         .flex_col()
-        .gap(px(2.))
-        .child(div().flex().child(header))
-        .when(work.open, |log| log.child(rail_rows(&work.rows, false, false, theme, handlers)))
+        .children(head)
+        .when(work.open || head_less(work), |log| {
+            log.child(
+                div()
+                    .flex()
+                    .flex_col()
+                    .when(indented, |rows| rows.pl(px(INDENT)))
+                    .when(work.hidden > 0, |rows| rows.child(earlier_steps(work, theme, handlers)))
+                    .children(shown.iter().map(|row| log_row(row, work.live, theme, handlers))),
+            )
+        })
         .into_any_element()
+}
+
+/// A settled group with nothing countable to name (only notes or events) shows its rows bare.
+fn head_less(work: &Work) -> bool {
+    !work.live && work.label.is_empty()
+}
+
+/// A settled group's line, or an earlier turn's: what it did, grey, the chevron after the words.
+fn fold_line(key: &SharedString, label: &SharedString, open: bool, theme: &Theme, handlers: &Handlers) -> AnyElement {
+    let toggle = handlers.toggle.clone();
+    let id = key.clone();
+    let key = key.clone();
+    let (hover, bright) = (theme.hover, theme.text_soft);
+    div()
+        .flex()
+        .child(
+            div()
+                .id(id)
+                .h(px(LINE))
+                .min_w_0()
+                .ml(px(-HOVER_PAD))
+                .px(px(HOVER_PAD))
+                .flex()
+                .items_center()
+                .gap(px(5.))
+                .rounded(px(7.))
+                .cursor_pointer()
+                .typography(Type::Ui)
+                .text_color(theme.text_dim)
+                .hover(move |line| line.bg(hover).text_color(bright))
+                .on_click(move |_, window, cx| toggle(key.clone(), window, cx))
+                .child(div().min_w_0().truncate().child(label.clone()))
+                .child(div().flex_none().child(if open { Icon::ChevronDown } else { Icon::ChevronRight }.view(px(11.), theme.text_faint)))
+                .tag("work-line"),
+        )
+        .into_any_element()
+}
+
+/// A live group's line: a breathing dot, and what it is doing now, with a light passing along
+/// the words. The step under way says it too, so the line names the kind of work, not the step.
+fn live_line(work: &Work, theme: &Theme, handlers: &Handlers) -> AnyElement {
+    let id = SharedString::from(format!("{}-doing", work.key));
+    let words: SharedString = crate::work::doing_now(&work.rows).into();
+    div()
+        .h(px(LINE))
+        .flex()
+        .items_center()
+        .gap(px(8.))
+        .child(live_dot(&work.key, theme, handlers))
+        .child(div().typography(Type::Ui).child(crate::motion::shining_text(id, words, theme.text_dim, theme.accent_text, handlers.still)))
+        .tag("work-line")
+        .into_any_element()
+}
+
+/// A small dot in the accent, breathing while something is under way.
+fn live_dot(key: &SharedString, theme: &Theme, handlers: &Handlers) -> AnyElement {
+    let dot = div().flex_none().size(px(6.)).rounded_full().bg(theme.accent);
+    crate::motion::breathing(SharedString::from(format!("{key}-dot")), dot, handlers.still)
 }
 
 /// A live turn before its first step: the duck paddles and "Working" shines.
 fn starting(work: &Work, theme: &Theme, handlers: &Handlers) -> AnyElement {
     let id = SharedString::from(format!("{}-starting", work.key));
     div()
-        .h(px(28.))
+        .h(px(LINE))
         .flex()
         .items_center()
-        .gap(px(ROW_GAP))
-        .child(
-            div()
-                .flex_none()
-                .ml(px(RAIL - ICON / 2.))
-                .size(px(ICON))
-                .flex()
-                .items_center()
-                .justify_center()
-                .child(crate::motion::paddling(div().child(Icon::Duck.view(px(14.), theme.accent_text)))),
-        )
+        .gap(px(7.))
+        .child(crate::motion::paddling(div().flex_none().child(Icon::Duck.view(px(13.), theme.text_soft))))
         .child(div().typography(Type::Ui).child(crate::motion::shining_text(id, "Working".into(), theme.text_dim, theme.accent_text, handlers.still)))
         .into_any_element()
 }
@@ -646,8 +697,7 @@ fn earlier_steps(work: &Work, theme: &Theme, handlers: &Handlers) -> impl IntoEl
     div().flex().child(
         div()
             .id(key.clone())
-            .h(px(24.))
-            .ml(px(RAIL - ICON / 2. + SHEET_INDENT))
+            .h(px(ROW))
             .flex()
             .items_center()
             .gap(px(5.))
@@ -656,105 +706,9 @@ fn earlier_steps(work: &Work, theme: &Theme, handlers: &Handlers) -> impl IntoEl
             .text_color(theme.text_faint)
             .hover(move |line| line.text_color(hover))
             .on_click(move |_, window, cx| toggle(key.clone(), window, cx))
-            .child(Icon::ChevronRight.view(px(10.), theme.text_faint))
-            .child(words),
+            .child(words)
+            .child(Icon::ChevronRight.view(px(10.), theme.text_faint)),
     )
-}
-
-/// Rows strung on the rail in the accent's sweep, from the first row's mark to the last's.
-fn rail_rows(rows: &[WorkRow], live: bool, thinking: bool, theme: &Theme, handlers: &Handlers) -> impl IntoElement {
-    // The rail is measured as the rows are laid out (prepaint is over before anything paints).
-    let span = Rc::new(std::cell::Cell::new(None::<(gpui::Pixels, gpui::Pixels)>));
-    let (top, bottom) = match theme.accent_sweep {
-        Some(stops) => (stops[0], stops[2]),
-        None => (theme.accent, theme.accent),
-    };
-    let (top, bottom) = (Hsla { a: RAIL_ALPHA, ..top }, Hsla { a: RAIL_ALPHA, ..bottom });
-    let rail = {
-        let span = span.clone();
-        gpui::canvas(
-            |_, _, _| (),
-            move |area, _, window, _| {
-                let Some((start, end)) = span.get() else { return };
-                if end <= start {
-                    return;
-                }
-                let line = gpui::Bounds::new(gpui::point(area.origin.x + px(ICON / 2. - 1.), start), gpui::size(px(2.), end - start));
-                let paint = gpui::linear_gradient(180., gpui::linear_color_stop(top, 0.), gpui::linear_color_stop(bottom, 1.));
-                window.paint_quad(gpui::fill(line, paint).corner_radii(px(1.)));
-            },
-        )
-        .absolute()
-        .top_0()
-        .left_0()
-        .size_full()
-    };
-    let mut column = div()
-        .relative()
-        .ml(px(RAIL - ICON / 2.))
-        .flex()
-        .flex_col()
-        .gap(px(2.))
-        .py(px(2.))
-        .on_children_prepainted(move |children, _, _| {
-            // The first child is the rail itself.
-            let marks: Vec<_> = children.iter().skip(1).map(|row| row.origin.y + px(MARK_MIDDLE)).collect();
-            span.set(marks.first().zip(marks.last()).map(|(first, last)| (*first, *last)));
-        })
-        .child(rail);
-    let last = rows.len().saturating_sub(1);
-    for (index, row) in rows.iter().enumerate() {
-        column = column.child(log_row(row, live, thinking && index == last, theme, handlers));
-    }
-    column
-}
-
-/// How strongly the rail shows behind the marks.
-const RAIL_ALPHA: f32 = 0.6;
-
-/// A row's round mark, lit: its icon (by its verb) on the glass's tone, ringed and glowing in the
-/// accent, or in success's colour for a command that passed and danger's for a step that failed.
-/// A step under way breathes; an event (a retry, a compaction) is a small bead on the rail.
-fn row_mark(row: &WorkRow, thinking: bool, theme: &Theme, still: bool) -> AnyElement {
-    let Some(icon) = row_icon(&row.verb) else {
-        return div()
-            .flex_none()
-            .size(px(ICON))
-            .flex()
-            .items_center()
-            .justify_center()
-            .child(div().size(px(7.)).rounded_full().bg(theme.glass_tone).border_1().border_color(theme.accent_line))
-            .into_any_element();
-    };
-    let (ink, ring, glow) = match &row.meta {
-        Meta::Failed(_) => (theme.danger, Hsla { a: 0.6, ..theme.danger }, theme.danger),
-        Meta::Running | Meta::Clock(_) | Meta::Thinking { .. } => (theme.accent_text, theme.accent_line, theme.accent),
-        _ if matches!(row.verb.as_ref(), "Ran" | "Finished") => (theme.success, Hsla { a: 0.6, ..theme.success }, theme.success),
-        _ => (theme.accent_text, theme.accent_line, theme.accent),
-    };
-    let mark = div()
-        .flex_none()
-        .size(px(ICON))
-        .rounded_full()
-        .flex()
-        .items_center()
-        .justify_center()
-        .bg(theme.glass_tone)
-        .border_1()
-        .border_color(ring)
-        .shadow(vec![gpui::BoxShadow {
-            color: Hsla { a: 0.3, ..glow },
-            offset: gpui::point(px(0.), px(0.)),
-            blur_radius: px(10.),
-            spread_radius: px(-2.),
-            inset: false,
-        }])
-        .child(icon.view(px(12.), ink));
-    match row.meta {
-        _ if thinking => crate::motion::breathing(SharedString::from(format!("{}-breath", row.key)), mark, still),
-        Meta::Running | Meta::Clock(_) | Meta::Thinking { .. } => crate::motion::breathing(SharedString::from(format!("{}-breath", row.key)), mark, still),
-        _ => mark.into_any_element(),
-    }
 }
 
 /// A row's icon, by its verb; none for an event.
@@ -766,14 +720,13 @@ fn row_icon(verb: &str) -> Option<Icon> {
         "Edited" | "Wrote" => Some(Icon::Pencil),
         "Ran" | "Watching" | "Watch" | "Waited" | "Finished" | "Failed" | "Ended" | "Lost" => Some(Icon::Terminal),
         "Stopped" => Some(Icon::Stop),
-        "Thought" | "Thinking" => Some(Icon::Brain),
-        verb if verb.starts_with("Thought") => Some(Icon::Brain),
         "Writing" | "Editing" => Some(Icon::Pencil),
         "Preparing" => Some(Icon::Hammer),
         "Asked" => Some(Icon::Question),
         "Used skill" => Some(Icon::Book),
         "Saved memory" | "Updated memory" | "Recalled memory" | "Forgot memory" => Some(Icon::Bookmark),
         "Reported" => Some(Icon::Duck),
+        "Searched the web" | "Fetched" => Some(Icon::Globe),
         verb if crate::work::CANVAS_VERBS.contains(&verb) => Some(Icon::Board),
         verb if crate::work::BROWSER_VERBS.contains(&verb) => Some(Icon::Globe),
         verb if crate::work::COMPUTER_VERBS.contains(&verb) => Some(Icon::Cursor),
@@ -782,10 +735,34 @@ fn row_icon(verb: &str) -> Option<Icon> {
     }
 }
 
-/// `live`: the row is in the log of a run still going, so its mark lands as it arrives.
-/// `thinking`: it is the thought the model is having now, so it reads "Thinking", a light running
-/// along the word, and its mark breathes.
-fn log_row(row: &WorkRow, live: bool, thinking: bool, theme: &Theme, handlers: &Handlers) -> AnyElement {
+/// Verbs whose subject is a path, shown as its file's name with its folder after it, faint.
+fn names_a_path(verb: &str) -> bool {
+    matches!(verb, "Read" | "Edited" | "Wrote" | "Listed" | "Writing" | "Editing")
+}
+
+/// A path as a file's name, then its folder, faint: "retry.rs crates/wack-llm/src".
+fn path_words(path: &SharedString, theme: &Theme) -> AnyElement {
+    let trimmed = path.trim_end_matches('/');
+    let (folder, name) = match trimmed.rsplit_once('/') {
+        Some((folder, name)) => (Some(folder.to_string()), name.to_string()),
+        None => (None, trimmed.to_string()),
+    };
+    div()
+        .min_w_0()
+        .flex()
+        .items_center()
+        .gap(px(6.))
+        .overflow_hidden()
+        .child(div().flex_none().typography(Type::UiStrong).text_color(theme.text_soft).child(name))
+        .children(folder.map(|folder| div().min_w_0().truncate().typography(Type::Ui).text_color(theme.text_faint).child(folder)))
+        .into_any_element()
+}
+
+/// A row under an opened group: its icon, faint; its verb, grey; what it acted on, lighter; then
+/// what came of it, and a chevron when it opens. No mark, no box. A step under way shines in its
+/// verb, in the present tense, and its icon takes the accent; a failure says so in danger's
+/// colour, and only there. `live`: the row is in a run still going, so it lands as it arrives.
+fn log_row(row: &WorkRow, live: bool, theme: &Theme, handlers: &Handlers) -> AnyElement {
     if let Some(agent) = &row.agent {
         return agent_row(&row.key, agent, theme);
     }
@@ -793,185 +770,139 @@ fn log_row(row: &WorkRow, live: bool, thinking: bool, theme: &Theme, handlers: &
         return thought_line(row, live, theme, handlers);
     }
     if let Target::Note(text) = &row.target {
-        return div()
-            .py(px(4.))
-            .pl(px(SHEET_INDENT))
-            .typography(Type::Ui)
-            .text_color(theme.text_soft)
-            .child(text.clone())
-            .into_any_element();
+        return div().py(px(4.)).typography(Type::Ui).text_color(theme.text_soft).child(text.clone()).into_any_element();
     }
+    let running = row.meta.running();
     let target = match &row.target {
-        Target::Code(text) => div().typography(Type::Mono).text_color(theme.text_body).child(text.clone()),
-        Target::Words(text) | Target::Note(text) | Target::Thought(text) | Target::Stream(text) => {
-            div().typography(Type::Ui).italic().text_color(theme.text_dim).child(text.clone())
-        }
+        Target::Code(text) if names_a_path(&row.verb) => path_words(text, theme),
+        Target::Code(text) => div().min_w_0().truncate().typography(Type::Mono).text_color(theme.text_soft).child(text.clone()).into_any_element(),
+        Target::Words(text) => div().min_w_0().truncate().typography(Type::Ui).text_color(theme.text_soft).child(text.clone()).into_any_element(),
+        Target::Note(_) | Target::Thought(_) | Target::Stream(_) => div().into_any_element(),
     };
-    let meta = match &row.meta {
-        Meta::None => div(),
-        Meta::Note(text) => div().text_color(theme.text_faint).child(text.clone()),
-        Meta::Success(text) => div().text_color(theme.success).child(text.clone()),
-        Meta::Failed(text) => div().text_color(theme.danger).child(text.clone()),
-        Meta::Running => div().text_color(theme.accent_text).child("running"),
-        Meta::Clock(time) => div().text_color(theme.accent_text).child(time.clone()),
-        Meta::Thinking { started, at } => div().text_color(theme.accent_text).child(thinking_clock(*started, *at, handlers)),
-        Meta::Lines { added, removed } => div()
-            .flex()
-            .gap(px(6.))
-            .child(div().text_color(theme.diff_added).child(format!("+{added}")))
-            .child(div().text_color(theme.diff_removed).child(format!("−{removed}"))),
+    let small = |text: SharedString, colour: Hsla| div().flex_none().typography(Type::Small).text_color(colour).child(text);
+    let marked = |icon: Icon, text: SharedString, colour: Hsla| {
+        div().flex_none().flex().items_center().gap(px(4.)).child(icon.view(px(11.), colour)).child(small(text, colour))
+    };
+    let meta: Option<AnyElement> = match &row.meta {
+        Meta::None | Meta::Running => None,
+        Meta::Note(text) => Some(small(text.clone(), theme.text_faint).into_any_element()),
+        Meta::Success(text) => Some(marked(Icon::Check, text.clone(), theme.success).into_any_element()),
+        Meta::Failed(text) => Some(marked(Icon::Close, text.clone(), theme.danger).into_any_element()),
+        Meta::Clock(time) => Some(small(time.clone(), theme.text_faint).into_any_element()),
+        Meta::Thinking { started, at } => Some(small(thinking_clock(*started, *at, handlers), theme.text_faint).into_any_element()),
+        Meta::Lines { added, removed } => Some(
+            div()
+                .flex_none()
+                .flex()
+                .gap(px(5.))
+                .typography(Type::Small)
+                .child(div().text_color(theme.diff_added).child(format!("+{added}")))
+                .child(div().text_color(theme.diff_removed).child(format!("−{removed}")))
+                .into_any_element(),
+        ),
+    };
+    let verb = if running {
+        let id = SharedString::from(format!("{}-doing", row.key));
+        let words = SharedString::from(crate::work::present(&row.verb).to_string());
+        crate::motion::shining_text(id, words, theme.text_dim, theme.accent_text, handlers.still)
+    } else {
+        row.verb.clone().into_any_element()
     };
     let openable = row.detail.is_some();
     let toggle = handlers.toggle.clone();
     let key = row.key.clone();
     let hover = theme.hover;
+    let line = div()
+        .id(row.key.clone())
+        .h(px(ROW))
+        .min_w_0()
+        .ml(px(-HOVER_PAD))
+        .px(px(HOVER_PAD))
+        .flex()
+        .items_center()
+        .gap(px(GLYPH_GAP))
+        .rounded(px(7.))
+        .when(openable, |line| {
+            line.cursor_pointer().hover(move |line| line.bg(hover)).on_click(move |_, window, cx| toggle(key.clone(), window, cx))
+        })
+        .children(row_icon(&row.verb).map(|icon| icon.view(px(GLYPH), if running { theme.accent_text } else { theme.text_faint })))
+        .when(!row.verb.is_empty(), |line| line.child(div().flex_none().typography(Type::Ui).text_color(theme.text_dim).child(verb)))
+        .child(target)
+        .children(meta)
+        .when(openable, |line| line.child(div().flex_none().child(if row.open { Icon::ChevronDown } else { Icon::ChevronRight }.view(px(11.), theme.text_faint))));
+    let line = div().flex().child(line);
+    let line = if live && running { crate::motion::land(SharedString::from(format!("{}-land", row.key)), line, handlers.still) } else { line.into_any_element() };
     div()
         .flex()
         .flex_col()
-        .child(
-            div()
-                .id(row.key.clone())
-                .h(px(28.))
-                .pr(px(10.))
-                .flex()
-                .items_center()
-                .gap(px(ROW_GAP))
-                .rounded_full()
-                .when(openable, |line| {
-                    line.cursor_pointer()
-                        .hover(move |line| line.bg(hover))
-                        .on_click(move |_, window, cx| toggle(key.clone(), window, cx))
-                })
-                .child({
-                    let mark = div().flex_none().child(row_mark(row, thinking, theme, handlers.still));
-                    if live {
-                        crate::motion::land(SharedString::from(format!("{}-land", row.key)), mark, handlers.still)
-                    } else {
-                        mark.into_any_element()
-                    }
-                })
-                .when(!row.verb.is_empty(), |line| {
-                    let verb = if thinking {
-                        let id = SharedString::from(format!("{}-thinking", row.key));
-                        crate::motion::shining_text(id, "Thinking".into(), theme.text_dim, theme.accent_text, handlers.still)
-                    } else {
-                        row.verb.clone().into_any_element()
-                    };
-                    line.child(div().flex_none().w(px(VERB_WIDTH)).typography(Type::Ui).text_color(theme.text_dim).child(verb))
-                })
-                .child(div().flex_1().min_w_0().truncate().child(target))
-                .child(div().flex_none().typography(Type::Small).child(meta)),
-        )
-        .when(!row.pictures.is_empty(), |line| {
-            line.child(div().pl(px(SHEET_INDENT)).pt(px(2.)).pb(px(6.)).child(crate::pictures::Strip {
+        .child(line)
+        .when(!row.pictures.is_empty(), |column| {
+            column.child(div().pl(px(GLYPH + GLYPH_GAP)).pt(px(2.)).pb(px(6.)).child(crate::pictures::Strip {
                 pictures: row.pictures.clone(),
                 key: format!("{}-shots", row.key).into(),
                 align_end: false,
             }))
         })
-        .when_some(row.detail.as_ref().filter(|_| row.open), |line, detail| {
-            line.child(div().pt(px(4.)).pb(px(8.)).child(detail_view(detail, &row.key, theme)))
+        .when_some(row.detail.as_ref().filter(|_| row.open), |column, detail| {
+            column.child(div().pt(px(4.)).pb(px(8.)).child(detail_view(detail, &row.key, theme)))
         })
         .into_any_element()
 }
 
-/// A thought's row, after version 2's. Live: its mark breathing, "Thinking" with a light along
-/// it and how long so far, then its newest words running into a caret, older words fading to
-/// the left. Settled: "Thought for 12s" and its first line. Either opens to the body.
+/// A thought: the duck, then "Thought for 12.3s", grey, its chevron after. While the model is
+/// having it, the duck paddles and "Thinking" shines, its clock counting. Either opens to the
+/// thought itself, plain grey words under the line.
 fn thought_line(row: &WorkRow, live: bool, theme: &Theme, handlers: &Handlers) -> AnyElement {
     let streaming = matches!(row.target, Target::Stream(_));
     let openable = row.detail.is_some();
     let toggle = handlers.toggle.clone();
     let key = row.key.clone();
-    let hover = theme.hover;
+    let (hover, bright) = (theme.hover, theme.text_soft);
     let label = if streaming {
         let id = SharedString::from(format!("{}-thinking", row.key));
         crate::motion::shining_text(id, "Thinking".into(), theme.text_dim, theme.accent_text, handlers.still)
     } else {
         row.verb.clone().into_any_element()
     };
-    let preview = match &row.target {
-        // Open, the body shows the newest reasoning itself.
-        Target::Stream(_) if row.open => div().flex_1().into_any_element(),
-        Target::Stream(tail) => stream_line(tail, theme, handlers).into_any_element(),
-        Target::Thought(first) => {
-            div().flex_1().min_w_0().truncate().typography(Type::Ui).italic().text_color(theme.text_faint).child(first.clone()).into_any_element()
-        }
-        _ => div().flex_1().into_any_element(),
+    let duck = div().flex_none().child(Icon::Duck.view(px(13.), if streaming { theme.text_soft } else { theme.text_dim }));
+    let duck = if streaming { crate::motion::paddling(duck) } else { duck };
+    let clock = match &row.meta {
+        Meta::Clock(time) => Some(time.clone()),
+        Meta::Thinking { started, at } => Some(thinking_clock(*started, *at, handlers)),
+        _ => None,
     };
-    let mark = div().flex_none().child(row_mark(row, streaming, theme, handlers.still));
-    let mark = if live { crate::motion::land(SharedString::from(format!("{}-land", row.key)), mark, handlers.still) } else { mark.into_any_element() };
+    let line = div()
+        .id(row.key.clone())
+        .h(px(LINE))
+        .ml(px(-HOVER_PAD))
+        .px(px(HOVER_PAD))
+        .flex()
+        .items_center()
+        .gap(px(6.))
+        .rounded(px(7.))
+        .typography(Type::Ui)
+        .text_color(theme.text_dim)
+        .when(openable, |line| {
+            line.cursor_pointer().hover(move |line| line.bg(hover).text_color(bright)).on_click(move |_, window, cx| toggle(key.clone(), window, cx))
+        })
+        .child(duck)
+        .child(div().flex_none().child(label))
+        .when_some(clock, |line, time| {
+            // Wide enough for "88.8s", so what follows holds still as it counts.
+            line.child(div().flex_none().min_w(px(CLOCK_WIDTH)).typography(Type::Small).text_color(theme.text_faint).child(time))
+        })
+        .when(openable, |line| line.child(div().flex_none().child(if row.open { Icon::ChevronDown } else { Icon::ChevronRight }.view(px(11.), theme.text_faint))))
+        .tag("thought-line");
+    let line = div().flex().child(line);
+    let line = if live && streaming { crate::motion::land(SharedString::from(format!("{}-land", row.key)), line, handlers.still) } else { line.into_any_element() };
     div()
         .flex()
         .flex_col()
-        .child(
-            div()
-                .id(row.key.clone())
-                .h(px(28.))
-                .pr(px(10.))
-                .flex()
-                .items_center()
-                .gap(px(ROW_GAP))
-                .rounded_full()
-                .when(openable, |line| {
-                    line.cursor_pointer()
-                        .hover(move |line| line.bg(hover))
-                        .on_click(move |_, window, cx| toggle(key.clone(), window, cx))
-                })
-                .child(mark)
-                .child(div().flex_none().typography(Type::Ui).text_color(theme.text_dim).child(label))
-                .when_some(match &row.meta {
-                    Meta::Clock(time) => Some(time.clone()),
-                    Meta::Thinking { started, at } => Some(thinking_clock(*started, *at, handlers)),
-                    _ => None,
-                }, |line, time| {
-                    // Wide enough for "88.8s", so the words after it hold still as it counts.
-                    line.child(div().flex_none().min_w(px(CLOCK_WIDTH)).typography(Type::Small).text_color(theme.text_faint).child(time))
-                })
-                .child(preview)
-                .when(openable, |line| {
-                    line.child(div().flex_none().child(if row.open { Icon::ChevronDown } else { Icon::ChevronRight }.view(px(11.), theme.text_faint)))
-                }),
-        )
-        .when_some(row.detail.as_ref().filter(|_| row.open), |line, detail| {
-            line.child(div().pt(px(2.)).pb(px(8.)).child(detail_view(detail, &row.key, theme)))
+        .child(line)
+        .when_some(row.detail.as_ref().filter(|_| row.open), |column, detail| {
+            column.child(div().pt(px(2.)).pb(px(8.)).child(detail_view(detail, &row.key, theme)))
         })
         .into_any_element()
-}
-
-/// A live thought's newest words on one line, held to the right so they run into the caret:
-/// what doesn't fit leaves at the left. The oldest third is faint, the newest brightest.
-fn stream_line(tail: &SharedString, theme: &Theme, handlers: &Handlers) -> impl IntoElement {
-    let text = tail.to_string();
-    let chars = text.chars().count();
-    let cut = |share: f32| text.char_indices().nth((chars as f32 * share) as usize).map(|(at, _)| at).unwrap_or(text.len());
-    let (first, second) = (cut(0.45), cut(0.75));
-    let run = |len: usize, color: Hsla| TextRun { len, font: font(UI_FONT), color, background_color: None, underline: None, strikethrough: None };
-    let runs: Vec<TextRun> = [(first, theme.text_faint), (second - first, theme.text_dim), (text.len() - second, theme.text_soft)]
-        .into_iter()
-        .filter(|(len, _)| *len > 0)
-        .map(|(len, color)| run(len, color))
-        .collect();
-    let caret = div().flex_none().ml(px(2.)).w(px(1.5)).h(px(13.)).rounded(px(1.)).bg(theme.accent);
-    let caret = crate::motion::breathing(SharedString::from(format!("caret-{}", chars % 7)), caret, handlers.still);
-    div()
-        .flex_1()
-        .min_w_0()
-        .h(px(20.))
-        .overflow_hidden()
-        .flex()
-        .items_center()
-        .justify_end()
-        .child(
-            div()
-                .flex_none()
-                .flex()
-                .items_center()
-                .whitespace_nowrap()
-                .typography(Type::Small)
-                .child(StyledText::new(text.clone()).with_runs(runs))
-                .child(caret),
-        )
 }
 
 /// A sub-agent's row: its duck (paddling while it works), its role and task, how it stands, and a
@@ -980,31 +911,22 @@ pub fn agent_row(key: &SharedString, agent: &AgentLine, theme: &Theme) -> AnyEle
     // A queued agent hasn't started: its duck waits, dimmed.
     let working = matches!(agent.state, AgentState::Working | AgentState::Background);
     let (word, colour) = agent_state_word(agent.state, theme);
-    let duck = div()
-        .flex_none()
-        .size(px(ICON))
-        .rounded_full()
-        .flex()
-        .items_center()
-        .justify_center()
-        .bg(theme.glass_tone)
-        .border_1()
-        .border_color(if working { theme.accent_line } else { theme.border_strong })
-        .child(if working {
-            crate::motion::paddling(div().child(Icon::Duck.view(px(12.), theme.accent_text))).into_any_element()
-        } else {
-            Icon::Duck.view(px(12.), theme.text_dim).into_any_element()
-        });
+    let duck = div().flex_none().w(px(GLYPH)).h(px(ROW)).flex().items_center().justify_center().child(if working {
+        crate::motion::paddling(div().child(Icon::Duck.view(px(13.), theme.accent_text))).into_any_element()
+    } else {
+        Icon::Duck.view(px(13.), theme.text_faint).into_any_element()
+    });
     let id = agent.id.clone();
     let hover = theme.hover;
     div()
         .id(key.clone())
-        .py(px(5.))
-        .pr(px(10.))
-        .rounded(px(14.))
+        .ml(px(-HOVER_PAD))
+        .px(px(HOVER_PAD))
+        .pb(px(3.))
+        .rounded(px(8.))
         .flex()
         .items_start()
-        .gap(px(ROW_GAP))
+        .gap(px(GLYPH_GAP))
         .when(!agent.id.is_empty(), |row| {
             row.cursor_pointer()
                 .hover(move |row| row.bg(hover))
@@ -1018,16 +940,15 @@ pub fn agent_row(key: &SharedString, agent: &AgentLine, theme: &Theme) -> AnyEle
                 .min_w_0()
                 .flex()
                 .flex_col()
-                .gap(px(1.))
                 .child(
                     div()
-                        .h(px(ICON))
+                        .h(px(ROW))
                         .flex()
                         .items_center()
                         .gap(px(8.))
-                        .child(div().flex_none().typography(Type::UiStrong).text_color(theme.text).child(agent.role.clone()))
+                        .child(div().flex_none().typography(Type::UiStrong).text_color(theme.text_soft).child(agent.role.clone()))
                         .children(agent.tier.map(|tier| tier_chip(tier, theme)))
-                        .child(div().flex_1().min_w_0().truncate().typography(Type::Ui).text_color(theme.text_soft).child(agent.task.clone()))
+                        .child(div().flex_1().min_w_0().truncate().typography(Type::Ui).text_color(theme.text_dim).child(agent.task.clone()))
                         .when(!agent.id.is_empty(), |line| {
                             line.child(div().flex_none().typography(Type::Small).font_family(MONO_FONT).text_color(theme.text_faint).child(agent.id.clone()))
                         })
@@ -1093,111 +1014,72 @@ pub fn agent_state_word(state: AgentState, theme: &Theme) -> (&'static str, Hsla
     }
 }
 
+/// What a row opens into, under it: a diff or output in a sheet, the questions it asked, or a
+/// thought's words.
 fn detail_view(detail: &Detail, key: &SharedString, theme: &Theme) -> AnyElement {
     match detail {
-        Detail::Diff(diff) => div().pl(px(SHEET_INDENT)).child(diff_sheet(diff, key, theme)).into_any_element(),
-        Detail::Output(text) => div()
-            .pl(px(SHEET_INDENT))
+        Detail::Diff(diff) => diff_sheet(diff, key, theme).into_any_element(),
+        Detail::Output(text) => sheet(theme)
             .child(
-                sheet(theme).child(
-                    div()
-                        .id(SharedString::from(format!("{key}-output")))
-                        .max_h(px(320.))
-                        .overflow_y_scroll()
-                        .px(px(14.))
-                        .py(px(10.))
-                        .typography(Type::Code)
-                        .text_color(theme.text_soft)
-                        .child(text.clone()),
-                ),
+                div()
+                    .id(SharedString::from(format!("{key}-output")))
+                    .max_h(px(320.))
+                    .overflow_y_scroll()
+                    .px(px(14.))
+                    .py(px(10.))
+                    .typography(Type::Code)
+                    .text_color(theme.text_dim)
+                    .child(text.clone()),
             )
             .into_any_element(),
-        Detail::Asked(asked) => div().pl(px(WORDS_INDENT)).py(px(4.)).child(crate::question::asked_view(asked, theme)).into_any_element(),
+        Detail::Asked(asked) => div().pl(px(GLYPH + GLYPH_GAP)).py(px(4.)).child(crate::question::asked_view(asked, theme)).into_any_element(),
         Detail::Thought { text, live } => thought_body(text, *live, key, theme),
         Detail::Text(text) => div()
-            .pl(px(WORDS_INDENT))
+            .pl(px(GLYPH + GLYPH_GAP))
             .typography(Type::Ui)
-            .italic()
             .text_color(theme.text_dim)
             .child(text.clone())
             .into_any_element(),
     }
 }
 
-/// A sheet: rounded, edged, on the code's ground.
 /// The tallest a thought's open body grows; the rest scrolls inside it, so opening a long
 /// thought never sends the page scrolling endlessly (version 2 capped it the same way).
 const THOUGHT_BODY: f32 = 320.;
 
-/// A thought opened: its paragraphs on a rail of their own, in a body of capped height. Live,
-/// the body holds to its end so the newest reasoning shows as it comes; settled, it scrolls.
+/// A thought opened: its paragraphs, grey, indented under the duck's line, in a body of capped
+/// height. Live, the body holds to its end so the newest reasoning shows as it comes; settled,
+/// it scrolls.
 fn thought_body(text: &SharedString, live: bool, key: &SharedString, theme: &Theme) -> AnyElement {
     let paragraphs = div()
         .flex()
         .flex_col()
-        .gap(px(6.))
-        .typography(Type::Small)
+        .gap(px(8.))
+        .typography(Type::Ui)
         .text_color(if live { theme.text_soft } else { theme.text_dim })
         .children(text.split("\n\n").map(str::trim).filter(|paragraph| !paragraph.is_empty()).map(|paragraph| div().child(SharedString::from(paragraph.to_string()))));
-    let frame = div().ml(px(ICON / 2. - 1.)).pl(px(SHEET_INDENT - ICON / 2.)).pr(px(12.)).border_l_2().border_color(theme.accent_line).max_h(px(THOUGHT_BODY));
-    let body = if live {
+    let frame = div().pl(px(INDENT - 1.)).pr(px(12.)).max_h(px(THOUGHT_BODY));
+    if live {
         frame.overflow_hidden().flex().flex_col().justify_end().child(paragraphs).into_any_element()
     } else {
         frame.id(SharedString::from(format!("{key}-body"))).overflow_y_scroll().child(paragraphs).into_any_element()
-    };
-    div().pl(px(0.)).child(body).into_any_element()
+    }
 }
 
+/// A sheet: code, a diff or output, on the code's ground inside a hairline. No band, no seam:
+/// the row above it already says what it holds.
 fn sheet(theme: &Theme) -> gpui::Div {
-    div().rounded(px(12.)).border_1().border_color(theme.border).bg(theme.code_ground).overflow_hidden().flex().flex_col()
+    div().rounded(px(10.)).border_1().border_color(theme.border).bg(theme.code_ground).overflow_hidden().flex().flex_col()
 }
 
-/// A sheet's head band: what it holds, on a wash over the code's ground, a dotted rule beneath.
+/// A reply's code block head: what it holds and its copy button, over a hairline.
 fn head_band(theme: &Theme) -> gpui::Div {
-    div()
-        .flex_none()
-        .h(px(32.))
-        .px(px(12.))
-        .flex()
-        .items_center()
-        .gap(px(8.))
-        .bg(theme.hover)
-        .border_b_1()
-        .border_dashed()
-        .border_color(theme.border_strong)
+    div().flex_none().h(px(30.)).px(px(12.)).flex().items_center().gap(px(8.)).border_b_1().border_color(theme.border)
 }
 
 fn diff_sheet(diff: &Diff, key: &SharedString, theme: &Theme) -> impl IntoElement {
-    let (folder, name) = match diff.path.rsplit_once('/') {
-        Some((folder, name)) => (Some(folder.to_string()), name.to_string()),
-        None => (None, diff.path.to_string()),
-    };
     let lines = div().flex().flex_col().py(px(6.)).children(diff.lines.iter().map(|line| diff_line(line, theme)));
-    sheet(theme)
-        .child(
-            head_band(theme)
-                .child(Icon::File.view(px(13.), theme.text_dim))
-                .child(div().flex_none().typography(Type::Mono).text_color(theme.text).child(name))
-                .child(
-                    div()
-                        .flex_1()
-                        .min_w_0()
-                        .truncate()
-                        .typography(Type::Small)
-                        .font_family(crate::typography::MONO_FONT)
-                        .text_color(theme.text_faint)
-                        .children(folder),
-                )
-                .child(
-                    div()
-                        .flex()
-                        .gap(px(6.))
-                        .typography(Type::Small)
-                        .child(div().text_color(theme.diff_added).child(format!("+{}", diff.added)))
-                        .child(div().text_color(theme.diff_removed).child(format!("−{}", diff.removed))),
-                ),
-        )
-        .child(div().id(SharedString::from(format!("{key}-diff"))).max_h(px(420.)).overflow_y_scroll().child(lines))
+    sheet(theme).child(div().id(SharedString::from(format!("{key}-diff"))).max_h(px(420.)).overflow_y_scroll().child(lines))
 }
 
 /// One line of a diff: number, sign and text, on the added or removed ground. Shared by edit
@@ -1398,7 +1280,8 @@ fn rich(spans: &[Span], key: &str, fresh: bool, theme: &Theme, handlers: &Handle
             len: span.text.len(),
             font: face,
             color: colour,
-            background_color: None,
+            // Inline code sits on a faint wash, as a word set apart.
+            background_color: span.code.then_some(theme.hover),
             underline: span.link.as_ref().map(|_| UnderlineStyle { color: Some(colour), thickness: px(1.), wavy: false }),
             strikethrough: span.strike.then_some(StrikethroughStyle { color: Some(colour), thickness: px(1.) }),
         });

@@ -1351,6 +1351,78 @@ pub fn all() -> Vec<Scene> {
             },
         },
         Scene {
+            name: "prompt-actions",
+            description: "The pointer over a message: Copy, Edit, Rewind and, on the latest, Retry.",
+            size: WINDOW,
+            build: |_, cx| {
+                let prompts = crate::rewind::Prompts { chat: true, idle: true, count: 2, hovered: Some(1), ..Default::default() };
+                rewind_scene(Body::Prompted(fixtures::two_turns(), Box::new(prompts)), None, cx)
+            },
+        },
+        Scene {
+            name: "prompt-menu",
+            description: "A message's right-click menu: Copy, Edit, Rewind to here and Retry on the latest.",
+            size: WINDOW,
+            build: |_, cx| {
+                let prompts = crate::rewind::Prompts { chat: true, idle: true, count: 2, ..Default::default() };
+                let menu = (gpui::point(px(760.), px(330.)), crate::context_menu::PromptFacts { number: 1, idle: true, latest: true });
+                rewind_scene(Body::Prompted(fixtures::two_turns(), Box::new(prompts)), Some(menu), cx)
+            },
+        },
+        Scene {
+            name: "prompt-editing",
+            description: "Editing the latest message in place: ↩ sends it again, Esc leaves it.",
+            size: WINDOW,
+            build: |_, cx| {
+                let field = cx.new(|cx| {
+                    let mut field = crate::text_field::TextField::new(crate::typography::Type::Body, "Write the message again", cx).multiline(crate::app::COMPOSER_ROWS);
+                    field.set_text("Now add a test for a stream that ends mid-line, and one for a stream that is empty.", cx);
+                    field
+                });
+                let prompts = crate::rewind::Prompts { chat: true, idle: true, count: 2, editing: Some((1, field)), ..Default::default() };
+                rewind_scene(Body::Prompted(fixtures::two_turns(), Box::new(prompts)), None, cx)
+            },
+        },
+        Scene {
+            name: "rewind-card",
+            description: "Rewinding to before the latest message: three files changed since, two ticked to go back.",
+            size: WINDOW,
+            build: |_, cx| {
+                let card = fixtures::rewind_card(crate::rewind::Purpose::Rewind, true);
+                let prompts = crate::rewind::Prompts { chat: true, idle: true, count: 2, card: Some(card), ..Default::default() };
+                rewind_scene(Body::Prompted(fixtures::two_turns(), Box::new(prompts)), None, cx)
+            },
+        },
+        Scene {
+            name: "rewind-card-plain",
+            description: "Rewinding when no file changed since the message: one button.",
+            size: WINDOW,
+            build: |_, cx| {
+                let card = fixtures::rewind_card(crate::rewind::Purpose::Rewind, false);
+                let prompts = crate::rewind::Prompts { chat: true, idle: true, count: 2, card: Some(card), ..Default::default() };
+                rewind_scene(Body::Prompted(fixtures::two_turns(), Box::new(prompts)), None, cx)
+            },
+        },
+        Scene {
+            name: "rewind-card-edit",
+            description: "Sending an edited message whose files changed since: keep them, or put the ticked ones back and send.",
+            size: WINDOW,
+            build: |_, cx| {
+                let card = fixtures::rewind_card(crate::rewind::Purpose::Edit, true);
+                let prompts = crate::rewind::Prompts { chat: true, idle: true, count: 2, card: Some(card), ..Default::default() };
+                rewind_scene(Body::Prompted(fixtures::two_turns(), Box::new(prompts)), None, cx)
+            },
+        },
+        Scene {
+            name: "rewound",
+            description: "Just after a rewind: its row at the end of the transcript offers Undo until anything runs.",
+            size: WINDOW,
+            build: |_, cx| {
+                let prompts = crate::rewind::Prompts { chat: true, idle: true, count: 1, ..Default::default() };
+                rewind_scene(Body::Prompted(fixtures::rewound_turns(), Box::new(prompts)), None, cx)
+            },
+        },
+        Scene {
             name: "chat-rename-tab",
             description: "Renaming a chat in its header, at the title's size (double-click the title or its tab, or File › Rename Chat…).",
             size: WINDOW,
@@ -4149,4 +4221,21 @@ impl Render for LightboxScene {
         });
         gpui::div().size_full().relative().child(shell).child(crate::pictures::LightboxView { lightbox: self.lightbox.clone() })
     }
+}
+
+/// A finished chat whose transcript is `body`, with a message's menu open when `menu` says.
+fn rewind_scene(body: Body, menu: Option<(gpui::Point<gpui::Pixels>, crate::context_menu::PromptFacts)>, cx: &mut gpui::App) -> gpui::AnyView {
+    let composer = fixtures::composer_after_turn(crate::composer::Input::Drawn { text: None, placeholder: "Reply, or ask for the next change".into() });
+    cx.new(|_| {
+        let shell = Shell::showing_tabs(
+            fixtures::sidebar(Selected::Finished),
+            Screen::Chat { title: fixtures::FINISHED_TITLE.into(), project: fixtures::project(), body, composer },
+            fixtures::strip(Some(fixtures::FINISHED_TITLE)),
+        );
+        match menu {
+            Some((position, facts)) => shell.with_prompt_menu(position, facts),
+            None => shell,
+        }
+    })
+    .into()
 }

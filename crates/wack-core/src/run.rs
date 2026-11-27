@@ -94,6 +94,9 @@ pub struct RunSetup {
     /// The app's Build and Run commands, so `browser_preview` can start the Run command the
     /// way the Run button does. `None` offers no `browser_preview`.
     pub commands: Option<crate::preview::RunCommands>,
+    /// The chat's checkpoint store: a run for a message of the user's snapshots `cwd` into it
+    /// first, so a rewind can put the files back. `None` takes no snapshot.
+    pub checkpoints: Option<crate::checkpoints::Checkpoints>,
 }
 
 pub enum Job {
@@ -184,6 +187,7 @@ impl Store {
             computer: None,
             run_command: project.command(crate::store::CommandKind::Run).map(str::to_string),
             commands: None,
+            checkpoints: Some(self.checkpoints(chat)),
         })
     }
 
@@ -231,6 +235,7 @@ impl Store {
             computer: None,
             run_command: None,
             commands: None,
+            checkpoints: Some(self.checkpoints(chat)),
         })
     }
 }
@@ -313,19 +318,36 @@ pub async fn run(
     } else {
         Session::create(&setup.session_path, &setup.cwd)
     };
-    let session = match session {
+    let mut session = match session {
         Ok(session) => session,
         Err(message) => return finished(Err(message), None),
     };
     // MCP servers: their tools, waiting only for a server with no tool list yet. A compaction
     // calls no tools, so it starts nothing.
-    let mut mcp = wack_mcp::Assembly::default();
-    if let Some(hub) = setup.mcp_hub.as_ref().filter(|_| !matches!(job, Job::Compact(_))) {
+    let servers = async {
+        let Some(hub) = setup.mcp_hub.as_ref().filter(|_| !matches!(job, Job::Compact(_))) else {
+            return wack_mcp::Assembly::default();
+        };
         let starting: wack_mcp::Starting = {
             let events = events.clone();
             Arc::new(move |servers| events(RunEvent::McpStarting(servers)))
         };
-        mcp = wack_mcp::assemble(hub, &setup.mcp_servers, &setup.mcp_folder, &control.stop_token(), starting).await;
+        wack_mcp::assemble(hub, &setup.mcp_servers, &setup.mcp_folder, &control.stop_token(), starting).await
+    };
+    // Where the files stand before the user's message, beside the servers starting. A folder
+    // that can't be snapshotted (no Git, a home folder, too many new files) just has none, and
+    // a rewind past this message leaves the files as they are.
+    let user_message = matches!(job, Job::Prompt(_) | Job::Command { .. } | Job::Attached { .. });
+    let snapshot = async {
+        let store = setup.checkpoints.clone().filter(|_| user_message)?;
+        let cwd = setup.cwd.clone();
+        tokio::task::spawn_blocking(move || store.snapshot(&cwd)).await.ok()?.ok()
+    };
+    let (mcp, tree) = tokio::join!(servers, snapshot);
+    if let Some(tree) = tree
+        && let Err(message) = session.checkpoint(&tree)
+    {
+        return finished(Err(message), None);
     }
     if setup.kind == ChatKind::Chat {
         let parts = ChatParts {
@@ -511,6 +533,7 @@ mod tests {
             computer: None,
             run_command: None,
             commands: None,
+            checkpoints: None,
         }
     }
 
@@ -569,6 +592,34 @@ mod tests {
                 .len(),
             4
         );
+    }
+
+    #[tokio::test]
+    async fn a_message_snapshots_the_files_before_it_and_a_wake_does_not() {
+        let folder = tempfile::tempdir().unwrap();
+        let project = folder.path().join("project");
+        std::fs::create_dir_all(&project).unwrap();
+        std::fs::write(project.join("app.rs"), "fn main() {}\n").unwrap();
+        let store = crate::checkpoints::Checkpoints::new(folder.path().join("data/v3/checkpoints/chat"), folder.path().join("data"));
+        let provider = ScriptedProvider::new([say("hello")]);
+        let with_store = |provider: ScriptedProvider| {
+            let mut setup = setup(provider, folder.path());
+            setup.cwd = project.clone();
+            setup.checkpoints = Some(store.clone());
+            setup
+        };
+        let (_, sink) = collect();
+        run(with_store(provider.clone()), Job::Prompt("hi".into()), Control::new(), sink.clone()).await;
+        // A wake sends nothing of the user's, so it takes no snapshot.
+        run(with_store(provider), Job::Wake, Control::new(), sink).await;
+
+        let session = folder.path().join("sessions/chat.jsonl");
+        let checkpoint = wack_agent::prompt_checkpoint(&session, 0).unwrap().expect("a snapshot before the message");
+        std::fs::write(project.join("app.rs"), "fn main() { changed(); }\n").unwrap();
+        let changes = store.changes(&project, &checkpoint).unwrap();
+        assert_eq!(changes.iter().map(|change| change.path.as_str()).collect::<Vec<_>>(), ["app.rs"]);
+        let lines = std::fs::read_to_string(&session).unwrap();
+        assert_eq!(lines.matches("\"type\":\"checkpoint\"").count(), 1);
     }
 
     #[tokio::test]

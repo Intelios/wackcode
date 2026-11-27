@@ -5,11 +5,14 @@
 //! A chat's menu ([`chat_entries`]) is version 2's, less what version 3 cut (forking, worktrees):
 //! Rename, the chat's folder in the Finder, its session file, its path, Close tab and Archive.
 //! Sidebar rows, title-strip tabs and the chat header open it.
+//!
+//! A message's menu ([`prompt_entries`]), from right-clicking one of the user's messages, is
+//! version 2's too, less forking: Copy, Edit, Rewind to here and, on the latest, Retry.
 
 use gpui::{Action, AnchoredPositionMode, AnyElement, MouseButton, Pixels, Point, SharedString, Size, anchored, deferred, div, prelude::*, px};
 
 use crate::{
-    actions::{ChatPick, ChatMenuPick},
+    actions::{ChatPick, ChatMenuPick, CopyPrompt, EditPrompt, RetryPrompt, RewindPrompt},
     icon::Icon,
     tags::Tag,
     theme::Theme,
@@ -125,5 +128,31 @@ pub fn chat_entries(facts: &ChatFacts) -> Vec<Entry> {
     }
     // Deleting is deliberately absent: a chat goes through Archived before it can be removed.
     entries.push(item(ChatPick::Archive, "Archive", Icon::Archive, true));
+    entries
+}
+
+/// What a message's menu offers, as [`prompt_entries`] lists it.
+#[derive(Clone, Copy, Debug)]
+pub struct PromptFacts {
+    /// Which of the user's messages (from 0).
+    pub number: usize,
+    /// No run holds the chat: it can be edited, rewound or retried.
+    pub idle: bool,
+    /// The user's latest message, which Retry asks again.
+    pub latest: bool,
+}
+
+pub fn prompt_entries(facts: &PromptFacts) -> Vec<Entry> {
+    let number = facts.number;
+    let item = |id: &'static str, label: &'static str, icon: Icon, enabled: bool, action: Box<dyn Action>| Entry::Item { id: id.into(), label: label.into(), icon, enabled, action };
+    let mut entries = vec![
+        item("prompt-menu-copy", "Copy", Icon::Copy, true, Box::new(CopyPrompt { number })),
+        Entry::Separator,
+        item("prompt-menu-edit", "Edit", Icon::Pencil, facts.idle, Box::new(EditPrompt { number })),
+        item("prompt-menu-rewind", "Rewind to here", Icon::Rewind, facts.idle, Box::new(RewindPrompt { number })),
+    ];
+    if facts.latest {
+        entries.push(item("prompt-menu-retry", "Retry", Icon::Reload, facts.idle, Box::new(RetryPrompt { number })));
+    }
     entries
 }

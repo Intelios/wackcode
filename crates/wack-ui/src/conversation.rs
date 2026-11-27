@@ -14,6 +14,10 @@
 //! - A background task's news (a note tagged `task:`) is shown where the model read it: in the
 //!   work of a turn still working, or, when the model had finished its reply (the chat was idle
 //!   and woke), as its own entry followed by the turn that answers it, with no prompt before it.
+//! - The user's messages are numbered by counting `Entry::Prompt`s ([`Conversation::prompt_number`]),
+//!   exactly as the session counts them (`wack_agent::session`), so rewinding, editing or
+//!   retrying "message 3" means the same message to both. A rewind just made is
+//!   `Entry::Rewound`, last, until the next run.
 
 use serde_json::Value;
 use wack_core::{
@@ -40,7 +44,16 @@ pub enum Entry {
     /// `pictures` are the ones the user attached.
     /// `files` are the text files that went with it (picked, dropped, pasted, terminal); `text` is
     /// the message without them.
-    Prompt { text: String, steered: bool, command: Option<CommandUse>, suggestion: Option<Started>, pictures: Vec<Picture>, files: Vec<crate::attachments::FileAttachment> },
+    /// `refs` are the chats a Chat chat's message referenced with `@`, split from its words.
+    Prompt {
+        text: String,
+        steered: bool,
+        command: Option<CommandUse>,
+        suggestion: Option<Started>,
+        pictures: Vec<Picture>,
+        files: Vec<crate::attachments::FileAttachment>,
+        refs: Vec<wack_core::chat_refs::ChatRef>,
+    },
     Turn(Turn),
     /// The older conversation was summarised here.
     Compacted(Compaction),
@@ -48,6 +61,9 @@ pub enum Entry {
     Notice { text: String, failed: bool },
     /// A background task reported while the chat was idle.
     News(News),
+    /// The user rewound the chat to here and nothing has run since, so it can be undone.
+    /// `files`: the rewind put files back too.
+    Rewound { files: bool },
 }
 
 /// A compaction boundary in the conversation: what the summary carried into the model's context.
@@ -438,10 +454,15 @@ impl Conversation {
                 // A server that failed or stopped: the model was told, and the transcript says so.
                 HistoryEntry::Note { tag, text, .. } if tag.starts_with(MCP_NOTE_PREFIX) => conversation.held_notices.push(text.clone()),
                 HistoryEntry::Note { .. } => {}
+                // Always last; added after the final turn closes.
+                HistoryEntry::Rewound { .. } => {}
             }
         }
         conversation.flush_notices();
         conversation.close_turn(None);
+        if let Some(HistoryEntry::Rewound { files }) = history.last() {
+            conversation.entries.push(Entry::Rewound { files: *files });
+        }
         conversation
     }
 
@@ -633,6 +654,31 @@ impl Conversation {
         self.entries.push(Entry::Turn(Turn::new(started.or(at), live)));
     }
 
+    /// The number of the user's message at entry `index`: how many came before it.
+    pub fn prompt_number(&self, index: usize) -> usize {
+        self.entries[..index.min(self.entries.len())].iter().filter(|entry| matches!(entry, Entry::Prompt { .. })).count()
+    }
+
+    /// The user's `number`-th message (from 0).
+    pub fn prompt(&self, number: usize) -> Option<&Entry> {
+        self.entries.iter().filter(|entry| matches!(entry, Entry::Prompt { .. })).nth(number)
+    }
+
+    /// How many messages the user has sent.
+    pub fn prompt_count(&self) -> usize {
+        self.entries.iter().filter(|entry| matches!(entry, Entry::Prompt { .. })).count()
+    }
+
+    /// Takes away the offer to undo a rewind: a run is starting, which writes to the chat.
+    /// Whether there was one.
+    pub fn forget_rewind(&mut self) -> bool {
+        if matches!(self.entries.last(), Some(Entry::Rewound { .. })) {
+            self.entries.pop();
+            return true;
+        }
+        false
+    }
+
     /// The chat woke to tell the model what its background tasks reported.
     pub fn wake(&mut self, now: u64) {
         self.close_turn(None);
@@ -651,7 +697,7 @@ impl Conversation {
     fn begin(&mut self, text: &str, steered: bool, at: Option<u64>, live: bool, command: Option<CommandUse>, pictures: Vec<Picture>) {
         // A Chat chat's message ends in the chats it referenced with `@`: the words keep their
         // `@"Name"`, and the section is the model's, not the transcript's.
-        let (words, _) = wack_core::chat_refs::split(text);
+        let (words, refs) = wack_core::chat_refs::split(text);
         let text = words.as_str();
         // A turn left waiting after news, which nothing answered, is not shown.
         if let Some(Entry::Turn(turn)) = self.entries.last()
@@ -681,7 +727,7 @@ impl Conversation {
             self.started.insert(started.id.clone());
             self.suggestion_view.queued.remove(&started.id);
         }
-        self.entries.push(Entry::Prompt { text, steered, command, suggestion, pictures, files });
+        self.entries.push(Entry::Prompt { text, steered, command, suggestion, pictures, files, refs });
         let mut turn = Turn::new(at, live);
         turn.notices = std::mem::take(&mut self.held_notices);
         self.entries.push(Entry::Turn(turn));
@@ -853,7 +899,7 @@ fn mid_turn_compaction(history: &[HistoryEntry], after: usize) -> bool {
                 return message.role == Role::Assistant
                     || message.content.iter().any(|block| matches!(block, Block::ToolResult { .. }));
             }
-            HistoryEntry::Note { .. } => return false,
+            HistoryEntry::Note { .. } | HistoryEntry::Rewound { .. } => return false,
         }
     }
     false
@@ -864,6 +910,75 @@ mod tests {
     use serde_json::json;
 
     use super::*;
+
+    /// A chat's file, written line by line as a run writes it.
+    fn session_file(folder: &std::path::Path, lines: &[serde_json::Value]) -> std::path::PathBuf {
+        let path = folder.join("chat.jsonl");
+        let mut text = json!({ "type": "meta", "version": 1, "cwd": folder, "created": 0 }).to_string();
+        for line in lines {
+            text.push('\n');
+            text.push_str(&line.to_string());
+        }
+        text.push('\n');
+        std::fs::write(&path, text).unwrap();
+        path
+    }
+
+    fn said(role: &str, content: serde_json::Value) -> serde_json::Value {
+        json!({ "type": "message", "message": { "role": role, "content": content } })
+    }
+
+    #[test]
+    fn messages_are_numbered_as_the_session_counts_them_so_a_rewind_lands_on_the_one_shown() {
+        let folder = tempfile::tempdir().unwrap();
+        let text = |text: &str| json!([{ "type": "text", "text": text }]);
+        let path = session_file(
+            folder.path(),
+            &[
+                json!({ "type": "checkpoint", "tree": "a".repeat(40) }),
+                said("user", text("one")),
+                said("assistant", json!([{ "type": "tool_use", "id": "t1", "name": "bash", "input": { "command": "make" } }])),
+                said("user", json!([{ "type": "tool_result", "tool_use_id": "t1", "content": "ok", "is_error": false }])),
+                // Steered in while the agent worked.
+                said("user", text("steered")),
+                said("assistant", text("done")),
+                json!({ "type": "message", "message": { "role": "user", "content": [{ "type": "text", "text": "Plan rules" }] }, "note": "contract:plan" }),
+                said("user", text("two")),
+                said("assistant", text("more")),
+                said("user", text("three")),
+            ],
+        );
+        let conversation = Conversation::from_history(&wack_core::history(&path).unwrap());
+        assert_eq!(conversation.prompt_count(), 4);
+        let numbered: Vec<(usize, String)> = conversation
+            .entries
+            .iter()
+            .enumerate()
+            .filter_map(|(index, entry)| match entry {
+                Entry::Prompt { text, .. } => Some((conversation.prompt_number(index), text.clone())),
+                _ => None,
+            })
+            .collect();
+        assert_eq!(numbered, [(0, "one".into()), (1, "steered".into()), (2, "two".into()), (3, "three".into())]);
+
+        // Rewinding message 2 leaves messages 0 and 1, and offers its undo last.
+        wack_core::rewind::rewind(&path, 2, None).unwrap();
+        let mut conversation = Conversation::from_history(&wack_core::history(&path).unwrap());
+        assert_eq!(conversation.prompt_count(), 2);
+        assert!(matches!(conversation.prompt(1), Some(Entry::Prompt { text, .. }) if text == "steered"));
+        assert_eq!(conversation.entries.last(), Some(&Entry::Rewound { files: false }));
+        assert!(conversation.forget_rewind());
+        assert!(!matches!(conversation.entries.last(), Some(Entry::Rewound { .. })));
+
+        // Rewinding the message sent while the agent worked keeps the turn up to it.
+        wack_core::rewind::rewind(&path, 1, None).unwrap();
+        let conversation = Conversation::from_history(&wack_core::history(&path).unwrap());
+        assert_eq!(conversation.prompt_count(), 1);
+        let Some(Entry::Turn(turn)) = conversation.entries.iter().rev().find(|entry| matches!(entry, Entry::Turn(_))) else {
+            panic!("the first turn stays");
+        };
+        assert!(turn.steps.iter().any(|step| matches!(step, Step::Tool(tool) if tool.name == "bash")));
+    }
 
     #[test]
     fn a_notice_at_the_end_of_a_run_keeps_the_reply() {

@@ -592,6 +592,50 @@ pub fn finished_turn() -> Vec<Item> {
     items(&conversation, &["turn-1", "edit-1"], START + 30_000)
 }
 
+/// The finished chat with a short second turn after it: two messages of the user's, to edit,
+/// rewind or retry.
+pub fn two_turns() -> Vec<Item> {
+    let mut conversation = Conversation::default();
+    two_turns_conversation(&mut conversation);
+    items(&conversation, &[], START + 90_000)
+}
+
+fn two_turns_conversation(conversation: &mut Conversation) {
+    finished(conversation);
+    let now = START + 60_000;
+    conversation.send("Now add a test for a stream that ends mid-line, with no newline at all.", now);
+    call(conversation, "edit-2", "edit", json!({ "path": "crates/wack-llm/src/sse.rs", "edits": [{ "old_text": "a", "new_text": "b" }] }), Some("Edited."), now);
+    conversation.apply(&Event::Text("Added `a_stream_cut_mid_line_keeps_its_last_event`; the six SSE tests pass.".into()), now);
+    conversation.apply(&Event::Reply { usage: None }, now);
+    conversation.finish(&Ok(Outcome::Done), now + 9_000);
+}
+
+/// Two turns, then a rewind to before the second message: its row offers Undo.
+pub fn rewound_turns() -> Vec<Item> {
+    let mut items = finished_turn();
+    items.push(Item::Rewound { files: true });
+    items
+}
+
+/// What the rewind card found before the second message: three files changed since, two of
+/// them ticked to go back.
+pub fn rewind_card(purpose: crate::rewind::Purpose, changes: bool) -> crate::rewind::Card {
+    use wack_core::checkpoints::{Action, Change};
+    let mut card = crate::rewind::Card::new(1, purpose);
+    let changes = if changes {
+        vec![
+            Change { path: "crates/wack-llm/src/sse.rs".into(), action: Action::Revert },
+            Change { path: "crates/wack-llm/tests/sse_tail.rs".into(), action: Action::Delete },
+            Change { path: "notes/decoder.md".into(), action: Action::Recreate },
+        ]
+    } else {
+        Vec::new()
+    };
+    card.found(wack_core::rewind::Preview { checkpoint: Some("a".repeat(40)), changes, problem: None });
+    card.ticked.remove("notes/decoder.md");
+    card
+}
+
 /// The same chat with a second turn under way.
 pub fn working_turn() -> Vec<Item> {
     let mut conversation = Conversation::default();

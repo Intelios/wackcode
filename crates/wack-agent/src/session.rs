@@ -1,9 +1,22 @@
 //! A chat's history on disk: one append-only JSON-lines file.
 //!
 //! Every line is written whole and flushed, so the worst a crash can leave is a cut-off last
-//! line, which opening drops. History is linear: there is no branching, rewinding or editing, so
-//! the file is only ever appended to. A compaction is one more line; what came before it stays in
-//! the file but is no longer sent to the model.
+//! line, which opening drops. The file is only ever appended to. A compaction is one more line;
+//! what came before it stays in the file but is no longer sent to the model.
+//!
+//! The user can take the conversation back to just before one of their messages (rewinding,
+//! which editing and retrying a message also do). That is one more line too, saying how much of
+//! the conversation still stands ([`rewind`]): reading the file replays every line and drops what
+//! a rewind took away, so a rewound conversation reads exactly as it did before that message.
+//! Until anything else is written, the rewind can be undone ([`unrewind`]). There are no
+//! branches: what a rewind took away is gone once the conversation carries on.
+//!
+//! The user's messages are found by counting ([`is_prompt`]): the transcript counts the same
+//! messages the same way, so "the third message" means one message to both.
+//!
+//! Before each message the user sends, a run notes where the chat's files stood
+//! ([`Session::checkpoint`], a tree in `wack_core::checkpoints`' store), so a rewind can put the
+//! files back too.
 //!
 //! Two kinds of line belong to features rather than the conversation:
 //! - A **note** is a message the app wrote for the model (a mode contract). It is sent as a
@@ -77,6 +90,144 @@ enum Entry {
         key: String,
         value: Value,
     },
+    /// The chat's files as they stood before the user's next message: a tree in the chat's
+    /// checkpoint store.
+    Checkpoint {
+        tree: String,
+    },
+    /// The user took the conversation back: of the lines that stood, only the first `keep`
+    /// still do. `files` puts back the files the rewind restored, when it restored any.
+    Rewind {
+        keep: usize,
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        files: Option<FilesUndo>,
+    },
+    /// Undoes the rewind on the line before it.
+    Unrewind,
+}
+
+/// How to undo the files a rewind put back: the tree they stood at just before, and which of
+/// them it changed.
+#[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
+pub struct FilesUndo {
+    pub tree: String,
+    pub paths: Vec<String>,
+}
+
+/// The lines that still stand after every rewind, in order, without the meta line; and, when
+/// the file's last line is a rewind, what it took away and how to put its files back.
+struct Standing {
+    entries: Vec<Entry>,
+    last_rewind: Option<(Vec<Entry>, Option<FilesUndo>)>,
+}
+
+fn standing(lines: impl IntoIterator<Item = Entry>) -> Standing {
+    let mut entries = Vec::new();
+    let mut last_rewind = None;
+    for line in lines {
+        match line {
+            Entry::Meta { .. } => {}
+            Entry::Rewind { keep, files } => {
+                let gone = entries.split_off(keep.min(entries.len()));
+                last_rewind = Some((gone, files));
+            }
+            Entry::Unrewind => {
+                if let Some((gone, _)) = last_rewind.take() {
+                    entries.extend(gone);
+                }
+            }
+            line => {
+                last_rewind = None;
+                entries.push(line);
+            }
+        }
+    }
+    Standing { entries, last_rewind }
+}
+
+/// Whether a line is one of the user's messages, as the transcript counts them: a user message
+/// the app did not write, holding no tool results or, beside them, words sent while the agent
+/// worked.
+fn is_prompt(entry: &Entry) -> bool {
+    let Entry::Message { message, note: None, .. } = entry else {
+        return false;
+    };
+    if message.role != Role::User {
+        return false;
+    }
+    let results = message.content.iter().any(|block| matches!(block, Block::ToolResult { .. }));
+    !results || !message.text().trim().is_empty()
+}
+
+/// Where the user's `prompt`-th message (from 0) stands among the lines that stand.
+fn prompt_position(entries: &[Entry], prompt: usize) -> Result<usize, String> {
+    entries
+        .iter()
+        .enumerate()
+        .filter(|(_, entry)| is_prompt(entry))
+        .nth(prompt)
+        .map(|(index, _)| index)
+        .ok_or_else(|| "That message is no longer in the chat.".to_string())
+}
+
+/// Every complete line of a chat's file, parsed, and how many bytes they take.
+fn read_lines(path: &Path) -> Result<(Vec<Entry>, usize), String> {
+    let bytes = std::fs::read(path).map_err(|error| format!("Could not read the chat: {error}"))?;
+    // A line that never got its newline was cut off mid-write.
+    let complete = bytes.iter().rposition(|byte| *byte == b'\n').map_or(0, |index| index + 1);
+    let entries = String::from_utf8_lossy(&bytes[..complete])
+        .lines()
+        .filter_map(|line| serde_json::from_str::<Entry>(line).ok())
+        .collect();
+    Ok((entries, complete))
+}
+
+/// Appends one line to a chat's file outside a run, dropping a cut-off last line first.
+fn append_line(path: &Path, complete: usize, entry: &Entry) -> Result<(), String> {
+    let mut file = OpenOptions::new().append(true).open(path).map_err(|error| format!("Could not open the chat: {error}"))?;
+    file.set_len(complete as u64).map_err(|error| format!("Could not repair the chat: {error}"))?;
+    let mut line = serde_json::to_vec(entry).map_err(|error| format!("Could not save the chat: {error}"))?;
+    line.push(b'\n');
+    file.write_all(&line).and_then(|()| file.flush()).map_err(|error| format!("Could not save the chat: {error}"))
+}
+
+/// The checkpoint taken just before the user's `prompt`-th message (from 0): the tree of the
+/// chat's files then. `None` when there is none: the message was sent while the agent worked,
+/// or no snapshot could be taken.
+pub fn prompt_checkpoint(path: &Path, prompt: usize) -> Result<Option<String>, String> {
+    let (lines, _) = read_lines(path)?;
+    let entries = standing(lines).entries;
+    let position = prompt_position(&entries, prompt)?;
+    for entry in entries[..position].iter().rev() {
+        match entry {
+            Entry::Checkpoint { tree } => return Ok(Some(tree.clone())),
+            // What the run wrote before the message: its state and notes.
+            Entry::State { .. } | Entry::ToolsLoaded { .. } | Entry::Message { note: Some(_), .. } => {}
+            _ => return Ok(None),
+        }
+    }
+    Ok(None)
+}
+
+/// Takes a chat back to just before the user's `prompt`-th message (from 0). What the app told
+/// the model before it (its notes) stays. `files` undoes the files put back with it, if any.
+/// Call it only while no run holds the file.
+pub fn rewind(path: &Path, prompt: usize, files: Option<FilesUndo>) -> Result<(), String> {
+    let (lines, complete) = read_lines(path)?;
+    let entries = standing(lines).entries;
+    let keep = prompt_position(&entries, prompt)?;
+    append_line(path, complete, &Entry::Rewind { keep, files })
+}
+
+/// Undoes the chat's last rewind, while it is still the file's last line, and returns how to put
+/// back the files it restored. Call it only while no run holds the file.
+pub fn unrewind(path: &Path) -> Result<Option<FilesUndo>, String> {
+    let (lines, complete) = read_lines(path)?;
+    let Some((_, files)) = standing(lines).last_rewind else {
+        return Err("The chat has moved on since the rewind, so it can't be undone.".to_string());
+    };
+    append_line(path, complete, &Entry::Unrewind)?;
+    Ok(files)
 }
 
 /// A message the app writes for the model. `tag` says what it is ("contract:plan"), so a feature
@@ -145,14 +296,15 @@ impl Session {
             file.set_len(complete as u64).map_err(|error| format!("Could not repair the session file: {error}"))?;
         }
 
-        let mut entries = String::from_utf8_lossy(&bytes[..complete])
+        let mut lines = String::from_utf8_lossy(&bytes[..complete])
             .lines()
             .filter_map(|line| serde_json::from_str::<Entry>(line).ok())
             .collect::<Vec<_>>()
             .into_iter();
-        let Some(Entry::Meta { version, cwd, .. }) = entries.next() else {
+        let Some(Entry::Meta { version, cwd, .. }) = lines.next() else {
             return Err("This file is not a WackCode session.".to_string());
         };
+        let entries = standing(lines).entries;
         if version > VERSION {
             return Err("This session was written by a newer version of WackCode.".to_string());
         }
@@ -175,6 +327,7 @@ impl Session {
                 Entry::Compaction { summary, keep, .. } => session.apply_compaction(summary, keep),
                 Entry::ToolsLoaded { names } => session.loaded.extend(names),
                 Entry::State { key, value } => session.remember_state(key, value),
+                Entry::Checkpoint { .. } | Entry::Rewind { .. } | Entry::Unrewind => {}
             }
         }
         session.repair()?;
@@ -345,6 +498,12 @@ impl Session {
         Ok((tokens_before, tokens_after))
     }
 
+    /// Notes where the chat's files stand before the user's next message: `tree`, a snapshot in
+    /// the chat's checkpoint store.
+    pub fn checkpoint(&mut self, tree: &str) -> Result<(), String> {
+        self.append(&Entry::Checkpoint { tree: tree.to_string() })
+    }
+
     /// Records a deferred tool as found. Returns false if it already was.
     pub fn load_tool(&mut self, name: &str) -> Result<bool, String> {
         if self.loaded.iter().any(|loaded| loaded == name) {
@@ -407,26 +566,32 @@ pub enum HistoryEntry {
     Note { tag: String, text: String, at: Option<u64> },
     /// A feature saved its state here.
     State { key: String, value: Value },
+    /// Always last: the user has just rewound the conversation, and nothing has been written
+    /// since, so it can be undone ([`unrewind`]). `files`: the rewind put files back too.
+    Rewound { files: bool },
 }
 
-/// Reads a whole chat for display. Read-only: unlike [`Session::open`] it repairs nothing, so it
-/// is safe while a run is writing to the same file.
+/// Reads a whole chat for display, as it stands after any rewinds. Read-only: unlike
+/// [`Session::open`] it repairs nothing, so it is safe while a run is writing to the same file.
 pub fn history(path: &Path) -> Result<Vec<HistoryEntry>, String> {
-    let bytes = std::fs::read(path).map_err(|error| format!("Could not read the chat: {error}"))?;
-    let complete = bytes.iter().rposition(|byte| *byte == b'\n').map_or(0, |index| index + 1);
+    let (lines, _) = read_lines(path)?;
+    let Standing { entries: lines, last_rewind } = standing(lines);
     let mut entries = Vec::new();
-    for line in String::from_utf8_lossy(&bytes[..complete]).lines() {
-        match serde_json::from_str::<Entry>(line) {
-            Ok(Entry::Message { note: Some(tag), message, at, .. }) => entries.push(HistoryEntry::Note { tag, text: message.text(), at }),
-            Ok(Entry::Message { message, usage, at, note: None, command, thought_ms }) => {
+    for line in lines {
+        match line {
+            Entry::Message { note: Some(tag), message, at, .. } => entries.push(HistoryEntry::Note { tag, text: message.text(), at }),
+            Entry::Message { message, usage, at, note: None, command, thought_ms } => {
                 entries.push(HistoryEntry::Message { message, usage, at, command, thought_ms })
             }
-            Ok(Entry::Compaction { summary, tokens_before, tokens_after, .. }) => {
+            Entry::Compaction { summary, tokens_before, tokens_after, .. } => {
                 entries.push(HistoryEntry::Compacted { summary, tokens_before, tokens_after });
             }
-            Ok(Entry::State { key, value }) => entries.push(HistoryEntry::State { key, value }),
-            Ok(Entry::Meta { .. } | Entry::ToolsLoaded { .. }) | Err(_) => {}
+            Entry::State { key, value } => entries.push(HistoryEntry::State { key, value }),
+            Entry::Meta { .. } | Entry::ToolsLoaded { .. } | Entry::Checkpoint { .. } | Entry::Rewind { .. } | Entry::Unrewind => {}
         }
+    }
+    if let Some((_, files)) = last_rewind {
+        entries.push(HistoryEntry::Rewound { files: files.is_some() });
     }
     Ok(entries)
 }
@@ -579,6 +744,7 @@ mod tests {
                 HistoryEntry::Compacted { .. } => "compacted".to_string(),
                 HistoryEntry::Note { tag, .. } => format!("note {tag}"),
                 HistoryEntry::State { key, .. } => format!("state {key}"),
+                HistoryEntry::Rewound { .. } => "rewound".to_string(),
             })
             .collect();
         assert_eq!(kinds, ["note contract:plan", "message one", "state todo", "state todo", "compacted", "note contract:normal"]);
@@ -606,6 +772,97 @@ mod tests {
         let block: Block = serde_json::from_str(old).unwrap();
         assert_eq!(block, Block::ToolResult { tool_use_id: "t1".into(), content: "ok".into(), is_error: false, images: Vec::new() });
         assert_eq!(serde_json::to_string(&block).unwrap(), old);
+    }
+
+    fn texts(path: &Path) -> Vec<String> {
+        Session::open(path).unwrap().messages().iter().map(Message::text).collect()
+    }
+
+    fn reply(text: &str) -> Message {
+        Message { role: Role::Assistant, content: vec![Block::Text { text: text.into() }] }
+    }
+
+    #[test]
+    fn a_rewind_takes_the_chat_back_to_before_a_message_and_can_be_undone() {
+        let folder = tempfile::tempdir().unwrap();
+        let path = folder.path().join("chat.jsonl");
+        let mut session = Session::create(&path, folder.path()).unwrap();
+        session.checkpoint("tree-one").unwrap();
+        session.push(Message::user("one"), None).unwrap();
+        session.push(reply("first"), None).unwrap();
+        session.checkpoint("tree-two").unwrap();
+        session.push_note(Note { tag: "contract:plan".into(), text: "Plan rules".into() }).unwrap();
+        assert!(session.set_state("todo", json!({ "tasks": [2] })).unwrap());
+        session.push(Message::user("two"), None).unwrap();
+        session.push(tool_call(), None).unwrap();
+        let result = Message { role: Role::User, content: vec![Block::ToolResult { tool_use_id: "t1".into(), content: "ok".into(), is_error: false, images: Vec::new() }] };
+        session.push(result, None).unwrap();
+        // Words sent while the agent worked count as a message of the user's.
+        session.push(Message::user("steered"), None).unwrap();
+        session.push(reply("second"), None).unwrap();
+        drop(session);
+
+        assert_eq!(prompt_checkpoint(&path, 0).unwrap().as_deref(), Some("tree-one"));
+        assert_eq!(prompt_checkpoint(&path, 1).unwrap().as_deref(), Some("tree-two"), "past the run's note and state");
+        assert_eq!(prompt_checkpoint(&path, 2).unwrap(), None, "steered in mid-run: no snapshot");
+        assert!(prompt_checkpoint(&path, 3).is_err());
+
+        let undo = FilesUndo { tree: "before-rewind".into(), paths: vec!["a.txt".into()] };
+        rewind(&path, 1, Some(undo.clone())).unwrap();
+        // What the app told the model before the message stays; the message and after go.
+        assert_eq!(texts(&path), ["one", "first", "Plan rules"]);
+        assert!(matches!(history(&path).unwrap().last(), Some(HistoryEntry::Rewound { files: true })));
+        assert_eq!(Session::open(&path).unwrap().state("todo"), Some(&json!({ "tasks": [2] })));
+
+        assert_eq!(unrewind(&path).unwrap(), Some(undo));
+        assert_eq!(texts(&path).len(), 8);
+        assert!(!history(&path).unwrap().iter().any(|entry| matches!(entry, HistoryEntry::Rewound { .. })));
+        assert!(unrewind(&path).is_err(), "an undone rewind can't be undone again");
+
+        // Rewound to the first message, then the chat carries on: the rewind is final.
+        rewind(&path, 0, None).unwrap();
+        assert!(texts(&path).is_empty());
+        let mut session = Session::open(&path).unwrap();
+        session.push(Message::user("again"), None).unwrap();
+        drop(session);
+        assert_eq!(texts(&path), ["again"]);
+        assert!(unrewind(&path).is_err());
+        assert!(!history(&path).unwrap().iter().any(|entry| matches!(entry, HistoryEntry::Rewound { .. })));
+    }
+
+    #[test]
+    fn a_rewind_past_a_compaction_brings_the_whole_conversation_back() {
+        let folder = tempfile::tempdir().unwrap();
+        let path = folder.path().join("chat.jsonl");
+        let mut session = Session::create(&path, folder.path()).unwrap();
+        for text in ["one", "two", "three"] {
+            session.push(Message::user(text), None).unwrap();
+        }
+        session.compact(Summary { body: "so far".into(), ..Summary::default() }, 1).unwrap();
+        session.push(Message::user("four"), None).unwrap();
+        drop(session);
+        assert!(texts(&path)[0].contains("so far"));
+        // The rewind counts messages as the user saw them, compaction or not.
+        rewind(&path, 3, None).unwrap();
+        assert!(texts(&path)[0].contains("so far"), "before \"four\" the summary still stands");
+        rewind(&path, 1, None).unwrap();
+        assert_eq!(texts(&path), ["one"]);
+        assert_eq!(Session::open(&path).unwrap().summary(), None);
+    }
+
+    #[test]
+    fn a_rewind_after_a_cut_off_line_still_reads() {
+        let folder = tempfile::tempdir().unwrap();
+        let path = folder.path().join("chat.jsonl");
+        let mut session = Session::create(&path, folder.path()).unwrap();
+        session.push(Message::user("one"), None).unwrap();
+        session.push(reply("hi"), None).unwrap();
+        drop(session);
+        OpenOptions::new().append(true).open(&path).unwrap().write_all(b"{\"type\":\"mess").unwrap();
+        rewind(&path, 0, None).unwrap();
+        let text = std::fs::read_to_string(&path).unwrap();
+        assert!(text.lines().all(|line| serde_json::from_str::<Entry>(line).is_ok()));
+        assert!(texts(&path).is_empty());
     }
 
     #[test]

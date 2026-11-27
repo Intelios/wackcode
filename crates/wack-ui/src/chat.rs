@@ -24,6 +24,9 @@
 //!   spends tokens. A report waiting for the model is [`ChatEvent::AgentsNews`].
 //! - A question the agent asks (`asking`) is answered exactly once: answering, cancelling,
 //!   stopping or the run ending all clear it. Its drafts live here, so switching chats keeps them.
+//! - The message being edited (`editing`) and the card asking what a rewind does (`rewind_card`)
+//!   live here too. While a rewind is under way (`rewinding`) nothing may run: the engine is
+//!   writing the chat's file. After it the conversation is read again from the file (`reload`).
 
 use std::{
     collections::HashSet,
@@ -178,11 +181,39 @@ pub struct ChatSession {
     /// The chat's computer use, which outlives its runs: a Code chat's only
     /// (`AppState::ensure_session`).
     pub computer: Option<wack_computer::computer::ChatComputer>,
+    /// The user's message being edited in place.
+    pub editing: Option<Editing>,
+    /// The card under a message asking what a rewind, an edit or a retry does.
+    pub rewind_card: Option<crate::rewind::Card>,
+    /// What an edit or retry will send once the chat is rewound, resolved when it was asked for.
+    pub resend: Option<Job>,
+    /// A rewind is under way: the engine is writing the chat's file, so nothing may run.
+    pub rewinding: bool,
+    /// The words a rewind put back in the composer, which undoing it takes away again.
+    pub rewound_words: Option<String>,
     /// The access card's app icon, decoded once per card: (card id, picture).
     computer_icon: Option<(u64, Option<std::sync::Arc<gpui::RenderImage>>)>,
     /// Why the card's last Always allow or Never allow couldn't be saved.
     pub computer_error: Option<(u64, SharedString)>,
     _computer_watch: Option<Task<()>>,
+}
+
+/// The user's message being edited in place: its number (from 0) and the field holding its
+/// words.
+pub struct Editing {
+    pub number: usize,
+    pub field: Entity<TextField>,
+    pub _subscriptions: Vec<Subscription>,
+}
+
+/// A copy of one of the user's messages, for sending it again.
+#[derive(Clone, Debug)]
+pub struct SentPrompt {
+    /// The words as the user wrote them: a slash command as typed.
+    pub words: String,
+    pub pictures: Vec<crate::pictures::Picture>,
+    pub files: Vec<crate::attachments::FileAttachment>,
+    pub refs: Vec<wack_core::chat_refs::ChatRef>,
 }
 
 /// A question the agent is waiting on, and the answers so far.
@@ -328,6 +359,11 @@ impl ChatSession {
             computer_icon: None,
             computer_error: None,
             _computer_watch: None,
+            editing: None,
+            rewind_card: None,
+            resend: None,
+            rewinding: false,
+            rewound_words: None,
         };
         chat.conversation.agents = chat.agent_rows();
         chat.refresh_from(0);
@@ -437,11 +473,19 @@ impl ChatSession {
         self.run.as_ref().is_some_and(|run| run.compacting)
     }
 
-    /// Starts a run: the user's message, or a compaction.
+    /// Starts a run: the user's message, or a compaction. Never while a rewind writes the
+    /// chat's file (the app refuses first, saying why).
     pub fn start(&mut self, setup: RunSetup, job: Job, cx: &mut Context<Self>) {
-        if self.run.is_some() {
+        if self.run.is_some() || self.rewinding {
             return;
         }
+        // A run writes to the chat, so the rewind before it can no longer be undone, and the
+        // message being edited or asked about stays as it was.
+        self.conversation.forget_rewind();
+        self.rewound_words = None;
+        self.editing = None;
+        self.rewind_card = None;
+        self.resend = None;
         let from = self.conversation.entries.len();
         let compacting = matches!(job, Job::Compact(_));
         let started_before = self.conversation.started.len();
@@ -763,6 +807,66 @@ impl ChatSession {
             Some(at) => self.queued_pictures.remove(at).1,
             None => Vec::new(),
         }
+    }
+
+    /// The file the chat is saved in.
+    pub fn session_path(&self) -> &std::path::Path {
+        &self.session_path
+    }
+
+    /// What the user's messages offer as the transcript draws them.
+    pub fn prompt_view(&self) -> crate::rewind::Prompts {
+        crate::rewind::Prompts {
+            chat: true,
+            idle: self.run.is_none() && !self.rewinding,
+            count: self.conversation.prompt_count(),
+            editing: self.editing.as_ref().map(|editing| (editing.number, editing.field.clone())),
+            card: self.rewind_card.clone(),
+            hovered: None,
+        }
+    }
+
+    /// A copy of the user's `number`-th message (from 0), to send again.
+    pub fn sent_prompt(&self, number: usize) -> Option<SentPrompt> {
+        let Some(Entry::Prompt { text, command, pictures, files, refs, .. }) = self.conversation.prompt(number) else {
+            return None;
+        };
+        Some(SentPrompt {
+            words: command.as_ref().map_or_else(|| text.clone(), |command| command.line()),
+            pictures: pictures.clone(),
+            files: files.clone(),
+            refs: refs.clone(),
+        })
+    }
+
+    /// Redraws the user's `number`-th message, whose height changed (opened for editing, or a
+    /// card under it).
+    pub fn remeasure_prompt(&self, number: usize) {
+        if let Some(index) = self.items.iter().position(|item| matches!(item, Item::Prompt { number: shown, .. } if *shown == number)) {
+            self.list.remeasure_items(index..index + 1);
+        }
+    }
+
+    /// Reads the conversation again from the chat's file, after a rewind changed it. Every item
+    /// is rebuilt; what the user opened stays open where it still exists.
+    pub fn reload(&mut self, cx: &mut Context<Self>) {
+        let history = match wack_core::history(&self.session_path) {
+            Ok(history) => history,
+            Err(message) => {
+                self.show_failure(message, cx);
+                return;
+            }
+        };
+        self.context_tokens = last_context(&history);
+        self.context_parts.clear();
+        let mut conversation = Conversation::from_history(&history);
+        conversation.suggestion_view = std::mem::take(&mut self.conversation.suggestion_view);
+        self.conversation = conversation;
+        self.conversation.agents = self.agent_rows();
+        self.cache = ReplyCache::default();
+        self.refresh_from(0);
+        self.count_changes(cx);
+        cx.notify();
     }
 
     /// Shows a problem in the transcript, such as a run that could not start.
@@ -1379,7 +1483,7 @@ fn last_context(history: &[HistoryEntry]) -> Option<u64> {
         match entry {
             HistoryEntry::Compacted { .. } => return None,
             HistoryEntry::Message { usage: Some(usage), .. } => return Some(usage.context_tokens() + usage.output),
-            HistoryEntry::Message { .. } | HistoryEntry::Note { .. } | HistoryEntry::State { .. } => {}
+            HistoryEntry::Message { .. } | HistoryEntry::Note { .. } | HistoryEntry::State { .. } | HistoryEntry::Rewound { .. } => {}
         }
     }
     None

@@ -282,6 +282,18 @@ actions!(
         RenameChat,
         /// Closes a chat's right-click menu.
         CloseChatMenu,
+        /// Closes a message's right-click menu.
+        ClosePromptMenu,
+        /// Leaves the message being edited as it was (Esc, Cancel).
+        CancelEdit,
+        /// Sends the message being edited (↩, Send): the chat goes back to before it first.
+        SendEdit,
+        /// Closes the card under a message without rewinding.
+        CancelRewind,
+        /// The rewind card's tick for every changed file: all on, or all off.
+        ToggleRewindFiles,
+        /// Undoes the rewind just made, while nothing has run since.
+        UndoRewind,
         /// Esc in a rename field: the chat keeps its name.
         CancelRename,
     ]
@@ -332,6 +344,58 @@ pub struct OpenChat {
 pub struct ChooseTitleModel {
     pub connection: String,
     pub model: String,
+}
+
+/// Turns the user's `number`-th message (from 0) of the chat on screen into a field holding its
+/// words, in place.
+#[derive(Clone, Debug, PartialEq, Action)]
+#[action(namespace = wackcode, no_json)]
+pub struct EditPrompt {
+    pub number: usize,
+}
+
+/// Asks to take the chat on screen back to before the user's `number`-th message (from 0).
+#[derive(Clone, Debug, PartialEq, Action)]
+#[action(namespace = wackcode, no_json)]
+pub struct RewindPrompt {
+    pub number: usize,
+}
+
+/// Sends the user's `number`-th message (from 0) again, as it was: the chat goes back to before
+/// it first.
+#[derive(Clone, Debug, PartialEq, Action)]
+#[action(namespace = wackcode, no_json)]
+pub struct RetryPrompt {
+    pub number: usize,
+}
+
+/// Copies the words of the user's `number`-th message (from 0).
+#[derive(Clone, Debug, PartialEq, Action)]
+#[action(namespace = wackcode, no_json)]
+pub struct CopyPrompt {
+    pub number: usize,
+}
+
+/// Opens a message's right-click menu (`context_menu::prompt_entries`) at the pointer.
+#[derive(Clone, Debug, PartialEq, Action)]
+#[action(namespace = wackcode, no_json)]
+pub struct OpenPromptMenu {
+    pub number: usize,
+    pub position: gpui::Point<gpui::Pixels>,
+}
+
+/// The rewind card's tick for one changed file.
+#[derive(Clone, Debug, PartialEq, Action)]
+#[action(namespace = wackcode, no_json)]
+pub struct ToggleRewindFile {
+    pub path: String,
+}
+
+/// Does what the rewind card asks: with `files`, the ticked files go back as they were too.
+#[derive(Clone, Debug, PartialEq, Action)]
+#[action(namespace = wackcode, no_json)]
+pub struct ConfirmRewind {
+    pub files: bool,
 }
 
 /// Opens a chat's right-click menu (`context_menu::chat_entries`) at the pointer.
@@ -1235,6 +1299,7 @@ pub fn init(cx: &mut App) {
         KeyBinding::new("cmd-,", OpenSettings, Some(CONTEXT)),
         KeyBinding::new("escape", Back, Some(CONTEXT)),
         KeyBinding::new("escape", CancelRename, Some(RENAME_CONTEXT)),
+        KeyBinding::new("escape", CancelEdit, Some(crate::rewind::EDIT_CONTEXT)),
         KeyBinding::new("escape", ClearSearch, Some(SEARCH_CONTEXT)),
         KeyBinding::new("tab", FocusNext, Some(FORM_CONTEXT)),
         KeyBinding::new("shift-tab", FocusPrevious, Some(FORM_CONTEXT)),

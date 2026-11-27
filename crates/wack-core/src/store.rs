@@ -1198,6 +1198,13 @@ impl Store {
         self.folder.join("tasks").join(&chat.id)
     }
 
+    /// A chat's checkpoint store (`v3/checkpoints/<chat>/`): snapshots of its folder before
+    /// each of the user's messages, which no folder holding WackCode's data may be.
+    pub fn checkpoints(&self, chat: &Chat) -> crate::checkpoints::Checkpoints {
+        let data = self.folder.parent().unwrap_or(&self.folder).to_path_buf();
+        crate::checkpoints::Checkpoints::new(self.folder.join("checkpoints").join(&chat.id), data)
+    }
+
     /// Where a chat's canvases live (`v3/canvases/<chat>/`), removed with the chat.
     pub fn canvases_folder(&self, chat: &Chat) -> PathBuf {
         self.folder.join("canvases").join(&chat.id)
@@ -1535,7 +1542,8 @@ impl Store {
         self.save()
     }
 
-    /// Deletes a chat, its conversation file, its sub-agents' sessions and its canvases.
+    /// Deletes a chat, its conversation file, its sub-agents' sessions, its canvases and its
+    /// checkpoints.
     pub fn delete_chat(&mut self, id: &str) -> Result<(), String> {
         let Some(chat) = self.chat(id).cloned() else {
             return Ok(());
@@ -1544,6 +1552,7 @@ impl Store {
         self.save()?;
         let _ = fs::remove_dir_all(self.tasks_folder(&chat));
         let _ = fs::remove_dir_all(self.canvases_folder(&chat));
+        let _ = fs::remove_dir_all(self.folder.join("checkpoints").join(&chat.id));
         let _ = fs::remove_dir_all(wack_agent::agents::children_folder(&self.session_path(&chat)));
         if chat.is_chat_area() {
             let _ = fs::remove_dir_all(self.scratch_folder(&chat));

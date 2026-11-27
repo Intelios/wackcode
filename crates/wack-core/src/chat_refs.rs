@@ -313,7 +313,7 @@ pub fn render(chat: &Readable, entries: &[HistoryEntry], tools: bool) -> String 
                     blocks.push(format!("## Assistant\n\n{}", if body.is_empty() { "[no text]".into() } else { body }));
                 }
             },
-            HistoryEntry::Note { .. } | HistoryEntry::State { .. } => {}
+            HistoryEntry::Note { .. } | HistoryEntry::State { .. } | HistoryEntry::Rewound { .. } => {}
         }
     }
     let mut header = vec![format!("# Chat: {}", chat.name)];

@@ -20,6 +20,8 @@ pub enum Icon {
     ArrowRight,
     /// Reload a page.
     Reload,
+    /// Take a chat back to before a message: the reload arrow turning the other way.
+    Rewind,
     /// A web page.
     Globe,
     /// The agent's pointer, and taking control of a page from it.
@@ -122,6 +124,7 @@ const FILES: &[(&str, &[u8])] = &[
     ("icons/arrow-left.svg", include_bytes!("../assets/icons/arrow-left.svg")),
     ("icons/arrow-right.svg", include_bytes!("../assets/icons/arrow-right.svg")),
     ("icons/reload.svg", include_bytes!("../assets/icons/reload.svg")),
+    ("icons/rewind.svg", include_bytes!("../assets/icons/rewind.svg")),
     ("icons/globe.svg", include_bytes!("../assets/icons/globe.svg")),
     ("icons/cursor.svg", include_bytes!("../assets/icons/cursor.svg")),
     ("icons/phone.svg", include_bytes!("../assets/icons/phone.svg")),
@@ -177,6 +180,7 @@ impl Icon {
             Icon::ArrowLeft => "icons/arrow-left.svg",
             Icon::ArrowRight => "icons/arrow-right.svg",
             Icon::Reload => "icons/reload.svg",
+            Icon::Rewind => "icons/rewind.svg",
             Icon::Globe => "icons/globe.svg",
             Icon::Cursor => "icons/cursor.svg",
             Icon::Phone => "icons/phone.svg",
@@ -275,6 +279,7 @@ mod tests {
             Icon::ArrowLeft,
             Icon::ArrowRight,
             Icon::Reload,
+            Icon::Rewind,
             Icon::Globe,
             Icon::Cursor,
             Icon::Phone,

@@ -52,7 +52,7 @@ use crate::{
         NewChat, NewChatIn, SelectDraft, CloseDraft, NewTerminal, NewTerminalWith, TogglePaneMenu, ClosePaneMenu, HideSidePanel, ToggleSidePanel, RevealProject, OpenPaneKind, NextTab, OpenEffortMenu, OpenModelMenu, OpenSettings,
         OpenSettingsSection, PinProject, PreviousTab, RemoveConnection, RemovePicture, ShowCommandOutput, ShowPicture, ShuffleBackdrop, ToggleBackdropShuffle, RemoveProject, ResetDockSize,
         PickCommand, RetryWorkspaceFiles, SelectChat, Send, Stop, StopCommand, MoveToBackground, ToggleTasks, ToggleTasksPane, StopTask, ShowTask, ToggleAgentsPane, ShowTeam, ToggleBrowserPane, ToggleCanvasPane, ShowCanvas, WriteInComposer, ShowAgent, StopAgent, ShowChanges, ToggleChanges, ToggleProject, ToggleSidebar, ToggleTerminal, TriggerProjectCommand, Unqueue,
-        ToggleAutoTitles, ToggleTitleModels, ChooseTitleModel, RenameChat, RenameChatAt, CancelRename, ToggleProjectPicker, CloseProjectPicker, ChooseNewChatProject, OpenChatMenu, CloseChatMenu, ChatMenuPick, ChatPick, ToggleModelReasoning, ToggleModelRow, ToggleModelVision, AttachPictures, AttachFiles, AttachTerminalSelection, RemoveAttachment, InsertFile, RemoveFile, SteerQueued, RemoveQueued, OpenPicture, ClosePicture, StepPicture, ZoomPicture,
+        ToggleAutoTitles, ToggleTitleModels, ChooseTitleModel, RenameChat, RenameChatAt, CancelRename, ToggleProjectPicker, CloseProjectPicker, ChooseNewChatProject, OpenChatMenu, CloseChatMenu, ChatMenuPick, ChatPick, OpenPromptMenu, ClosePromptMenu, CopyPrompt, EditPrompt, CancelEdit, SendEdit, RewindPrompt, RetryPrompt, CancelRewind, ToggleRewindFile, ToggleRewindFiles, ConfirmRewind, UndoRewind, ToggleModelReasoning, ToggleModelRow, ToggleModelVision, AttachPictures, AttachFiles, AttachTerminalSelection, RemoveAttachment, InsertFile, RemoveFile, SteerQueued, RemoveQueued, OpenPicture, ClosePicture, StepPicture, ZoomPicture,
         StartSuggestion, DismissSuggestion, CopySuggestion, OpenChat,
         ArchiveChat, ArchiveCurrentChat, ClearSearch, RevealScratchpadFile, DeleteAllArchived, DeleteArchivedChat, ToggleArchived, UnarchiveChat,
         ToggleModelEffort, SwitchSkill, SwitchSkillFolder, RemoveSkillFolder, OpenSkill, CopySkill, ChooseSkillUse, NewSkill, SaveSkill,
@@ -146,6 +146,9 @@ pub struct ProjectInfo {
 pub enum Body {
     /// Fixed items, drawn all at once: for scenes.
     Items(Vec<Item>),
+    /// The same, with the user's messages offering what a chat's do, and one of them being
+    /// edited or asked about: for scenes.
+    Prompted(Vec<Item>, Box<crate::rewind::Prompts>),
     /// A live chat, drawn through GPUI's virtual list.
     Live(Entity<ChatSession>, ListState),
 }
@@ -188,6 +191,7 @@ pub struct Shell {
     scene_sidebar_hidden: bool,
     /// A scene's open chat menu: where, and what it lists.
     scene_chat_menu: Option<(gpui::Point<Pixels>, crate::context_menu::ChatFacts)>,
+    scene_prompt_menu: Option<(gpui::Point<Pixels>, crate::context_menu::PromptFacts)>,
     /// A scene's backdrop; the app's comes from the store.
     scene_backdrop: Option<Picture>,
     _activation: Option<Subscription>,
@@ -264,6 +268,7 @@ impl Shell {
             scene_panes: None,
             scene_sidebar_hidden: false,
             scene_chat_menu: None,
+            scene_prompt_menu: None,
             scene_backdrop: None,
             _activation: Some(activation),
             _bounds: Some(bounds),
@@ -314,6 +319,7 @@ impl Shell {
             scene_panes: None,
             scene_sidebar_hidden: false,
             scene_chat_menu: None,
+            scene_prompt_menu: None,
             scene_backdrop: None,
             _activation: None,
             _bounds: None,
@@ -344,6 +350,11 @@ impl Shell {
     }
 
     /// A scene with a chat's right-click menu open at `position`.
+    pub fn with_prompt_menu(mut self, position: gpui::Point<Pixels>, facts: crate::context_menu::PromptFacts) -> Self {
+        self.scene_prompt_menu = Some((position, facts));
+        self
+    }
+
     pub fn with_chat_menu(mut self, position: gpui::Point<Pixels>, facts: crate::context_menu::ChatFacts) -> Self {
         self.scene_chat_menu = Some((position, facts));
         self
@@ -995,6 +1006,14 @@ impl Render for Shell {
         .map(|(position, facts)| {
             crate::context_menu::menu("chat-menu", position, crate::context_menu::chat_entries(&facts), Box::new(CloseChatMenu), window.viewport_size(), &theme)
         });
+        // A message's right-click menu, over everything too.
+        let prompt_menu = match &self.source {
+            Source::Live(app) => app.read(cx).prompt_menu_facts(cx),
+            _ => self.scene_prompt_menu,
+        }
+        .map(|(position, facts)| {
+            crate::context_menu::menu("prompt-menu", position, crate::context_menu::prompt_entries(&facts), Box::new(ClosePromptMenu), window.viewport_size(), &theme)
+        });
         // An area hop: Chat sits to the right of Code on the switch, so its page comes in from the
         // right and Code's from the left. Nothing moves at launch.
         if self.area.is_some_and(|last| last != sidebar_data.area) {
@@ -1434,6 +1453,41 @@ impl Render for Shell {
                     shell.with_app(cx, |app, cx| app.open_chat_menu(menu, cx));
                 }))
                 .on_action(cx.listener(|shell, _: &CloseChatMenu, _, cx| shell.with_app(cx, |app, cx| app.close_chat_menu(cx))))
+                // The user's messages: their menu, editing, rewinding and retrying (`rewind.rs`).
+                .on_action(cx.listener(|shell, action: &OpenPromptMenu, _, cx| {
+                    let (number, position) = (action.number, action.position);
+                    shell.with_app(cx, |app, cx| app.open_prompt_menu(number, position, cx));
+                }))
+                .on_action(cx.listener(|shell, _: &ClosePromptMenu, _, cx| shell.with_app(cx, |app, cx| app.close_prompt_menu(cx))))
+                .on_action(cx.listener(|shell, action: &CopyPrompt, _, cx| {
+                    let number = action.number;
+                    shell.with_app(cx, |app, cx| app.copy_prompt(number, cx));
+                }))
+                .on_action(cx.listener(|shell, action: &EditPrompt, window, cx| {
+                    let number = action.number;
+                    shell.with_app(cx, |app, cx| app.edit_prompt(number, window, cx));
+                }))
+                .on_action(cx.listener(|shell, _: &CancelEdit, window, cx| shell.with_app(cx, |app, cx| app.cancel_edit(window, cx))))
+                .on_action(cx.listener(|shell, _: &SendEdit, _, cx| shell.with_app(cx, |app, cx| app.send_edit(cx))))
+                .on_action(cx.listener(|shell, action: &RewindPrompt, _, cx| {
+                    let number = action.number;
+                    shell.with_app(cx, |app, cx| app.rewind_prompt(number, cx));
+                }))
+                .on_action(cx.listener(|shell, action: &RetryPrompt, _, cx| {
+                    let number = action.number;
+                    shell.with_app(cx, |app, cx| app.retry_prompt(number, cx));
+                }))
+                .on_action(cx.listener(|shell, _: &CancelRewind, _, cx| shell.with_app(cx, |app, cx| app.cancel_rewind(cx))))
+                .on_action(cx.listener(|shell, action: &ToggleRewindFile, _, cx| {
+                    let path = action.path.clone();
+                    shell.with_app(cx, |app, cx| app.toggle_rewind_file(&path, cx));
+                }))
+                .on_action(cx.listener(|shell, _: &ToggleRewindFiles, _, cx| shell.with_app(cx, |app, cx| app.toggle_rewind_files(cx))))
+                .on_action(cx.listener(|shell, action: &ConfirmRewind, _, cx| {
+                    let files = action.files;
+                    shell.with_app(cx, |app, cx| app.confirm_rewind_on_screen(files, cx));
+                }))
+                .on_action(cx.listener(|shell, _: &UndoRewind, _, cx| shell.with_app(cx, |app, cx| app.undo_rewind(cx))))
                 .on_action(cx.listener(|shell, action: &ChatMenuPick, window, cx| {
                     let chat = action.chat.clone();
                     match action.pick {
@@ -2403,6 +2457,7 @@ impl Render for Shell {
                 .child(over)
                 .children(lights)
                 .children(chat_menu)
+                .children(prompt_menu)
                 .children(lightbox.map(|lightbox| crate::pictures::LightboxView { lightbox }))
                 .child(present_mark(crate::browser::end_frame)),
         )
@@ -4139,6 +4194,15 @@ fn chat(
             .pb(DOCK_FADE)
             .child(column(Transcript::new(items), narrow))
             .into_any_element(),
+        Body::Prompted(items, prompts) => div()
+            .size_full()
+            .overflow_hidden()
+            .flex()
+            .flex_col()
+            .justify_end()
+            .pb(DOCK_FADE)
+            .child(column(Transcript::new(items).prompts(*prompts), narrow))
+            .into_any_element(),
         Body::Live(session, list_state) => {
             let state = session.clone();
             let handlers = Handlers {
@@ -4150,6 +4214,7 @@ fn chat(
                     }
                 }),
                 still,
+                prompts: Default::default(),
             };
             list(list_state, move |index, _, cx| {
                 let theme = Theme::get(cx);
@@ -4159,7 +4224,11 @@ fn chat(
                     return div().into_any_element();
                 };
                 let previous = index.checked_sub(1).and_then(|index| items.get(index));
-                column(transcript::item(current, previous, theme, &handlers), narrow).into_any_element()
+                let handlers = match current {
+                    transcript::Item::Prompt { .. } => &Handlers { prompts: chat.prompt_view(), ..handlers.clone() },
+                    _ => &handlers,
+                };
+                column(transcript::item(current, previous, theme, handlers), narrow).into_any_element()
             })
             .size_full()
             .pt(px(24.))

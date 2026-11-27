@@ -298,6 +298,8 @@ pub struct AppState {
     pub project_picker: bool,
     /// A chat's right-click menu, while open.
     pub chat_menu: Option<ChatMenu>,
+    /// A message's right-click menu, in the chat on screen.
+    pub prompt_menu: Option<PromptMenu>,
     /// The `/` menu, open over one composer.
     pub slash: Option<Slash>,
     /// Where ⎋ closed the menu (whose composer, the word's start): it stays shut for that word.
@@ -345,6 +347,15 @@ pub struct ChatMenu {
     pub chat: String,
     pub position: gpui::Point<gpui::Pixels>,
     pub sidebar: bool,
+}
+
+/// A message's right-click menu: whose chat, which of the user's messages (from 0), and where
+/// the pointer was.
+#[derive(Clone, Debug)]
+pub struct PromptMenu {
+    pub chat: String,
+    pub number: usize,
+    pub position: gpui::Point<gpui::Pixels>,
 }
 
 /// A chat's title being edited where it is shown: in its header or on its sidebar row.
@@ -546,6 +557,7 @@ impl AppState {
             title_error: None,
             renaming: None,
             chat_menu: None,
+            prompt_menu: None,
             project_picker: false,
             _subscriptions: subscriptions,
         };
@@ -3650,6 +3662,10 @@ impl AppState {
             return false;
         }
         let session = self.ensure_session(&chat, cx);
+        if session.read(cx).rewinding {
+            session.update(cx, |session, cx| session.note("Wait a moment: the chat is going back to before a message.".into(), cx));
+            return false;
+        }
         // A message from the user lets task news wake the chat again.
         if matches!(job, Job::Prompt(_) | Job::Command { .. } | Job::Attached { .. }) {
             session.update(cx, |session, _| {
@@ -3722,6 +3738,10 @@ impl AppState {
                 && session.awaiting_plan().is_none()
                 && session.queue.is_empty()
                 && session.asking.is_none()
+                // The user is changing the conversation: the news waits for what they send.
+                && session.editing.is_none()
+                && session.rewind_card.is_none()
+                && !session.rewinding
                 && !session.wake_paused;
             (may, !agents)
         };
@@ -5069,6 +5089,516 @@ pub fn shown_path(path: &Path) -> String {
         },
         None => path.display().to_string(),
     }
+}
+
+// -------------------------------------------------------------------------------------------------
+// Rewinding, editing and retrying the user's messages (`rewind.rs` draws them; the engine's
+// `wack_core::rewind` does the work, off the UI thread)
+
+impl AppState {
+    /// The chat on screen, by id, with its session.
+    fn chat_on_screen(&self) -> Option<(String, Entity<ChatSession>)> {
+        match &self.selection {
+            Selection::Chat(id) => self.sessions.get(id).map(|session| (id.clone(), session.clone())),
+            _ => None,
+        }
+    }
+
+    pub fn open_prompt_menu(&mut self, number: usize, position: gpui::Point<gpui::Pixels>, cx: &mut Context<Self>) {
+        let Some((chat, _)) = self.chat_on_screen() else {
+            return;
+        };
+        self.prompt_menu = Some(PromptMenu { chat, number, position });
+        cx.notify();
+    }
+
+    pub fn close_prompt_menu(&mut self, cx: &mut Context<Self>) {
+        if self.prompt_menu.take().is_some() {
+            cx.notify();
+        }
+    }
+
+    /// The open message menu: where, and what it offers.
+    pub fn prompt_menu_facts(&self, cx: &App) -> Option<(gpui::Point<gpui::Pixels>, crate::context_menu::PromptFacts)> {
+        let menu = self.prompt_menu.as_ref()?;
+        let prompts = self.sessions.get(&menu.chat)?.read(cx).prompt_view();
+        Some((menu.position, crate::context_menu::PromptFacts { number: menu.number, idle: prompts.idle, latest: menu.number + 1 == prompts.count }))
+    }
+
+    /// Copies the words of the user's `number`-th message: a slash command as typed.
+    pub fn copy_prompt(&mut self, number: usize, cx: &mut Context<Self>) {
+        let Some((_, session)) = self.chat_on_screen() else {
+            return;
+        };
+        if let Some(prompt) = session.read(cx).sent_prompt(number) {
+            cx.write_to_clipboard(gpui::ClipboardItem::new_string(prompt.words));
+        }
+    }
+
+    /// Opens the user's `number`-th message for editing, in place of its bubble, with the
+    /// keyboard in it. Only while the chat is idle.
+    pub fn edit_prompt(&mut self, number: usize, window: &mut Window, cx: &mut Context<Self>) {
+        let Some((_, session)) = self.chat_on_screen() else {
+            return;
+        };
+        if !session.read(cx).prompt_view().idle {
+            return;
+        }
+        let Some(prompt) = session.read(cx).sent_prompt(number) else {
+            return;
+        };
+        let field = cx.new(|cx| {
+            let mut field = TextField::new(crate::typography::Type::Body, "Write the message again", cx).multiline(COMPOSER_ROWS);
+            field.set_text(&prompt.words, cx);
+            field
+        });
+        let entered = cx.subscribe(&field, |app, _, event: &TextFieldEvent, cx| {
+            if matches!(event, TextFieldEvent::Enter | TextFieldEvent::SendNow) {
+                app.send_edit(cx);
+            }
+        });
+        let focus = field.read(cx).focus_handle(cx);
+        window.defer(cx, move |window, cx| window.focus(&focus, cx));
+        session.update(cx, |session, cx| {
+            let before = [session.editing.as_ref().map(|editing| editing.number), session.rewind_card.as_ref().map(|card| card.number)];
+            session.rewind_card = None;
+            session.resend = None;
+            session.editing = Some(crate::chat::Editing { number, field, _subscriptions: vec![entered] });
+            for shown in before.into_iter().flatten().chain([number]) {
+                session.remeasure_prompt(shown);
+            }
+            cx.notify();
+        });
+    }
+
+    /// Leaves the message being edited as it was, and gives the composer the keyboard back.
+    pub fn cancel_edit(&mut self, window: &mut Window, cx: &mut Context<Self>) {
+        let Some((_, session)) = self.chat_on_screen() else {
+            return;
+        };
+        let composer = session.update(cx, |session, cx| {
+            let editing = session.editing.take()?;
+            // An edit already asking about its files goes back to editing first.
+            if session.rewind_card.as_ref().is_some_and(|card| card.number == editing.number && !card.working) {
+                session.rewind_card = None;
+                session.resend = None;
+            }
+            session.remeasure_prompt(editing.number);
+            cx.notify();
+            Some(session.composer.read(cx).focus_handle(cx))
+        });
+        if let Some(composer) = composer {
+            window.focus(&composer, cx);
+        }
+    }
+
+    /// Sends the message being edited. What it sends is worked out first, so a message that
+    /// can't be sent leaves the chat as it was; then the chat goes back to before it (asking
+    /// about the files when they changed) and it runs.
+    pub fn send_edit(&mut self, cx: &mut Context<Self>) {
+        let Some((chat, session)) = self.chat_on_screen() else {
+            return;
+        };
+        let Some((number, words)) = session.read(cx).editing.as_ref().map(|editing| (editing.number, editing.field.read(cx).text().trim().to_string())) else {
+            return;
+        };
+        self.resend_prompt(&chat, number, words, crate::rewind::Purpose::Edit, cx);
+    }
+
+    /// Sends the user's `number`-th message again, as it was.
+    pub fn retry_prompt(&mut self, number: usize, cx: &mut Context<Self>) {
+        let Some((chat, session)) = self.chat_on_screen() else {
+            return;
+        };
+        let Some(prompt) = session.read(cx).sent_prompt(number) else {
+            return;
+        };
+        self.resend_prompt(&chat, number, prompt.words, crate::rewind::Purpose::Retry, cx);
+    }
+
+    fn resend_prompt(&mut self, chat: &str, number: usize, words: String, purpose: crate::rewind::Purpose, cx: &mut Context<Self>) {
+        let Some(session) = self.sessions.get(chat).cloned() else {
+            return;
+        };
+        if !session.read(cx).prompt_view().idle || session.read(cx).rewind_card.as_ref().is_some_and(|card| card.working) {
+            return;
+        }
+        match self.resend_job(chat, number, &words, cx) {
+            Ok(job) => {
+                session.update(cx, |session, cx| {
+                    let before = session.rewind_card.as_ref().map(|card| card.number);
+                    session.resend = Some(job);
+                    session.rewind_card = Some(crate::rewind::Card::new(number, purpose));
+                    for shown in before.into_iter().chain([number]) {
+                        session.remeasure_prompt(shown);
+                    }
+                    cx.notify();
+                });
+                self.look_before_rewind(chat, number, cx);
+            }
+            Err(message) => session.update(cx, |session, cx| session.note(message, cx)),
+        }
+    }
+
+    /// What sending `words` again as the user's `number`-th message runs, with the pictures and
+    /// files it carried: resolved as the composer resolves a message (a slash command, the chats
+    /// it referenced), and refused for the same reasons.
+    fn resend_job(&mut self, chat: &str, number: usize, words: &str, cx: &mut Context<Self>) -> Result<Job, String> {
+        let session = self.sessions.get(chat).cloned().ok_or("That chat is no longer open.")?;
+        let prompt = session.read(cx).sent_prompt(number).ok_or("That message is no longer in the chat.")?;
+        let listed = self.store.chat(chat).cloned().ok_or("That chat is no longer in WackCode.")?;
+        let words = words.trim();
+        if words.is_empty() && prompt.pictures.is_empty() && prompt.files.is_empty() {
+            return Err("Write something to send.".into());
+        }
+        if !prompt.files.is_empty() && words.starts_with('/') {
+            return Err(FILES_WITH_COMMAND.into());
+        }
+        if let Some(problem) = self.store.chat_model_problem(&listed) {
+            return Err(problem.into());
+        }
+        if let Some(refused) = self.pictures_refused(self.store.resolve(&listed.choice).as_ref(), prompt.pictures.len()) {
+            return Err(refused);
+        }
+        if let Some(missing) = self.crew_missing(listed.team.as_ref()) {
+            return Err(missing);
+        }
+        let text = crate::attachments::compose(words, &prompt.files);
+        let cwd = session.read(cx).cwd().to_path_buf();
+        let outgoing = if listed.is_chat_area() {
+            match chat_area_outgoing(&text) {
+                // The chats it referenced go again while their `@"Name"` is still in the words.
+                Outgoing::Message(text) => Outgoing::Message(chat_refs::encode(&text, &chat_refs::surviving(&text, &prompt.refs))),
+                other => other,
+            }
+        } else {
+            self.outgoing(Some(chat), &text, &cwd)?
+        };
+        let job = match outgoing {
+            Outgoing::Builtin { name, .. } => return Err(format!("/{name} is one of WackCode's own commands: use it from the composer.")),
+            Outgoing::Message(text) => Job::Prompt(text),
+            Outgoing::Prompt { text, command } => Job::Command { text, command },
+        };
+        Ok(with_images(job, prompt.pictures.iter().filter_map(picture_image).collect()))
+    }
+
+    /// Asks to take the chat on screen back to before the user's `number`-th message: the card
+    /// under it, filled in once the engine has looked at the files.
+    pub fn rewind_prompt(&mut self, number: usize, cx: &mut Context<Self>) {
+        let Some((chat, session)) = self.chat_on_screen() else {
+            return;
+        };
+        if !session.read(cx).prompt_view().idle || session.read(cx).rewind_card.as_ref().is_some_and(|card| card.working) {
+            return;
+        }
+        session.update(cx, |session, cx| {
+            let before = [session.editing.take().map(|editing| editing.number), session.rewind_card.as_ref().map(|card| card.number)];
+            session.resend = None;
+            session.rewind_card = Some(crate::rewind::Card::new(number, crate::rewind::Purpose::Rewind));
+            for shown in before.into_iter().flatten().chain([number]) {
+                session.remeasure_prompt(shown);
+            }
+            cx.notify();
+        });
+        self.look_before_rewind(&chat, number, cx);
+    }
+
+    /// The chat's file, folder and checkpoint store, for the engine to work on off the UI
+    /// thread.
+    fn rewind_parts(&self, chat: &str, cx: &App) -> Option<(PathBuf, PathBuf, wack_core::checkpoints::Checkpoints)> {
+        let listed = self.store.chat(chat)?;
+        let session = self.sessions.get(chat)?.read(cx);
+        Some((session.session_path().to_path_buf(), session.cwd().to_path_buf(), self.store.checkpoints(listed)))
+    }
+
+    /// Asks the engine what rewinding to before message `number` would find. An edit or a retry
+    /// with no changed files to ask about goes straight on.
+    fn look_before_rewind(&mut self, chat: &str, number: usize, cx: &mut Context<Self>) {
+        let Some((path, cwd, store)) = self.rewind_parts(chat, cx) else {
+            return;
+        };
+        let chat = chat.to_string();
+        cx.spawn(async move |app, cx| {
+            let preview = cx.background_spawn(async move { wack_core::rewind::preview(&path, number, &store, &cwd) }).await;
+            let _ = app.update(cx, |app, cx| app.found_before_rewind(&chat, number, preview, cx));
+        })
+        .detach();
+    }
+
+    fn found_before_rewind(&mut self, chat: &str, number: usize, preview: Result<wack_core::rewind::Preview, String>, cx: &mut Context<Self>) {
+        let Some(session) = self.sessions.get(chat).cloned() else {
+            return;
+        };
+        let straight_on = session.update(cx, |session, cx| {
+            // Closed, or asked again about another message, since.
+            let Some(card) = session.rewind_card.as_mut().filter(|card| card.number == number && card.preview.is_none()) else {
+                return false;
+            };
+            match preview {
+                Ok(preview) => card.found(preview),
+                Err(message) => card.error = Some(message.into()),
+            }
+            let straight_on = card.preview.is_some() && card.purpose != crate::rewind::Purpose::Rewind && !card.has_changes();
+            session.remeasure_prompt(number);
+            cx.notify();
+            straight_on
+        });
+        if straight_on {
+            self.confirm_rewind(chat, false, cx);
+        }
+    }
+
+    /// The rewind card's tick for one changed file.
+    pub fn toggle_rewind_file(&mut self, path: &str, cx: &mut Context<Self>) {
+        let Some((_, session)) = self.chat_on_screen() else {
+            return;
+        };
+        session.update(cx, |session, cx| {
+            if let Some(card) = session.rewind_card.as_mut().filter(|card| !card.working) {
+                if !card.ticked.remove(path) {
+                    card.ticked.insert(path.to_string());
+                }
+                cx.notify();
+            }
+        });
+    }
+
+    /// The rewind card's tick for every changed file: all on, or, when all are on, all off.
+    pub fn toggle_rewind_files(&mut self, cx: &mut Context<Self>) {
+        let Some((_, session)) = self.chat_on_screen() else {
+            return;
+        };
+        session.update(cx, |session, cx| {
+            let Some(card) = session.rewind_card.as_mut().filter(|card| !card.working) else {
+                return;
+            };
+            let Some(preview) = &card.preview else {
+                return;
+            };
+            if card.ticked.len() == preview.changes.len() {
+                card.ticked.clear();
+            } else {
+                card.ticked = preview.changes.iter().map(|change| change.path.clone()).collect();
+            }
+            cx.notify();
+        });
+    }
+
+    /// Closes the card under a message without rewinding. An edit's field stays open.
+    pub fn cancel_rewind(&mut self, cx: &mut Context<Self>) {
+        let Some((_, session)) = self.chat_on_screen() else {
+            return;
+        };
+        session.update(cx, |session, cx| {
+            if let Some(card) = session.rewind_card.take_if(|card| !card.working) {
+                session.resend = None;
+                session.remeasure_prompt(card.number);
+                cx.notify();
+            }
+        });
+    }
+
+    /// Does what the rewind card on screen asks.
+    pub fn confirm_rewind_on_screen(&mut self, files: bool, cx: &mut Context<Self>) {
+        if let Some((chat, _)) = self.chat_on_screen() {
+            self.confirm_rewind(&chat, files, cx);
+        }
+    }
+
+    /// Takes the chat back to before the card's message, off the UI thread: with `files`, the
+    /// ticked files go back as they were first. Then a rewind puts the message's words back in
+    /// the composer, and an edit or a retry sends.
+    fn confirm_rewind(&mut self, chat: &str, files: bool, cx: &mut Context<Self>) {
+        let Some(session) = self.sessions.get(chat).cloned() else {
+            return;
+        };
+        let Some((path, cwd, store)) = self.rewind_parts(chat, cx) else {
+            return;
+        };
+        let card = {
+            let session = session.read(cx);
+            if session.running() || session.rewinding {
+                return;
+            }
+            match session.rewind_card.clone() {
+                Some(card) if !card.working && card.preview.is_some() => card,
+                _ => return,
+            }
+        };
+        let restore = files
+            .then(|| card.preview.as_ref().and_then(|preview| preview.checkpoint.clone()))
+            .flatten()
+            .map(|checkpoint| (checkpoint, card.ticked.iter().cloned().collect::<Vec<_>>()));
+        session.update(cx, |session, cx| {
+            if let Some(card) = session.rewind_card.as_mut() {
+                card.working = true;
+                card.error = None;
+            }
+            session.rewinding = true;
+            cx.notify();
+        });
+        let (chat, number, purpose) = (chat.to_string(), card.number, card.purpose);
+        cx.spawn(async move |app, cx| {
+            let result = cx
+                .background_spawn(async move {
+                    let restore = restore.as_ref().map(|(checkpoint, paths)| wack_core::rewind::Restore { store: &store, cwd: &cwd, checkpoint, paths });
+                    wack_core::rewind::rewind(&path, number, restore)
+                })
+                .await;
+            let _ = app.update(cx, |app, cx| app.rewound(&chat, number, purpose, result, cx));
+        })
+        .detach();
+    }
+
+    fn rewound(&mut self, chat: &str, number: usize, purpose: crate::rewind::Purpose, result: Result<wack_core::rewind::Files, String>, cx: &mut Context<Self>) {
+        let Some(session) = self.sessions.get(chat).cloned() else {
+            return;
+        };
+        let files = match result {
+            Ok(files) => files,
+            Err(message) => {
+                session.update(cx, |session, cx| {
+                    session.rewinding = false;
+                    if let Some(card) = session.rewind_card.as_mut() {
+                        card.working = false;
+                        card.error = Some(message.into());
+                    }
+                    session.remeasure_prompt(number);
+                    cx.notify();
+                });
+                return;
+            }
+        };
+        // The message as it was, read before the conversation is read again without it.
+        let prompt = session.read(cx).sent_prompt(number);
+        let job = session.update(cx, |session, cx| {
+            session.rewinding = false;
+            session.rewind_card = None;
+            session.editing = None;
+            let job = session.resend.take();
+            session.reload(cx);
+            if !files.skipped.is_empty() {
+                let shown: Vec<&str> = files.skipped.iter().take(3).map(String::as_str).collect();
+                let more = if files.skipped.len() > 3 { "…" } else { "" };
+                session.note(
+                    format!(
+                        "{} left as they are: something the snapshot doesn't hold is in the way (an ignored or very large file): {}{more}",
+                        if files.skipped.len() == 1 { "1 file was".to_string() } else { format!("{} files were", files.skipped.len()) },
+                        shown.join(", ")
+                    ),
+                    cx,
+                );
+            }
+            job
+        });
+        match purpose {
+            crate::rewind::Purpose::Rewind => {
+                if let Some(prompt) = prompt {
+                    self.words_back(chat, prompt, cx);
+                }
+            }
+            crate::rewind::Purpose::Edit | crate::rewind::Purpose::Retry => {
+                if let Some(job) = job {
+                    self.run(chat, job, cx);
+                }
+            }
+        }
+        cx.notify();
+    }
+
+    /// Puts a rewound message back in its chat's composer, ahead of anything written there:
+    /// its words, its files, the chats it referenced and (decoded off the UI thread) its
+    /// pictures.
+    fn words_back(&mut self, chat: &str, prompt: crate::chat::SentPrompt, cx: &mut Context<Self>) {
+        let Some(session) = self.sessions.get(chat).cloned() else {
+            return;
+        };
+        let message = chat_refs::encode(&crate::attachments::compose(&prompt.words, &prompt.files), &prompt.refs);
+        let refs = restore(&session, vec![message], cx);
+        self.keep_refs(chat, refs);
+        let composer = session.read(cx).composer.clone();
+        let written = composer.read(cx).text().to_string();
+        session.update(cx, |session, cx| {
+            session.rewound_words = Some(written);
+            session.focus_request = Some(session.composer.read(cx).focus_handle(cx));
+            cx.notify();
+        });
+        if prompt.pictures.is_empty() {
+            return;
+        }
+        let pictures = prompt.pictures;
+        cx.spawn(async move |_, cx| {
+            let attachments = cx
+                .background_spawn(async move {
+                    pictures
+                        .iter()
+                        .filter_map(|picture| {
+                            let bytes = wack_core::images::decode(&picture.data).ok()?;
+                            let name = picture.label.as_ref().map_or("Picture".to_string(), |label| label.to_string());
+                            crate::attachments::Attachment::from_bytes(bytes, &name).ok()
+                        })
+                        .collect::<Vec<_>>()
+                })
+                .await;
+            session.update(cx, |session, cx| {
+                let room = crate::attachments::MAX_ATTACHMENTS.saturating_sub(session.attachments.len());
+                session.attachments.extend(attachments.into_iter().take(room));
+                cx.notify();
+            });
+        })
+        .detach();
+    }
+
+    /// Undoes the rewind just made in the chat on screen: the messages after it come back, and
+    /// the files it put back go as they were. The words it put in the composer leave it, if
+    /// they are still all that is there.
+    pub fn undo_rewind(&mut self, cx: &mut Context<Self>) {
+        let Some((chat, session)) = self.chat_on_screen() else {
+            return;
+        };
+        let Some((path, cwd, store)) = self.rewind_parts(&chat, cx) else {
+            return;
+        };
+        if session.read(cx).running() || session.read(cx).rewinding {
+            return;
+        }
+        session.update(cx, |session, cx| {
+            session.rewinding = true;
+            cx.notify();
+        });
+        cx.spawn(async move |_, cx| {
+            let result = cx.background_spawn(async move { wack_core::rewind::undo(&path, &store, &cwd) }).await;
+            session.update(cx, |session, cx| {
+                session.rewinding = false;
+                session.reload(cx);
+                match result {
+                    Ok(_) => {
+                        let composer = session.composer.clone();
+                        if session.rewound_words.take().is_some_and(|words| composer.read(cx).text() == words) {
+                            composer.update(cx, |composer, cx| composer.set_text("", cx));
+                            session.attachments.clear();
+                            session.files.clear();
+                        }
+                    }
+                    Err(message) => session.note(message, cx),
+                }
+                cx.notify();
+            });
+        })
+        .detach();
+    }
+}
+
+/// A picture the user attached to a message, to send with it again: its media type read from
+/// its first bytes.
+fn picture_image(picture: &crate::pictures::Picture) -> Option<wack_core::llm::Image> {
+    let head: String = picture.data.chars().take(24).collect();
+    let media_type = wack_core::images::media_type(&wack_core::images::decode(&head).ok()?)?;
+    let image = wack_core::llm::Image::new(media_type, picture.data.to_string());
+    Some(match &picture.label {
+        Some(label) => image.labelled(label.to_string()),
+        None => image,
+    })
 }
 
 // -------------------------------------------------------------------------------------------------

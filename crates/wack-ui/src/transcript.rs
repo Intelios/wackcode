@@ -1,6 +1,8 @@
 //! The transcript: one chat read as a document.
 //!
-//! - The user's message is a bubble on the right, its tail corner tucked in.
+//! - The user's message is a bubble on the right, its tail corner tucked in. Under it, while the
+//!   pointer is over it, Copy, Edit, Rewind and Retry (`rewind.rs`); right-clicking it offers the
+//!   same. Being edited, it is a field in place of the bubble.
 //! - A turn reads as the model wrote it, after Claude Desktop's: its words between steps are
 //!   running text, never folded away, and each run of steps between them is a group. Settled, a
 //!   group is one line of what it did ("Read 3 files and ran a command"), which opens; live, it
@@ -45,6 +47,8 @@ pub enum Item {
     /// got) behind its name. `suggestion` captions a message that started a suggested task.
     /// `pictures` are the ones the user attached, under the bubble.
     Prompt {
+        /// Which of the user's messages it is (from 0), as the session counts them.
+        number: usize,
         text: SharedString,
         steered: bool,
         command: Option<CommandShown>,
@@ -92,6 +96,9 @@ pub enum Item {
     ChatFiles(Vec<crate::chat_transcript::ScratchFile>),
     /// The conversation was compacted here; clicking opens the summary.
     ChatTidied(crate::compaction_card::CompactionCard),
+    /// A rewind just made, which Undo takes back until anything runs. `files`: it put files
+    /// back too.
+    Rewound { files: bool },
 }
 
 /// A slash command as the user typed it.
@@ -284,12 +291,14 @@ pub struct Handlers {
     pub open_link: Handler<String>,
     /// Reduce Motion is on: what would loop holds still.
     pub still: bool,
+    /// What the user's messages offer, and the one being edited or asked about.
+    pub prompts: crate::rewind::Prompts,
 }
 
 impl Handlers {
     /// Clicks that do nothing: for scenes.
     pub fn inert() -> Self {
-        Self { toggle: Rc::new(|_, _, _| {}), open_link: Rc::new(|_, _, _| {}), still: false }
+        Self { toggle: Rc::new(|_, _, _| {}), open_link: Rc::new(|_, _, _| {}), still: false, prompts: Default::default() }
     }
 }
 
@@ -391,7 +400,9 @@ fn gap_above(item: &Item, previous: Option<&Item>) -> f32 {
         (Some(Item::Commit(_)), Item::Work(_)) => 12.,
         (Some(Item::Work(_)), Item::Compacted(_)) => 12.,
         (Some(Item::Compacted(_)), Item::Work(_)) => 12.,
-        (Some(Item::Prompt { .. }), _) => 16.,
+        // Under the row of actions every message keeps.
+        (Some(Item::Prompt { .. }), _) => 2.,
+        (_, Item::Rewound { .. }) => 20.,
         _ => 18.,
     }
 }
@@ -402,7 +413,16 @@ pub fn item(item: &Item, previous: Option<&Item>, theme: &Theme, handlers: &Hand
         return div().pt(px(gap_above(item, previous))).child(body).into_any_element();
     }
     let body = match item {
-        Item::Prompt { text, steered, command, suggestion, pictures, files } => {
+        Item::Prompt { number, text, steered, command, suggestion, pictures, files } => {
+            let number = *number;
+            let editing = handlers.prompts.editing.as_ref().filter(|(editing, _)| *editing == number).map(|(_, field)| field);
+            let card = handlers.prompts.card.as_ref().filter(|card| card.number == number);
+            let group = SharedString::from(format!("prompt-{number}"));
+            let copy: SharedString = match command {
+                Some(command) if command.args.is_empty() => command.name.clone(),
+                Some(command) => format!("{} {}", command.name, command.args).into(),
+                None => text.clone(),
+            };
             let bubble = div()
                 .max_w(relative(BUBBLE_SHARE))
                 .px(px(14.))
@@ -416,15 +436,24 @@ pub fn item(item: &Item, previous: Option<&Item>, theme: &Theme, handlers: &Hand
                 .border_color(theme.border)
                 .typography(Type::Body)
                 .text_color(theme.text);
-            let bubble = match command {
-                None => bubble.child(prompt_text(text, theme)).into_any_element(),
-                Some(command) => command_bubble(bubble, command, theme, handlers).into_any_element(),
+            let bubble = match (editing, command) {
+                (Some(field), _) => crate::rewind::editor(field, BUBBLE_SHARE, theme),
+                (None, None) => bubble.child(prompt_text(text, theme)).into_any_element(),
+                (None, Some(command)) => command_bubble(bubble, command, theme, handlers).into_any_element(),
             };
             div()
+                .id(ElementId::NamedInteger("prompt".into(), number as u64))
+                .group(group.clone())
                 .flex()
                 .flex_col()
                 .items_end()
                 .gap(px(4.))
+                .when(handlers.prompts.chat, |prompt| {
+                    prompt.on_mouse_down(gpui::MouseButton::Right, move |event, window, cx| {
+                        cx.stop_propagation();
+                        window.dispatch_action(Box::new(crate::actions::OpenPromptMenu { number, position: event.position }), cx);
+                    })
+                })
                 .when(*steered, |prompt| {
                     prompt.child(div().pr(px(6.)).typography(Type::Small).text_color(theme.text_faint).child("Sent while working"))
                 })
@@ -442,7 +471,7 @@ pub fn item(item: &Item, previous: Option<&Item>, theme: &Theme, handlers: &Hand
                             .children(files.iter().map(|file| file_chip(file, theme, handlers))),
                     )
                 })
-                .when(!text.is_empty() || command.is_some(), |prompt| prompt.child(bubble))
+                .when(!text.is_empty() || command.is_some() || editing.is_some(), |prompt| prompt.child(bubble))
                 .when_some(suggestion.as_ref(), |prompt, caption| {
                     prompt.child(
                         div()
@@ -459,8 +488,16 @@ pub fn item(item: &Item, previous: Option<&Item>, theme: &Theme, handlers: &Hand
                 .when_some(command.as_ref().filter(|command| command.open), |prompt, command| {
                     prompt.child(sent_prompt(&command.key, text, theme))
                 })
+                .map(|prompt| match card {
+                    Some(card) => prompt.child(crate::rewind::card(card, theme)),
+                    // The editor's own buttons stand where the actions would.
+                    None if editing.is_some() => prompt.child(div().h(px(10.))),
+                    None => prompt.child(crate::rewind::actions(number, copy, &handlers.prompts, group, theme)),
+                })
+                .tag("prompt")
                 .into_any_element()
         }
+        Item::Rewound { files } => crate::rewind::rewound(*files, theme),
         Item::Work(work) => work_log(work, theme, handlers),
         Item::Commit(commit) => crate::commit::view(commit, theme, handlers),
         Item::Reply { blocks, live } => reply_inked(blocks, *live && !handlers.still, theme, handlers).into_any_element(),
@@ -1400,18 +1437,25 @@ fn code_block(language: &str, text: &str, key: &str, theme: &Theme) -> impl Into
 #[derive(IntoElement)]
 pub struct Transcript {
     items: Vec<Item>,
+    prompts: crate::rewind::Prompts,
 }
 
 impl Transcript {
     pub fn new(items: Vec<Item>) -> Self {
-        Self { items }
+        Self { items, prompts: Default::default() }
+    }
+
+    /// What the user's messages offer, as a chat's do.
+    pub fn prompts(mut self, prompts: crate::rewind::Prompts) -> Self {
+        self.prompts = prompts;
+        self
     }
 }
 
 impl RenderOnce for Transcript {
     fn render(self, _: &mut Window, cx: &mut App) -> impl IntoElement {
         let theme = Theme::get(cx).clone();
-        let handlers = Handlers { still: cx.reduce_motion(), ..Handlers::inert() };
+        let handlers = Handlers { still: cx.reduce_motion(), prompts: self.prompts, ..Handlers::inert() };
         let mut column = div().w_full().flex().flex_col();
         for (index, current) in self.items.iter().enumerate() {
             let previous = index.checked_sub(1).map(|index| &self.items[index]);

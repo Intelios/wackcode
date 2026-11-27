@@ -466,6 +466,7 @@ pub fn entry_items(conversation: &Conversation, index: usize, scratchpad: &Path,
     }
     match entry {
         Entry::Prompt { text, steered, pictures, files, .. } => items.push(Item::Prompt {
+            number: conversation.prompt_number(index),
             text: text.clone().into(),
             steered: *steered,
             command: None,
@@ -496,6 +497,7 @@ pub fn entry_items(conversation: &Conversation, index: usize, scratchpad: &Path,
             )));
         }
         Entry::Notice { text, failed } => items.push(Item::Notice { text: text.clone().into(), failed: *failed }),
+        Entry::Rewound { files } => items.push(Item::Rewound { files: *files }),
         // A Chat chat has no background tasks or sub-agents to hear from.
         Entry::News(_) => {}
         Entry::Turn(turn) => turn_items(conversation, index, turn, scratchpad, open, cache, items),

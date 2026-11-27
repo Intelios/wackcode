@@ -46,6 +46,7 @@ pub mod pixel_scroll;
 pub mod plan_card;
 pub mod prompts_page;
 pub mod question;
+pub mod rewind;
 pub mod ring;
 pub mod run_button;
 pub mod scenes;

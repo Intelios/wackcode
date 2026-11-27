@@ -103,9 +103,10 @@ pub fn entry_items(
     };
     {
         match entry {
-            Entry::Prompt { text, steered, command, suggestion, pictures, files } => {
+            Entry::Prompt { text, steered, command, suggestion, pictures, files, .. } => {
                 let key = format!("prompt-{index}");
                 items.push(Item::Prompt {
+                    number: conversation.prompt_number(index),
                     text: text.clone().into(),
                     steered: *steered,
                     command: command.as_ref().map(|command| CommandShown {
@@ -142,6 +143,7 @@ pub fn entry_items(
                 )));
             }
             Entry::Notice { text, failed } => items.push(Item::Notice { text: text.clone().into(), failed: *failed }),
+            Entry::Rewound { files } => items.push(Item::Rewound { files: *files }),
             Entry::News(news) => {
                 let mut row = news_row(news, &format!("news-{index}"));
                 row.open = row.detail.is_some() && open.contains(row.key.as_ref());

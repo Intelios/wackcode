@@ -45,7 +45,7 @@ use gpui::{AnimationExt as _,
 
 use crate::{
     actions::{
-        self, ActivatePane, AddFolder, Back, ChooseBackdrop, ChooseEffort, SlideEffort, ToggleTodos, PreviewCrop, CommitCrop, ChooseZoom, ResetCrop, ClearCommandOutput, CloseCommandEditor, CycleAgentMode, SetAgentMode, PickOption, ShowQuestion, NextQuestion, PreviousQuestion, SubmitAnswers, CancelQuestion, WrapUpQuestion, ShowDoneTodos, DiscardPlan, KeepPlan, ConfirmDiscardPlan, ApprovePlan, SavePlan, CopyPlan, ToggleUnrestrictedPlanning, ToggleWebFetch, ToggleWebSearch, ToggleRouteFetch, CloseSearchEditor, SaveSearchProvider, TestSearchProvider, AskDeleteSearchProvider, ConfirmDeleteSearchProvider, CancelDeleteSearchProvider, ResetWebUsage, ChooseSearchProvider, AddSearchProvider, EditSearchProvider, ChooseSearchKey, ChooseSearchMethod, AddMcpServer, EditMcpServer, ToggleMcpServer, ToggleMcpTool, ExpandMcpServer, TestMcpServer, AskDeleteMcpServer, RemoveMcpEntry, ChooseMcpTransport, ChooseMcpScope, ToggleMcpProject, CloseMcpEditor, SaveMcpServer, TestMcpDraft, AddMcpEntry, ConfirmDeleteMcpServer, CancelDeleteMcpServer, ConfirmUnrestrictedPlanning, CancelUnrestrictedPlanning, ToggleMemory, SwitchProjectMemory, NewMemory, EditMemory, ChooseMemoryKind, SaveMemory, CloseMemoryEditor, AskDeleteMemory, AskRemoveMemoryFolder, ConfirmMemoryDelete, CancelMemoryDelete, RevealMemory, ToggleCommitAttribution, ToggleUsageRecording, RevealUsageFolder,
+        self, ActivatePane, AddFolder, Back, ChooseBackdrop, ChooseEffort, SlideEffort, ToggleTodos, PreviewCrop, CommitCrop, ChooseZoom, ResetCrop, ClearCommandOutput, CloseCommandEditor, CycleAgentMode, SetAgentMode, PickOption, ShowQuestion, NextQuestion, PreviousQuestion, SubmitAnswers, CancelQuestion, WrapUpQuestion, ShowDoneTodos, DiscardPlan, KeepPlan, ConfirmDiscardPlan, ApprovePlan, SavePlan, CopyPlan, ToggleUnrestrictedPlanning, ToggleWebFetch, ToggleWebSearch, ToggleRouteFetch, CloseSearchEditor, SaveSearchProvider, TestSearchProvider, AskDeleteSearchProvider, ConfirmDeleteSearchProvider, CancelDeleteSearchProvider, ResetWebUsage, ChooseSearchProvider, AddSearchProvider, EditSearchProvider, ChooseSearchKey, ChooseSearchMethod, AddMcpServer, EditMcpServer, ToggleMcpServer, ToggleMcpTool, ExpandMcpServer, TestMcpServer, AskDeleteMcpServer, RemoveMcpEntry, ChooseMcpTransport, ChooseMcpArea, ChooseMcpProjectFilter, ToggleMcpProject, CloseMcpEditor, SaveMcpServer, TestMcpDraft, AddMcpEntry, ConfirmDeleteMcpServer, CancelDeleteMcpServer, ConfirmUnrestrictedPlanning, CancelUnrestrictedPlanning, ToggleMemory, SwitchProjectMemory, NewMemory, EditMemory, ChooseMemoryKind, SaveMemory, CloseMemoryEditor, AskDeleteMemory, AskRemoveMemoryFolder, ConfirmMemoryDelete, CancelMemoryDelete, RevealMemory, ToggleCommitAttribution, ToggleUsageRecording, RevealUsageFolder,
         ChooseBlur, ChooseDim, ChooseFormat, OpenCommandEditor, OpenConnectionForm, CloseConnectionForm, SwitchConnection, ChooseMode, ChooseModel, ChooseTexture, ChooseTheme, CloseChatTab, CloseMenu, ClosePane,
         ClosePaneId, CloseSettings, CloseTab, Compact, DeleteChat, DiscardConnection, EditConnection, ToggleConnectionKey, EqualizeSplit, FocusNext, FocusPrevious, MovePane, AddModelRow, RemoveModelRow, SaveCommandEditor, SaveConnection,
         CloseModelSuggestions, RefreshCatalog, FetchModels, TickAllFetched, AddFetchedModels, CloseFetchedModels, PickModelSuggestion, ToggleFetchedModel,
@@ -1694,13 +1694,17 @@ impl Render for Shell {
                     let transport = action.transport;
                     shell.with_app(cx, |app, cx| app.choose_mcp_transport(transport, cx));
                 }))
-                .on_action(cx.listener(|shell, action: &ChooseMcpScope, _, cx| {
-                    let only = action.only;
-                    shell.with_app(cx, |app, cx| app.choose_mcp_scope(only, cx));
+                .on_action(cx.listener(|shell, action: &ChooseMcpArea, _, cx| {
+                    let (server, area) = (action.server.clone(), action.area);
+                    shell.with_app(cx, |app, cx| app.choose_mcp_area(server.as_deref(), area, cx));
+                }))
+                .on_action(cx.listener(|shell, action: &ChooseMcpProjectFilter, _, cx| {
+                    let (server, filter) = (action.server.clone(), action.filter);
+                    shell.with_app(cx, |app, cx| app.choose_mcp_project_filter(server.as_deref(), filter, cx));
                 }))
                 .on_action(cx.listener(|shell, action: &ToggleMcpProject, _, cx| {
-                    let id = action.id.clone();
-                    shell.with_app(cx, |app, cx| app.toggle_mcp_project(&id, cx));
+                    let (server, id) = (action.server.clone(), action.id.clone());
+                    shell.with_app(cx, |app, cx| app.toggle_mcp_project(server.as_deref(), &id, cx));
                 }))
                 .on_action(cx.listener(|shell, action: &ToggleMcpServer, _, cx| {
                     let id = action.id.clone();

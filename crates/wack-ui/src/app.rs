@@ -822,9 +822,9 @@ impl AppState {
     // ---------------------------------------------------------------------------------------------
     // Settings › MCP servers
 
-    /// Closes connections to servers that were removed, switched off or changed.
+    /// Closes connections to servers that were removed, switched off, changed, or scoped away.
     fn mcp_changed(&mut self) {
-        self.mcp.retain(&self.store.mcp_live_keys());
+        self.mcp.retain(|id, fingerprint, folder| self.store.mcp_keeps_connection(id, fingerprint, folder));
     }
 
     fn project_names(&self) -> Vec<(String, SharedString)> {
@@ -852,10 +852,14 @@ impl AppState {
                 } else {
                     Live::Idle
                 };
+                let pending = self.mcp_settings.pending_scope.as_ref().filter(|(id, _)| id == &server.id);
+                let scope = pending.map_or_else(|| server.scope.clone(), |(_, scope)| scope.clone());
                 ServerRow {
+                    reach: crate::mcp_page::reach(&server.scope, &names),
+                    scope,
+                    scope_pending: pending.is_some(),
                     server: server.clone(),
                     live,
-                    reach: crate::mcp_page::reach(&server.projects, &names),
                     test: self.mcp_settings.tests.get(&server.id).cloned(),
                 }
             })
@@ -866,6 +870,7 @@ impl AppState {
         });
         McpData {
             servers,
+            all_projects: names,
             expanded: self.mcp_settings.expanded.clone(),
             confirming_delete: self.mcp_settings.confirming_delete.clone(),
             editor,
@@ -891,6 +896,7 @@ impl AppState {
         self.mcp_settings.editor = Some(editor);
         self.mcp_settings.error = None;
         self.mcp_settings.confirming_delete = None;
+        self.mcp_settings.pending_scope = None;
         self.watch_mcp_editor(cx);
         cx.notify();
         name
@@ -938,49 +944,82 @@ impl AppState {
         self.watch_mcp_editor(cx);
     }
 
-    pub fn choose_mcp_scope(&mut self, only: bool, cx: &mut Context<Self>) {
-        use wack_core::mcp::Projects;
-        self.mcp_editor(
-            |editor| {
-                editor.projects = match (only, &editor.projects) {
-                    (false, _) => Projects::All,
-                    (true, Projects::Only(ids)) => Projects::Only(ids.clone()),
-                    (true, Projects::All) => Projects::Only(Vec::new()),
-                }
-            },
-            cx,
-        );
+    fn inline_mcp_scope(&self, id: &str) -> Option<wack_core::mcp::McpScope> {
+        if let Some((pending_id, scope)) = &self.mcp_settings.pending_scope
+            && pending_id == id
+        {
+            return Some(scope.clone());
+        }
+        self.store.mcp_server(id).map(|server| server.scope.clone())
     }
 
-    pub fn toggle_mcp_project(&mut self, id: &str, cx: &mut Context<Self>) {
-        self.mcp_editor(
-            |editor| {
-                if let wack_core::mcp::Projects::Only(ids) = &mut editor.projects {
-                    match ids.iter().position(|chosen| chosen == id) {
-                        Some(index) => {
-                            ids.remove(index);
-                        }
-                        None => ids.push(id.to_string()),
-                    }
-                }
-            },
-            cx,
-        );
+    fn apply_inline_mcp_scope(&mut self, id: &str, next: wack_core::mcp::McpScope, cx: &mut Context<Self>) {
+        if next.needs_project_choice() {
+            self.mcp_settings.pending_scope = Some((id.to_string(), next));
+            self.mcp_settings.error = None;
+            cx.notify();
+            return;
+        }
+        self.mcp_settings.pending_scope = None;
+        let result = self.store.set_mcp_server_scope(id, next);
+        self.mcp_result(result, cx);
     }
 
-    /// Saves the editor's server, closes the editor and tests the connection in the background,
-    /// which lists its tools on its row.
+    pub fn choose_mcp_area(&mut self, server: Option<&str>, area: wack_core::mcp::AreaScope, cx: &mut Context<Self>) {
+        match server {
+            None => self.mcp_editor(|editor| editor.scope = editor.scope.with_area(area), cx),
+            Some(id) => {
+                if let Some(current) = self.inline_mcp_scope(id) {
+                    self.apply_inline_mcp_scope(id, current.with_area(area), cx);
+                }
+            }
+        }
+    }
+
+    pub fn choose_mcp_project_filter(&mut self, server: Option<&str>, filter: wack_core::mcp::ProjectFilter, cx: &mut Context<Self>) {
+        match server {
+            None => self.mcp_editor(|editor| editor.scope = editor.scope.with_project_filter(filter), cx),
+            Some(id) => {
+                if let Some(current) = self.inline_mcp_scope(id) {
+                    self.apply_inline_mcp_scope(id, current.with_project_filter(filter), cx);
+                }
+            }
+        }
+    }
+
+    pub fn toggle_mcp_project(&mut self, server: Option<&str>, id: &str, cx: &mut Context<Self>) {
+        match server {
+            None => self.mcp_editor(|editor| editor.scope = editor.scope.toggle_project(id), cx),
+            Some(server_id) => {
+                if let Some(current) = self.inline_mcp_scope(server_id) {
+                    self.apply_inline_mcp_scope(server_id, current.toggle_project(id), cx);
+                }
+            }
+        }
+    }
+
+    /// Saves the editor's server, closes the editor and tests the connection in the background
+    /// when it is new, reconfigured, or has no known tools yet.
     pub fn save_mcp_server(&mut self, cx: &mut Context<Self>) {
         let Some(editor) = self.mcp_settings.editor.as_ref() else {
             return;
         };
+        let previous = editor.editing.as_deref().and_then(|id| {
+            Some((self.store.mcp_spec(id)?.fingerprint(), !self.store.mcp_server(id)?.tools.is_empty()))
+        });
         let result = editor.draft(cx).and_then(|draft| self.store.save_mcp_server(&draft));
         match result {
             Ok(id) => {
+                let should_test = match previous {
+                    Some((old_fp, has_tools)) => !has_tools || self.store.mcp_spec(&id).is_some_and(|spec| spec.fingerprint() != old_fp),
+                    None => true,
+                };
                 self.close_mcp_editor(cx);
                 self.mcp_changed();
                 self.mcp_settings.expanded = Some(id.clone());
-                self.test_mcp_server(&id, cx);
+                if should_test {
+                    self.test_mcp_server(&id, cx);
+                }
             }
             Err(message) => {
                 if let Some(editor) = self.mcp_settings.editor.as_mut() {
@@ -1101,6 +1140,7 @@ impl AppState {
         let open = self.mcp_settings.expanded.as_deref() != Some(id);
         self.mcp_settings.expanded = open.then(|| id.to_string());
         self.mcp_settings.confirming_delete = None;
+        self.mcp_settings.pending_scope = None;
         cx.notify();
     }
 
@@ -1118,6 +1158,9 @@ impl AppState {
                 self.mcp_settings.tests.remove(&id);
                 if self.mcp_settings.expanded.as_deref() == Some(id.as_str()) {
                     self.mcp_settings.expanded = None;
+                }
+                if self.mcp_settings.pending_scope.as_ref().is_some_and(|(pending, _)| pending == &id) {
+                    self.mcp_settings.pending_scope = None;
                 }
                 if self.mcp_settings.editor.as_ref().is_some_and(|editor| editor.editing.as_deref() == Some(id.as_str())) {
                     self.close_mcp_editor(cx);
@@ -2076,6 +2119,8 @@ impl AppState {
             cx.notify();
             return;
         }
+        self.mcp_settings.pending_scope = None;
+        self.mcp_changed();
         self.new_chat_panes.remove(id);
         if self.command_editor.as_ref().is_some_and(|editor| editor.project_id == id) {
             self.command_editor = None;

@@ -179,7 +179,7 @@ impl Store {
             tasks: None,
             usage: Some(usage),
             web: self.web_setup(),
-            mcp_servers: self.mcp_specs_for(&project.path),
+            mcp_servers: self.mcp_specs_for(ChatKind::Code, &project.path),
             mcp_hub: None,
             agents: self.agents_setup(children, crew, &chat.id, &project.path, wack_agent::Agents::new()),
             browser: None,
@@ -206,7 +206,7 @@ impl Store {
             provider: Arc::new(provider),
             session_path: self.session_path(chat),
             cwd: scratch,
-            mcp_servers: self.mcp_specs_for(&mcp_folder),
+            mcp_servers: self.mcp_specs_for(ChatKind::Chat, &mcp_folder),
             mcp_folder,
             settings: Settings {
                 model: resolved.model.id.clone(),
@@ -987,5 +987,50 @@ mod tests {
         // Switching the repaired chat's connection off refuses it again.
         store.set_connection_enabled(&second.id, false).unwrap();
         assert_eq!(store.run_setup(&repaired).err().as_deref(), Some(crate::MODEL_MISSING_MESSAGE));
+    }
+
+    #[test]
+    fn run_setup_filters_mcp_servers_by_area_and_project() {
+        use crate::mcp::{McpDraft, McpScope, McpTransport, Projects};
+
+        let folder = tempfile::tempdir().unwrap();
+        let game_dir = tempfile::tempdir().unwrap();
+        let app_dir = tempfile::tempdir().unwrap();
+        let mut store = Store::open(folder.path()).unwrap();
+        store
+            .add_connection(
+                crate::NewConnection {
+                    name: "Testing".into(),
+                    format: wack_llm::WireFormat::OpenaiChat,
+                    base_url: "https://example.invalid/v1".into(),
+                    models: vec![crate::Model::new("m", None)],
+                },
+                "k",
+            )
+            .unwrap();
+        let game = store.add_project(game_dir.path()).unwrap();
+        let app = store.add_project(app_dir.path()).unwrap();
+
+        let add = |store: &mut Store, name: &str, scope: McpScope| {
+            let mut draft = McpDraft::new(McpTransport::Stdio);
+            draft.name = name.into();
+            draft.command = "true".into();
+            draft.scope = scope;
+            store.save_mcp_server(&draft).unwrap();
+        };
+        add(&mut store, "Everywhere", McpScope::default());
+        add(&mut store, "CodeOnly", McpScope::Code { projects: Projects::All });
+        add(&mut store, "ChatOnly", McpScope::Chat);
+        add(&mut store, "Blender", McpScope::Code { projects: Projects::Only(vec![game.id.clone()]) });
+        add(&mut store, "ExceptApp", McpScope::All { projects: Projects::Except(vec![app.id.clone()]) });
+
+        let game_chat = store.create_chat(&game.id, "Game", crate::ModelChoice::default(), AgentMode::Build, None).unwrap();
+        let app_chat = store.create_chat(&app.id, "App", crate::ModelChoice::default(), AgentMode::Build, None).unwrap();
+        let area_chat = store.create_area_chat("Chat", crate::ModelChoice::default()).unwrap();
+
+        let names = |setup: RunSetup| setup.mcp_servers.into_iter().map(|spec| spec.name).collect::<Vec<_>>();
+        assert_eq!(names(store.run_setup(&game_chat).unwrap()), ["Everywhere", "CodeOnly", "Blender", "ExceptApp"]);
+        assert_eq!(names(store.run_setup(&app_chat).unwrap()), ["Everywhere", "CodeOnly"]);
+        assert_eq!(names(store.run_setup(&area_chat).unwrap()), ["Everywhere", "ChatOnly", "ExceptApp"]);
     }
 }

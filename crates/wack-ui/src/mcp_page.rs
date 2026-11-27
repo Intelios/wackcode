@@ -1,16 +1,18 @@
 //! Settings › MCP servers, after version 2's section: the servers the user added, what each
-//! offers, and the projects each reaches.
+//! offers, and where each is available (areas and projects).
 //!
 //! - The overview's head says how many servers are on and offers New server. With none yet, two
 //!   tiles start one: "A command on your Mac" or "A server at a URL".
 //! - Each server is a row: its type, name and what starts or reaches it, how it stands (from the
 //!   app's MCP hub, refreshed every few seconds while the page shows, or the last Test
-//!   connection), the projects it reaches, and its switch. A row opens to its details, its tools
-//!   (each with a switch, and a Read-only badge where the server marks one), and Test connection,
-//!   Edit and Delete (which asks first).
+//!   connection), where it runs, and its switch. A row opens to its details, inline Availability
+//!   controls (Everywhere / Code only / Chat only, plus All / Only chosen / Except chosen
+//!   projects), its tools (each with a switch, and a Read-only badge where the server marks one),
+//!   and Test connection, Edit and Delete (which asks first).
 //! - The editor replaces the overview: name, type, the command and its arguments and variables or
-//!   the URL and its headers, the timeout, and which projects it reaches. Test connection runs the
-//!   draft as it stands; saving tests it again in the background so its tools are listed.
+//!   the URL and its headers, the timeout, and its availability across areas and projects. Test
+//!   connection runs the draft as it stands; saving tests it again in the background when new or
+//!   reconfigured so its tools are listed.
 //!
 //! A header or variable value is typed into a masked field and handed to the store once. Editing
 //! a saved server leaves the value fields empty: blank keeps the saved value, and nothing ever
@@ -19,13 +21,13 @@
 
 use std::collections::HashMap;
 
-use gpui::{AnyElement, App, AppContext, Entity, SharedString, div, prelude::*, px};
-use wack_core::mcp::{DEFAULT_TIMEOUT_MS, McpDraft, McpServer, McpTransport as Transport, Projects, SecretEntry};
+use gpui::{AnyElement, App, AppContext, Entity, Hsla, SharedString, div, prelude::*, px};
+use wack_core::mcp::{AreaScope, DEFAULT_TIMEOUT_MS, McpDraft, McpScope, McpServer, McpTransport as Transport, ProjectFilter, Projects, SecretEntry};
 
 use crate::{
     actions::{
-        AddMcpEntry, AddMcpServer, AskDeleteMcpServer, CancelDeleteMcpServer, ChooseMcpScope, ChooseMcpTransport, CloseMcpEditor, ConfirmDeleteMcpServer, EditMcpServer,
-        ExpandMcpServer, RemoveMcpEntry, SaveMcpServer, TestMcpDraft, TestMcpServer, ToggleMcpProject, ToggleMcpServer, ToggleMcpTool,
+        AddMcpEntry, AddMcpServer, AskDeleteMcpServer, CancelDeleteMcpServer, ChooseMcpArea, ChooseMcpProjectFilter, ChooseMcpTransport, CloseMcpEditor, ConfirmDeleteMcpServer,
+        EditMcpServer, ExpandMcpServer, RemoveMcpEntry, SaveMcpServer, TestMcpDraft, TestMcpServer, ToggleMcpProject, ToggleMcpServer, ToggleMcpTool,
     },
     button::{Button, Kind as ButtonKind},
     icon::Icon,
@@ -95,7 +97,7 @@ pub struct McpEditor {
     pub timeout: Entity<TextField>,
     pub env: Vec<EntryField>,
     pub headers: Vec<EntryField>,
-    pub projects: Projects,
+    pub scope: McpScope,
     pub error: Option<SharedString>,
     pub testing: bool,
     pub test: Option<ProbeOutcome>,
@@ -126,7 +128,7 @@ impl McpEditor {
             timeout: text(Type::Ui, "120", &seconds(draft.timeout_ms), cx),
             env: entries(&draft.env, cx),
             headers: entries(&draft.headers, cx),
-            projects: draft.projects.clone(),
+            scope: draft.scope.clone(),
             error: None,
             testing: false,
             test: None,
@@ -184,7 +186,7 @@ impl McpEditor {
             url: text(&self.url),
             headers: entries(&self.headers),
             env: entries(&self.env),
-            projects: self.projects.clone(),
+            scope: self.scope.clone(),
         })
     }
 }
@@ -201,9 +203,12 @@ pub struct McpState {
     pub expanded: Option<String>,
     /// The server whose Delete is waiting for a yes.
     pub confirming_delete: Option<String>,
+    /// An incomplete inline scope change on an expanded row (Only or Except with no project
+    /// picked yet), saved as soon as a project is chosen.
+    pub pending_scope: Option<(String, McpScope)>,
     /// Each server's last Test connection, by id.
     pub tests: HashMap<String, RowTest>,
-    /// A failure from the overview: a switch.
+    /// A failure from the overview: a switch or inline scope change.
     pub error: Option<SharedString>,
 }
 
@@ -227,7 +232,7 @@ pub struct EditorData {
     pub url: Entity<TextField>,
     pub timeout: Entity<TextField>,
     pub entries: Vec<EntryData>,
-    pub projects: Projects,
+    pub scope: McpScope,
     /// Every project, by id and name, to choose from.
     pub all_projects: Vec<(String, SharedString)>,
     pub error: Option<SharedString>,
@@ -252,7 +257,7 @@ impl EditorData {
                 .iter()
                 .map(|entry| EntryData { name: entry.name.clone(), value: entry.value.clone() })
                 .collect(),
-            projects: editor.projects.clone(),
+            scope: editor.scope.clone(),
             all_projects,
             error: editor.error.clone(),
             testing: editor.testing,
@@ -267,8 +272,12 @@ impl EditorData {
 pub struct ServerRow {
     pub server: McpServer,
     pub live: Live,
-    /// "All projects", or the names of the ones it reaches.
+    /// Short summary of the saved availability ("Everywhere", "Chat only", "Only scenes", …).
     pub reach: SharedString,
+    /// Scope shown in the expanded row's inline Availability controls (may hold a pending choice).
+    pub scope: McpScope,
+    /// `scope` is awaiting at least one project selection before saving.
+    pub scope_pending: bool,
     pub test: Option<RowTest>,
 }
 
@@ -276,6 +285,8 @@ pub struct ServerRow {
 #[derive(Clone, Default)]
 pub struct McpData {
     pub servers: Vec<ServerRow>,
+    /// Every project, by id and name, for inline Availability controls on expanded rows.
+    pub all_projects: Vec<(String, SharedString)>,
     pub expanded: Option<String>,
     pub confirming_delete: Option<String>,
     pub editor: Option<EditorData>,
@@ -283,14 +294,8 @@ pub struct McpData {
 }
 
 /// Where a server reaches, in words.
-pub fn reach(projects: &Projects, names: &[(String, SharedString)]) -> SharedString {
-    match projects {
-        Projects::All => "All projects".into(),
-        Projects::Only(ids) => {
-            let chosen: Vec<&str> = ids.iter().filter_map(|id| names.iter().find(|(project, _)| project == id)).map(|(_, name)| name.as_ref()).collect();
-            if chosen.is_empty() { "No projects".into() } else { chosen.join(", ").into() }
-        }
-    }
+pub fn reach(scope: &McpScope, names: &[(String, SharedString)]) -> SharedString {
+    scope.describe(|id| names.iter().find(|(project, _)| project == id).map(|(_, name)| name.as_ref())).into()
 }
 
 pub fn page(data: McpData, theme: &Theme) -> AnyElement {
@@ -365,7 +370,7 @@ fn server_list(data: &McpData, theme: &Theme) -> impl IntoElement {
     for (index, row) in data.servers.iter().enumerate() {
         let expanded = data.expanded.as_deref() == Some(row.server.id.as_str());
         let confirming = data.confirming_delete.as_deref() == Some(row.server.id.as_str());
-        list = list.child(server_row(row, index == 0, expanded, confirming, theme));
+        list = list.child(server_row(row, &data.all_projects, index == 0, expanded, confirming, theme));
     }
     list
 }
@@ -413,7 +418,7 @@ fn badge(text: impl Into<SharedString>, theme: &Theme) -> impl IntoElement {
     div().flex_none().h(px(18.)).px(px(7.)).rounded_full().flex().items_center().bg(theme.hover).typography(Type::Small).text_color(theme.text_soft).child(text.into())
 }
 
-fn server_row(row: &ServerRow, first: bool, expanded: bool, confirming: bool, theme: &Theme) -> impl IntoElement {
+fn server_row(row: &ServerRow, all_projects: &[(String, SharedString)], first: bool, expanded: bool, confirming: bool, theme: &Theme) -> impl IntoElement {
     let server = &row.server;
     let id = server.id.clone();
     let (status, tone) = standing(row);
@@ -459,7 +464,7 @@ fn server_row(row: &ServerRow, first: bool, expanded: bool, confirming: bool, th
                         .child(div().flex_none().size(px(6.)).rounded_full().bg(dot))
                         .child(div().min_w_0().truncate().text_color(if tone == Tone::Bad { theme.danger } else { theme.text_dim }).child(status))
                         .child(div().flex_none().text_color(theme.text_faint).child("·"))
-                        .child(div().flex_none().text_color(theme.text_faint).child(row.reach.clone())),
+                        .child(div().flex_none().max_w(px(220.)).truncate().text_color(theme.text_faint).child(row.reach.clone())),
                 ),
         )
         .child(
@@ -483,11 +488,11 @@ fn server_row(row: &ServerRow, first: bool, expanded: bool, confirming: bool, th
         .flex_col()
         .when(!first, |row| row.border_t_1().border_color(theme.border))
         .child(head)
-        .when(expanded, |block| block.child(details(row, confirming, theme)))
+        .when(expanded, |block| block.child(details(row, all_projects, confirming, theme)))
         .tag("mcp-server")
 }
 
-fn details(row: &ServerRow, confirming: bool, theme: &Theme) -> impl IntoElement {
+fn details(row: &ServerRow, all_projects: &[(String, SharedString)], confirming: bool, theme: &Theme) -> impl IntoElement {
     let server = &row.server;
     let id = server.id.clone();
     let fact = |label: &'static str, value: String, mono: bool| {
@@ -515,7 +520,22 @@ fn details(row: &ServerRow, confirming: bool, theme: &Theme) -> impl IntoElement
             }
         }
     }
-    facts = facts.child(fact("Timeout", format!("{} s", seconds(server.timeout_ms)), false)).child(fact("Projects", row.reach.to_string(), false));
+    facts = facts.child(fact("Timeout", format!("{} s", seconds(server.timeout_ms)), false));
+
+    let availability = div()
+        .flex()
+        .flex_col()
+        .gap(px(8.))
+        .child(div().typography(Type::Label).text_color(theme.text_dim).child("Availability"))
+        .child(
+            div()
+                .p(px(14.))
+                .rounded(px(12.))
+                .border_1()
+                .border_color(theme.border)
+                .child(availability_controls(&row.scope, all_projects, Some(&id), row.scope_pending, theme)),
+        )
+        .tag("mcp-availability");
 
     let tools: AnyElement = if server.tools.is_empty() {
         div().typography(Type::Small).text_color(theme.text_faint).child("Test the connection to list this server’s tools. They’re all on until you switch one off.").into_any_element()
@@ -600,6 +620,7 @@ fn details(row: &ServerRow, confirming: bool, theme: &Theme) -> impl IntoElement
         .flex_col()
         .gap(px(14.))
         .child(facts)
+        .child(availability)
         .child(div().flex().flex_col().gap(px(8.)).child(div().typography(Type::Label).text_color(theme.text_dim).child("Tools")).child(tools))
         .child(actions)
 }
@@ -663,12 +684,12 @@ fn editor_page(editor: &EditorData, theme: &Theme) -> impl IntoElement {
         .gap(px(18.))
         .child(div().flex().flex_col().child(back).child(head(
             if editor.new { "New MCP server" } else { "Edit MCP server" },
-            "Its tools are offered to the agent in the projects you choose. Values you type are kept in WackCode’s secret store and never shown again.",
+            "Choose where its tools are offered across Code projects and Chat mode. Values you type are kept in WackCode’s secret store and never shown again.",
             None,
             theme,
         )))
         .child(server_card)
-        .child(projects_card(editor, theme))
+        .child(availability_card(editor, theme))
         .children(editor.test.clone().map(|test| test_result(test, theme)))
         .child(footer(editor, theme))
 }
@@ -712,33 +733,122 @@ fn entries(editor: &EditorData, theme: &Theme) -> AnyElement {
         .into_any_element()
 }
 
-fn projects_card(editor: &EditorData, theme: &Theme) -> impl IntoElement {
-    let chosen = matches!(editor.projects, Projects::Only(_));
-    let mut block = div().flex().flex_col().items_start().gap(px(12.)).child(segmented(
-        "mcp-scope",
-        &[(false, "All projects"), (true, "Chosen projects")],
-        chosen,
-        |only| Box::new(ChooseMcpScope { only }),
-        theme,
-    ));
-    if let Projects::Only(ids) = &editor.projects {
-        block = block.child(if editor.all_projects.is_empty() {
-            div().typography(Type::Small).text_color(theme.text_faint).child("Add a project folder first.").into_any_element()
-        } else {
+/// A project pill marked excluded in `Except chosen`: tinted in the fixed danger colour so
+/// exclusions never read like accented inclusions.
+fn excluded_pill(id: impl Into<gpui::ElementId>, label: impl Into<SharedString>, theme: &Theme) -> gpui::Stateful<gpui::Div> {
+    div()
+        .id(id)
+        .flex_none()
+        .h(px(32.))
+        .pl(px(11.))
+        .pr(px(14.))
+        .rounded_full()
+        .flex()
+        .items_center()
+        .gap(px(7.))
+        .cursor_pointer()
+        .bg(Hsla { a: 0.14, ..theme.danger })
+        .border_1()
+        .border_color(Hsla { a: 0.34, ..theme.danger })
+        .hover(|pill| pill.bg(Hsla { a: 0.22, ..theme.danger }))
+        .child(Icon::Close.view(px(14.), theme.danger))
+        .child(div().typography(Type::UiStrong).text_color(theme.danger).child(label.into()))
+}
+
+/// Shared Availability controls for both the editor card and an expanded server row.
+fn availability_controls(scope: &McpScope, all_projects: &[(String, SharedString)], server: Option<&str>, pending: bool, theme: &Theme) -> impl IntoElement {
+    let server_owned: Option<String> = server.map(str::to_string);
+    let area = scope.area();
+    let area_hint = match area {
+        AreaScope::All => "Available in Code projects and Chat mode.",
+        AreaScope::Code => "Available in Code projects, never in Chat mode.",
+        AreaScope::Chat => "Available only in Chat mode, never in Code projects.",
+    };
+    let area_block = div()
+        .flex()
+        .flex_col()
+        .items_start()
+        .gap(px(6.))
+        .child(
             div()
-                .flex()
-                .flex_wrap()
-                .gap(px(8.))
-                .children(editor.all_projects.iter().enumerate().map(|(index, (id, name))| {
-                    let on = ids.contains(id);
-                    pill(("mcp-project", index), name.clone(), on.then_some(Icon::Check), on, theme).on_click(dispatch(ToggleMcpProject { id: id.clone() })).tag("mcp-project")
-                }))
-                .into_any_element()
-        });
+                .child(segmented(
+                    "mcp-area",
+                    &[(AreaScope::All, "Everywhere"), (AreaScope::Code, "Code only"), (AreaScope::Chat, "Chat only")],
+                    area,
+                    {
+                        let server = server_owned.clone();
+                        move |area| Box::new(ChooseMcpArea { server: server.clone(), area })
+                    },
+                    theme,
+                ))
+                .tag("mcp-area"),
+        )
+        .child(div().typography(Type::Small).text_color(theme.text_faint).child(area_hint));
+
+    let mut block = div().flex().flex_col().items_start().gap(px(12.)).child(area_block);
+    if let Some(projects) = scope.projects() {
+        let label = if area == AreaScope::All { "Code projects" } else { "Projects" };
+        let mut section = div()
+            .w_full()
+            .pt(px(12.))
+            .border_t_1()
+            .border_color(theme.border)
+            .flex()
+            .flex_col()
+            .items_start()
+            .gap(px(10.))
+            .child(div().typography(Type::Ui).text_color(theme.text_soft).child(label))
+            .child(
+                div()
+                    .child(segmented(
+                        "mcp-project-filter",
+                        &[(ProjectFilter::All, "All projects"), (ProjectFilter::Only, "Only chosen"), (ProjectFilter::Except, "Except chosen")],
+                        projects.filter(),
+                        {
+                            let server = server_owned.clone();
+                            move |filter| Box::new(ChooseMcpProjectFilter { server: server.clone(), filter })
+                        },
+                        theme,
+                    ))
+                    .tag("mcp-project-filter"),
+            );
+        if let Projects::Only(ids) | Projects::Except(ids) = projects {
+            let excluding = matches!(projects, Projects::Except(_));
+            let (hint, ink) = match (pending, excluding) {
+                (true, true) => ("Choose at least one project to exclude below to apply.", theme.warning),
+                (true, false) => ("Choose at least one project below to apply.", theme.warning),
+                (false, true) => ("Every project gets this server except the ones you turn off.", theme.text_faint),
+                (false, false) => ("Only chats in the projects you pick get this server.", theme.text_faint),
+            };
+            section = section.child(div().typography(Type::Small).text_color(ink).child(hint)).child(if all_projects.is_empty() {
+                div().typography(Type::Small).text_color(theme.text_faint).child("Add a project folder first.").into_any_element()
+            } else {
+                div()
+                    .flex()
+                    .flex_wrap()
+                    .gap(px(8.))
+                    .children(all_projects.iter().enumerate().map(|(index, (id, name))| {
+                        let picked = ids.contains(id);
+                        let toggle = ToggleMcpProject { server: server_owned.clone(), id: id.clone() };
+                        if excluding && picked {
+                            excluded_pill(("mcp-project", index), name.clone(), theme).on_click(dispatch(toggle)).tag("mcp-project").into_any_element()
+                        } else {
+                            let on = !excluding && picked;
+                            pill(("mcp-project", index), name.clone(), on.then_some(Icon::Check), on, theme).on_click(dispatch(toggle)).tag("mcp-project").into_any_element()
+                        }
+                    }))
+                    .into_any_element()
+            });
+        }
+        block = block.child(section);
     }
-    card(Some("Projects"), None, Some("Keeps a server, such as one for a design app, out of unrelated work."), theme)
-        .child(div().px(px(18.)).py(px(13.)).border_t_1().border_color(theme.border).child(block))
-        .tag("mcp-projects")
+    block
+}
+
+fn availability_card(editor: &EditorData, theme: &Theme) -> impl IntoElement {
+    card(Some("Availability"), None, Some("Keeps a server, such as Blender, out of unrelated projects or modes."), theme)
+        .child(div().px(px(18.)).py(px(13.)).border_t_1().border_color(theme.border).child(availability_controls(&editor.scope, &editor.all_projects, None, false, theme)))
+        .tag("mcp-availability")
 }
 
 fn test_result(test: ProbeOutcome, theme: &Theme) -> impl IntoElement {
@@ -814,9 +924,9 @@ mod tests {
             env: Vec::new(),
             disabled_tools: Vec::new(),
             tools: Vec::new(),
-            projects: Projects::All,
+            scope: McpScope::default(),
         };
-        ServerRow { server, live, reach: "All projects".into(), test }
+        ServerRow { scope: server.scope.clone(), scope_pending: false, server, live, reach: "Everywhere".into(), test }
     }
 
     #[test]
@@ -831,11 +941,16 @@ mod tests {
     }
 
     #[test]
-    fn reach_names_the_chosen_projects() {
-        let names = vec![("p1".to_string(), SharedString::from("WackCode")), ("p2".to_string(), SharedString::from("Site"))];
-        assert_eq!(reach(&Projects::All, &names).as_ref(), "All projects");
-        assert_eq!(reach(&Projects::Only(vec!["p2".into(), "p1".into()]), &names).as_ref(), "Site, WackCode");
-        assert_eq!(reach(&Projects::Only(vec!["gone".into()]), &names).as_ref(), "No projects");
+    fn reach_describes_areas_and_projects() {
+        let names = vec![("p1".to_string(), SharedString::from("Game")), ("p2".to_string(), SharedString::from("App"))];
+        assert_eq!(reach(&McpScope::default(), &names).as_ref(), "Everywhere");
+        assert_eq!(reach(&McpScope::Chat, &names).as_ref(), "Chat only");
+        assert_eq!(reach(&McpScope::Code { projects: Projects::All }, &names).as_ref(), "Code only");
+        assert_eq!(reach(&McpScope::Code { projects: Projects::Only(vec!["p2".into(), "p1".into()]) }, &names).as_ref(), "Only App, Game");
+        assert_eq!(reach(&McpScope::Code { projects: Projects::Only(vec!["gone".into()]) }, &names).as_ref(), "No projects");
+        assert_eq!(reach(&McpScope::Code { projects: Projects::Except(vec!["p2".into()]) }, &names).as_ref(), "Code except App");
+        assert_eq!(reach(&McpScope::All { projects: Projects::Only(vec!["p1".into()]) }, &names).as_ref(), "Chat, Game");
+        assert_eq!(reach(&McpScope::All { projects: Projects::Except(vec!["p2".into()]) }, &names).as_ref(), "Everywhere except App");
         assert_eq!(seconds(120_000), "120");
         assert_eq!(seconds(1_500), "1.5");
     }

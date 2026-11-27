@@ -944,6 +944,7 @@ impl Store {
     pub fn remove_project(&mut self, id: &str) -> Result<(), String> {
         self.state.projects.retain(|project| project.id != id);
         self.state.chats.retain(|chat| chat.project.as_deref() != Some(id));
+        self.prune_mcp_project(id);
         self.save()
     }
 
@@ -1153,11 +1154,16 @@ impl Store {
         wack_agent::images::Images::for_session(&self.session_path(chat)).folder().map(Path::to_path_buf).unwrap_or_default()
     }
 
+    /// The path of the Chat area's shared MCP working folder (without creating it).
+    pub fn chat_area_folder_path(&self) -> PathBuf {
+        self.folder.join("chat-area")
+    }
+
     /// The one empty folder every Chat chat's MCP servers start in, so the chats share their
     /// connections (the hub keys them by folder) and no server is rooted where it could see a
     /// scratchpad.
     pub fn chat_area_folder(&self) -> Result<PathBuf, String> {
-        let folder = self.folder.join("chat-area");
+        let folder = self.chat_area_folder_path();
         fs::create_dir_all(&folder).map_err(|error| format!("Could not make the Chat area's folder: {error}"))?;
         let _ = fs::set_permissions(&folder, fs::Permissions::from_mode(0o700));
         Ok(folder)

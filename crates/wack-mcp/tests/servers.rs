@@ -278,8 +278,31 @@ async fn switched_off_tools_and_servers_are_not_offered() {
     assert!(!first.offered(0).contains(&"mcp__mock__echo".to_string()));
     let none = run(&hub, &[], folder.path(), vec![say("hi")], Control::new()).await;
     assert!(none.offered(0).is_empty());
-    hub.retain(&[]);
+    hub.retain(|_, _, _| false);
     assert!(hub.states().is_empty());
+}
+
+#[tokio::test]
+async fn retain_can_retire_one_folder_while_keeping_another_alive() {
+    let first = tempfile::tempdir().unwrap();
+    let second = tempfile::tempdir().unwrap();
+    let hub = Hub::new(None);
+    let spec = stdio("Mock", &[]);
+    let fp = spec.fingerprint();
+
+    let a = run(&hub, std::slice::from_ref(&spec), first.path(), vec![say("hi")], Control::new()).await;
+    let b = run(&hub, std::slice::from_ref(&spec), second.path(), vec![say("hi")], Control::new()).await;
+    assert!(a.offered(0).contains(&"mcp__mock__peek".to_string()));
+    assert!(b.offered(0).contains(&"mcp__mock__peek".to_string()));
+    assert_eq!(hub.states().len(), 2);
+
+    // Scope the server away from `second`: only `first` stays connected.
+    hub.retain(|id, fingerprint, folder| id == spec.id && fingerprint == fp && folder == first.path());
+    let states = hub.states();
+    assert_eq!(states.len(), 1);
+    assert_eq!(states[0].folder, first.path());
+    assert!(matches!(states[0].state, State::Connected { .. }));
+    hub.terminate_all();
 }
 
 /// Warms the cache with a gated server, then starts a new hub (a relaunch) whose server is held

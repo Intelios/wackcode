@@ -244,11 +244,11 @@ impl Hub {
         });
     }
 
-    /// Closes every connection whose `(server id, fingerprint)` is not in `keep`: the server was
-    /// removed, switched off or reconfigured.
-    pub fn retain(&self, keep: &[(String, String)]) {
+    /// Closes every connection for which `keep(server_id, fingerprint, folder)` returns false:
+    /// the server was removed, switched off, reconfigured, or scoped away from that folder.
+    pub fn retain(&self, mut keep: impl FnMut(&str, &str, &Path) -> bool) {
         self.inner.entries.lock().unwrap().retain(|entry| {
-            let kept = keep.iter().any(|(server, fingerprint)| *server == entry.server && *fingerprint == entry.fingerprint);
+            let kept = keep(&entry.server, &entry.fingerprint, &entry.folder);
             if !kept {
                 entry.retire();
             }

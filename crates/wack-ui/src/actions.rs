@@ -1134,17 +1134,28 @@ pub struct ChooseMcpTransport {
     pub transport: wack_core::mcp::McpTransport,
 }
 
-/// Settings › MCP servers: all projects, or only chosen ones.
+/// Settings › MCP servers: which areas a server runs in (Everywhere, Code only, Chat only).
+/// `server: None` targets the open editor; `Some(id)` edits a saved server inline.
 #[derive(Clone, Debug, PartialEq, Action)]
 #[action(namespace = wackcode, no_json)]
-pub struct ChooseMcpScope {
-    pub only: bool,
+pub struct ChooseMcpArea {
+    pub server: Option<String>,
+    pub area: wack_core::mcp::AreaScope,
 }
 
-/// Settings › MCP servers: adds or removes a project from the edited server's chosen ones.
+/// Settings › MCP servers: how Code projects are filtered (All, Only chosen, Except chosen).
+#[derive(Clone, Debug, PartialEq, Action)]
+#[action(namespace = wackcode, no_json)]
+pub struct ChooseMcpProjectFilter {
+    pub server: Option<String>,
+    pub filter: wack_core::mcp::ProjectFilter,
+}
+
+/// Settings › MCP servers: adds or removes a project from a server's Only or Except list.
 #[derive(Clone, Debug, PartialEq, Action)]
 #[action(namespace = wackcode, no_json)]
 pub struct ToggleMcpProject {
+    pub server: Option<String>,
     pub id: String,
 }
 

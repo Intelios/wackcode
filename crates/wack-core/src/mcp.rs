@@ -1,6 +1,6 @@
-//! Settings › MCP servers: the servers the user added, which projects each reaches, and what a
-//! run is given. The client itself is `wack_mcp`. Ported from version 2's `mcp.rs`, with its
-//! validation and tests; scoping a server to projects is new.
+//! Settings › MCP servers: the servers the user added, where each is available (areas and
+//! projects), and what a run is given. The client itself is `wack_mcp`. Ported from version 2's
+//! `mcp.rs`, with its validation and tests; scoping a server by area and projects is new.
 //!
 //! Invariants:
 //! - `state.json` keeps each server with its header and environment variable *names* only. Their
@@ -8,15 +8,15 @@
 //!   it only inside a [`ServerSpec`] for a run or a Test connection. Nothing returns them to the
 //!   UI: a value field in the editor starts empty, and blank keeps the saved value.
 //! - Headers go over https only, except to this Mac, so they are never sent unencrypted.
-//! - A server switched off, or scoped away from a project, is not given to that project's runs,
+//! - A server switched off, or scoped away from an area or project, is not given to those runs,
 //!   and its secrets are not read for them.
 
-use std::{collections::BTreeMap, net::IpAddr, time::Duration};
+use std::{collections::BTreeMap, net::IpAddr, path::Path, time::Duration};
 
-use serde::{Deserialize, Serialize};
+use serde::{Deserialize, Deserializer, Serialize};
 use wack_mcp::{ServerSpec, Transport, slug};
 
-use crate::store::Store;
+use crate::store::{ChatKind, Store};
 
 pub use wack_mcp::Transport as McpTransport;
 
@@ -38,21 +38,264 @@ const MAX_TOOL_DESCRIPTION_CHARS: usize = 1_000;
 const RESERVED_HEADERS: &[&str] =
     &["host", "content-length", "content-type", "accept", "connection", "transfer-encoding", "mcp-session-id", "mcp-protocol-version", "last-event-id"];
 
-/// Which projects' chats a server reaches.
+/// Which Code projects a server reaches when Code is in scope.
 #[derive(Clone, Debug, Default, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(rename_all = "lowercase")]
 pub enum Projects {
     #[default]
     All,
-    /// These projects, by id.
+    /// Only these projects, by id.
     Only(Vec<String>),
+    /// Every project except these, by id.
+    Except(Vec<String>),
 }
 
 impl Projects {
+    pub fn is_all(&self) -> bool {
+        matches!(self, Projects::All)
+    }
+
+    pub fn filter(&self) -> ProjectFilter {
+        match self {
+            Projects::All => ProjectFilter::All,
+            Projects::Only(_) => ProjectFilter::Only,
+            Projects::Except(_) => ProjectFilter::Except,
+        }
+    }
+
+    pub fn ids(&self) -> &[String] {
+        match self {
+            Projects::All => &[],
+            Projects::Only(ids) | Projects::Except(ids) => ids,
+        }
+    }
+
     pub fn includes(&self, project: Option<&str>) -> bool {
         match self {
             Projects::All => true,
             Projects::Only(ids) => project.is_some_and(|project| ids.iter().any(|id| id == project)),
+            Projects::Except(ids) => project.is_none_or(|project| !ids.iter().any(|id| id == project)),
+        }
+    }
+}
+
+/// Which areas a server reaches, for UI controls.
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq, Hash)]
+pub enum AreaScope {
+    /// Both Code projects and the Chat area.
+    #[default]
+    All,
+    /// Code area only (never Chat mode).
+    Code,
+    /// Chat area only (never Code projects).
+    Chat,
+}
+
+/// Which project filter mode is active for Code, for UI controls.
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq, Hash)]
+pub enum ProjectFilter {
+    #[default]
+    All,
+    Only,
+    Except,
+}
+
+/// Where an MCP server is offered: which areas and, when Code is included, which projects.
+#[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(tag = "area", rename_all = "lowercase")]
+pub enum McpScope {
+    /// Both Code and Chat; `projects` filters which Code projects receive it.
+    All {
+        #[serde(default, skip_serializing_if = "Projects::is_all")]
+        projects: Projects,
+    },
+    /// Code area only; `projects` filters which Code projects receive it.
+    Code {
+        #[serde(default, skip_serializing_if = "Projects::is_all")]
+        projects: Projects,
+    },
+    /// Chat area only; never offered to Code projects.
+    Chat,
+}
+
+impl Default for McpScope {
+    fn default() -> Self {
+        Self::All { projects: Projects::All }
+    }
+}
+
+impl McpScope {
+    pub fn area(&self) -> AreaScope {
+        match self {
+            McpScope::All { .. } => AreaScope::All,
+            McpScope::Code { .. } => AreaScope::Code,
+            McpScope::Chat => AreaScope::Chat,
+        }
+    }
+
+    pub fn projects(&self) -> Option<&Projects> {
+        match self {
+            McpScope::All { projects } | McpScope::Code { projects } => Some(projects),
+            McpScope::Chat => None,
+        }
+    }
+
+    pub fn includes_chat(&self) -> bool {
+        matches!(self, McpScope::All { .. } | McpScope::Chat)
+    }
+
+    pub fn includes_code(&self, project: Option<&str>) -> bool {
+        match self {
+            McpScope::Chat => false,
+            McpScope::All { projects } | McpScope::Code { projects } => projects.includes(project),
+        }
+    }
+
+    pub fn includes(&self, kind: ChatKind, project: Option<&str>) -> bool {
+        match kind {
+            ChatKind::Chat => self.includes_chat(),
+            ChatKind::Code => self.includes_code(project),
+        }
+    }
+
+    /// Switches the area while preserving the project filter between Everywhere and Code only.
+    pub fn with_area(&self, area: AreaScope) -> Self {
+        let projects = self.projects().cloned().unwrap_or(Projects::All);
+        match area {
+            AreaScope::All => McpScope::All { projects },
+            AreaScope::Code => McpScope::Code { projects },
+            AreaScope::Chat => McpScope::Chat,
+        }
+    }
+
+    /// Switches the Code project filter, preserving any chosen project ids when flipping between
+    /// `Only` and `Except`.
+    pub fn with_project_filter(&self, filter: ProjectFilter) -> Self {
+        let next = |current: &Projects| match filter {
+            ProjectFilter::All => Projects::All,
+            ProjectFilter::Only => Projects::Only(current.ids().to_vec()),
+            ProjectFilter::Except => Projects::Except(current.ids().to_vec()),
+        };
+        match self {
+            McpScope::All { projects } => McpScope::All { projects: next(projects) },
+            McpScope::Code { projects } => McpScope::Code { projects: next(projects) },
+            McpScope::Chat => McpScope::Chat,
+        }
+    }
+
+    /// Adds or removes `project_id` from an `Only` or `Except` list.
+    pub fn toggle_project(&self, project_id: &str) -> Self {
+        let toggle = |projects: &Projects| match projects {
+            Projects::All => Projects::All,
+            Projects::Only(ids) => {
+                let mut next = ids.clone();
+                match next.iter().position(|id| id == project_id) {
+                    Some(index) => {
+                        next.remove(index);
+                    }
+                    None => next.push(project_id.to_string()),
+                }
+                Projects::Only(next)
+            }
+            Projects::Except(ids) => {
+                let mut next = ids.clone();
+                match next.iter().position(|id| id == project_id) {
+                    Some(index) => {
+                        next.remove(index);
+                    }
+                    None => next.push(project_id.to_string()),
+                }
+                Projects::Except(next)
+            }
+        };
+        match self {
+            McpScope::All { projects } => McpScope::All { projects: toggle(projects) },
+            McpScope::Code { projects } => McpScope::Code { projects: toggle(projects) },
+            McpScope::Chat => McpScope::Chat,
+        }
+    }
+
+    /// Whether the scope is an `Only` or `Except` filter with no projects chosen yet.
+    pub fn needs_project_choice(&self) -> bool {
+        matches!(self.projects(), Some(Projects::Only(ids) | Projects::Except(ids)) if ids.is_empty())
+    }
+
+    /// Removes a deleted project from any `Only` or `Except` list. An emptied `Except` normalises
+    /// to `All`; an emptied `Only` under `All` becomes `Chat`, while under `Code` it stays empty
+    /// so removing a server's only allowed project never enables it everywhere.
+    pub fn prune_project(&mut self, project_id: &str) -> bool {
+        match self {
+            McpScope::Chat => false,
+            McpScope::All { projects } => match projects {
+                Projects::All => false,
+                Projects::Except(ids) => {
+                    let before = ids.len();
+                    ids.retain(|id| id != project_id);
+                    if ids.len() == before {
+                        return false;
+                    }
+                    if ids.is_empty() {
+                        *projects = Projects::All;
+                    }
+                    true
+                }
+                Projects::Only(ids) => {
+                    let before = ids.len();
+                    ids.retain(|id| id != project_id);
+                    if ids.len() == before {
+                        return false;
+                    }
+                    if ids.is_empty() {
+                        *self = McpScope::Chat;
+                    }
+                    true
+                }
+            },
+            McpScope::Code { projects } => match projects {
+                Projects::All => false,
+                Projects::Except(ids) => {
+                    let before = ids.len();
+                    ids.retain(|id| id != project_id);
+                    if ids.len() == before {
+                        return false;
+                    }
+                    if ids.is_empty() {
+                        *projects = Projects::All;
+                    }
+                    true
+                }
+                Projects::Only(ids) => {
+                    let before = ids.len();
+                    ids.retain(|id| id != project_id);
+                    ids.len() != before
+                }
+            },
+        }
+    }
+
+    /// A short human description of where this server runs, shared by Settings and `wack mcp list`.
+    pub fn describe<'a>(&self, project_name: impl Fn(&str) -> Option<&'a str>) -> String {
+        let list = |ids: &[String]| -> Vec<&'a str> { ids.iter().filter_map(|id| project_name(id)).collect() };
+        match self {
+            McpScope::Chat => "Chat only".into(),
+            McpScope::All { projects: Projects::All } => "Everywhere".into(),
+            McpScope::All { projects: Projects::Only(ids) } => {
+                let chosen = list(ids);
+                if chosen.is_empty() { "Chat only".into() } else { format!("Chat, {}", chosen.join(", ")) }
+            }
+            McpScope::All { projects: Projects::Except(ids) } => {
+                let excluded = list(ids);
+                if excluded.is_empty() { "Everywhere".into() } else { format!("Everywhere except {}", excluded.join(", ")) }
+            }
+            McpScope::Code { projects: Projects::All } => "Code only".into(),
+            McpScope::Code { projects: Projects::Only(ids) } => {
+                let chosen = list(ids);
+                if chosen.is_empty() { "No projects".into() } else { format!("Only {}", chosen.join(", ")) }
+            }
+            McpScope::Code { projects: Projects::Except(ids) } => {
+                let excluded = list(ids);
+                if excluded.is_empty() { "Code only".into() } else { format!("Code except {}", excluded.join(", ")) }
+            }
         }
     }
 }
@@ -68,7 +311,7 @@ pub struct McpToolInfo {
 }
 
 /// A server as `state.json` keeps it.
-#[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
+#[derive(Clone, Debug, PartialEq, Serialize)]
 pub struct McpServer {
     pub id: String,
     pub name: String,
@@ -96,7 +339,64 @@ pub struct McpServer {
     #[serde(default, skip_serializing_if = "Vec::is_empty")]
     pub tools: Vec<McpToolInfo>,
     #[serde(default)]
-    pub projects: Projects,
+    pub scope: McpScope,
+}
+
+/// Reads both the current `scope` field and earlier v3 files that saved `projects` alone,
+/// keeping `projects: { only: […] }` restricted to Code so it never leaks into Chat.
+impl<'de> Deserialize<'de> for McpServer {
+    fn deserialize<D: Deserializer<'de>>(deserializer: D) -> Result<Self, D::Error> {
+        #[derive(Deserialize)]
+        struct StoredMcpServer {
+            id: String,
+            name: String,
+            #[serde(default = "on")]
+            enabled: bool,
+            transport: Transport,
+            #[serde(default = "default_timeout")]
+            timeout_ms: u64,
+            #[serde(default)]
+            command: String,
+            #[serde(default)]
+            args: Vec<String>,
+            #[serde(default)]
+            url: String,
+            #[serde(default)]
+            headers: Vec<String>,
+            #[serde(default)]
+            env: Vec<String>,
+            #[serde(default)]
+            disabled_tools: Vec<String>,
+            #[serde(default)]
+            tools: Vec<McpToolInfo>,
+            #[serde(default)]
+            scope: Option<McpScope>,
+            #[serde(default)]
+            projects: Option<Projects>,
+        }
+        let raw = StoredMcpServer::deserialize(deserializer)?;
+        let scope = match (raw.scope, raw.projects) {
+            (Some(scope), _) => scope,
+            (None, Some(Projects::Only(ids))) => McpScope::Code { projects: Projects::Only(ids) },
+            (None, Some(Projects::Except(ids))) => McpScope::All { projects: Projects::Except(ids) },
+            (None, Some(Projects::All) | None) => McpScope::default(),
+        };
+        Ok(Self {
+            id: raw.id,
+            name: raw.name,
+            enabled: raw.enabled,
+            transport: raw.transport,
+            timeout_ms: raw.timeout_ms,
+            command: raw.command,
+            args: raw.args,
+            url: raw.url,
+            headers: raw.headers,
+            env: raw.env,
+            disabled_tools: raw.disabled_tools,
+            tools: raw.tools,
+            scope,
+        })
+    }
 }
 
 fn on() -> bool {
@@ -160,7 +460,7 @@ pub struct McpDraft {
     pub url: String,
     pub headers: Vec<SecretEntry>,
     pub env: Vec<SecretEntry>,
-    pub projects: Projects,
+    pub scope: McpScope,
 }
 
 impl McpDraft {
@@ -175,7 +475,7 @@ impl McpDraft {
             url: String::new(),
             headers: Vec::new(),
             env: Vec::new(),
-            projects: Projects::All,
+            scope: McpScope::default(),
         }
     }
 
@@ -192,13 +492,50 @@ impl McpDraft {
             url: server.url.clone(),
             headers: entries(&server.headers),
             env: entries(&server.env),
-            projects: server.projects.clone(),
+            scope: server.scope.clone(),
         }
     }
 }
 
 pub fn secret_key(server_id: &str) -> String {
     format!("mcp:{server_id}")
+}
+
+/// Validates and normalises a server's availability scope against the projects currently saved.
+pub fn validate_scope(scope: &McpScope, project_ids: &[String]) -> Result<McpScope, String> {
+    let clean = |ids: &[String]| -> Vec<String> {
+        let mut kept = Vec::new();
+        for id in ids {
+            if project_ids.contains(id) && !kept.contains(id) {
+                kept.push(id.clone());
+            }
+        }
+        kept
+    };
+    let check_projects = |projects: &Projects, empty_only_message: &str| -> Result<Projects, String> {
+        match projects {
+            Projects::All => Ok(Projects::All),
+            Projects::Only(ids) => {
+                let kept = clean(ids);
+                if kept.is_empty() {
+                    return Err(empty_only_message.into());
+                }
+                Ok(Projects::Only(kept))
+            }
+            Projects::Except(ids) => {
+                let kept = clean(ids);
+                if kept.is_empty() {
+                    return Err("Choose at least one project to exclude, or switch to All projects.".into());
+                }
+                Ok(Projects::Except(kept))
+            }
+        }
+    };
+    match scope {
+        McpScope::Chat => Ok(McpScope::Chat),
+        McpScope::All { projects } => Ok(McpScope::All { projects: check_projects(projects, "Choose at least one project, or switch to Chat only.")? }),
+        McpScope::Code { projects } => Ok(McpScope::Code { projects: check_projects(projects, "Choose at least one project, or switch to All projects.")? }),
+    }
 }
 
 /// Checks an edited server against the others and resolves its secrets: a blank value keeps the
@@ -227,17 +564,7 @@ pub fn validate(draft: &McpDraft, servers: &[McpServer], saved: &McpSecrets, pro
     if !(MIN_TIMEOUT_MS..=MAX_TIMEOUT_MS).contains(&draft.timeout_ms) {
         return Err(format!("Set a timeout between {} second and {} hour.", MIN_TIMEOUT_MS / 1_000, MAX_TIMEOUT_MS / 3_600_000));
     }
-    let projects = match &draft.projects {
-        Projects::All => Projects::All,
-        Projects::Only(ids) => {
-            let mut kept: Vec<String> = ids.iter().filter(|id| project_ids.contains(id)).cloned().collect();
-            kept.dedup();
-            if kept.is_empty() {
-                return Err("Choose at least one project, or All projects.".into());
-            }
-            Projects::Only(kept)
-        }
-    };
+    let scope = validate_scope(&draft.scope, project_ids)?;
 
     let mut secrets = McpSecrets::default();
     let (command, args, url) = match draft.transport {
@@ -287,7 +614,7 @@ pub fn validate(draft: &McpDraft, servers: &[McpServer], saved: &McpSecrets, pro
         env: secrets.env.keys().cloned().collect(),
         disabled_tools: existing.map(|server| server.disabled_tools.clone()).unwrap_or_default(),
         tools: Vec::new(),
-        projects,
+        scope,
     };
     // A tool list only applies while the server is reached the same way.
     let tools = existing.filter(|server| server.same_connection(&record)).map(|server| server.tools.clone()).unwrap_or_default();
@@ -441,6 +768,26 @@ impl Store {
         self.save_state()
     }
 
+    /// Updates where a saved server is available (area and project filter) without touching its
+    /// connection, secrets, or known tools.
+    pub fn set_mcp_server_scope(&mut self, id: &str, scope: McpScope) -> Result<(), String> {
+        let project_ids: Vec<String> = self.projects().iter().map(|project| project.id.clone()).collect();
+        let scope = validate_scope(&scope, &project_ids)?;
+        let server = self.mcp_state_mut().servers.iter_mut().find(|server| server.id == id).ok_or("That MCP server no longer exists.")?;
+        if server.scope == scope {
+            return Ok(());
+        }
+        server.scope = scope;
+        self.save_state()
+    }
+
+    /// Removes a deleted project from every server's scope lists.
+    pub(crate) fn prune_mcp_project(&mut self, project_id: &str) {
+        for server in &mut self.mcp_state_mut().servers {
+            server.scope.prune_project(project_id);
+        }
+    }
+
     /// Switches one of a server's tools on or off, by the server's own name for it.
     pub fn set_mcp_tool_enabled(&mut self, id: &str, tool: &str, enabled: bool) -> Result<(), String> {
         let server = self.mcp_state_mut().servers.iter_mut().find(|server| server.id == id).ok_or("That MCP server no longer exists.")?;
@@ -477,13 +824,17 @@ impl Store {
         self.save_state()
     }
 
-    /// The servers a run in `folder` gets: switched on and reaching its project. A folder that
-    /// is no project (a `wack run` elsewhere) gets the servers for all projects.
-    pub fn mcp_specs_for(&self, folder: &std::path::Path) -> Vec<ServerSpec> {
-        let project = self.projects().iter().find(|project| project.path == folder).map(|project| project.id.as_str());
+    /// The servers a run gets: switched on and whose scope includes `kind` and (for Code) the
+    /// project at `folder`. A Code run in an unregistered folder (`wack run` elsewhere) gets
+    /// `All` and `Except` servers, never `Only` or `Chat` servers.
+    pub fn mcp_specs_for(&self, kind: ChatKind, folder: &Path) -> Vec<ServerSpec> {
+        let project = match kind {
+            ChatKind::Code => self.projects().iter().find(|project| project.path == folder).map(|project| project.id.as_str()),
+            ChatKind::Chat => None,
+        };
         self.mcp_servers()
             .iter()
-            .filter(|server| server.enabled && server.projects.includes(project))
+            .filter(|server| server.enabled && server.scope.includes(kind, project))
             .map(|server| spec(server, &self.mcp_secrets(&server.id)))
             .collect()
     }
@@ -502,9 +853,22 @@ impl Store {
         Ok(spec(&record, &secrets))
     }
 
-    /// The connections that may stay up: each enabled server's id with its fingerprint.
-    pub fn mcp_live_keys(&self) -> Vec<(String, String)> {
-        self.mcp_servers().iter().filter(|server| server.enabled).map(|server| (server.id.clone(), spec(server, &self.mcp_secrets(&server.id)).fingerprint())).collect()
+    /// Whether a live hub connection `(id, fingerprint, folder)` is still enabled, matches the
+    /// saved connection configuration, and remains in scope for `folder`.
+    pub fn mcp_keeps_connection(&self, id: &str, fingerprint: &str, folder: &Path) -> bool {
+        let Some(server) = self.mcp_server(id).filter(|server| server.enabled) else {
+            return false;
+        };
+        if spec(server, &self.mcp_secrets(id)).fingerprint() != fingerprint {
+            return false;
+        }
+        if folder == self.chat_area_folder_path() {
+            return server.scope.includes_chat();
+        }
+        let Some(project) = self.projects().iter().find(|project| project.path == folder) else {
+            return false;
+        };
+        server.scope.includes_code(Some(&project.id))
     }
 
     /// Where each server's last tool list is cached.
@@ -622,45 +986,161 @@ mod tests {
     }
 
     #[test]
-    fn projects_must_exist_and_one_must_be_chosen() {
+    fn scopes_validate_deduplicate_and_filter_areas_and_projects() {
         let mut draft = stdio("A");
-        draft.projects = Projects::Only(vec!["gone".into()]);
+        draft.scope = McpScope::Code { projects: Projects::Only(vec!["gone".into()]) };
         assert!(check(&draft).unwrap_err().contains("at least one project"));
-        draft.projects = Projects::Only(vec!["p1".into(), "gone".into()]);
-        let (record, _) = validate(&draft, &[], &McpSecrets::default(), &["p1".into()]).unwrap();
-        assert_eq!(record.projects, Projects::Only(vec!["p1".into()]));
-        assert!(record.projects.includes(Some("p1")));
-        assert!(!record.projects.includes(Some("p2")));
-        assert!(!record.projects.includes(None));
-        assert!(Projects::All.includes(None));
+
+        draft.scope = McpScope::All { projects: Projects::Only(vec!["gone".into()]) };
+        assert!(check(&draft).unwrap_err().contains("Chat only"));
+
+        draft.scope = McpScope::Code { projects: Projects::Except(vec!["gone".into()]) };
+        assert!(check(&draft).unwrap_err().contains("exclude"));
+
+        draft.scope = McpScope::Code { projects: Projects::Only(vec!["p1".into(), "gone".into(), "p1".into()]) };
+        let (record, _) = validate(&draft, &[], &McpSecrets::default(), &["p1".into(), "p2".into()]).unwrap();
+        assert_eq!(record.scope, McpScope::Code { projects: Projects::Only(vec!["p1".into()]) });
+        assert!(record.scope.includes(ChatKind::Code, Some("p1")));
+        assert!(!record.scope.includes(ChatKind::Code, Some("p2")));
+        assert!(!record.scope.includes(ChatKind::Code, None));
+        assert!(!record.scope.includes(ChatKind::Chat, None));
+
+        // Excluding all current projects is valid: future projects (and Chat for All) still get it.
+        draft.scope = McpScope::All { projects: Projects::Except(vec!["p1".into(), "p2".into()]) };
+        let (except_all, _) = validate(&draft, &[], &McpSecrets::default(), &["p1".into(), "p2".into()]).unwrap();
+        assert!(!except_all.scope.includes(ChatKind::Code, Some("p1")));
+        assert!(!except_all.scope.includes(ChatKind::Code, Some("p2")));
+        assert!(except_all.scope.includes(ChatKind::Code, Some("p3")));
+        assert!(except_all.scope.includes(ChatKind::Code, None));
+        assert!(except_all.scope.includes(ChatKind::Chat, None));
+
+        // Chat only never includes Code.
+        draft.scope = McpScope::Chat;
+        let (chat_only, _) = check(&draft).unwrap();
+        assert!(chat_only.scope.includes(ChatKind::Chat, None));
+        assert!(!chat_only.scope.includes(ChatKind::Code, Some("p1")));
+        assert!(!chat_only.scope.includes(ChatKind::Code, None));
+    }
+
+    #[test]
+    fn legacy_projects_field_migrates_without_leaking_project_only_servers_into_chat() {
+        let all_json = r#"{"id":"mcp-1","name":"GitHub","transport":"stdio","command":"npx","projects":"all"}"#;
+        let all: McpServer = serde_json::from_str(all_json).unwrap();
+        assert_eq!(all.scope, McpScope::All { projects: Projects::All });
+        assert!(all.scope.includes_chat());
+        assert!(all.scope.includes_code(Some("p1")));
+
+        let only_json = r#"{"id":"mcp-2","name":"Blender","transport":"stdio","command":"uvx","projects":{"only":["p1"]}}"#;
+        let only: McpServer = serde_json::from_str(only_json).unwrap();
+        assert_eq!(only.scope, McpScope::Code { projects: Projects::Only(vec!["p1".into()]) });
+        assert!(!only.scope.includes_chat(), "a project-scoped server must stay out of Chat");
+        assert!(only.scope.includes_code(Some("p1")));
+        assert!(!only.scope.includes_code(Some("p2")));
+
+        // Serialising writes only `scope`, never the legacy `projects` key at top level.
+        let written = serde_json::to_string(&only).unwrap();
+        assert!(written.contains("\"scope\""), "{written}");
+        assert!(!written.contains("\"projects\":\"all\""), "{written}");
+    }
+
+    #[test]
+    fn scope_helpers_preserve_selections_and_describe_every_combination() {
+        let names = |id: &str| match id {
+            "p1" => Some("Game"),
+            "p2" => Some("App"),
+            _ => None,
+        };
+        let s = McpScope::default();
+        assert_eq!(s.describe(names), "Everywhere");
+        let s = s.with_area(AreaScope::Code);
+        assert_eq!(s.describe(names), "Code only");
+        let s = s.with_project_filter(ProjectFilter::Only);
+        assert!(s.needs_project_choice());
+        assert_eq!(s.describe(names), "No projects");
+        let s = s.toggle_project("p1");
+        assert!(!s.needs_project_choice());
+        assert_eq!(s.describe(names), "Only Game");
+        let s = s.with_area(AreaScope::All);
+        assert_eq!(s.describe(names), "Chat, Game");
+        let s = s.with_project_filter(ProjectFilter::Except);
+        assert_eq!(s.describe(names), "Everywhere except Game");
+        let s = s.toggle_project("p1").toggle_project("p2");
+        assert_eq!(s.describe(names), "Everywhere except App");
+        let s = s.with_area(AreaScope::Code);
+        assert_eq!(s.describe(names), "Code except App");
+        let s = s.with_area(AreaScope::Chat);
+        assert_eq!(s.describe(names), "Chat only");
     }
 
     #[test]
     fn runs_get_enabled_servers_in_scope_with_their_own_secrets() {
         let folder = tempfile::tempdir().unwrap();
         let mut store = Store::open(folder.path()).unwrap();
-        let first = store.add_project(folder.path()).unwrap().id.clone();
+        let game = store.add_project(folder.path()).unwrap().id.clone();
         let elsewhere = tempfile::tempdir().unwrap();
-        let other = store.add_project(elsewhere.path()).unwrap();
-        let (first_path, other_path) = (store.project(&first).unwrap().path.clone(), other.path.clone());
+        let app = store.add_project(elsewhere.path()).unwrap().id.clone();
+        let (game_path, app_path) = (store.project(&game).unwrap().path.clone(), store.project(&app).unwrap().path.clone());
+        let chat_folder = store.chat_area_folder().unwrap();
+        let adhoc = tempfile::tempdir().unwrap();
 
         let everywhere = store.save_mcp_server(&stdio("GitHub")).unwrap();
-        let mut scoped = http("https://example.com/mcp", vec![entry("Authorization", Some("Bearer abcdefgh12345"))]);
-        scoped.name = "Blender".into();
-        scoped.projects = Projects::Only(vec![first.clone()]);
-        store.save_mcp_server(&scoped).unwrap();
+
+        let mut blender_draft = http("https://example.com/mcp", vec![entry("Authorization", Some("Bearer abcdefgh12345"))]);
+        blender_draft.name = "Blender".into();
+        blender_draft.scope = McpScope::Code { projects: Projects::Only(vec![game.clone()]) };
+        let blender = store.save_mcp_server(&blender_draft).unwrap();
+
+        let mut code_except_app = stdio("Linter");
+        code_except_app.env.clear();
+        code_except_app.scope = McpScope::Code { projects: Projects::Except(vec![app.clone()]) };
+        let linter = store.save_mcp_server(&code_except_app).unwrap();
+
+        let mut chat_only = stdio("Notes");
+        chat_only.env.clear();
+        chat_only.scope = McpScope::Chat;
+        let notes = store.save_mcp_server(&chat_only).unwrap();
 
         let names = |specs: Vec<ServerSpec>| specs.into_iter().map(|spec| spec.name).collect::<Vec<_>>();
-        assert_eq!(names(store.mcp_specs_for(&first_path)), ["GitHub", "Blender"]);
-        assert_eq!(names(store.mcp_specs_for(&other_path)), ["GitHub"]);
-        let specs = store.mcp_specs_for(&first_path);
+        assert_eq!(names(store.mcp_specs_for(ChatKind::Code, &game_path)), ["GitHub", "Blender", "Linter"]);
+        assert_eq!(names(store.mcp_specs_for(ChatKind::Code, &app_path)), ["GitHub"]);
+        assert_eq!(names(store.mcp_specs_for(ChatKind::Code, adhoc.path())), ["GitHub", "Linter"]);
+        assert_eq!(names(store.mcp_specs_for(ChatKind::Chat, &chat_folder)), ["GitHub", "Notes"]);
+
+        let specs = store.mcp_specs_for(ChatKind::Code, &game_path);
         assert_eq!(specs[0].env["GITHUB_TOKEN"], "ghp_secretvalue123");
         assert!(specs[0].headers.is_empty());
         assert_eq!(specs[1].headers["Authorization"], "Bearer abcdefgh12345");
         assert!(specs[1].env.is_empty());
 
+        // Live connection retention honours enabled state, fingerprint and folder scope.
+        let blender_fp = store.mcp_spec(&blender).unwrap().fingerprint();
+        let notes_fp = store.mcp_spec(&notes).unwrap().fingerprint();
+        let linter_fp = store.mcp_spec(&linter).unwrap().fingerprint();
+        assert!(store.mcp_keeps_connection(&blender, &blender_fp, &game_path));
+        assert!(!store.mcp_keeps_connection(&blender, &blender_fp, &app_path));
+        assert!(!store.mcp_keeps_connection(&blender, &blender_fp, &chat_folder));
+        assert!(store.mcp_keeps_connection(&notes, &notes_fp, &chat_folder));
+        assert!(!store.mcp_keeps_connection(&notes, &notes_fp, &game_path));
+        assert!(store.mcp_keeps_connection(&linter, &linter_fp, &game_path));
+        assert!(!store.mcp_keeps_connection(&linter, &linter_fp, &app_path));
+        assert!(!store.mcp_keeps_connection(&linter, &linter_fp, adhoc.path()));
+
+        // Inline scope update applies immediately without touching tools or secrets.
+        store.set_mcp_server_scope(&everywhere, McpScope::All { projects: Projects::Except(vec![app.clone()]) }).unwrap();
+        assert_eq!(names(store.mcp_specs_for(ChatKind::Code, &app_path)), Vec::<String>::new());
+        assert_eq!(names(store.mcp_specs_for(ChatKind::Chat, &chat_folder)), ["GitHub", "Notes"]);
+
+        // Removing a project prunes Except back to All, keeps Code+Only empty (never leaks),
+        // and retires its live connections.
+        store.remove_project(&app).unwrap();
+        assert_eq!(store.mcp_server(&linter).unwrap().scope, McpScope::Code { projects: Projects::All });
+        assert_eq!(store.mcp_server(&everywhere).unwrap().scope, McpScope::All { projects: Projects::All });
+        store.remove_project(&game).unwrap();
+        assert_eq!(store.mcp_server(&blender).unwrap().scope, McpScope::Code { projects: Projects::Only(Vec::new()) });
+        assert!(!store.mcp_keeps_connection(&blender, &blender_fp, &game_path));
+
         store.set_mcp_server_enabled(&everywhere, false).unwrap();
-        assert_eq!(names(store.mcp_specs_for(&other_path)), Vec::<String>::new());
+        assert_eq!(names(store.mcp_specs_for(ChatKind::Chat, &chat_folder)), ["Notes"]);
         store.set_mcp_tool_enabled(&everywhere, "delete_repo", false).unwrap();
         assert_eq!(store.mcp_server(&everywhere).unwrap().disabled_tools, ["delete_repo"]);
         store.set_mcp_tool_enabled(&everywhere, "delete_repo", true).unwrap();
@@ -675,14 +1155,27 @@ mod tests {
         assert!(secrets.contains("abcdefgh12345"));
 
         let reopened = Store::open(folder.path()).unwrap();
-        assert_eq!(reopened.mcp_servers().len(), 1);
-        assert_eq!(reopened.mcp_servers()[0].projects, Projects::Only(vec![first]));
+        assert_eq!(reopened.mcp_servers().len(), 3);
+        assert_eq!(reopened.mcp_server(&notes).unwrap().scope, McpScope::Chat);
+    }
+
+    #[test]
+    fn removing_the_only_project_from_all_only_keeps_chat_without_leaking_to_code() {
+        let folder = tempfile::tempdir().unwrap();
+        let mut store = Store::open(folder.path()).unwrap();
+        let project = store.add_project(folder.path()).unwrap();
+        let mut draft = stdio("Mixed");
+        draft.scope = McpScope::All { projects: Projects::Only(vec![project.id.clone()]) };
+        let id = store.save_mcp_server(&draft).unwrap();
+        store.remove_project(&project.id).unwrap();
+        assert_eq!(store.mcp_server(&id).unwrap().scope, McpScope::Chat);
     }
 
     #[test]
     fn a_test_connections_tools_are_kept_only_for_the_same_connection() {
         let folder = tempfile::tempdir().unwrap();
         let mut store = Store::open(folder.path()).unwrap();
+        let project = store.add_project(folder.path()).unwrap();
         let id = store.save_mcp_server(&stdio("GitHub")).unwrap();
         let fingerprint = store.mcp_spec(&id).unwrap().fingerprint();
         let peek = wack_mcp::ToolDecl { name: "peek".into(), title: None, description: Some("Peek.".into()), input_schema: serde_json::json!({}), annotations: None };
@@ -690,6 +1183,7 @@ mod tests {
         assert!(store.mcp_server(&id).unwrap().tools.is_empty());
         store.set_mcp_tools(&id, &fingerprint, &[peek]).unwrap();
         assert_eq!(store.mcp_server(&id).unwrap().tools[0].name, "peek");
-        assert_eq!(store.mcp_live_keys(), [(id, fingerprint)]);
+        assert!(store.mcp_keeps_connection(&id, &fingerprint, &project.path));
+        assert!(!store.mcp_keeps_connection(&id, "stale", &project.path));
     }
 }

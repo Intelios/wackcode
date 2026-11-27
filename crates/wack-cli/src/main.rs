@@ -50,7 +50,7 @@ const HELP: &str = "wack: the WackCode agent without the app
   wack commands                List the slash commands a run understands.
   wack agents                  List the sub-agents a run can start (Settings › Sub-agents).
   wack prompts [name]          List WackCode's system prompts (Settings › Prompts), or print one.
-  wack mcp list                List the MCP servers (Settings › MCP servers) and the projects they reach.
+  wack mcp list                List the MCP servers (Settings › MCP servers) and where they are available.
   wack mcp test <name>         Connect to one, list its tools and close. Starts in --cwd, or here.
 
   --data-dir <folder>          Use another data folder (for tests).
@@ -273,13 +273,7 @@ async fn mcp(args: &mut Args, folder: &Path) -> Result<ExitCode, String> {
                 println!("No MCP servers yet. Add one in Settings › MCP servers.");
             }
             for server in store.mcp_servers() {
-                let reach = match &server.projects {
-                    wack_core::mcp::Projects::All => "all projects".to_string(),
-                    wack_core::mcp::Projects::Only(ids) => {
-                        let names: Vec<&str> = ids.iter().filter_map(|id| store.project(id)).map(|project| project.name.as_str()).collect();
-                        if names.is_empty() { "no projects".to_string() } else { names.join(", ") }
-                    }
-                };
+                let reach = server.scope.describe(|id| store.project(id).map(|project| project.name.as_str()));
                 let what = if server.transport == wack_mcp::Transport::Stdio { std::iter::once(server.command.as_str()).chain(server.args.iter().map(String::as_str)).collect::<Vec<_>>().join(" ") } else { server.url.clone() };
                 println!(
                     "{}  ·  {}{}  ·  {}\n  {what}\n  {} tools known, {} switched off",
@@ -373,7 +367,7 @@ async fn chat_run(store: &Store, connection: Connection, model: Model, effort: O
         }
     });
     let mcp_folder = store.chat_area_folder()?;
-    let mcp = wack_mcp::assemble(&hub.0, &store.mcp_specs_for(&mcp_folder), &mcp_folder, &control.stop_token(), starting).await;
+    let mcp = wack_mcp::assemble(&hub.0, &store.mcp_specs_for(wack_core::ChatKind::Chat, &mcp_folder), &mcp_folder, &control.stop_token(), starting).await;
     let effort = model.pick(effort);
     let prompts = store.prompts().agent_overrides();
     let settings = Settings {
@@ -594,7 +588,7 @@ async fn agent(args: &mut Args, folder: &Path) -> Result<ExitCode, String> {
             eprintln!("{}", print::dim(&format!("Starting MCP servers: {}…", servers.join(", "))));
         }
     });
-    let mcp = wack_mcp::assemble(&hub.0, &store.mcp_specs_for(session.cwd()), session.cwd(), &control.stop_token(), starting).await;
+    let mcp = wack_mcp::assemble(&hub.0, &store.mcp_specs_for(wack_core::ChatKind::Code, session.cwd()), session.cwd(), &control.stop_token(), starting).await;
     let mut tools = wack_tools::core_tools();
     tools.extend(kit.tools());
     tools.extend(wack_web::tools(&store.web_setup())?);

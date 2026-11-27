@@ -3956,7 +3956,7 @@ enum McpScene {
 
 /// Settings › MCP servers, drawn over `backdrop` when there is one.
 fn mcp_scene(scene: McpScene, backdrop: Option<crate::backdrop::Picture>, cx: &mut App) -> AnyView {
-    use wack_core::mcp::{McpDraft, McpServer, McpToolInfo, McpTransport as Transport, Projects, SecretEntry};
+    use wack_core::mcp::{McpDraft, McpScope, McpServer, McpToolInfo, McpTransport as Transport, Projects, SecretEntry};
     use crate::mcp_page::{EditorData, Live, McpData, McpEditor, ProbeOutcome, RowTest, ServerRow, reach};
 
     let projects: Vec<(String, gpui::SharedString)> =
@@ -3975,7 +3975,7 @@ fn mcp_scene(scene: McpScene, backdrop: Option<crate::backdrop::Picture>, cx: &m
         env: Vec::new(),
         disabled_tools: Vec::new(),
         tools: Vec::new(),
-        projects: Projects::All,
+        scope: McpScope::default(),
     };
     let github = McpServer {
         command: "npx".into(),
@@ -3993,12 +3993,30 @@ fn mcp_scene(scene: McpScene, backdrop: Option<crate::backdrop::Picture>, cx: &m
     let blender = McpServer {
         command: "uvx".into(),
         args: vec!["blender-mcp".into()],
-        projects: Projects::Only(vec!["p3".into()]),
+        scope: McpScope::Code { projects: Projects::Only(vec!["p3".into()]) },
         ..server("mcp-2", "Blender", Transport::Stdio)
     };
-    let linear = McpServer { url: "https://mcp.linear.app/mcp".into(), headers: vec!["Authorization".into()], timeout_ms: 30_000, ..server("mcp-3", "Linear", Transport::Http) };
-    let docs = McpServer { url: "http://localhost:8931/sse".into(), enabled: false, ..server("mcp-4", "Docs", Transport::Sse) };
-    let row = |server: McpServer, live: Live, test: Option<RowTest>| ServerRow { reach: reach(&server.projects, &projects), server, live, test };
+    let linear = McpServer {
+        url: "https://mcp.linear.app/mcp".into(),
+        headers: vec!["Authorization".into()],
+        timeout_ms: 30_000,
+        scope: McpScope::Code { projects: Projects::Except(vec!["p4".into()]) },
+        ..server("mcp-3", "Linear", Transport::Http)
+    };
+    let docs = McpServer {
+        url: "http://localhost:8931/sse".into(),
+        enabled: false,
+        scope: McpScope::Chat,
+        ..server("mcp-4", "Docs", Transport::Sse)
+    };
+    let row = |server: McpServer, live: Live, test: Option<RowTest>| ServerRow {
+        reach: reach(&server.scope, &projects),
+        scope: server.scope.clone(),
+        scope_pending: false,
+        server,
+        live,
+        test,
+    };
     let servers = match scene {
         McpScene::Empty => Vec::new(),
         _ => vec![
@@ -4012,7 +4030,7 @@ fn mcp_scene(scene: McpScene, backdrop: Option<crate::backdrop::Picture>, cx: &m
         McpScene::EditorCommand => {
             let mut draft = McpDraft::of(&github);
             draft.env.push(SecretEntry { name: "GITHUB_HOST".into(), value: None });
-            draft.projects = Projects::Only(vec!["p1".into(), "p2".into()]);
+            draft.scope = McpScope::Code { projects: Projects::Only(vec!["p1".into(), "p2".into()]) };
             let mut editor = McpEditor::new(&draft, &["GITHUB_PERSONAL_ACCESS_TOKEN".to_string()], cx);
             editor.test = Some(ProbeOutcome::Found {
                 elapsed_ms: 1840,
@@ -4025,6 +4043,7 @@ fn mcp_scene(scene: McpScene, backdrop: Option<crate::backdrop::Picture>, cx: &m
             draft.name = "Linear".into();
             draft.url = "https://mcp.linear.app/mcp".into();
             draft.headers = vec![SecretEntry { name: "Authorization".into(), value: None }];
+            draft.scope = McpScope::All { projects: Projects::Except(vec!["p4".into()]) };
             let editor = McpEditor::new(&draft, &[], cx);
             editor.headers[0].value.update(cx, |field, cx| field.set_text("Bearer lin_api_0000000000", cx));
             let mut editor = editor;
@@ -4035,6 +4054,7 @@ fn mcp_scene(scene: McpScene, backdrop: Option<crate::backdrop::Picture>, cx: &m
     };
     let mcp = McpData {
         servers,
+        all_projects: projects,
         expanded: matches!(scene, McpScene::Servers | McpScene::Deleting).then(|| "mcp-1".into()),
         confirming_delete: (scene == McpScene::Deleting).then(|| "mcp-1".into()),
         editor,

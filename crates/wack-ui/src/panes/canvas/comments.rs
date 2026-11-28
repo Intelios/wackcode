@@ -538,14 +538,14 @@ impl CanvasPane {
                         .flex()
                         .items_center()
                         .gap(px(6.))
-                        .when(editing.id.is_some(), |row| row.child(button("canvas-comment-delete", "Delete", false).on_click(delete).tag("canvas-comment-delete")))
+                        .when(editing.id.is_some(), |row| row.child(button("canvas-comment-delete", "Delete", false).cursor_pointer().on_click(delete).tag("canvas-comment-delete")))
                         .child(div().flex_1())
                         .when(!editing.sent, |row| {
                             row.child(div().typography(Type::Small).text_color(theme.text_faint).child("↩ to save"))
-                                .child(button("canvas-comment-cancel", "Cancel", false).on_click(close.clone()).tag("canvas-comment-cancel"))
-                                .child(button("canvas-comment-save", if editing.id.is_some() { "Save" } else { "Comment" }, true).on_click(save).tag("canvas-comment-save"))
+                                .child(button("canvas-comment-cancel", "Cancel", false).cursor_pointer().on_click(close.clone()).tag("canvas-comment-cancel"))
+                                .child(button("canvas-comment-save", if editing.id.is_some() { "Save" } else { "Comment" }, true).cursor_pointer().on_click(save).tag("canvas-comment-save"))
                         })
-                        .when(editing.sent, |row| row.child(button("canvas-comment-close", "Close", true).on_click(close).tag("canvas-comment-close"))),
+                        .when(editing.sent, |row| row.child(button("canvas-comment-close", "Close", true).cursor_pointer().on_click(close).tag("canvas-comment-close"))),
                 )
                 .tag("canvas-comment-editor"),
         )

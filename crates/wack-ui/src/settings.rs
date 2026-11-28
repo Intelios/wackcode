@@ -1610,12 +1610,12 @@ fn models_card(editor: &ProviderEditor, theme: &Theme) -> impl IntoElement {
             .border_color(theme.border)
             .flex()
             .gap(px(8.))
-            .child(pill("add-model", "Add model", Some(Icon::Plus), false, theme).on_click(dispatch(AddModelRow)).tag("add-model"))
+            .child(pill("add-model", "Add model", Some(Icon::Plus), false, theme).cursor_pointer().on_click(dispatch(AddModelRow)).tag("add-model"))
             .when(!fetching, |foot| {
                 foot.child(
                     pill("fetch-models", "Fetch models", Some(Icon::Download), false, theme)
                         .tooltip(crate::tooltip::tip("Ask this address which models it has"))
-                        .on_click(dispatch(FetchModelsAction))
+                        .cursor_pointer().on_click(dispatch(FetchModelsAction))
                         .tag("fetch-models"),
                 )
             }),
@@ -1706,7 +1706,7 @@ fn remove_button(id: (&'static str, usize), index: usize, tag: Option<&'static s
         .justify_center()
         .hover(|button| button.bg(theme.hover))
         .tooltip(crate::tooltip::tip("Remove this model"))
-        .on_click(move |_, window, cx| {
+        .cursor_pointer().on_click(move |_, window, cx| {
             cx.stop_propagation();
             window.dispatch_action(Box::new(RemoveModelRow { index }), cx);
         })

@@ -199,7 +199,7 @@ impl RenderOnce for QuestionCard {
                         }
                     })
                     .tooltip(crate::tooltip::tip(entry.header.clone()))
-                    .on_click(dispatch(ShowQuestion { index }))
+                    .cursor_pointer().on_click(dispatch(ShowQuestion { index }))
                     .child(if answered && !active {
                         Icon::Check.view(px(12.), ink).into_any_element()
                     } else {

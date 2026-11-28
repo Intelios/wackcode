@@ -376,6 +376,10 @@ fn turn_work_items(
                 if rows.is_empty() && !group_live {
                     continue;
                 }
+                // Counted as the steps they were; drawn with pictures read one after another as
+                // one row.
+                let (group_tally, group_label) = (tally(&rows), sentence(&rows));
+                let rows = gather_pictures(rows, open);
                 // Agents still out keep their work group open after it settles, as a live group is.
                 let agents_out = rows.iter().any(|row| row.agent.as_ref().is_some_and(|agent| agent.state.working()));
                 // Only a single work group in a settled turn carries the turn's total duration;
@@ -390,11 +394,14 @@ fn turn_work_items(
                     && matches!(steps.last().map(|(_, step)| *step), Some(Step::Thought(_)));
                 // A live group shows its newest rows; the earlier ones fold until asked for.
                 let hidden = if group_live && !open.contains(&format!("{group_key}-all")) { rows.len().saturating_sub(LIVE_ROWS) } else { 0 };
+                // A live group stands open unless the user folded it to its line ("-shut"); a
+                // settled one is folded unless opened, or while agents it started are out.
+                let shown = if group_live { !open.contains(&format!("{group_key}{}", crate::transcript::SHUT)) } else { agents_out || open.contains(&group_key) };
                 items.push(Item::Work(Work {
-                    open: group_live || agents_out || open.contains(&group_key),
+                    open: shown,
                     summary: group_summary.into(),
-                    tally: tally(&rows).into(),
-                    label: sentence(&rows).into(),
+                    tally: group_tally.into(),
+                    label: group_label.into(),
                     live: group_live,
                     thinking,
                     hidden,
@@ -404,6 +411,38 @@ fn turn_work_items(
             }
         }
     }
+}
+
+/// Pictures the model read one after another, as one row: "Read 3 images", their thumbnails
+/// along it, opening to the files they came from. A read still under way stays its own row until
+/// it has its picture. Keyed by the first, so the row holds still as more join it.
+fn gather_pictures(rows: Vec<WorkRow>, open: &HashSet<String>) -> Vec<WorkRow> {
+    let picture_read = |row: &WorkRow| row.inline_pictures() && !row.meta.running();
+    let mut gathered: Vec<WorkRow> = Vec::with_capacity(rows.len());
+    // The files the last gathered row's pictures came from, while it is a run of them.
+    let mut files: Vec<String> = Vec::new();
+    for row in rows {
+        let joins = picture_read(&row) && gathered.last().is_some_and(&picture_read);
+        if !joins {
+            files = match &row.target {
+                Target::Code(path) if picture_read(&row) => vec![path.to_string()],
+                _ => Vec::new(),
+            };
+            gathered.push(row);
+            continue;
+        }
+        if let Target::Code(path) = &row.target {
+            files.push(path.to_string());
+        }
+        let Some(last) = gathered.last_mut() else { continue };
+        last.pictures.extend(row.pictures);
+        let count = last.pictures.len();
+        last.target = Target::Words(plural(count, "image", "images").into());
+        last.meta = Meta::None;
+        last.detail = (!files.is_empty()).then(|| Detail::Output(files.join("\n").into()));
+        last.open = last.detail.is_some() && open.contains(last.key.as_ref());
+    }
+    gathered
 }
 
 /// What an earlier turn's folded line says: "Worked for 1m 12s", or how many steps it took when
@@ -599,14 +638,16 @@ fn search_results(text: &str) -> Vec<String> {
     results
 }
 
-/// "8s", "1m 05s", "1h 02m".
+/// "8s", "1m 5s", "10m", "1h 2m", "2h": a whole minute or hour says no zeros, and no part is
+/// padded, so the clock reads 9m 59s, 10m, 10m 1s.
 pub fn duration(millis: u64) -> String {
     let seconds = millis / 1000;
-    match seconds {
-        0..60 => format!("{seconds}s"),
-        60..3600 => format!("{}m {:02}s", seconds / 60, seconds % 60),
-        _ => format!("{}h {:02}m", seconds / 3600, seconds % 3600 / 60),
-    }
+    let (big, small, big_unit, small_unit) = match seconds {
+        0..60 => return format!("{seconds}s"),
+        60..3600 => (seconds / 60, seconds % 60, "m", "s"),
+        _ => (seconds / 3600, seconds % 3600 / 60, "h", "m"),
+    };
+    if small == 0 { format!("{big}{big_unit}") } else { format!("{big}{big_unit} {small}{small_unit}") }
 }
 
 /// How long a thought took, in seconds and tenths as version 2's timer counted it: "0.4s",
@@ -851,15 +892,18 @@ fn tail_chars(text: &str, max: usize) -> String {
     }
 }
 
-/// What a settled group did, in one sentence: "Read 3 files, edited a file and ran 2
-/// commands". Files count once however often they were touched; at most three kinds are named,
-/// the rest counted as "and N more steps"; failures are said ("ran 2 commands (1 failed)").
-/// Thoughts are not counted. Empty when nothing countable happened.
+/// What a settled group did, in one sentence, naming what it touched where that is short, as
+/// Claude Desktop's lines read: "Read theme.rs, edited work.rs and ran the test suite". A file is
+/// named while a kind touched one or two (once however often), a command by what the model said
+/// it does (in the past tense) or by itself when short, a search by its words; more are counted
+/// ("read 5 files"). At most three kinds are named, the rest counted as "and N more steps";
+/// failures are said ("ran 2 commands (1 failed)"). Thoughts are not counted. Empty when nothing
+/// countable happened.
 pub fn sentence(rows: &[WorkRow]) -> String {
-    struct Kind {
+    struct Kind<'a> {
         name: &'static str,
+        rows: Vec<&'a WorkRow>,
         subjects: Vec<String>,
-        calls: usize,
         failed: usize,
     }
     let mut kinds: Vec<Kind> = Vec::new();
@@ -872,12 +916,12 @@ pub fn sentence(rows: &[WorkRow]) -> String {
         let at = match kinds.iter().position(|kind| kind.name == name) {
             Some(at) => at,
             None => {
-                kinds.push(Kind { name, subjects: Vec::new(), calls: 0, failed: 0 });
+                kinds.push(Kind { name, rows: Vec::new(), subjects: Vec::new(), failed: 0 });
                 kinds.len() - 1
             }
         };
         let kind = &mut kinds[at];
-        kind.calls += 1;
+        kind.rows.push(row);
         if !kind.subjects.contains(&subject) {
             kind.subjects.push(subject);
         }
@@ -885,21 +929,64 @@ pub fn sentence(rows: &[WorkRow]) -> String {
             kind.failed += 1;
         }
     }
+    // One or two files by name, more by count.
+    let files = |verb: &str, subjects: &[String]| -> String {
+        let name = |path: &String| path.trim_end_matches('/').rsplit('/').next().unwrap_or(path).to_string();
+        match subjects {
+            [one] if !one.is_empty() => format!("{verb} {}", name(one)),
+            [one, two] if !one.is_empty() && !two.is_empty() => format!("{verb} {} and {}", name(one), name(two)),
+            many if many.len() == 1 => format!("{verb} a file"),
+            many => format!("{verb} {} files", many.len()),
+        }
+    };
     let phrase = |kind: &Kind| {
-        let files = kind.subjects.len();
-        let n = kind.calls;
+        let distinct = kind.subjects.len();
+        let n = kind.rows.len();
+        let only = (n == 1).then(|| kind.rows[0]);
         let text = match kind.name {
-            "read" => if files == 1 { "read a file".to_string() } else { format!("read {files} files") },
-            "edit" => if files == 1 { "edited a file".to_string() } else { format!("edited {files} files") },
-            "run" => if n == 1 { "ran a command".to_string() } else { format!("ran {n} commands") },
-            "search" => if n == 1 { "searched the code".to_string() } else { format!("searched the code {n} times") },
-            "fetch" => if n == 1 { "read a page".to_string() } else { format!("read {n} pages") },
-            "web" => if n == 1 { "searched the web".to_string() } else { format!("searched the web {n} times") },
+            "read" => files("read", &kind.subjects),
+            "edit" => files("edited", &kind.subjects),
+            "write" => files("wrote", &kind.subjects),
+            "image" => if distinct == 1 { "viewed an image".to_string() } else { format!("viewed {distinct} images") },
+            "run" => match only.map(|row| &row.target) {
+                Some(Target::Words(described)) => past_tense(described).unwrap_or_else(|| "ran a command".to_string()),
+                Some(Target::Code(command)) if !command.is_empty() && command.chars().count() <= SHORT => format!("ran {command}"),
+                _ if n == 1 => "ran a command".to_string(),
+                _ => format!("ran {n} commands"),
+            },
+            "search" => match only {
+                Some(row) if row.verb.as_ref() == "Searched" => match quoted(&kind.subjects[0]) {
+                    Some(words) => format!("searched for “{words}”"),
+                    None => "searched the code".to_string(),
+                },
+                Some(row) if row.verb.as_ref() == "Listed" && matches!(kind.subjects[0].as_str(), "." | "./" | "") => "listed the project".to_string(),
+                Some(row) if row.verb.as_ref() == "Listed" && kind.subjects[0].chars().count() <= SHORT => {
+                    format!("listed {}", kind.subjects[0])
+                }
+                Some(_) => "searched the code".to_string(),
+                None => format!("searched the code {n} times"),
+            },
+            "fetch" => match only {
+                Some(_) => match kind.subjects[0].split('/').next().filter(|site| !site.is_empty()) {
+                    Some(site) => format!("read {site}"),
+                    None => "read a page".to_string(),
+                },
+                None => format!("read {n} pages"),
+            },
+            "web" => match only.and_then(|_| quoted(&kind.subjects[0])) {
+                Some(words) => format!("searched the web for “{words}”"),
+                None if n == 1 => "searched the web".to_string(),
+                None => format!("searched the web {n} times"),
+            },
             "browser" => if n == 1 { "used the browser".to_string() } else { format!("took {n} browser steps") },
             "mac" => if n == 1 { "took a step on your Mac".to_string() } else { format!("took {n} steps on your Mac") },
             "agent" => if n == 1 { "ran an agent".to_string() } else { format!("ran {n} agents") },
             "ask" => if n == 1 { "asked you".to_string() } else { format!("asked you {n} times") },
-            "skill" => if n == 1 { "used a skill".to_string() } else { format!("used {n} skills") },
+            "skill" => match only {
+                Some(_) if !kind.subjects[0].is_empty() => format!("used the {} skill", kind.subjects[0]),
+                _ if n == 1 => "used a skill".to_string(),
+                _ => format!("used {n} skills"),
+            },
             "memory" => "used memory".to_string(),
             "mcp" => if n == 1 { "used an MCP tool".to_string() } else { format!("used {n} MCP tools") },
             "canvas" => "worked on the canvas".to_string(),
@@ -913,11 +1000,11 @@ pub fn sentence(rows: &[WorkRow]) -> String {
     };
     const NAMED: usize = 3;
     let mut parts: Vec<String> = kinds.iter().take(NAMED).map(phrase).collect();
-    let more: usize = kinds.iter().skip(NAMED).map(|kind| kind.calls).sum();
+    let more: usize = kinds.iter().skip(NAMED).map(|kind| kind.rows.len()).sum();
     if more > 0 {
         parts.push(if more == 1 { "1 more step".to_string() } else { format!("{more} more steps") });
     }
-    let mut text = match parts.len() {
+    let text = match parts.len() {
         0 => return String::new(),
         1 => parts.remove(0),
         _ => {
@@ -925,10 +1012,109 @@ pub fn sentence(rows: &[WorkRow]) -> String {
             format!("{} and {last}", parts.join(", "))
         }
     };
-    if let Some(first) = text.get(..1) {
-        text = first.to_uppercase() + &text[1..];
+    let mut letters = text.chars();
+    match letters.next() {
+        Some(first) => first.to_uppercase().chain(letters).collect(),
+        None => text,
     }
-    text
+}
+
+/// The longest command, search or folder a group's sentence names as it is.
+const SHORT: usize = 28;
+
+/// The words a search target quotes (“retry” in src), when short enough to name.
+fn quoted(target: &str) -> Option<String> {
+    let words = target.strip_prefix('“')?.split_once('”')?.0;
+    (!words.trim().is_empty() && words.chars().count() <= SHORT).then(|| words.to_string())
+}
+
+/// What a command did, from what the model said it does: "Run the test suite" is "ran the test
+/// suite". Only an opening verb it knows is turned, so a description that doesn't start with one
+/// (or runs long) is `None`, and the command is counted instead.
+fn past_tense(described: &str) -> Option<String> {
+    const IRREGULAR: [(&str, &str); 26] = [
+        ("run", "ran"),
+        ("rerun", "reran"),
+        ("build", "built"),
+        ("rebuild", "rebuilt"),
+        ("find", "found"),
+        ("make", "made"),
+        ("write", "wrote"),
+        ("rewrite", "rewrote"),
+        ("read", "read"),
+        ("reread", "reread"),
+        ("get", "got"),
+        ("set", "set"),
+        ("reset", "reset"),
+        ("put", "put"),
+        ("take", "took"),
+        ("see", "saw"),
+        ("do", "did"),
+        ("undo", "undid"),
+        ("send", "sent"),
+        ("show", "showed"),
+        ("split", "split"),
+        ("cut", "cut"),
+        ("sleep", "slept"),
+        ("bring", "brought"),
+        ("spin", "spun"),
+        ("hit", "hit"),
+    ];
+    const DOUBLED: [(&str, &str); 14] = [
+        ("stop", "stopped"),
+        ("commit", "committed"),
+        ("grep", "grepped"),
+        ("drop", "dropped"),
+        ("strip", "stripped"),
+        ("submit", "submitted"),
+        ("swap", "swapped"),
+        ("wrap", "wrapped"),
+        ("log", "logged"),
+        ("tag", "tagged"),
+        ("zip", "zipped"),
+        ("unzip", "unzipped"),
+        ("scan", "scanned"),
+        ("trim", "trimmed"),
+    ];
+    const REGULAR: [&str; 101] = [
+        "add", "analyse", "analyze", "append", "apply", "archive", "benchmark", "capture", "check", "clean", "clear", "click", "clone", "close", "collect",
+        "compare", "compile", "configure", "confirm", "convert", "copy", "count", "create", "debug", "decode", "delete", "deploy", "detect", "diff", "download",
+        "dump", "edit", "encode", "ensure", "examine", "execute", "exercise", "explore", "export", "extract", "fetch", "filter", "fix", "format", "gather",
+        "generate", "import", "inspect", "install", "kill", "launch", "lint", "list", "load", "locate", "look", "measure", "merge", "move", "open", "parse",
+        "patch", "peek", "ping", "poll", "preview", "print", "probe", "profile", "pull", "push", "query", "rebase", "record", "reload", "remove", "rename",
+        "render", "replace", "reproduce", "resize", "restart", "retry", "review", "save", "search", "serve", "simulate", "sort", "stage", "start", "stash",
+        "tail", "test", "time", "touch", "try", "type-check", "update", "verify", "wait",
+    ];
+    let turned = |word: &str| -> Option<String> {
+        let verb = word.to_lowercase();
+        IRREGULAR.iter().chain(DOUBLED.iter()).find(|(present, _)| *present == verb).map(|(_, past)| past.to_string()).or_else(|| {
+            REGULAR.contains(&verb.as_str()).then(|| {
+                if verb.ends_with('e') {
+                    format!("{verb}d")
+                } else if let Some(stem) = verb.strip_suffix('y').filter(|stem| !stem.ends_with(['a', 'e', 'o', 'u'])) {
+                    format!("{stem}ied")
+                } else {
+                    format!("{verb}ed")
+                }
+            })
+        })
+    };
+    let described = described.trim().trim_end_matches('.');
+    if described.chars().count() > 48 {
+        return None;
+    }
+    let mut words = described.split(' ');
+    let mut said = vec![turned(words.next()?)?];
+    // A second step joined on ("…and extract the colours", "…, then show the diff") is done too.
+    let mut joined = false;
+    for word in words {
+        said.push(match turned(word) {
+            Some(past) if joined => past,
+            _ => word.to_string(),
+        });
+        joined = matches!(word, "and" | "then");
+    }
+    Some(said.join(" "))
 }
 
 /// The kind of step a row counts as in a group's sentence; `None` for what is not counted
@@ -938,8 +1124,10 @@ fn kind_of(row: &WorkRow) -> Option<&'static str> {
         return None;
     }
     Some(match row.verb.as_ref() {
+        "Read" if !row.pictures.is_empty() => "image",
         "Read" => "read",
-        "Edited" | "Wrote" | "Writing" | "Editing" => "edit",
+        "Wrote" | "Writing" => "write",
+        "Edited" | "Editing" => "edit",
         "Ran" | "Watching" | "Finished" | "Failed" | "Ended" => "run",
         "Searched" | "Found" | "Listed" | "Looked for" => "search",
         "Fetched" => "fetch",
@@ -1047,6 +1235,13 @@ fn text_field<'a>(input: &'a Option<Value>, name: &str) -> Option<&'a str> {
     input.as_ref()?.get(name)?.as_str()
 }
 
+/// A picture's size from what `read` says of it ("shot.png is a picture, 1280 × 800 pixels."):
+/// "1280 × 800".
+fn picture_size(text: &str) -> Option<String> {
+    let (_, rest) = text.split_once(" is a picture, ")?;
+    rest.split_once(" pixels").map(|(size, _)| size.to_string())
+}
+
 /// Lines of a tool's text result, leaving out the notes tools add in brackets.
 fn result_lines(text: &str) -> usize {
     text.lines().filter(|line| !(line.starts_with('[') && line.ends_with(".]"))).filter(|line| !line.is_empty()).count()
@@ -1080,7 +1275,11 @@ pub fn tool_row(tool: &ToolStep, cwd: &Path, live: bool) -> WorkRow {
         "read" => (
             "Read",
             Target::Code(path("path").unwrap_or_default().into()),
-            ok.map(|text| if text.starts_with("(The file is empty") { "empty".into() } else { plural(result_lines(text), "line", "lines") }),
+            ok.map(|text| match picture_size(text) {
+                Some(size) => size,
+                None if text.starts_with("(The file is empty") => "empty".into(),
+                None => plural(result_lines(text), "line", "lines"),
+            }),
             None,
         ),
         "write" => {
@@ -2188,8 +2387,12 @@ mod tests {
         assert_eq!(thought_time(4_290), "4.2s");
         assert_eq!(thought_time(75_000), "75.0s");
         assert_eq!(duration(8_400), "8s");
-        assert_eq!(duration(65_000), "1m 05s");
-        assert_eq!(duration(3_720_000), "1h 02m");
+        assert_eq!(duration(65_000), "1m 5s");
+        assert_eq!(duration(599_000), "9m 59s");
+        assert_eq!(duration(600_000), "10m");
+        assert_eq!(duration(601_000), "10m 1s");
+        assert_eq!(duration(3_720_000), "1h 2m");
+        assert_eq!(duration(7_200_000), "2h");
         assert_eq!(count(812), "812");
         assert_eq!(count(12_400), "12.4k");
         assert_eq!(count(2_000), "2k");
@@ -2232,7 +2435,7 @@ mod tests {
                 other => format!("{other:?}"),
             })
             .collect();
-        assert_eq!(shapes, ["prompt", "work: Read a file", "reply", "work: Ran a command (1 failed)", "reply"], "one file read twice counts once");
+        assert_eq!(shapes, ["prompt", "work: Read a.rs", "reply", "work: Ran cargo test (1 failed)", "reply"], "one file read twice counts once");
         assert!(items.iter().all(|item| !matches!(item, Item::Work(work) if work.open)), "settled groups fold");
     }
 
@@ -2248,9 +2451,45 @@ mod tests {
             agent: None,
             pictures: Vec::new(),
         };
-        let rows = [row("Read", "a"), row("Read", "b"), row("Edited", "a"), row("Ran", "x"), row("Ran", "y"), row("Fetched", "p"), row("Fetched", "q")];
-        assert_eq!(sentence(&rows), "Read 2 files, edited a file, ran 2 commands and 2 more steps");
+        let rows = [row("Read", "a"), row("Read", "b"), row("Read", "c"), row("Edited", "src/a.rs"), row("Ran", "x"), row("Ran", "y"), row("Fetched", "p"), row("Fetched", "q")];
+        assert_eq!(sentence(&rows), "Read 3 files, edited a.rs, ran 2 commands and 2 more steps");
         assert_eq!(sentence(&[]), "");
+    }
+
+    #[test]
+    fn a_sentence_names_what_it_touched_when_that_is_short() {
+        let row = |verb: &str, target: Target| WorkRow {
+            key: "k".into(),
+            verb: verb.to_string().into(),
+            target,
+            meta: Meta::None,
+            detail: None,
+            open: false,
+            agent: None,
+            pictures: Vec::new(),
+        };
+        let code = |text: &str| Target::Code(text.to_string().into());
+        let words = |text: &str| Target::Words(text.to_string().into());
+        let rows = [row("Read", code("crates/ui/theme.rs")), row("Edited", code("crates/ui/work.rs")), row("Ran", words("Run the test suite"))];
+        assert_eq!(sentence(&rows), "Read theme.rs, edited work.rs and ran the test suite");
+        let rows = [row("Read", code("a.rs")), row("Read", code("b.rs")), row("Read", code("a.rs"))];
+        assert_eq!(sentence(&rows), "Read a.rs and b.rs", "a file read twice is named once");
+        assert_eq!(sentence(&[row("Ran", code("cargo test"))]), "Ran cargo test");
+        assert_eq!(sentence(&[row("Ran", words("Find the dev binary"))]), "Found the dev binary");
+        assert_eq!(sentence(&[row("Ran", words("Check git status"))]), "Checked git status");
+        assert_eq!(sentence(&[row("Ran", words("Verify the copy"))]), "Verified the copy");
+        assert_eq!(sentence(&[row("Ran", words("Stop the server"))]), "Stopped the server");
+        assert_eq!(sentence(&[row("Ran", words("Something unusual happens"))]), "Ran a command", "an opening it doesn't know is counted");
+        assert_eq!(sentence(&[row("Searched", words("“retry_after” in crates"))]), "Searched for “retry_after”");
+        assert_eq!(sentence(&[row("Fetched", code("docs.rs/gpui/latest"))]), "Read docs.rs");
+        assert_eq!(sentence(&[row("Wrote", code("notes/plan.md"))]), "Wrote plan.md");
+        assert_eq!(sentence(&[row("Listed", code("."))]), "Listed the project");
+        assert_eq!(sentence(&[row("Ran", words("Type-check the frontend"))]), "Type-checked the frontend");
+        assert_eq!(sentence(&[row("Ran", words("Decode PNGs and extract colours"))]), "Decoded PNGs and extracted colours");
+        assert_eq!(sentence(&[row("Ran", words("Run all tests, then show git status"))]), "Ran all tests, then showed git status");
+        assert_eq!(sentence(&[row("Ran", words("Search docs and backend"))]), "Searched docs and backend");
+        assert_eq!(sentence(&[row("Ran", words("Retry the download"))]), "Retried the download");
+        assert_eq!(sentence(&[row("Ran", words("Wait a moment"))]), "Waited a moment");
     }
 
     #[test]

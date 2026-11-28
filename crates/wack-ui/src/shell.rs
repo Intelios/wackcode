@@ -230,6 +230,50 @@ pub struct Shell {
     /// last showed, for sliding it out.
     side_open: Option<motion::Ease>,
     side_width: f32,
+    /// The last frame showed a new-chat screen, so a chat opening now may be its first send.
+    was_hero: bool,
+    /// A chat's first send playing out: when it began, and how far above its dock the composer's
+    /// foot stood on the screen it came from.
+    launch: Option<(std::time::Instant, f32)>,
+}
+
+/// How long a first send takes to land in its chat ([`Launch`]).
+const LAUNCH: std::time::Duration = std::time::Duration::from_millis(680);
+/// How far above the stage's foot the chat's composer sits (the dock's `pb`).
+const DOCK_FOOT: f32 = 18.;
+
+thread_local! {
+    /// Where the new-chat screen's composer and the stage body ended (their feet, in window
+    /// points) when last drawn: a first send starts its composer from there.
+    static HERO_COMPOSER_FOOT: std::cell::Cell<Option<f32>> = const { std::cell::Cell::new(None) };
+    static BODY_FOOT: std::cell::Cell<Option<f32>> = const { std::cell::Cell::new(None) };
+}
+
+/// `element` with its foot noted in `cell` as it is laid out.
+fn noting_foot(element: impl IntoElement, cell: &'static std::thread::LocalKey<std::cell::Cell<Option<f32>>>) -> gpui::Div {
+    div().relative().child(element).child(
+        gpui::canvas(move |bounds, _, _| cell.with(|foot| foot.set(Some(f32::from(bounds.bottom())))), |_, _, _, _| {})
+            .absolute()
+            .top_0()
+            .left_0()
+            .size_full(),
+    )
+}
+
+/// A chat's first send landing, after the new-chat screen: `t` (0–1) of the way, and `rise`,
+/// how far above its dock the composer starts, where it stood on that screen. The composer
+/// glides down to its dock while the header drops in and the conversation rises in behind it.
+#[derive(Clone, Copy, Debug)]
+struct Launch {
+    t: f32,
+    rise: f32,
+}
+
+impl Launch {
+    /// How far along a part is that starts `delay` in and takes `share` of the whole.
+    fn part(self, delay: f32, share: f32) -> f32 {
+        motion::spring(((self.t - delay) / share).clamp(0., 1.))
+    }
 }
 
 impl Shell {
@@ -288,6 +332,8 @@ impl Shell {
             tab_bounds: Default::default(),
             side_open: None,
             side_width: 0.,
+            was_hero: false,
+            launch: None,
         }
     }
 
@@ -339,6 +385,8 @@ impl Shell {
             tab_bounds: Default::default(),
             side_open: None,
             side_width: 0.,
+            was_hero: false,
+            launch: None,
         }
     }
 
@@ -1264,6 +1312,30 @@ impl Render for Shell {
             ))), ms(0), -28., 0.)
         });
 
+        // A chat opening straight after its new-chat screen sent: its first send lands. Anything
+        // else that opens a chat (a tab, the sidebar) just shows it.
+        let opens_chat = matches!(screen, Screen::Chat { .. });
+        if opens_chat && self.was_hero && !cx.reduce_motion() {
+            let sent = match &self.source {
+                // Setting the chat up can take a moment, so the send counts for a while.
+                Source::Live(app) => app.read(cx).sent_at.is_some_and(|at| at.elapsed() < std::time::Duration::from_secs(2)),
+                _ => false,
+            };
+            let feet = (HERO_COMPOSER_FOOT.with(|foot| foot.get()), BODY_FOOT.with(|foot| foot.get()));
+            if let (true, (Some(composer), Some(body))) = (sent, feet) {
+                self.launch = Some((std::time::Instant::now(), (body - composer - DOCK_FOOT).max(0.)));
+            }
+        }
+        self.was_hero = matches!(screen, Screen::NewChat { .. } | Screen::ChatHero { .. });
+        let launch = self.launch.filter(|_| opens_chat).and_then(|(at, rise)| {
+            let t = at.elapsed().as_secs_f32() / LAUNCH.as_secs_f32();
+            (t < 1.).then_some(Launch { t, rise })
+        });
+        match launch {
+            Some(_) => window.request_animation_frame(),
+            None => self.launch = None,
+        }
+
         // A screen arrives as it is opened; a chat does not, so switching tabs never moves text.
         let arrive = |id: String, body: gpui::AnyElement| {
             motion::enter(ElementId::Name(id.into()), div().size_full().child(body)).into_any_element()
@@ -1306,7 +1378,7 @@ impl Render for Shell {
                         _ => None,
                     };
                     let veil = over_picture.then_some(theme.reading_veil);
-                    chat(body, composer, header, narrow, transcript_height, cx.reduce_motion(), jump, veil).into_any_element()
+                    chat(body, composer, header, narrow, transcript_height, cx.reduce_motion(), jump, veil, launch).into_any_element()
                 },
             ),
             Screen::Settings(data) => {
@@ -1353,7 +1425,14 @@ impl Render for Shell {
                     .w(px(transcript.width))
                     .h(px(transcript.height))
                     .overflow_hidden()
-                    .child(motion::rebuild(rebuild_step, "rebuild-stage", div().size_full().child(hop_in("hop-stage", body)), ms(80), 0., 18.)),
+                    .child(motion::rebuild(rebuild_step, "rebuild-stage", div().size_full().child(hop_in("hop-stage", body)), ms(80), 0., 18.))
+                    .child(
+                        gpui::canvas(|bounds, _, _| BODY_FOOT.with(|foot| foot.set(Some(f32::from(bounds.bottom())))), |_, _, _, _| {})
+                            .absolute()
+                            .top_0()
+                            .left_0()
+                            .size_full(),
+                    ),
             )
             .children(docks.stage);
         let stage = pane(div().flex_1().min_h_0().w_full().child(content).into_any_element(), PaneGround::Stage);
@@ -3322,7 +3401,7 @@ fn welcome(notice: Option<SharedString>, ground: Option<Hsla>, theme: &Theme) ->
                             .gap(px(8.))
                             .bg(theme.accent_fill())
                             .hover(|button| button.bg(theme.accent_fill_hover()))
-                            .on_click(|_, window, cx| window.dispatch_action(Box::new(AddFolder), cx))
+                            .cursor_pointer().on_click(|_, window, cx| window.dispatch_action(Box::new(AddFolder), cx))
                             .child(Icon::Folder.view(px(15.), theme.on_accent))
                             .child(div().typography(Type::UiStrong).text_color(theme.on_accent).child("Add folder…"))
                             .tag("add-folder-button"),
@@ -3376,7 +3455,7 @@ fn new_chat(
                         })),
                 )
             })
-            .child(div().w_full().pt(px(22.)).child(Composer::new(composer)))
+            .child(div().w_full().pt(px(22.)).child(noting_foot(Composer::new(composer), &HERO_COMPOSER_FOOT)))
             .child(
                 div().pt(px(12.)).child(on_ground(
                     div().flex().gap(px(20.)).typography(Type::Small).child(hint("↩", "send")).child(hint("⇧↩", "new line")),
@@ -3593,7 +3672,7 @@ fn chat_hero(
             .border_color(theme.border)
             .when(ground.is_none(), |pill| pill.bg(theme.surface))
             .hover(|pill| pill.border_color(theme.accent_line).text_color(theme.text))
-            .on_click(move |_, window, cx| window.dispatch_action(Box::new(UseIdea { index }), cx))
+            .cursor_pointer().on_click(move |_, window, cx| window.dispatch_action(Box::new(UseIdea { index }), cx))
             .child(idea.label)
             .tag("idea");
         match ground {
@@ -3617,7 +3696,7 @@ fn chat_hero(
                 ground,
                 theme,
             )))
-            .child(div().w_full().pt(px(22.)).child(Composer::new(composer)))
+            .child(div().w_full().pt(px(22.)).child(noting_foot(Composer::new(composer), &HERO_COMPOSER_FOOT)))
             .child(div().pt(px(14.)).flex().flex_wrap().justify_center().gap(px(8.)).children(ideas.into_iter().map(chip)))
             .child(
                 div().pt(px(12.)).child(on_ground(
@@ -3719,7 +3798,7 @@ fn sidebar_toggle(theme: &Theme) -> impl IntoElement {
         .items_center()
         .justify_center()
         .hover(|button| button.bg(theme.hover))
-        .on_click(|_, window, cx| window.dispatch_action(Box::new(ToggleSidebar), cx))
+        .cursor_pointer().on_click(|_, window, cx| window.dispatch_action(Box::new(ToggleSidebar), cx))
         .child(Icon::Sidebar.view(px(15.), theme.text_dim))
         .tag("toggle-sidebar")
 }
@@ -3801,7 +3880,7 @@ fn tab_strip(strip: &StripData, tray: &Tray, theme: &Theme) -> gpui::Div {
             .gap(px(6.))
             .when(!active, |tab| tab.hover(|tab| tab.bg(Hsla { a: 0.5, ..theme.hover })))
             .when(id.is_none() && !active, |tab| {
-                tab.on_click(move |_, window, cx| window.dispatch_action(Box::new(SelectDraft { key: draft }), cx))
+                tab.cursor_pointer().on_click(move |_, window, cx| window.dispatch_action(Box::new(SelectDraft { key: draft }), cx))
             })
             .when_some(select.clone(), |tab, select| {
                 tab.on_mouse_down(MouseButton::Right, move |event, window, cx| {
@@ -3810,7 +3889,7 @@ fn tab_strip(strip: &StripData, tray: &Tray, theme: &Theme) -> gpui::Div {
                 })
             })
             .when_some(select, |tab, select| {
-                tab.on_click(move |event, window, cx| {
+                tab.cursor_pointer().on_click(move |event, window, cx| {
                     let action: Box<dyn gpui::Action> = if event.click_count() == 2 {
                         Box::new(RenameChatAt { chat: select.id.clone(), sidebar: false })
                     } else {
@@ -3883,7 +3962,7 @@ fn tab_strip(strip: &StripData, tray: &Tray, theme: &Theme) -> gpui::Div {
                     .justify_center()
                     .when(!active, |close| close.invisible().group_hover(group.clone(), |close| close.visible()))
                     .hover(|close| close.bg(theme.hover))
-                    .on_click(move |_, window, cx| {
+                    .cursor_pointer().on_click(move |_, window, cx| {
                         cx.stop_propagation();
                         window.dispatch_action(close.boxed_clone(), cx);
                     })
@@ -3962,7 +4041,7 @@ fn tab_strip(strip: &StripData, tray: &Tray, theme: &Theme) -> gpui::Div {
                 .items_center()
                 .justify_center()
                 .hover(|button| button.bg(Hsla { a: 0.5, ..theme.hover }))
-                .on_click(|_, window, cx| window.dispatch_action(Box::new(NewChat), cx))
+                .cursor_pointer().on_click(|_, window, cx| window.dispatch_action(Box::new(NewChat), cx))
                 .child(Icon::Plus.view(px(14.), theme.text_dim))
                 .tag("new-tab"),
             theme,
@@ -4213,6 +4292,7 @@ fn chat(
     still: bool,
     jump: Option<(ListState, bool)>,
     veil: Option<Hsla>,
+    launch: Option<Launch>,
 ) -> impl IntoElement {
     // An open question may take more of the chat: answering it is what the chat waits on.
     let kept = if composer.question.is_some() { TRANSCRIPT_KEPT / 3. } else { TRANSCRIPT_KEPT };
@@ -4249,6 +4329,7 @@ fn chat(
                 prompts: Default::default(),
                 clock: true,
                 folds: Default::default(),
+                follows: Default::default(),
             };
             list(list_state, move |index, _, cx| {
                 let theme = Theme::get(cx);
@@ -4260,7 +4341,7 @@ fn chat(
                 let previous = index.checked_sub(1).and_then(|index| items.get(index));
                 let handlers = match current {
                     transcript::Item::Prompt { .. } => Handlers { prompts: chat.prompt_view(), ..handlers.clone() },
-                    _ => Handlers { folds: chat.folds(), ..handlers.clone() },
+                    _ => Handlers { folds: chat.folds(), follows: chat.follows(), ..handlers.clone() },
                 };
                 column(transcript::item(current, previous, theme, &handlers), narrow).into_any_element()
             })
@@ -4270,13 +4351,20 @@ fn chat(
             .into_any_element()
         }
     };
+    // A first send landing: the header drops in, the conversation rises in a beat later, and the
+    // composer glides from where it stood down to its dock.
+    let (header_in, words_in, composer_in) = match launch {
+        Some(launch) => (launch.part(0.12, 0.6), launch.part(0.22, 0.7), launch.part(0., 0.8)),
+        None => (1., 1., 1.),
+    };
+    let rise = launch.map_or(0., |launch| launch.rise);
     div()
         .relative()
         .size_full()
         .flex()
         .flex_col()
-        .children(veil.map(|veil| reading_veil(veil, narrow)))
-        .child(header)
+        .children(veil.map(reading_veil))
+        .child(div().flex_none().relative().top(px(-10. * (1. - header_in))).opacity(header_in).child(header))
         // Text fades out as it scrolls under the chat's header and the composer, rather than
         // being cut off; the fade is the text's own, so a backdrop shows through untouched.
         .child(
@@ -4284,12 +4372,16 @@ fn chat(
                 .relative()
                 .flex_1()
                 .min_h_0()
+                .top(px(24. * (1. - words_in)))
+                .opacity(words_in)
                 .child(faded(transcript, TOP_FADE, DOCK_FADE))
                 .when_some(jump, |area, (list, coming)| area.child(jump_pill(list, coming))),
         )
         .child(
             div()
                 .flex_none()
+                .relative()
+                .top(px(-rise * (1. - composer_in)))
                 // Reaches up over the transcript's foot, where its text has faded out.
                 .mt(-DOCK_FADE)
                 .flex()
@@ -4298,7 +4390,7 @@ fn chat(
                 // transcript's.
                 .px(gutter(narrow) - px(16.))
                 .pt(DOCK_FADE)
-                .pb(px(18.))
+                .pb(px(DOCK_FOOT))
                 .child(
                     div()
                         .w_full()
@@ -4313,23 +4405,46 @@ fn chat(
         )
 }
 
-/// Over a picture, a band of calmer glass down the stage behind the transcript's column: full
-/// across the column, fading out through the gutters either side, so it has no edge to see.
-fn reading_veil(veil: Hsla, narrow: bool) -> impl IntoElement {
-    let clear = Hsla { a: 0., ..veil };
-    let side = gutter(narrow);
-    let fade = |from: Hsla, to: Hsla| {
-        div().flex_none().w(side).h_full().bg(gpui::linear_gradient(90., gpui::linear_color_stop(from, 0.), gpui::linear_color_stop(to, 1.)))
+/// How far the reading veil reaches past the transcript's column on each side, and how far into
+/// it its fade begins.
+const VEIL_REACH: f32 = 200.;
+const VEIL_INSET: f32 = 60.;
+/// The strips each side's fade is drawn in: enough that the eased curve shows no corners.
+const VEIL_STEPS: usize = 10;
+
+/// Over a picture, calmer glass behind the transcript: full down the middle of the column,
+/// easing out to nothing well past either side of it on a curve that starts and ends flat, so no
+/// edge or band can be made out, only the picture growing quieter where the words are. Its width
+/// is fixed: in a narrow chat its middle covers nearly all of it, its ends cut off by the stage.
+fn reading_veil(veil: Hsla) -> impl IntoElement {
+    let ramp = VEIL_REACH + VEIL_INSET;
+    let alpha = |t: f32| {
+        let t = t.clamp(0., 1.);
+        veil.a * t * t * (3. - 2. * t)
     };
-    div().absolute().top_0().left_0().size_full().flex().justify_center().child(
+    // One side's fade, rising towards the middle when `rising`.
+    let fade = |rising: bool| {
+        let mut side = div().flex_none().w(px(ramp)).h_full().flex();
+        for step in 0..VEIL_STEPS {
+            let (from, to) = (step as f32 / VEIL_STEPS as f32, (step + 1) as f32 / VEIL_STEPS as f32);
+            let (from, to) = if rising { (from, to) } else { (1. - from, 1. - to) };
+            side = side.child(div().flex_1().h_full().bg(gpui::linear_gradient(
+                90.,
+                gpui::linear_color_stop(Hsla { a: alpha(from), ..veil }, 0.),
+                gpui::linear_color_stop(Hsla { a: alpha(to), ..veil }, 1.),
+            )));
+        }
+        side
+    };
+    div().absolute().top_0().left_0().size_full().overflow_hidden().flex().justify_center().child(
         div()
-            .w_full()
-            .max_w(TRANSCRIPT_MAX_WIDTH + side * 2.)
+            .flex_none()
+            .w(TRANSCRIPT_MAX_WIDTH + px(2. * VEIL_REACH))
             .h_full()
             .flex()
-            .child(fade(clear, veil))
+            .child(fade(true))
             .child(div().flex_1().h_full().bg(veil))
-            .child(fade(veil, clear)),
+            .child(fade(false)),
     )
 }
 

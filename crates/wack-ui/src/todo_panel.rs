@@ -80,7 +80,7 @@ pub fn todo_panel(data: TodoData, theme: &Theme) -> impl IntoElement {
                     .typography(Type::Small)
                     .text_color(theme.text_dim)
                     .hover(|word| word.text_color(theme.accent_text))
-                    .on_click(|_, window, cx| window.dispatch_action(Box::new(ShowDoneTodos), cx))
+                    .cursor_pointer().on_click(|_, window, cx| window.dispatch_action(Box::new(ShowDoneTodos), cx))
                     .child(format!("+{} done", view.hidden_done))
                     .tag("todo-show-done"),
             )

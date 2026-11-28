@@ -545,7 +545,7 @@ pub fn composer_foreground() -> ComposerData {
         archived: None,
         working: true,
         foreground: true,
-        activity: Some("Working for 2m 04s".into()),
+        activity: Some("Working for 2m 4s".into()),
         tasks: crate::shell::task_lines(&tasks()),
         ..composer_after_turn(drawn(None, crate::chat::FOLLOW_UP_PLACEHOLDER))
     }
@@ -1630,6 +1630,18 @@ pub fn pictures_turn() -> Vec<Item> {
     let attached = saved_pictures(2, "mockup");
     let pictures: Vec<Picture> = attached.iter().map(Picture::of_image).collect();
     conversation.send_pictures("Make the login page match these mockups.", None, pictures, START);
+    // It looks over the design folder's pictures one after another: they read as one row.
+    // Pictures of their own: one already in the chat would be the same picture to it.
+    let designs: Vec<_> = saved_pictures(6, "design").into_iter().skip(3).collect();
+    for (index, name) in ["login.png", "login-error.png", "signup.png"].iter().enumerate() {
+        let id = format!("look-{index}");
+        let path = format!("{CWD}/design/{name}");
+        conversation.apply(&Event::ToolCall { id: id.clone(), name: "read".into(), input: serde_json::json!({ "path": path }) }, START + 1_000);
+        let mut images = vec![designs[index].clone()];
+        images[0].label = Some(format!("design/{name}"));
+        let content = format!("design/{name} is a picture, 1440 × 900 pixels.");
+        conversation.apply(&Event::ToolResult { id, name: "read".into(), content, is_error: false, images }, START + 1_500);
+    }
     let input = serde_json::json!({ "steps": [{ "tool": "browser_screenshot", "input": {} }] });
     conversation.apply(&Event::ToolCall { id: "shot-1".into(), name: "browser_screenshot".into(), input }, START + 4_000);
     let shots = saved_pictures(3, "screenshot of http://localhost:3000/login");

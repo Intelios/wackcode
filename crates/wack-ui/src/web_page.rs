@@ -413,7 +413,7 @@ fn searching(data: &WebData, theme: &Theme) -> impl IntoElement {
                 .child(
                     div().flex().flex_wrap().gap(px(8.)).children(SearchKind::ALL.iter().map(|kind| {
                         let label = preset(*kind).label;
-                        pill(("add-search", *kind as usize), label, Some(Icon::Plus), false, theme).on_click(dispatch(AddSearchProvider { kind: *kind }))
+                        pill(("add-search", *kind as usize), label, Some(Icon::Plus), false, theme).cursor_pointer().on_click(dispatch(AddSearchProvider { kind: *kind }))
                     })),
                 ),
         )
@@ -428,7 +428,7 @@ fn searching(data: &WebData, theme: &Theme) -> impl IntoElement {
                     .items_center()
                     .gap(px(12.))
                     .child(div().flex_1().typography(Type::Small).text_color(theme.text_faint).child("Counts are kept on this Mac, per calendar month. Estimates use the prices you enter for each provider."))
-                    .child(pill("reset-web-usage", "Reset counts", None, false, theme).on_click(dispatch(ResetWebUsage))),
+                    .child(pill("reset-web-usage", "Reset counts", None, false, theme).cursor_pointer().on_click(dispatch(ResetWebUsage))),
             )
         })
 }
@@ -523,7 +523,7 @@ fn provider_row(summary: &ProviderSummary, connections: &[(String, String)], the
                         .child(facts.join(" · ")),
                 ),
         )
-        .child(pill(SharedString::from(format!("edit-search-{}", provider.id)), "Edit", Some(Icon::Pencil), false, theme).on_click(dispatch(EditSearchProvider { id })))
+        .child(pill(SharedString::from(format!("edit-search-{}", provider.id)), "Edit", Some(Icon::Pencil), false, theme).cursor_pointer().on_click(dispatch(EditSearchProvider { id })))
         .tag("search-provider")
 }
 
@@ -630,7 +630,7 @@ fn key_section(editor: &EditorData, theme: &Theme) -> AnyElement {
         if let Some(borrowed) = &borrowing {
             block = block.child(div().flex().flex_wrap().gap(px(8.)).children(editor.lenders.iter().enumerate().map(|(index, (id, name))| {
                 pill(("search-lender", index), name.clone(), (id == borrowed).then_some(Icon::Check), id == borrowed, theme)
-                    .on_click(dispatch(ChooseSearchKey { connection: Some(id.clone()) }))
+                    .cursor_pointer().on_click(dispatch(ChooseSearchKey { connection: Some(id.clone()) }))
             })));
         }
     }

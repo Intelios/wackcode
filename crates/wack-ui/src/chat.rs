@@ -116,6 +116,8 @@ pub struct ChatSession {
     /// have been, so each plays afresh.
     folds: std::rc::Rc<std::collections::HashMap<String, crate::transcript::Fold>>,
     toggles: u64,
+    /// Where each opened thought is scrolled, and whether it follows its newest words.
+    follows: crate::transcript::Follows,
     cache: ReplyCache,
     items: Vec<Item>,
     spans: Vec<usize>,
@@ -333,6 +335,7 @@ impl ChatSession {
             open: HashSet::new(),
             folds: Default::default(),
             toggles: 0,
+            follows: Default::default(),
             cache: ReplyCache::default(),
             items: Vec::new(),
             spans: Vec::new(),
@@ -1005,7 +1008,12 @@ impl ChatSession {
         self.toggles += 1;
         let folds = std::rc::Rc::make_mut(&mut self.folds);
         folds.retain(|_, fold| fold.at.elapsed() < crate::transcript::FOLD * 4);
-        folds.insert(key.clone(), crate::transcript::Fold { at: std::time::Instant::now(), count: self.toggles });
+        let fold = crate::transcript::Fold { at: std::time::Instant::now(), count: self.toggles };
+        // Folding a live group moves the group itself.
+        if let Some(group) = key.strip_suffix(crate::transcript::SHUT) {
+            folds.insert(group.to_string(), fold);
+        }
+        folds.insert(key.clone(), fold);
         if let Some(index) = self.entry_holding(&key) {
             self.refresh_entry(index);
         }
@@ -1031,6 +1039,11 @@ impl ChatSession {
                             self.spent += *usage;
                         }
                         Event::Compacted { usage: Some(usage), .. } => self.spent += *usage,
+                        // Before every request: the popover fills in from the first message on.
+                        Event::Context { parts, tokens } => {
+                            self.context_parts = parts.clone();
+                            self.context_tokens = Some(*tokens);
+                        }
                         // Everything waiting is delivered together.
                         Event::Steered(_) => self.steering.clear(),
                         // A tool may have changed files.
@@ -1278,12 +1291,20 @@ impl ChatSession {
         self.folds.clone()
     }
 
+    pub fn follows(&self) -> crate::transcript::Follows {
+        self.follows.clone()
+    }
+
     /// The entry whose items show the work log or row with this key.
     fn entry_holding(&self, key: &str) -> Option<usize> {
         let mut start = 0;
         for (index, span) in self.spans.iter().enumerate() {
             let holds = self.items[start..start + span].iter().any(|item| match item {
-                Item::Work(work) => work.key.as_ref() == key || work.rows.iter().any(|row| row.key.as_ref() == key),
+                Item::Work(work) => {
+                    work.key.as_ref() == key
+                        || key.strip_suffix(crate::transcript::SHUT) == Some(work.key.as_ref())
+                        || work.rows.iter().any(|row| row.key.as_ref() == key)
+                }
                 Item::Commit(commit) => commit.key.as_ref() == key,
                 Item::Earlier { key: fold, .. } => fold.as_ref() == key,
                 Item::News(row) => row.key.as_ref() == key,

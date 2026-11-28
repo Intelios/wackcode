@@ -307,7 +307,7 @@ fn archived_footer(chat: String, theme: &Theme) -> impl IntoElement {
                 .hover(|button| button.bg(theme.accent_fill_hover()))
                 .typography(Type::UiStrong)
                 .text_color(theme.on_accent)
-                .on_click(dispatch(crate::actions::UnarchiveChat { id: chat, ask: false }))
+                .cursor_pointer().on_click(dispatch(crate::actions::UnarchiveChat { id: chat, ask: false }))
                 .child("Unarchive")
                 .tag("unarchive-footer"),
         )
@@ -448,7 +448,7 @@ impl RenderOnce for Composer {
                         .bg(theme.accent_fill())
                         .hover(|button| button.bg(theme.accent_fill_hover()))
                         .tooltip(tip("Send once the agent finishes (↩). ⌘↩ steers it now"))
-                        .on_click(dispatch(Send))
+                        .cursor_pointer().on_click(dispatch(Send))
                         .child(Icon::ArrowUp.view(px(13.), theme.on_accent))
                         .child(div().typography(Type::UiStrong).text_color(theme.on_accent).child("Queue"))
                         .tag("queue"),
@@ -853,7 +853,7 @@ fn tab(data: &ComposerData, running: usize, asking: bool, viewport: gpui::Size<P
                 .cursor_pointer()
                 .hover(|segment| segment.bg(theme.hover))
                 .tooltip(tip("Keep it working in the background and let the agent carry on"))
-                .on_click(dispatch(MoveToBackground))
+                .cursor_pointer().on_click(dispatch(MoveToBackground))
                 .child(words("⌘B".into(), theme.text_faint))
                 .when(fit.background_words, |segment| segment.child(words("Background".into(), theme.text_dim)))
                 .tag("background-pill")
@@ -1005,7 +1005,7 @@ fn send_ring(data: &ComposerData, has_text: bool, viewport: gpui::Size<Pixels>, 
             .border_color(theme.border_strong)
             .hover(|button| button.bg(theme.hover))
             .tooltip(tip("Stop (⎋)"))
-            .on_click(dispatch(Stop))
+            .cursor_pointer().on_click(dispatch(Stop))
             .child(Icon::Stop.view(px(12.), theme.text))
             .tag("stop")
     } else {
@@ -1019,7 +1019,7 @@ fn send_ring(data: &ComposerData, has_text: bool, viewport: gpui::Size<Pixels>, 
             .justify_center()
             .when(has_text, |button| button.bg(theme.accent_fill()).hover(|button| button.bg(theme.accent_fill_hover())))
             .when(!has_text, |button| button.bg(theme.hover))
-            .on_click(dispatch(Send))
+            .cursor_pointer().on_click(dispatch(Send))
             .child(Icon::ArrowUp.view(px(15.), if has_text { theme.on_accent } else { theme.text_faint }))
             .tag("send")
     };
@@ -1232,17 +1232,25 @@ fn context_card(meter: &Meter, working: bool, model_missing: bool, open: &[Kind]
     } else {
         ("Compacting summarises older turns to free room.", theme.text_faint)
     };
-    // A figure for the whole chat beside a label; a dash until there is one.
+    // A figure for the whole chat on a tile of its own, its label small over it, as version 2's
+    // were; a dash until there is one.
     let stat = |label: &'static str, value: Option<String>, tag: &'static str| {
         div()
+            .flex_1()
+            .min_w_0()
+            .px(px(10.))
+            .py(px(7.))
+            .rounded(px(10.))
+            .bg(theme.surface)
+            .border_1()
+            .border_color(theme.border)
             .flex()
-            .items_center()
-            .gap(px(10.))
-            .child(div().flex_1().min_w_0().typography(Type::Small).text_color(theme.text_dim).child(label))
+            .flex_col()
+            .gap(px(1.))
+            .child(div().truncate().typography(Type::Small).text_color(theme.text_faint).child(label))
             .child(
                 div()
-                    .flex_none()
-                    .typography(Type::Small)
+                    .typography(Type::UiStrong)
                     .font_weight(gpui::FontWeight::SEMIBOLD)
                     .text_color(if value.is_some() { theme.text } else { theme.text_faint })
                     .child(value.unwrap_or_else(|| "—".into())),
@@ -1250,14 +1258,13 @@ fn context_card(meter: &Meter, working: bool, model_missing: bool, open: &[Kind]
             .tag(tag)
     };
     // What the chat has cost so far, sub-agents included, and how much of what it sent the
-    // provider read from its cache: cheap and fast when high.
+    // provider read from its cache: cheap and fast when high. Side by side under a hairline.
     let stats = div()
         .mt(px(10.))
         .pt(px(10.))
         .border_t_1()
         .border_color(theme.border)
         .flex()
-        .flex_col()
         .gap(px(6.))
         .child(stat("Session tokens", (meter.spent > 0).then(|| count(meter.spent)), "context-spent"))
         .child(stat("Prompt cache hits", meter.cache.map(|rate| format!("{:.1}%", rate * 100.)), "context-cache"));
@@ -1690,7 +1697,7 @@ fn picker(
         "crew" => Box::new(OpenCrewMenu),
         _ => Box::new(OpenEffortMenu),
     };
-    let button = button.on_click(move |_, window, cx| window.dispatch_action(open.boxed_clone(), cx)).tag(tag);
+    let button = button.cursor_pointer().on_click(move |_, window, cx| window.dispatch_action(open.boxed_clone(), cx)).tag(tag);
     div().relative().when(shrinks, |picker| picker.min_w(px(MODEL_MIN))).when(!shrinks, |picker| picker.flex_none()).child(button).when_some(popover, |picker, popover| {
         let backdrop = anchored().position_mode(AnchoredPositionMode::Window).position(point(px(0.), px(0.))).child(
             div().id("menu-backdrop").w(viewport.width).h(viewport.height).on_mouse_down(MouseButton::Left, |_, window, cx| {
@@ -2022,6 +2029,7 @@ impl RenderOnce for EffortSlider {
         };
         let track = track
             .child(knob)
+            .cursor_pointer()
             .on_mouse_down(MouseButton::Left, move |event, window, cx| {
                 cx.stop_propagation();
                 crate::slide::begin("effort-track");
@@ -2043,7 +2051,7 @@ impl RenderOnce for EffortSlider {
                     .w(px(STOP_LABEL))
                     .flex()
                     .justify_center()
-                    .on_click(move |_, window, cx| window.dispatch_action(Box::new(SlideEffort { effort }), cx))
+                    .cursor_pointer().on_click(move |_, window, cx| window.dispatch_action(Box::new(SlideEffort { effort }), cx))
                     .child(if effort == Some(Reasoning::Ultra) {
                         UltraLabel::new(("slider-stop-ultra", index), label, Type::Small).decode_on_arrival(false).into_any_element()
                     } else {
@@ -2197,7 +2205,7 @@ impl RenderOnce for ModelPicker {
             let name = group.title.clone().unwrap_or_else(|| "Models".into());
             providers = providers.child(
                 row(("picker-provider", index))
-                    .on_click(go(Some(index)))
+                    .cursor_pointer().on_click(go(Some(index)))
                     .child(Icon::Key.view(px(13.), if holds_current { theme.accent_text } else { theme.text_dim }))
                     .child(
                         div()
@@ -2252,7 +2260,7 @@ impl RenderOnce for ModelPicker {
             models = models.child(
                 row(("menu-item", models_of * 1000 + number))
                     .when(item.selected, |row| row.bg(theme.accent_wash))
-                    .on_click(move |_, window, cx| window.dispatch_action(action.boxed_clone(), cx))
+                    .cursor_pointer().on_click(move |_, window, cx| window.dispatch_action(action.boxed_clone(), cx))
                     .when_some(item.brand, |row, brand| row.child(brand.view(px(14.), &theme)))
                     .child(
                         div()
@@ -2665,7 +2673,7 @@ impl RenderOnce for ModeToggle {
                 .items_center()
                 .justify_center()
                 .gap(px(5.))
-                .when(!self.locked, |option| option.on_click(dispatch(SetAgentMode { mode: target })))
+                .when(!self.locked, |option| option.cursor_pointer().on_click(dispatch(SetAgentMode { mode: target })))
         };
         // A soft wash blooms behind the option as the pill arrives.
         let wash = |colour: Hsla| {

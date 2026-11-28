@@ -292,6 +292,11 @@ pub enum Event {
     Thought { ms: u64 },
     /// One reply from the model is complete and saved.
     Reply { usage: Option<Usage> },
+    /// What the request about to be sent holds, part by part, and about how many tokens it comes
+    /// to: the provider's last count and an estimate of what came since, or, before the provider
+    /// has counted anything, an estimate of the whole (`crate::context`). Comes before every
+    /// request, so the context popover fills in as soon as a message is sent.
+    Context { parts: Vec<crate::context::Part>, tokens: u64 },
     Retrying(RetryNotice),
     /// A message the user sent mid-run was handed to the model.
     Steered(String),
@@ -534,6 +539,12 @@ impl Agent {
             }
 
             let request = self.request();
+            {
+                let measured = if self.session.counted() { self.session.context_tokens() } else { 0 };
+                let parts = crate::context::breakdown(&request, measured);
+                let tokens = if measured > 0 { measured } else { parts.iter().map(|part| part.tokens).sum() };
+                events(Event::Context { parts, tokens });
+            }
             let written = Mutex::new(String::new());
             // When reasoning first came, and when the first words or call after it did.
             let thinking = Mutex::new((None::<Instant>, None::<Instant>));

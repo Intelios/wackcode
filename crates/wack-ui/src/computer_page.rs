@@ -44,7 +44,7 @@ fn permission(label: &'static str, about: &'static str, granted: bool, screen: b
             .child(div().typography(Type::Small).text_color(theme.text_soft).child("Allowed"))
             .into_any_element()
     } else {
-        pill(tag, "Allow…", None, false, theme).on_click(dispatch(RequestComputerPermission { screen })).tag(tag).into_any_element()
+        pill(tag, "Allow…", None, false, theme).cursor_pointer().on_click(dispatch(RequestComputerPermission { screen })).tag(tag).into_any_element()
     };
     row(label, Some(about)).control(control).view(theme)
 }
@@ -79,7 +79,7 @@ pub fn page(data: ComputerData, theme: &Theme) -> impl IntoElement {
     }
     for (index, (name, path)) in data.always.iter().enumerate() {
         let again = pill(SharedString::from(format!("computer-ask-again-{index}")), "Ask again", None, false, theme)
-            .on_click(dispatch(AskComputerAgain { path: path.to_string() }))
+            .cursor_pointer().on_click(dispatch(AskComputerAgain { path: path.to_string() }))
             .tag("computer-ask-again");
         always = always.child(row(name.clone(), None).about(path.clone()).control(again).view(theme));
     }
@@ -93,7 +93,7 @@ pub fn page(data: ComputerData, theme: &Theme) -> impl IntoElement {
     }
     for (index, bundle_id) in data.never.iter().enumerate() {
         let forget = pill(SharedString::from(format!("computer-forget-never-{index}")), "Let it ask", None, false, theme)
-            .on_click(dispatch(ForgetNeverAllowed { bundle_id: bundle_id.to_string() }))
+            .cursor_pointer().on_click(dispatch(ForgetNeverAllowed { bundle_id: bundle_id.to_string() }))
             .tag("computer-let-ask");
         never = never.child(row(bundle_id.clone(), None).control(forget).view(theme));
     }

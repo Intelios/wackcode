@@ -258,8 +258,8 @@ pub fn fetch_picker(view: &FetchView, theme: &Theme) -> Option<AnyElement> {
                 div()
                     .flex()
                     .gap(px(8.))
-                    .child(pill("fetch-again", "Try again", Some(Icon::Reload), false, theme).on_click(dispatch(FetchModels)))
-                    .child(pill("fetch-models-cancel", "Close", None, false, theme).on_click(dispatch(CloseFetchedModels)).tag("fetch-models-cancel")),
+                    .child(pill("fetch-again", "Try again", Some(Icon::Reload), false, theme).cursor_pointer().on_click(dispatch(FetchModels)))
+                    .child(pill("fetch-models-cancel", "Close", None, false, theme).cursor_pointer().on_click(dispatch(CloseFetchedModels)).tag("fetch-models-cancel")),
             )
             .tag("fetch-models-failed")
             .into_any_element(),

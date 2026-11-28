@@ -341,7 +341,7 @@ pub fn view(pane: &Entity<ChangesPane>, width: f32, theme: &Theme, cx: &App) -> 
                 .rounded(px(5.))
                 .text_color(theme.text_dim)
                 .hover(|word| word.text_color(theme.text).bg(theme.hover))
-                .on_click({
+                .cursor_pointer().on_click({
                     let pane = pane.clone();
                     move |_, _, cx| pane.update(cx, |pane, cx| pane.refresh(cx))
                 })
@@ -379,7 +379,7 @@ pub fn view(pane: &Entity<ChangesPane>, width: f32, theme: &Theme, cx: &App) -> 
                         .gap(px(8.))
                         .when(selected, |row| row.bg(theme.accent_wash))
                         .when(!selected, |row| row.hover(|row| row.bg(theme.hover)))
-                        .on_click(move |_, _, cx| pane.update(cx, |pane, cx| pane.select(&path, cx)))
+                        .cursor_pointer().on_click(move |_, _, cx| pane.update(cx, |pane, cx| pane.select(&path, cx)))
                         .child(div().flex_none().w(px(10.)).typography(Type::Mono).text_color(mark_colour).child(mark))
                         .child(
                             div()

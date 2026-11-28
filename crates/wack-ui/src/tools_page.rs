@@ -116,7 +116,7 @@ pub fn page(data: ToolsData, theme: &Theme) -> impl IntoElement {
             div().pt(px(18.)).child(
                 card(Some("Elsewhere"), None, None, theme).child(
                     row("Memory", Some("Notes it saves and recalls, per project."))
-                        .control(pill("tools-memory", "Open", None, false, theme).on_click(dispatch(OpenSettingsSection { section: Section::Memory })))
+                        .control(pill("tools-memory", "Open", None, false, theme).cursor_pointer().on_click(dispatch(OpenSettingsSection { section: Section::Memory })))
                         .view(theme),
                 ),
             ),

@@ -909,7 +909,7 @@ pub fn all() -> Vec<Scene> {
                     chat_area: false,
                     archived: None,
                     input: drawn,
-                    activity: Some("Working for 1m 05s".into()),
+                    activity: Some("Working for 1m 5s".into()),
                     crew_at_work: Some(crate::composer::CrewAtWork { working: 2, queued: 1, done: 2 }),
                     todos: Some(fixtures::todos()),
                     tasks: crate::shell::task_lines(&fixtures::tasks()),

@@ -485,19 +485,19 @@ impl BrowserPane {
             .child(
                 circle("browser-back", Icon::ArrowLeft, back, theme)
                     .tooltip(tip("Back"))
-                    .when(back, |circle| circle.on_click(move |_, _, cx| back_pane.update(cx, |pane, cx| pane.navigate(Nav::Back, cx))))
+                    .when(back, |circle| circle.cursor_pointer().on_click(move |_, _, cx| back_pane.update(cx, |pane, cx| pane.navigate(Nav::Back, cx))))
                     .tag("browser-back"),
             )
             .child(
                 circle("browser-forward", Icon::ArrowRight, forward, theme)
                     .tooltip(tip("Forward"))
-                    .when(forward, |circle| circle.on_click(move |_, _, cx| forward_pane.update(cx, |pane, cx| pane.navigate(Nav::Forward, cx))))
+                    .when(forward, |circle| circle.cursor_pointer().on_click(move |_, _, cx| forward_pane.update(cx, |pane, cx| pane.navigate(Nav::Forward, cx))))
                     .tag("browser-forward"),
             )
             .child(
                 circle("browser-reload", if loading { Icon::Close } else { Icon::Reload }, tab.is_some(), theme)
                     .tooltip(tip(if loading { "Stop loading" } else { "Reload" }))
-                    .on_click(move |_, _, cx| {
+                    .cursor_pointer().on_click(move |_, _, cx| {
                         reload_pane.update(cx, |pane, cx| pane.navigate(if loading { Nav::Stop } else { Nav::Reload }, cx))
                     })
                     .tag("browser-reload"),
@@ -640,7 +640,7 @@ impl BrowserPane {
                             .justify_center()
                             .when(!picked, |close| close.invisible().group_hover(group.clone(), |close| close.visible()))
                             .hover(|close| close.bg(theme.hover))
-                            .on_click(move |_, _, cx| {
+                            .cursor_pointer().on_click(move |_, _, cx| {
                                 cx.stop_propagation();
                                 close_pane.update(cx, |pane, cx| pane.close_tab(id, cx));
                             })
@@ -655,7 +655,7 @@ impl BrowserPane {
             circle("new-browser-tab", Icon::Plus, true, theme)
                 .size(px(26.))
                 .tooltip(tip("New tab"))
-                .on_click(move |_, window, cx| new_pane.update(cx, |pane, cx| pane.new_tab(window, cx)))
+                .cursor_pointer().on_click(move |_, window, cx| new_pane.update(cx, |pane, cx| pane.new_tab(window, cx)))
                 .tag("new-browser-tab"),
         )
     }
@@ -823,11 +823,11 @@ impl BrowserPane {
                     .justify_end()
                     .gap(px(8.))
                     .when(asks, |row| {
-                        row.child(button("browser-dialog-dismiss", dismiss_label, false).on_click(move |_, _, cx| {
+                        row.child(button("browser-dialog-dismiss", dismiss_label, false).cursor_pointer().on_click(move |_, _, cx| {
                             dismiss_pane.update(cx, |pane, cx| pane.answer(false, cx))
                         }).tag("browser-dialog-dismiss"))
                     })
-                    .child(button("browser-dialog-accept", accept_label, true).on_click(move |_, _, cx| accept_pane.update(cx, |pane, cx| pane.answer(true, cx))).tag("browser-dialog-accept")),
+                    .child(button("browser-dialog-accept", accept_label, true).cursor_pointer().on_click(move |_, _, cx| accept_pane.update(cx, |pane, cx| pane.answer(true, cx))).tag("browser-dialog-accept")),
             )
             .tag("browser-dialog")
     }

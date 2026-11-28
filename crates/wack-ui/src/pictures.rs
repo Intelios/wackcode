@@ -212,6 +212,64 @@ fn strip(pictures: &[Picture], key: &str, align_end: bool, cx: &mut App) -> gpui
         .into_any_element()
 }
 
+/// Thumbnails along a work row, after Claude Desktop: small enough to sit in the line, each
+/// opening the lightbox on it, so pictures the model looked at take one line however many.
+#[derive(IntoElement)]
+pub struct Thumbs {
+    pub pictures: Vec<Picture>,
+    pub key: SharedString,
+}
+
+/// A thumbnail in a row: its height, and how many show before "+N".
+const THUMB_HEIGHT: f32 = 20.;
+const THUMBS_MOST: usize = 8;
+
+impl RenderOnce for Thumbs {
+    fn render(self, _: &mut gpui::Window, cx: &mut App) -> impl IntoElement {
+        let theme = Theme::get(cx).clone();
+        let key = self.key;
+        let all: Arc<Vec<Picture>> = Arc::new(self.pictures);
+        let shown: Vec<_> = all.iter().take(THUMBS_MOST).map(|picture| (picture.clone(), thumb(picture, cx))).collect();
+        let more = all.len().saturating_sub(THUMBS_MOST);
+        div()
+            .flex_none()
+            .flex()
+            .items_center()
+            .gap(px(4.))
+            .children(shown.into_iter().enumerate().map(|(index, (picture, decoded))| {
+                let label = picture.label.clone().unwrap_or_else(|| "Picture".into());
+                let all = all.clone();
+                let accent = theme.accent_line;
+                let frame = div()
+                    .id(SharedString::from(format!("{key}-thumb-{index}")))
+                    .flex_none()
+                    .h(px(THUMB_HEIGHT))
+                    .rounded(px(5.))
+                    .overflow_hidden()
+                    .border_1()
+                    .border_color(theme.border)
+                    .bg(theme.raised)
+                    .cursor_pointer()
+                    .hover(move |frame| frame.border_color(accent))
+                    .tooltip(tip(label))
+                    .on_click(move |_, window, cx| {
+                        cx.stop_propagation();
+                        window.dispatch_action(Box::new(OpenPicture { pictures: all.clone(), index }), cx);
+                    });
+                match decoded {
+                    Some(decoded) => {
+                        let size = decoded.size(0);
+                        let width = THUMB_HEIGHT * size.width.0 as f32 / size.height.0.max(1) as f32;
+                        frame.w(px(width.clamp(THUMB_HEIGHT * 0.75, THUMB_HEIGHT * 1.8))).child(img(decoded).size_full().object_fit(ObjectFit::Cover))
+                    }
+                    None => frame.w(px(THUMB_HEIGHT * 1.3)),
+                }
+            }))
+            .when(more > 0, |row| row.child(div().flex_none().typography(Type::Small).text_color(theme.text_faint).child(format!("+{more}"))))
+            .tag("thumbs")
+    }
+}
+
 /// The lightbox: which pictures, and which one is showing. How far it is zoomed is the view's
 /// own ([`Zoom`]), and goes when the lightbox closes or steps to another picture.
 #[derive(Clone, Debug, PartialEq)]
@@ -678,7 +736,7 @@ impl RenderOnce for LightboxView {
                         bar.child(
                             round("lightbox-previous", crate::icon::Icon::ArrowLeft, &theme)
                                 .tooltip(tip("Previous (←)"))
-                                .on_click(|_, window, cx| window.dispatch_action(Box::new(crate::actions::StepPicture { by: -1 }), cx)),
+                                .cursor_pointer().on_click(|_, window, cx| window.dispatch_action(Box::new(crate::actions::StepPicture { by: -1 }), cx)),
                         )
                     })
                     .child(
@@ -697,13 +755,13 @@ impl RenderOnce for LightboxView {
                         bar.child(
                             round("lightbox-next", crate::icon::Icon::ArrowRight, &theme)
                                 .tooltip(tip("Next (→)"))
-                                .on_click(|_, window, cx| window.dispatch_action(Box::new(crate::actions::StepPicture { by: 1 }), cx)),
+                                .cursor_pointer().on_click(|_, window, cx| window.dispatch_action(Box::new(crate::actions::StepPicture { by: 1 }), cx)),
                         )
                     })
                     .child(zoom_pill)
                     .child(
                         round("lightbox-close", crate::icon::Icon::Close, &theme)
-                            .on_click(|_, window, cx| window.dispatch_action(Box::new(crate::actions::ClosePicture), cx)),
+                            .cursor_pointer().on_click(|_, window, cx| window.dispatch_action(Box::new(crate::actions::ClosePicture), cx)),
                     ),
             );
         let focus = zoom.read(cx).focus.clone();

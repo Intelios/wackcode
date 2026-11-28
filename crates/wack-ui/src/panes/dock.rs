@@ -307,7 +307,7 @@ fn stack_view(place: &StackPlace, stack: &Stack, frame: &Frame, theme: &Theme, c
                     tab.border_color(gpui::transparent_black()).hover(|tab| tab.bg(theme.hover))
                 }
             })
-            .on_click(move |_, window, cx| window.dispatch_action(Box::new(ActivatePane { pane: id }), cx))
+            .cursor_pointer().on_click(move |_, window, cx| window.dispatch_action(Box::new(ActivatePane { pane: id }), cx))
             .on_drag(dragged, |tab, _, _, cx| cx.new(|_| tab.clone()))
             .child(kind_icon(pane.kind).view(px(13.), if selected { theme.accent_text } else { theme.text_dim }))
             .when_some(status_dot, |tab, dot| {
@@ -387,20 +387,20 @@ fn stack_view(place: &StackPlace, stack: &Stack, frame: &Frame, theme: &Theme, c
             div()
                 .relative()
                 .flex_none()
-                .child(round("pane-add", Icon::Plus, "Open a pane").on_click(|_, window, cx| window.dispatch_action(Box::new(TogglePaneMenu), cx)).tag("pane-add"))
+                .child(round("pane-add", Icon::Plus, "Open a pane").cursor_pointer().on_click(|_, window, cx| window.dispatch_action(Box::new(TogglePaneMenu), cx)).tag("pane-add"))
                 .when(frame.menu_open, |host| host.child(pane_menu(frame, theme)))
                 .into_any_element(),
         )
     } else {
         (active.kind == PaneKind::Terminal).then(|| {
             round("new-terminal", Icon::Plus, "New terminal")
-                .on_click(move |_, window, cx| window.dispatch_action(Box::new(NewTerminalWith { pane: active.id }), cx))
+                .cursor_pointer().on_click(move |_, window, cx| window.dispatch_action(Box::new(NewTerminalWith { pane: active.id }), cx))
                 .tag("new-terminal")
                 .into_any_element()
         })
     };
     let hide = heads_frame.then(|| {
-        round("hide-side-panel", Icon::PanelRight, "Hide panel").on_click(|_, window, cx| window.dispatch_action(Box::new(HideSidePanel), cx)).tag("hide-side-panel")
+        round("hide-side-panel", Icon::PanelRight, "Hide panel").cursor_pointer().on_click(|_, window, cx| window.dispatch_action(Box::new(HideSidePanel), cx)).tag("hide-side-panel")
     });
     let header = div()
         .flex_none()

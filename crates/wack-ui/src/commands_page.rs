@@ -147,7 +147,7 @@ pub fn page(data: CommandsData, theme: &Theme) -> AnyElement {
     if let Some(editor) = &data.editor {
         return editor_page(editor, theme).into_any_element();
     }
-    let new = pill("command-new", "New command", Some(Icon::Plus), true, theme).on_click(dispatch(NewSlashCommand)).tag("command-new");
+    let new = pill("command-new", "New command", Some(Icon::Plus), true, theme).cursor_pointer().on_click(dispatch(NewSlashCommand)).tag("command-new");
     let mut page = div().flex().flex_col().gap(px(18.)).child(staged_head(crate::settings::Section::Commands, 
         "Commands",
         "What you can type after / in the composer. Your own commands send a prompt you wrote, with what you type after the name filled in.",

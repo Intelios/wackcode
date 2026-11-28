@@ -79,7 +79,7 @@ impl RenderOnce for Button {
             .when(enabled, |button| button.hover(move |button| button.bg(hover)))
             .when(!enabled, |button| button.opacity(0.45))
             .when_some(self.tooltip, |button, text| button.tooltip(tip(text)))
-            .when_some(self.on_click.filter(|_| enabled), |button, on_click| button.on_click(on_click))
+            .when_some(self.on_click.filter(|_| enabled), |button, on_click| button.cursor_pointer().on_click(on_click))
             .child(
                 div()
                     .typography(if matches!(self.kind, Kind::Primary | Kind::Ultra) { Type::UiStrong } else { Type::Ui })

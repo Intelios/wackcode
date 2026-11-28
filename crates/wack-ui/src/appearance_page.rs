@@ -111,7 +111,7 @@ fn themes(chosen: ThemeName, theme: &Theme) -> impl IntoElement {
         let look = Theme::derive(ThemeInput { appearance: theme.appearance, theme: name, ground: None });
         let picked = name == chosen;
         tile(("theme", name as usize), picked, name.name(), window(&look), theme)
-            .on_click(dispatch(ChooseTheme { theme: name }))
+            .cursor_pointer().on_click(dispatch(ChooseTheme { theme: name }))
             .tag(tag(name))
     }))
 }
@@ -200,7 +200,7 @@ fn backdrop(data: &AppearanceData, theme: &Theme) -> gpui::Div {
     };
     let shuffle = (data.pictures.len() > 1).then(|| {
         let shuffle_now = pill("shuffle-now", "Shuffle now", Some(Icon::Shuffle), false, theme)
-            .on_click(dispatch(ShuffleBackdrop))
+            .cursor_pointer().on_click(dispatch(ShuffleBackdrop))
             .tag("shuffle-now");
         let toggle = div()
             .id("backdrop-shuffle")
@@ -365,7 +365,7 @@ const PICTURE_HEIGHT: f32 = 82.;
 fn strip(data: &AppearanceData, theme: &Theme) -> impl IntoElement {
     let none_shown = data.backdrop.is_none();
     let none = frame(none_shown, theme).bg(theme.window).flex().items_center().justify_center().child(Icon::Close.view(px(16.), theme.text_faint));
-    let none = tile("no-picture", none_shown, "No picture", none, theme).on_click(dispatch(ShowPicture { file: None })).tag("no-picture");
+    let none = tile("no-picture", none_shown, "No picture", none, theme).cursor_pointer().on_click(dispatch(ShowPicture { file: None })).tag("no-picture");
     let pictures = data.pictures.iter().enumerate().map(|(index, thumbnail)| {
         let picture = &thumbnail.picture;
         let area = crate::panes::Rect { x: 0., y: 0., width: PICTURE_WIDTH, height: PICTURE_HEIGHT };
@@ -389,7 +389,7 @@ fn strip(data: &AppearanceData, theme: &Theme) -> impl IntoElement {
             .invisible()
             .group_hover(group.clone(), |button| button.visible())
             .hover(|button| button.bg(theme.hover))
-            .on_click({
+            .cursor_pointer().on_click({
                 let file = file.clone();
                 move |_, window, cx| {
                     cx.stop_propagation();
@@ -412,7 +412,7 @@ fn strip(data: &AppearanceData, theme: &Theme) -> impl IntoElement {
         let caption = thumbnail.theme.map_or("No theme yet", ThemeName::name);
         tile(("picture", index), thumbnail.shown, caption, image, theme)
             .group(group)
-            .on_click(dispatch(ShowPicture { file: Some(file) }))
+            .cursor_pointer().on_click(dispatch(ShowPicture { file: Some(file) }))
     });
     let add = frame(false, theme)
         .flex()
@@ -422,7 +422,7 @@ fn strip(data: &AppearanceData, theme: &Theme) -> impl IntoElement {
         .border_color(theme.border_strong)
         .child(Icon::Plus.view(px(18.), theme.text_soft));
     let add = tile("choose-backdrop", false, if data.importing { "Reading…" } else { "Add a picture…" }, add, theme)
-        .on_click(dispatch(ChooseBackdrop))
+        .cursor_pointer().on_click(dispatch(ChooseBackdrop))
         .tag("choose-backdrop");
     div().w_full().flex().flex_wrap().gap(px(12.)).child(none).children(pictures).child(add)
 }

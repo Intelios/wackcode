@@ -1376,7 +1376,7 @@ impl Render for CanvasPane {
             .items_center()
             .gap(px(2.))
             .on_mouse_down(MouseButton::Left, |_, _, cx| cx.stop_propagation())
-            .child(circle("canvas-zoom-out", Icon::Minus, "Zoom out  ⌘−", &theme).on_click({
+            .child(circle("canvas-zoom-out", Icon::Minus, "Zoom out  ⌘−", &theme).cursor_pointer().on_click({
                 let pane = pane.clone();
                 move |_, _, cx| pane.update(cx, |pane, cx| pane.zoom_by(false, cx))
             }))
@@ -1695,7 +1695,7 @@ impl Render for CanvasPane {
                             .flex()
                             .items_center()
                             .gap(px(12.))
-                            .child(circle("canvas-present-previous", Icon::ArrowLeft, "Previous  ←", &theme).bg(theme.raised).on_click(step(-1)))
+                            .child(circle("canvas-present-previous", Icon::ArrowLeft, "Previous  ←", &theme).bg(theme.raised).cursor_pointer().on_click(step(-1)))
                             .child(
                                 div()
                                     .flex()
@@ -1705,8 +1705,8 @@ impl Render for CanvasPane {
                                     .child(div().max_w(px(480.)).truncate().typography(Type::UiStrong).text_color(theme.text).child(name))
                                     .child(div().typography(Type::Small).text_color(theme.text_dim).child(format!("{} of {count} · ← → to step · esc to close", index + 1))),
                             )
-                            .child(circle("canvas-present-next", Icon::ArrowRight, "Next  →", &theme).bg(theme.raised).on_click(step(1)))
-                            .child(circle("canvas-present-close", Icon::Close, "Back to the board  esc", &theme).bg(theme.raised).on_click(close)),
+                            .child(circle("canvas-present-next", Icon::ArrowRight, "Next  →", &theme).bg(theme.raised).cursor_pointer().on_click(step(1)))
+                            .child(circle("canvas-present-close", Icon::Close, "Back to the board  esc", &theme).bg(theme.raised).cursor_pointer().on_click(close)),
                     )
                     .tag("canvas-present"),
             )

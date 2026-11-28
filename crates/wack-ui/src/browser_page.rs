@@ -92,7 +92,7 @@ pub fn page(data: BrowserData, theme: &Theme) -> impl IntoElement {
             .child(div().child(Button::new("browser-clear-keep", "Keep it", ButtonKind::Secondary).action(CancelClearBrowsingData)).tag("browser-clear-keep"))
             .child(div().child(Button::new("browser-clear-confirm", "Clear", ButtonKind::Danger).action(ConfirmClearBrowsingData)).tag("browser-clear-confirm"))
             .into_any_element(),
-        _ => pill("browser-clear", "Clear…", Some(Icon::Trash), false, theme).on_click(dispatch(AskClearBrowsingData)).tag("browser-clear").into_any_element(),
+        _ => pill("browser-clear", "Clear…", Some(Icon::Trash), false, theme).cursor_pointer().on_click(dispatch(AskClearBrowsingData)).tag("browser-clear").into_any_element(),
     };
     let outcome: Option<(SharedString, bool)> = match &data.clearing {
         Clearing::Idle => None,

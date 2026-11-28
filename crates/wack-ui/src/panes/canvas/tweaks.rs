@@ -376,9 +376,9 @@ impl CanvasPane {
             .flex()
             .items_center()
             .gap(px(6.))
-            .child(super::circle(format!("canvas-tweak-{}-less", tweak.id), Icon::Minus, "Less", theme).on_click(step_by(-1.)))
+            .child(super::circle(format!("canvas-tweak-{}-less", tweak.id), Icon::Minus, "Less", theme).cursor_pointer().on_click(step_by(-1.)))
             .child(track)
-            .child(super::circle(format!("canvas-tweak-{}-more", tweak.id), Icon::Plus, "More", theme).on_click(step_by(1.)))
+            .child(super::circle(format!("canvas-tweak-{}-more", tweak.id), Icon::Plus, "More", theme).cursor_pointer().on_click(step_by(1.)))
             .into_any_element()
     }
 }

@@ -302,7 +302,7 @@ pub fn page(data: McpData, theme: &Theme) -> AnyElement {
     if let Some(editor) = &data.editor {
         return editor_page(editor, theme).into_any_element();
     }
-    let new = pill("mcp-new", "New server", Some(Icon::Plus), true, theme).on_click(dispatch(AddMcpServer { transport: Transport::Stdio })).tag("mcp-new").into_any_element();
+    let new = pill("mcp-new", "New server", Some(Icon::Plus), true, theme).cursor_pointer().on_click(dispatch(AddMcpServer { transport: Transport::Stdio })).tag("mcp-new").into_any_element();
     div()
         .flex()
         .flex_col()
@@ -604,10 +604,10 @@ fn details(row: &ServerRow, all_projects: &[(String, SharedString)], confirming:
             .flex()
             .items_center()
             .gap(px(8.))
-            .child(pill(SharedString::from(format!("mcp-test-{id}")), if testing { "Testing…" } else { "Test connection" }, Some(Icon::Play), false, theme).on_click(dispatch(TestMcpServer { id: id.clone() })).tag("mcp-row-test"))
-            .child(pill(SharedString::from(format!("mcp-edit-{id}")), "Edit", Some(Icon::Pencil), false, theme).on_click(dispatch(EditMcpServer { id: id.clone() })).tag("mcp-row-edit"))
+            .child(pill(SharedString::from(format!("mcp-test-{id}")), if testing { "Testing…" } else { "Test connection" }, Some(Icon::Play), false, theme).cursor_pointer().on_click(dispatch(TestMcpServer { id: id.clone() })).tag("mcp-row-test"))
+            .child(pill(SharedString::from(format!("mcp-edit-{id}")), "Edit", Some(Icon::Pencil), false, theme).cursor_pointer().on_click(dispatch(EditMcpServer { id: id.clone() })).tag("mcp-row-edit"))
             .child(div().flex_1())
-            .child(pill(SharedString::from(format!("mcp-delete-{id}")), "Delete", Some(Icon::Trash), false, theme).on_click(dispatch(AskDeleteMcpServer { id: id.clone() })).tag("mcp-row-delete"))
+            .child(pill(SharedString::from(format!("mcp-delete-{id}")), "Delete", Some(Icon::Trash), false, theme).cursor_pointer().on_click(dispatch(AskDeleteMcpServer { id: id.clone() })).tag("mcp-row-delete"))
             .into_any_element()
     };
 
@@ -729,7 +729,7 @@ fn entries(editor: &EditorData, theme: &Theme) -> AnyElement {
                         .child(Icon::Close.view(px(12.), theme.text_dim)),
                 )
         }))
-        .child(div().flex().child(pill("mcp-add-entry", add, Some(Icon::Plus), false, theme).on_click(dispatch(AddMcpEntry)).tag("mcp-add-entry")))
+        .child(div().flex().child(pill("mcp-add-entry", add, Some(Icon::Plus), false, theme).cursor_pointer().on_click(dispatch(AddMcpEntry)).tag("mcp-add-entry")))
         .into_any_element()
 }
 
@@ -831,10 +831,10 @@ fn availability_controls(scope: &McpScope, all_projects: &[(String, SharedString
                         let picked = ids.contains(id);
                         let toggle = ToggleMcpProject { server: server_owned.clone(), id: id.clone() };
                         if excluding && picked {
-                            excluded_pill(("mcp-project", index), name.clone(), theme).on_click(dispatch(toggle)).tag("mcp-project").into_any_element()
+                            excluded_pill(("mcp-project", index), name.clone(), theme).cursor_pointer().on_click(dispatch(toggle)).tag("mcp-project").into_any_element()
                         } else {
                             let on = !excluding && picked;
-                            pill(("mcp-project", index), name.clone(), on.then_some(Icon::Check), on, theme).on_click(dispatch(toggle)).tag("mcp-project").into_any_element()
+                            pill(("mcp-project", index), name.clone(), on.then_some(Icon::Check), on, theme).cursor_pointer().on_click(dispatch(toggle)).tag("mcp-project").into_any_element()
                         }
                     }))
                     .into_any_element()

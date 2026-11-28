@@ -606,7 +606,7 @@ fn file_row(file: &ChangedFile, theme: &Theme, handlers: &Handlers) -> impl Into
             .tag("turn-changes-diff")
             .into_any_element()
     });
-    let height = 31. + (file.lines.len() as f32 * 19. + 12.).min(DIFF_MAX_HEIGHT);
+    let height = 31. + (file.lines.len() as f32 * 20. + 12.).min(DIFF_MAX_HEIGHT);
     let diff_body = diff_body.and_then(|body| crate::transcript::unfolding(body, &file.key, file.open, height, handlers));
 
     div().border_t_1().border_color(theme.border).flex().flex_col().child(head).children(diff_body)

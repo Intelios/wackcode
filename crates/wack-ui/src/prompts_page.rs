@@ -260,7 +260,7 @@ pub fn page(data: PromptsData, theme: &Theme) -> AnyElement {
     let customised = data.config.customised_count();
     let restore_all = (customised >= 2 && !data.confirming_restore_all).then(|| {
         pill("prompts-restore-all", "Restore all defaults", Some(Icon::Reload), false, theme)
-            .on_click(dispatch(AskRestoreAllPrompts))
+            .cursor_pointer().on_click(dispatch(AskRestoreAllPrompts))
             .tag("prompts-restore-all")
             .into_any_element()
     });

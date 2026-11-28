@@ -539,6 +539,12 @@ impl Session {
         &self.loaded
     }
 
+    /// The provider has counted this conversation's tokens at least once since it was opened or
+    /// compacted, so [`Session::context_tokens`] rests on a measurement.
+    pub fn counted(&self) -> bool {
+        self.usage.is_some()
+    }
+
     /// How much of the model's context the next request will use: the provider's last count plus
     /// an estimate of what was added since.
     pub fn context_tokens(&self) -> u64 {

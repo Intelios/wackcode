@@ -809,7 +809,7 @@ impl Conversation {
         let Some(turn) = self.current() else {
             return;
         };
-        if !matches!(event, Event::Thinking(_) | Event::Thought { .. } | Event::State { .. } | Event::Notice(_)) {
+        if !matches!(event, Event::Thinking(_) | Event::Thought { .. } | Event::State { .. } | Event::Notice(_) | Event::Context { .. }) {
             turn.close_thought(now);
         }
         match event {
@@ -843,7 +843,7 @@ impl Conversation {
             // Never settles the reply: a notice at the end of a run must not fold it away.
             Event::Notice(text) => turn.notices.push(text.clone()),
             Event::Interrupted => turn.interrupt(),
-            Event::Steered(_) | Event::Question { .. } | Event::Noted { .. } => {}
+            Event::Steered(_) | Event::Question { .. } | Event::Noted { .. } | Event::Context { .. } => {}
         }
     }
 

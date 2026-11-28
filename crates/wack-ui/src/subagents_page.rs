@@ -291,7 +291,7 @@ pub fn page(data: SubagentsData, theme: &Theme) -> AnyElement {
     if let Some(editor) = &data.editor {
         return editor_page(editor, theme).into_any_element();
     }
-    let new = pill("agent-new", "New agent", Some(Icon::Plus), true, theme).on_click(dispatch(NewAgent)).tag("agent-new");
+    let new = pill("agent-new", "New agent", Some(Icon::Plus), true, theme).cursor_pointer().on_click(dispatch(NewAgent)).tag("agent-new");
     let mut page = div().flex().flex_col().gap(px(18.)).child(staged_head(crate::settings::Section::Subagents, 
         "Sub-agents",
         "Agents the agent can hand work to. Each works in its own context and reports back, so the chat keeps the conclusion, not the search. Chat mode chats work alone and never hand work off.",
@@ -324,7 +324,7 @@ fn delegation_card(data: &SubagentsData, theme: &Theme) -> impl IntoElement {
         theme,
     )
     .max_w(px(260.))
-    .on_click(dispatch(ToggleHelperModels))
+    .cursor_pointer().on_click(dispatch(ToggleHelperModels))
     .tag("helper-model");
     let helper_about = if data.helper_gone {
         "The model chosen is gone, so these use the chat’s model. Choose another."
@@ -353,7 +353,7 @@ fn team_card(data: &SubagentsData, theme: &Theme) -> impl IntoElement {
         theme,
     )
     .max_w(px(260.))
-    .on_click(dispatch(ToggleTeamModels))
+    .cursor_pointer().on_click(dispatch(ToggleTeamModels))
     .tag("team-model");
     let about = if off {
         "Sub-agents are off, so no chat can have a Team. Choose When it helps or Only when I ask above."

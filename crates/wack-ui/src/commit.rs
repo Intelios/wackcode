@@ -640,7 +640,7 @@ pub fn view(commit: &CommitRow, theme: &Theme, handlers: &Handlers) -> gpui::Any
             .into_any_element()
     });
     let lines = commit.command.len() / 90 + 1 + commit.output.as_ref().map_or(0, |output| output.lines().count() + 1);
-    let body = body.and_then(|body| crate::transcript::unfolding(body, &commit.key, commit.open, (lines as f32 * 19. + 32.).min(DETAIL_MAX_HEIGHT + 6.), handlers));
+    let body = body.and_then(|body| crate::transcript::unfolding(body, &commit.key, commit.open, (lines as f32 * 20. + 32.).min(DETAIL_MAX_HEIGHT + 6.), handlers));
 
     div()
         .flex()

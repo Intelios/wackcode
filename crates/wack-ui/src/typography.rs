@@ -72,13 +72,15 @@ impl Type {
                 italic: true,
                 ..style(DISPLAY_FONT, 13.5, 18., FontWeight::NORMAL)
             },
-            Type::Heading => style(UI_FONT, 15., 22., FontWeight::SEMIBOLD),
-            Type::Body => style(UI_FONT, 14., 22., FontWeight::NORMAL),
+            // The transcript's running text: a size up from version 2's 14 points, which was Inter,
+            // whose large x-height read bigger than SF Pro at the same size.
+            Type::Heading => style(UI_FONT, 17., 24., FontWeight::SEMIBOLD),
+            Type::Body => style(UI_FONT, 15., 24., FontWeight::NORMAL),
             Type::Ui => style(UI_FONT, 13., 18., FontWeight::NORMAL),
             Type::UiStrong => style(UI_FONT, 13., 18., FontWeight::MEDIUM),
             Type::Small => style(UI_FONT, 11.5, 15., FontWeight::NORMAL),
             Type::Mono => style(MONO_FONT, 12., 18., FontWeight::NORMAL),
-            Type::Code => style(MONO_FONT, 12., 19., FontWeight::NORMAL),
+            Type::Code => style(MONO_FONT, 12.5, 20., FontWeight::NORMAL),
             Type::Terminal => style(MONO_FONT, 12., 16., FontWeight::NORMAL),
         }
     }

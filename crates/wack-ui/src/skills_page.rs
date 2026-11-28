@@ -174,7 +174,7 @@ pub fn page(data: SkillsData, theme: &Theme) -> AnyElement {
     if let Some(viewing) = &data.viewing {
         return view_page(viewing, theme).into_any_element();
     }
-    let new = pill("skill-new", "New skill", Some(Icon::Plus), true, theme).on_click(dispatch(NewSkill)).tag("skill-new");
+    let new = pill("skill-new", "New skill", Some(Icon::Plus), true, theme).cursor_pointer().on_click(dispatch(NewSkill)).tag("skill-new");
     let mut page = div().flex().flex_col().gap(px(18.)).child(staged_head(crate::settings::Section::Skills, 
         "Skills",
         "Instructions the agent loads when a task matches its description, or that you run as /name. Changes apply from a chat’s next message.",
@@ -206,7 +206,7 @@ pub fn page(data: SkillsData, theme: &Theme) -> AnyElement {
         page = page.child(card);
     }
     let added: Vec<&SkillFolder> = data.folders.iter().filter(|folder| folder.kind == FolderKind::Added).collect();
-    let add = pill("skill-add-folder", "Add folder", Some(Icon::Folder), false, theme).on_click(dispatch(AddSkillFolder)).tag("skill-add-folder");
+    let add = pill("skill-add-folder", "Add folder", Some(Icon::Folder), false, theme).cursor_pointer().on_click(dispatch(AddSkillFolder)).tag("skill-add-folder");
     let mut added_card = card(Some("Added folders"), None, Some("Load after the others, in this order"), theme);
     for (index, folder) in added.iter().enumerate() {
         added_card = folder_skills(added_card.child(folder_row(("added-folder", index), folder, theme)), folder, theme);
@@ -234,7 +234,7 @@ fn library_card(folder: &SkillFolder, theme: &Theme) -> impl IntoElement {
                 .child(div().typography(Type::UiStrong).text_color(theme.text).child("Your skills"))
                 .child(div().truncate().typography(Type::Small).text_color(theme.text_faint).child(format!("{} · {}", folder.display, skills_count(count)))),
         )
-        .child(pill("skill-import", "Import", Some(Icon::Download), false, theme).on_click(dispatch(ImportSkills)).tag("skill-import"))
+        .child(pill("skill-import", "Import", Some(Icon::Download), false, theme).cursor_pointer().on_click(dispatch(ImportSkills)).tag("skill-import"))
         .child(icon_button("skills-reveal", Icon::Folder, "Show the folder in Finder", RevealMemory { path: folder.path.clone() }, theme));
     folder_skills(card(None, None, None, theme).child(header), folder, theme)
 }

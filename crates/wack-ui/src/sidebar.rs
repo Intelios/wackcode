@@ -312,7 +312,7 @@ fn new_chat_pill(theme: &Theme) -> impl IntoElement {
         .border_1()
         .border_color(theme.accent_line)
         .hover(|pill| pill.border_color(theme.accent))
-        .on_click(dispatch(NewChat))
+        .cursor_pointer().on_click(dispatch(NewChat))
         .child(
             div()
                 .flex_none()
@@ -340,7 +340,7 @@ fn settings_row(theme: &Theme) -> impl IntoElement {
         .items_center()
         .gap(px(9.))
         .hover(|row| row.bg(theme.hover))
-        .on_click(dispatch(OpenSettings))
+        .cursor_pointer().on_click(dispatch(OpenSettings))
         .child(Icon::Settings.view(px(15.), theme.text_dim))
         .child(div().flex_1().typography(Type::Ui).text_color(theme.text_soft).child("Settings"))
         .child(div().typography(Type::Small).text_color(theme.text_faint).child("⌘,"))
@@ -444,7 +444,7 @@ fn project_rows(project: ProjectRow, theme: &Theme) -> impl IntoElement {
         .group_hover(group.clone(), |controls| controls.visible())
         .child(
             small_button(SharedString::from(format!("{id}-new")), Icon::Plus, theme.text_dim, theme)
-                .on_click(dispatch(NewChatIn { project: id.clone() })),
+                .cursor_pointer().on_click(dispatch(NewChatIn { project: id.clone() })),
         )
         .child(
             small_button(
@@ -453,11 +453,11 @@ fn project_rows(project: ProjectRow, theme: &Theme) -> impl IntoElement {
                 if project.pinned { theme.accent_text } else { theme.text_dim },
                 theme,
             )
-            .on_click(dispatch(PinProject { id: id.clone(), pinned: !project.pinned })),
+            .cursor_pointer().on_click(dispatch(PinProject { id: id.clone(), pinned: !project.pinned })),
         )
         .child(
             small_button(SharedString::from(format!("{id}-remove")), Icon::Close, theme.text_dim, theme)
-                .on_click(dispatch(RemoveProject { id: id.clone() })),
+                .cursor_pointer().on_click(dispatch(RemoveProject { id: id.clone() })),
         );
     let count = (!project.open && !project.chats.is_empty()).then(|| {
         div().pr(px(6.)).typography(Type::Small).text_color(theme.text_faint).child(project.chats.len().to_string())
@@ -474,7 +474,7 @@ fn project_rows(project: ProjectRow, theme: &Theme) -> impl IntoElement {
         .items_center()
         .gap(px(8.))
         .hover(|row| row.bg(theme.hover))
-        .on_click(dispatch(ToggleProject { id: id.clone() }))
+        .cursor_pointer().on_click(dispatch(ToggleProject { id: id.clone() }))
         .child(monogram(&project.name, project.open || has_selection, theme))
         .child(
             div()
@@ -558,7 +558,7 @@ fn chat_row_body(chat: ChatRow, theme: &Theme) -> impl IntoElement {
                 window.dispatch_action(Box::new(crate::actions::OpenChatMenu { chat: id.clone(), position: event.position, sidebar: true }), cx);
             }
         })
-        .on_click({
+        .cursor_pointer().on_click({
             let id = id.clone();
             move |event, window, cx| {
                 let action: Box<dyn gpui::Action> = if event.click_count() == 2 {
@@ -666,11 +666,11 @@ fn row_control(
             .typography(Type::Small)
             .font_weight(FontWeight::MEDIUM)
             .text_color(if danger { theme.danger } else { theme.on_accent })
-            .on_click(click)
+            .cursor_pointer().on_click(click)
             .child(words)
             .tag(tag)
             .into_any_element(),
-        None => small_button(id, icon, theme.text_dim, theme).tooltip(tip(tooltip)).on_click(click).tag(tag).into_any_element(),
+        None => small_button(id, icon, theme.text_dim, theme).tooltip(tip(tooltip)).cursor_pointer().on_click(click).tag(tag).into_any_element(),
     }
 }
 
@@ -690,7 +690,7 @@ fn search_field(field: Entity<TextField>, searching: bool, theme: &Theme) -> imp
         .child(Icon::Search.view(px(13.), theme.text_faint))
         .child(div().flex_1().min_w_0().overflow_hidden().child(field))
         .when(searching, |well| {
-            well.child(small_button("clear-search", Icon::Close, theme.text_dim, theme).tooltip(tip("Clear search")).on_click(dispatch(ClearSearch)).tag("clear-search"))
+            well.child(small_button("clear-search", Icon::Close, theme.text_dim, theme).tooltip(tip("Clear search")).cursor_pointer().on_click(dispatch(ClearSearch)).tag("clear-search"))
         })
         .tag("sidebar-search")
 }
@@ -708,7 +708,7 @@ fn archived_button(open: bool, theme: &Theme) -> impl IntoElement {
         .when(open, |button| button.bg(theme.accent_wash))
         .when(!open, |button| button.hover(|button| button.bg(theme.hover)))
         .tooltip(tip(if open { "Back to chats" } else { "Archived chats" }))
-        .on_click(dispatch(ToggleArchived))
+        .cursor_pointer().on_click(dispatch(ToggleArchived))
         .child(Icon::Archive.view(px(15.), if open { theme.accent_text } else { theme.text_dim }))
         .tag("show-archived")
 }
@@ -736,7 +736,7 @@ fn archived_header(total: usize, confirming_all: bool, theme: &Theme) -> impl In
                 theme,
             ))
         })
-        .child(small_button("close-archived", Icon::Close, theme.text_dim, theme).tooltip(tip("Back to chats")).on_click(dispatch(ToggleArchived)).tag("close-archived"))
+        .child(small_button("close-archived", Icon::Close, theme.text_dim, theme).tooltip(tip("Back to chats")).cursor_pointer().on_click(dispatch(ToggleArchived)).tag("close-archived"))
         .tag("archived-header")
 }
 
@@ -756,7 +756,7 @@ fn archived_row(row: ArchivedRow, theme: &Theme) -> impl IntoElement {
         .flex_col()
         .gap(px(2.))
         .map(|row_box| if row.selected { row_box.bg(theme.accent_wash) } else { row_box.hover(|row_box| row_box.bg(theme.hover)) })
-        .on_click(dispatch(SelectChat { id: id.clone() }))
+        .cursor_pointer().on_click(dispatch(SelectChat { id: id.clone() }))
         .child(
             div()
                 .flex()
@@ -869,7 +869,7 @@ impl RenderOnce for AreaSwitch {
                 .justify_center()
                 .when(!on, |segment| segment.hover(|segment| segment.bg(theme.hover)))
                 .tooltip(tip(if waiting { format!("{tooltip} · a chat is waiting for your answer") } else { tooltip.to_string() }))
-                .on_click(move |_, window, cx| {
+                .cursor_pointer().on_click(move |_, window, cx| {
                     cx.stop_propagation();
                     window.dispatch_action(action.boxed_clone(), cx);
                 })

@@ -74,7 +74,7 @@ fn token_trail(status: UsageStatus, theme: &Theme) -> impl IntoElement {
         .flex_none()
         .when(!has_history, |wrap| wrap.opacity(0.5))
         .when(has_history, |wrap| {
-            wrap.child(pill("usage-folder", "Usage folder", Some(Icon::Folder), false, theme).on_click(dispatch(RevealUsageFolder {
+            wrap.child(pill("usage-folder", "Usage folder", Some(Icon::Folder), false, theme).cursor_pointer().on_click(dispatch(RevealUsageFolder {
                 path: PathBuf::from(path.clone()),
             })))
         });

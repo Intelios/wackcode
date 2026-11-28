@@ -14,12 +14,17 @@
 //!   (+/− in the diff colours, a pass in success's, a failure in danger's). A row with more to
 //!   show (a diff, a command's output) opens in place. Opening and closing move: what opens
 //!   grows under its line as its chevron turns ([`unfolding`]).
-//! - Live, a group's line is a breathing dot and what it is doing now, shining; its newest rows
-//!   come under it, older ones behind "N earlier steps", the step under way shining in the
-//!   present tense. The accent is only ever on what is live and on actions.
-//! - A thought is the duck and "Thought for 12.3s ›"; live, the duck paddles and "Thinking"
-//!   shines, its clock counting. Opened, its words are plain grey text under the line in a body
-//!   of capped height that scrolls inside, so a long thought never runs the page on.
+//! - Live, a group's line is the flocking working mark (`flock.rs`) and what it is doing now,
+//!   shining; its newest rows come under it, older ones behind "N earlier steps", the step under
+//!   way shining in the present tense. Clicking the line folds the live group to it and back.
+//!   The accent is only ever on what is live and on actions.
+//! - A settled group's line names what it touched where that is short ("Read theme.rs and ran
+//!   the test suite", `work::sentence`). Pictures read one after another are one row, "Read 3
+//!   images", their thumbnails along it and along the folded line, each opening the lightbox.
+//! - A thought is the duck and "Thought for 12.3s ›"; live, the duck paddles, "Thinking" shines,
+//!   its clock counts and its newest words run past beside it, version 2's stream. Opened, its
+//!   words are plain grey text under the line in a body of capped height that scrolls inside,
+//!   live too, following the newest words until the reader scrolls up.
 //! - A turn the user has since answered folds all its work behind "Worked for 1m 12s ›" over
 //!   its answer (`Item::Earlier`); the latest turn stays open.
 //! - A call still being written says what is coming ("Writing the plan · 6.4k characters").
@@ -222,6 +227,12 @@ impl WorkRow {
     pub fn is_thought(&self) -> bool {
         matches!(self.target, Target::Thought(_) | Target::Stream(_))
     }
+
+    /// Pictures read from files show as thumbnails along the row; what other steps returned to
+    /// look at (a browser's or the Mac's screenshot) shows under it, larger.
+    pub fn inline_pictures(&self) -> bool {
+        self.verb.as_ref() == "Read" && !self.pictures.is_empty()
+    }
 }
 
 #[derive(Clone, Debug)]
@@ -323,6 +334,8 @@ pub struct Handlers {
     pub clock: bool,
     /// When each group or row was last opened or closed, by key, so it can move as it does.
     pub folds: Rc<HashMap<String, Fold>>,
+    /// Where each opened thought is scrolled, and whether it follows its newest words.
+    pub follows: Follows,
 }
 
 impl Handlers {
@@ -335,6 +348,7 @@ impl Handlers {
             prompts: Default::default(),
             clock: false,
             folds: Default::default(),
+            follows: Default::default(),
         }
     }
 
@@ -344,6 +358,22 @@ impl Handlers {
             return None;
         }
         self.folds.get(key).copied().filter(|fold| fold.at.elapsed() < FOLD + FOLD_SLACK)
+    }
+}
+
+/// Each opened thought's scroll, by its row's key, kept by the chat so it outlives a redraw: a
+/// thought still coming follows its newest words until the reader scrolls up, and follows again
+/// once they are back at its end.
+#[derive(Clone, Default)]
+pub struct Follows(Rc<std::cell::RefCell<HashMap<SharedString, Follow>>>);
+
+/// A thought body's scroll, and whether it follows its newest words.
+type Follow = (gpui::ScrollHandle, Rc<std::cell::Cell<bool>>);
+
+impl Follows {
+    /// The scroll for `key`'s body, and whether it follows; a new one follows.
+    fn of(&self, key: &SharedString) -> Follow {
+        self.0.borrow_mut().entry(key.clone()).or_insert_with(|| (gpui::ScrollHandle::new(), Rc::new(std::cell::Cell::new(true)))).clone()
     }
 }
 
@@ -632,7 +662,13 @@ fn work_log(work: &Work, theme: &Theme, handlers: &Handlers) -> AnyElement {
     } else if work.label.is_empty() {
         None
     } else {
-        Some(fold_line(&work.key, &work.label, work.open, theme, handlers))
+        // Pictures the group read show along its folded line too, so they are a click away.
+        let pictures: Vec<crate::pictures::Picture> = if work.open {
+            Vec::new()
+        } else {
+            work.rows.iter().filter(|row| row.inline_pictures()).flat_map(|row| row.pictures.iter().cloned()).collect()
+        };
+        Some(fold_line_with(&work.key, &work.label, work.open, pictures, theme, handlers))
     };
     let indented = head.is_some();
     // Its rows are drawn while it is open, and while it folds shut.
@@ -702,7 +738,7 @@ fn rows_height(rows: &[WorkRow], earlier: bool) -> f32 {
         } else {
             ROW
         };
-        if !row.pictures.is_empty() {
+        if !row.pictures.is_empty() && !row.inline_pictures() {
             height += 128.;
         }
         if row.open {
@@ -717,8 +753,8 @@ fn detail_height(detail: &Detail) -> f32 {
     let lines = |text: &str| text.lines().count().max(1) as f32;
     let wrapped = |text: &str| (text.len() as f32 / 90.).ceil().max(1.) + text.matches("\n\n").count() as f32;
     12. + match detail {
-        Detail::Diff(diff) => (diff.lines.len() as f32 * 19. + 14.).min(422.),
-        Detail::Output(text) => (lines(text) * 19. + 22.).min(322.),
+        Detail::Diff(diff) => (diff.lines.len() as f32 * 20. + 14.).min(422.),
+        Detail::Output(text) => (lines(text) * 20. + 22.).min(322.),
         Detail::Thought { text, .. } => (wrapped(text) * 18.).min(THOUGHT_BODY),
         Detail::Text(text) => wrapped(text) * 18.,
         Detail::Asked(asked) => asked.len() as f32 * 64.,
@@ -732,6 +768,12 @@ fn head_less(work: &Work) -> bool {
 
 /// A settled group's line, or an earlier turn's: what it did, grey, the chevron after the words.
 fn fold_line(key: &SharedString, label: &SharedString, open: bool, theme: &Theme, handlers: &Handlers) -> AnyElement {
+    fold_line_with(key, label, open, Vec::new(), theme, handlers)
+}
+
+/// [`fold_line`], with the thumbnails of `pictures` after the words.
+fn fold_line_with(key: &SharedString, label: &SharedString, open: bool, pictures: Vec<crate::pictures::Picture>, theme: &Theme, handlers: &Handlers) -> AnyElement {
+    let thumbs = (!pictures.is_empty()).then(|| crate::pictures::Thumbs { pictures, key: format!("{key}-line-thumbs").into() });
     let toggle = handlers.toggle.clone();
     let id = key.clone();
     let key_for_chevron = key.clone();
@@ -756,32 +798,52 @@ fn fold_line(key: &SharedString, label: &SharedString, open: bool, theme: &Theme
                 .hover(move |line| line.bg(hover).text_color(bright))
                 .on_click(move |_, window, cx| toggle(key.clone(), window, cx))
                 .child(div().min_w_0().truncate().child(label.clone()))
+                .children(thumbs.map(|thumbs| div().flex_none().pl(px(3.)).child(thumbs)))
                 .child(chevron(&key_for_chevron, open, theme.text_faint, handlers))
                 .tag("work-line"),
         )
         .into_any_element()
 }
 
-/// A live group's line: a breathing dot, and what it is doing now, with a light passing along
+/// What a live group's key takes to say the user folded it to its line.
+pub const SHUT: &str = "-shut";
+
+/// A live group's line: the working mark, and what it is doing now, with a light passing along
 /// the words. The step under way says it too, so the line names the kind of work, not the step.
+/// Clicking it folds the group to this line, as a settled one is, and back; its chevron turns.
 fn live_line(work: &Work, theme: &Theme, handlers: &Handlers) -> AnyElement {
     let id = SharedString::from(format!("{}-doing", work.key));
     let words: SharedString = crate::work::doing_now(&work.rows).into();
+    let toggle = handlers.toggle.clone();
+    let shut = SharedString::from(format!("{}{SHUT}", work.key));
+    let (hover, bright) = (theme.hover, theme.text_soft);
     div()
-        .h(px(LINE))
         .flex()
-        .items_center()
-        .gap(px(8.))
-        .child(live_dot(&work.key, theme, handlers))
-        .child(div().typography(Type::Ui).child(crate::motion::shining_text(id, words, theme.text_dim, theme.accent_text, handlers.still)))
-        .tag("work-line")
+        .child(
+            div()
+                .id(shut.clone())
+                .h(px(LINE))
+                .min_w_0()
+                .ml(px(-HOVER_PAD))
+                .px(px(HOVER_PAD))
+                .flex()
+                .items_center()
+                .gap(px(7.))
+                .rounded(px(7.))
+                .cursor_pointer()
+                .hover(move |line| line.bg(hover).text_color(bright))
+                .on_click(move |_, window, cx| toggle(shut.clone(), window, cx))
+                .child(live_dot(&work.key, theme, handlers))
+                .child(div().typography(Type::Ui).child(crate::motion::shining_text(id, words, theme.text_dim, theme.accent_text, handlers.still)))
+                .child(div().ml(px(-3.)).child(chevron(&work.key, work.open, theme.text_faint, handlers)))
+                .tag("work-line"),
+        )
         .into_any_element()
 }
 
-/// A small dot in the accent, breathing while something is under way.
+/// The working mark, flocking while something is under way (`flock.rs`).
 fn live_dot(key: &SharedString, theme: &Theme, handlers: &Handlers) -> AnyElement {
-    let dot = div().flex_none().size(px(6.)).rounded_full().bg(theme.accent);
-    crate::motion::breathing(SharedString::from(format!("{key}-dot")), dot, handlers.still)
+    crate::flock::mark(SharedString::from(format!("{key}-dot")), theme.accent, handlers.still)
 }
 
 /// A live turn before its first step: the duck paddles and "Working" shines.
@@ -927,6 +989,7 @@ fn log_row(row: &WorkRow, live: bool, theme: &Theme, handlers: &Handlers) -> Any
         row.verb.clone().into_any_element()
     };
     let openable = row.detail.is_some();
+    let inline_pictures = row.inline_pictures();
     let toggle = handlers.toggle.clone();
     let key = row.key.clone();
     let hover = theme.hover;
@@ -947,6 +1010,9 @@ fn log_row(row: &WorkRow, live: bool, theme: &Theme, handlers: &Handlers) -> Any
         .when(!row.verb.is_empty() && !described, |line| line.child(div().flex_none().typography(Type::Ui).text_color(theme.text_dim).child(verb)))
         .child(target)
         .children(meta)
+        .when(inline_pictures, |line| {
+            line.child(crate::pictures::Thumbs { pictures: row.pictures.clone(), key: format!("{}-thumbs", row.key).into() })
+        })
         .when(openable, |line| line.child(chevron(&row.key, row.open, theme.text_faint, handlers)));
     let line = div().flex().child(line);
     let line = if live && running { crate::motion::land(SharedString::from(format!("{}-land", row.key)), line, handlers.still) } else { line.into_any_element() };
@@ -954,7 +1020,7 @@ fn log_row(row: &WorkRow, live: bool, theme: &Theme, handlers: &Handlers) -> Any
         .flex()
         .flex_col()
         .child(line)
-        .when(!row.pictures.is_empty(), |column| {
+        .when(!row.pictures.is_empty() && !inline_pictures, |column| {
             column.child(div().pl(px(GLYPH + GLYPH_GAP)).pt(px(2.)).pb(px(6.)).child(crate::pictures::Strip {
                 pictures: row.pictures.clone(),
                 key: format!("{}-shots", row.key).into(),
@@ -987,9 +1053,15 @@ fn thought_line(row: &WorkRow, live: bool, theme: &Theme, handlers: &Handlers) -
         Meta::Thinking { started, at } => Some(thinking_clock(*started, *at, handlers)),
         _ => None,
     };
+    // Shut while it comes, its newest words run past beside the clock, as version 2's did.
+    let words = match &row.target {
+        Target::Stream(tail) if !row.open && !tail.is_empty() => Some(tail.clone()),
+        _ => None,
+    };
     let line = div()
         .id(row.key.clone())
         .h(px(LINE))
+        .min_w_0()
         .ml(px(-HOVER_PAD))
         .px(px(HOVER_PAD))
         .flex()
@@ -999,14 +1071,18 @@ fn thought_line(row: &WorkRow, live: bool, theme: &Theme, handlers: &Handlers) -
         .typography(Type::Ui)
         .text_color(theme.text_dim)
         .when(openable, |line| {
-            line.cursor_pointer().hover(move |line| line.bg(hover).text_color(bright)).on_click(move |_, window, cx| toggle(key.clone(), window, cx))
+            line.cursor_pointer().on_click(move |_, window, cx| toggle(key.clone(), window, cx))
         })
+        // The stream fills the row, so a wash behind all of it would be a bar: it brightens instead.
+        .when(openable && words.is_none(), |line| line.hover(move |line| line.bg(hover).text_color(bright)))
+        .when(words.is_some(), |line| line.flex_1())
         .child(duck)
         .child(div().flex_none().child(label))
         .when_some(clock, |line, time| {
             // Wide enough for "88.8s", so what follows holds still as it counts.
             line.child(div().flex_none().min_w(px(CLOCK_WIDTH)).typography(Type::Small).text_color(theme.text_faint).child(time))
         })
+        .when_some(words, |line, words| line.child(thought_stream(&row.key, words, theme, handlers.still)))
         .when(openable, |line| line.child(chevron(&row.key, row.open, theme.text_faint, handlers)))
         .tag("thought-line");
     let line = div().flex().child(line);
@@ -1017,6 +1093,70 @@ fn thought_line(row: &WorkRow, live: bool, theme: &Theme, handlers: &Handlers) -
         .child(line)
         .children(opened_detail(row, 2., theme, handlers))
         .into_any_element()
+}
+
+/// How much of the stream's width, from its left edge, its oldest words fade in over.
+const STREAM_FADE: f32 = 0.28;
+/// Where along the stream the words have brightened from dim to soft.
+const STREAM_SOFT: f32 = 0.7;
+
+/// A live thought's newest words running past, version 2's stream: anchored at the right, so
+/// each new word slides the line left and the oldest drift out through a fade at the left edge;
+/// dim old words brighten towards the accent at a blinking caret, the write head. The line is
+/// shaped as it is painted, so each letter's colour comes from where it lands.
+fn thought_stream(key: &SharedString, text: SharedString, theme: &Theme, still: bool) -> AnyElement {
+    let (dim, soft) = (theme.text_dim, theme.text_soft);
+    let head = theme.text.blend(Hsla { a: 0.6, ..theme.accent_text });
+    let style = Type::Ui.style();
+    let stream = gpui::canvas(
+        |_, _, _| (),
+        move |bounds, (), window, cx| {
+            let size = px(style.size);
+            let run = |len: usize, color: Hsla| TextRun { len, font: font(UI_FONT), color, background_color: None, underline: None, strikethrough: None };
+            let plain = window.text_system().shape_line(text.clone(), size, &[run(text.len(), soft)], None);
+            let left = bounds.right() - plain.width();
+            let width = f32::from(bounds.size.width).max(1.);
+            // Each letter's colour by where it lands, in steps, so neighbours share a run.
+            let colour_at = |x: f32| -> Hsla {
+                let at = ((x / width).clamp(0., 1.) * 32.).round() / 32.;
+                if at < STREAM_FADE {
+                    Hsla { a: dim.a * (at / STREAM_FADE), ..dim }
+                } else if at < STREAM_SOFT {
+                    dim.blend(Hsla { a: (at - STREAM_FADE) / (STREAM_SOFT - STREAM_FADE), ..soft })
+                } else {
+                    soft.blend(Hsla { a: (at - STREAM_SOFT) / (1. - STREAM_SOFT), ..head })
+                }
+            };
+            let mut runs: Vec<TextRun> = Vec::new();
+            for (at, letter) in text.char_indices() {
+                let x = f32::from(left + plain.x_for_index(at) - bounds.left());
+                let colour = colour_at(x);
+                match runs.last_mut() {
+                    Some(last) if last.color == colour => last.len += letter.len_utf8(),
+                    _ => runs.push(run(letter.len_utf8(), colour)),
+                }
+            }
+            let line = window.text_system().shape_line(text.clone(), size, &runs, None);
+            let height = px(style.line_height);
+            let origin = gpui::point(left, bounds.top() + (bounds.size.height - height) / 2.);
+            window.with_content_mask(Some(gpui::ContentMask { bounds }), |window| {
+                let _ = line.paint(origin, height, gpui::TextAlign::Left, None, window, cx);
+            });
+        },
+    )
+    .flex_1()
+    .min_w_0()
+    .h(px(LINE));
+    let caret = div().flex_none().w(px(1.5)).h(px(13.)).rounded(px(1.)).bg(theme.accent);
+    let caret = if still {
+        caret.into_any_element()
+    } else {
+        // On, then off, as a text caret blinks.
+        caret
+            .with_animation(SharedString::from(format!("{key}-caret")), Animation::new(Duration::from_millis(900)).repeat(), |caret, t| caret.opacity(if t < 0.5 { 1. } else { 0. }))
+            .into_any_element()
+    };
+    div().flex_1().min_w_0().flex().items_center().gap(px(2.)).child(stream).child(caret).tag("thought-stream").into_any_element()
 }
 
 /// A sub-agent's row: its duck (paddling while it works), its role and task, how it stands, and a
@@ -1134,13 +1274,13 @@ fn opened_detail(row: &WorkRow, above: f32, theme: &Theme, handlers: &Handlers) 
     if !row.open && handlers.folding(&row.key).is_none() {
         return None;
     }
-    let body = div().pt(px(above)).pb(px(8.)).child(detail_view(detail, &row.key, theme)).into_any_element();
+    let body = div().pt(px(above)).pb(px(8.)).child(detail_view(detail, &row.key, theme, handlers)).into_any_element();
     unfolding(body, &row.key, row.open, detail_height(detail), handlers)
 }
 
 /// What a row opens into, under it: a diff or output in a sheet, the questions it asked, or a
 /// thought's words.
-fn detail_view(detail: &Detail, key: &SharedString, theme: &Theme) -> AnyElement {
+fn detail_view(detail: &Detail, key: &SharedString, theme: &Theme, handlers: &Handlers) -> AnyElement {
     match detail {
         Detail::Diff(diff) => diff_sheet(diff, key, theme).into_any_element(),
         Detail::Output(text) => sheet(theme)
@@ -1157,7 +1297,7 @@ fn detail_view(detail: &Detail, key: &SharedString, theme: &Theme) -> AnyElement
             )
             .into_any_element(),
         Detail::Asked(asked) => div().pl(px(GLYPH + GLYPH_GAP)).py(px(4.)).child(crate::question::asked_view(asked, theme)).into_any_element(),
-        Detail::Thought { text, live } => thought_body(text, *live, key, theme),
+        Detail::Thought { text, live } => thought_body(text, *live, key, theme, handlers),
         Detail::Text(text) => div()
             .pl(px(GLYPH + GLYPH_GAP))
             .typography(Type::Ui)
@@ -1172,9 +1312,9 @@ fn detail_view(detail: &Detail, key: &SharedString, theme: &Theme) -> AnyElement
 const THOUGHT_BODY: f32 = 320.;
 
 /// A thought opened: its paragraphs, grey, indented under the duck's line, in a body of capped
-/// height. Live, the body holds to its end so the newest reasoning shows as it comes; settled,
-/// it scrolls.
-fn thought_body(text: &SharedString, live: bool, key: &SharedString, theme: &Theme) -> AnyElement {
+/// height that scrolls. Live, the body follows its end so the newest reasoning shows as it comes,
+/// until the reader scrolls up to read back; scrolling back down to the end follows again.
+fn thought_body(text: &SharedString, live: bool, key: &SharedString, theme: &Theme, handlers: &Handlers) -> AnyElement {
     let paragraphs = div()
         .flex()
         .flex_col()
@@ -1182,12 +1322,31 @@ fn thought_body(text: &SharedString, live: bool, key: &SharedString, theme: &The
         .typography(Type::Ui)
         .text_color(if live { theme.text_soft } else { theme.text_dim })
         .children(text.split("\n\n").map(str::trim).filter(|paragraph| !paragraph.is_empty()).map(|paragraph| div().child(SharedString::from(paragraph.to_string()))));
-    let frame = div().pl(px(INDENT - 1.)).pr(px(12.)).max_h(px(THOUGHT_BODY));
-    if live {
-        frame.overflow_hidden().flex().flex_col().justify_end().child(paragraphs).into_any_element()
-    } else {
-        frame.id(SharedString::from(format!("{key}-body"))).overflow_y_scroll().child(paragraphs).into_any_element()
+    let (scroll, follow) = handlers.follows.of(key);
+    if live && follow.get() {
+        scroll.scroll_to_bottom();
     }
+    let watched = scroll.clone();
+    div()
+        .id(SharedString::from(format!("{key}-body")))
+        .pl(px(INDENT - 1.))
+        .pr(px(12.))
+        .max_h(px(THOUGHT_BODY))
+        .overflow_y_scroll()
+        .track_scroll(&scroll)
+        .on_scroll_wheel(move |event, _, _| {
+            // Up leaves the end, so the words stay where the reader is; reaching the end again
+            // picks the newest back up.
+            let dy = f32::from(event.delta.pixel_delta(px(18.)).y);
+            let (at, end) = (-f32::from(watched.offset().y), f32::from(watched.max_offset().y));
+            if dy > 0. {
+                follow.set(false);
+            } else if at - dy >= end - 4. {
+                follow.set(true);
+            }
+        })
+        .child(paragraphs)
+        .into_any_element()
 }
 
 /// A sheet: code, a diff or output, on the code's ground inside a hairline. No band, no seam:

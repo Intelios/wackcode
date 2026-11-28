@@ -433,7 +433,7 @@ fn project_card(index: usize, project: &MemoryProject, master: bool, confirming:
         )
         .child(
             pill(("memory-new", index), "New memory", Some(Icon::Plus), false, theme)
-                .on_click(dispatch(NewMemory { dir: project.dir.clone() }))
+                .cursor_pointer().on_click(dispatch(NewMemory { dir: project.dir.clone() }))
                 .tag("memory-new"),
         )
         .child(

@@ -88,6 +88,8 @@ pub struct AgentsPane {
     /// The work's scroll: it follows new steps while the reader is at the bottom, and starts at
     /// the bottom (the latest step, or the report) when an agent is picked.
     scroll: ScrollHandle,
+    /// Where each opened thought is scrolled, and whether it follows its newest words.
+    follows: crate::transcript::Follows,
     _field: Subscription,
 }
 
@@ -114,6 +116,7 @@ impl AgentsPane {
             field,
             sent: None,
             scroll: ScrollHandle::new(),
+            follows: Default::default(),
             _field: subscription,
         }
     }
@@ -448,6 +451,7 @@ impl Render for AgentsPane {
             prompts: Default::default(),
             clock: true,
             folds: Default::default(),
+            follows: self.follows.clone(),
         };
         let mut work = div().px(px(16.)).py(px(14.)).flex().flex_col();
         if items.is_empty() {

@@ -280,7 +280,7 @@ pub fn menu(data: SlashData, theme: &Theme) -> impl IntoElement {
                 .gap(px(10.))
                 .when(selected, |row| row.bg(theme.hover))
                 .when(!selected, |row| row.hover(|row| row.bg(theme.hover)))
-                .on_click(move |_, window, cx| window.dispatch_action(Box::new(PickCommand { index }), cx))
+                .cursor_pointer().on_click(move |_, window, cx| window.dispatch_action(Box::new(PickCommand { index }), cx))
                 .child(row.icon.view(px(14.), if selected || row.accent_icon { theme.accent_text } else { theme.text_dim }))
                 .child(
                     div()

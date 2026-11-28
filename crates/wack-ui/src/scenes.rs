@@ -263,6 +263,12 @@ pub fn all() -> Vec<Scene> {
             build: |_, cx| chat_scene(fixtures::grouped_turn(&[]), cx),
         },
         Scene {
+            name: "chat-groups-summarised",
+            description: "The same turn with Step summaries on: each group's line is the small model's words, not the app's own sentence.",
+            size: WINDOW,
+            build: |_, cx| chat_scene(fixtures::summarised_turn(), cx),
+        },
+        Scene {
             name: "chat-groups-open",
             description: "The same turn with its first group opened and its thought's body open: capped, scrolling inside.",
             size: WINDOW,
@@ -1351,9 +1357,15 @@ pub fn all() -> Vec<Scene> {
         },
         Scene {
             name: "settings-subagents",
-            description: "Settings › Sub-agents: delegation, the helper model list open, the agents (one customised, one off, one from Claude Code), and Automatic titles.",
+            description: "Settings › Sub-agents: delegation, the helper model list open, the agents (one customised, one off, one from Claude Code), Automatic titles and Step summaries.",
             size: size(px(1180.), px(1400.)),
             build: |_, cx| subagents_scene(SubagentsScene::List, None, cx),
+        },
+        Scene {
+            name: "settings-subagents-helpers",
+            description: "Settings › Sub-agents, whole: Automatic titles on, and Step summaries off with its model list open.",
+            size: size(px(1180.), px(2300.)),
+            build: |_, cx| subagents_scene(SubagentsScene::Helpers, None, cx),
         },
         Scene {
             name: "settings-subagents-backdrop",
@@ -3267,6 +3279,8 @@ fn team_pane_scene(backdrop: Option<crate::backdrop::Picture>, cx: &mut App) -> 
 enum SubagentsScene {
     List,
     Editor,
+    /// The list with the small helpers' cards in view: the Step summaries model list open.
+    Helpers,
 }
 
 /// Settings › Sub-agents in one of its states.
@@ -3312,7 +3326,9 @@ fn subagents_scene(scene: SubagentsScene, backdrop: Option<crate::backdrop::Pict
         tool_folders: vec!["claude".into()],
         team_default: Some(wack_core::ModelChoice { connection: Some(connections[0].id.clone()), model: connections[0].models.last().map(|model| model.id.clone()), effort: None }),
     };
-    let titles = crate::titles_card::TitlesData::new(&wack_core::AutoTitleConfig { enabled: true, connection: Some(connections[0].id.clone()), model: connections[0].models.last().map(|model| model.id.clone()) }, &connections, true, false, None);
+    let chosen = wack_core::AutoTitleConfig { enabled: true, connection: Some(connections[0].id.clone()), model: connections[0].models.last().map(|model| model.id.clone()) };
+    let titles = crate::titles_card::TitlesData::new(crate::titles_card::Helper::Titles, &chosen, &connections, true, false, None);
+    let summaries = crate::titles_card::TitlesData::new(crate::titles_card::Helper::Summaries, &wack_core::AutoTitleConfig { enabled: false, ..chosen }, &connections, true, scene == SubagentsScene::Helpers, None);
     let form = ProviderForm::new(cx);
     let data = SettingsData {
         section: Section::Subagents,
@@ -3323,7 +3339,7 @@ fn subagents_scene(scene: SubagentsScene, backdrop: Option<crate::backdrop::Pict
         memory: Default::default(),
         skills: Default::default(),
         commands: Default::default(),
-        subagents: state.data(&config, &connections, true, titles, cx),
+        subagents: state.data(&config, &connections, true, (titles, summaries), cx),
         git: Default::default(),
         integrations: Default::default(),
         web: Default::default(),

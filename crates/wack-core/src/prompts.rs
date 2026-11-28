@@ -7,8 +7,8 @@
 //!
 //! Dynamic guides and data wrappers stay app-owned around every custom prompt: `# This chat`'s
 //! tool list and untrusted-content rule, the `[WACKCODE PLAN MODE CONTRACT v1: …]` header lines,
-//! Team's `[WACKCODE TEAM MODE v1]` line and the models it names, compaction's `<conversation>` and `<previous-summary>` framing, and automatic titles'
-//! `<message>` data tag.
+//! Team's `[WACKCODE TEAM MODE v1]` line and the models it names, compaction's `<conversation>` and `<previous-summary>` framing, automatic titles'
+//! `<message>` data tag, and step summaries' `<intent>` and `<steps>` tags.
 
 use std::borrow::Cow;
 
@@ -21,7 +21,7 @@ use wack_agent::{
     prompt::{CHAT_PROMPT, CODE_PROMPT, ULTRA_PROMPT},
 };
 
-use crate::{store::Store, title};
+use crate::{step_summary, store::Store, title};
 
 /// Maximum length of a user-customised prompt, in Unicode scalar values (`chars().count()`).
 pub const MAX_PROMPT_CHARS: usize = 20_000;
@@ -39,6 +39,7 @@ pub enum PromptId {
     Subagent,
     Team,
     Title,
+    StepSummary,
 }
 
 /// How Settings › Prompts groups the prompts into cards.
@@ -64,13 +65,13 @@ impl PromptGroup {
         match self {
             PromptGroup::Chats => &[PromptId::Code, PromptId::Chat],
             PromptGroup::Planning => &[PromptId::Plan, PromptId::UltraPlan, PromptId::Ultra],
-            PromptGroup::Background => &[PromptId::Compaction, PromptId::Subagent, PromptId::Team, PromptId::Title],
+            PromptGroup::Background => &[PromptId::Compaction, PromptId::Subagent, PromptId::Team, PromptId::Title, PromptId::StepSummary],
         }
     }
 }
 
 impl PromptId {
-    pub const ALL: [PromptId; 9] = [
+    pub const ALL: [PromptId; 10] = [
         PromptId::Code,
         PromptId::Chat,
         PromptId::Plan,
@@ -80,6 +81,7 @@ impl PromptId {
         PromptId::Subagent,
         PromptId::Team,
         PromptId::Title,
+        PromptId::StepSummary,
     ];
 
     /// The stable CLI and automation name.
@@ -94,6 +96,7 @@ impl PromptId {
             PromptId::Subagent => "subagent",
             PromptId::Team => "team",
             PromptId::Title => "title",
+            PromptId::StepSummary => "step-summary",
         }
     }
 
@@ -109,6 +112,7 @@ impl PromptId {
             "subagent" | "sub-agent" | "subagents" | "sub-agents" | "child" => PromptId::Subagent,
             "team" | "lead" | "crew" | "orchestrator" => PromptId::Team,
             "title" | "titles" | "auto-title" => PromptId::Title,
+            "step-summary" | "step-summaries" | "steps" => PromptId::StepSummary,
             _ => return None,
         })
     }
@@ -124,6 +128,7 @@ impl PromptId {
             PromptId::Subagent => "Sub-agent core",
             PromptId::Team => "Team lead",
             PromptId::Title => "Automatic titles",
+            PromptId::StepSummary => "Step summaries",
         }
     }
 
@@ -131,7 +136,7 @@ impl PromptId {
         match self {
             PromptId::Code | PromptId::Chat => PromptGroup::Chats,
             PromptId::Plan | PromptId::UltraPlan | PromptId::Ultra => PromptGroup::Planning,
-            PromptId::Compaction | PromptId::Subagent | PromptId::Team | PromptId::Title => PromptGroup::Background,
+            PromptId::Compaction | PromptId::Subagent | PromptId::Team | PromptId::Title | PromptId::StepSummary => PromptGroup::Background,
         }
     }
 
@@ -151,6 +156,7 @@ impl PromptId {
             PromptId::Subagent => "The shared core instructions every fresh sub-agent starts with before its own role’s prompt.",
             PromptId::Team => "How a chat’s model leads while its Team is on: when to delegate, how to brief and review the crew, and how to finish.",
             PromptId::Title => "The system prompt that names a new chat in 3 to 7 words from its opening message.",
+            PromptId::StepSummary => "The system prompt that sums up a finished group of the agent’s steps in one short line for the transcript.",
         }
     }
 
@@ -166,6 +172,7 @@ impl PromptId {
             PromptId::Subagent => "Prepended before # Your role and the role’s own instructions (Settings › Sub-agents) on fresh sub-agents. Sub-agents started from a copy of the conversation keep their parent’s prompt so the prompt cache holds.",
             PromptId::Team => "WackCode adds one [WACKCODE TEAM MODE v1] marker line above this text, then a line naming the lead’s and the crew’s models. Chats with Team on pick up edits from their next message; the system prompt never changes.",
             PromptId::Title => "WackCode wraps the first 8,000 characters of the opening message inside <message>…</message> as source data and strips quotes, markdown and emoji from the answer.",
+            PromptId::StepSummary => "WackCode wraps what the agent meant to do in <intent>…</intent> and its steps, cut to 6,000 characters, in <steps>…</steps> as source data, and refuses answers longer than one short line.",
         }
     }
 
@@ -181,6 +188,7 @@ impl PromptId {
             PromptId::Subagent => Cow::Borrowed(CHILD_PROMPT),
             PromptId::Team => Cow::Borrowed(TEAM_PROMPT),
             PromptId::Title => Cow::Borrowed(title::SYSTEM),
+            PromptId::StepSummary => Cow::Borrowed(step_summary::SYSTEM),
         }
     }
 }
@@ -207,6 +215,8 @@ pub struct PromptConfig {
     pub team: Option<String>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub title: Option<String>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub step_summary: Option<String>,
 }
 
 impl PromptConfig {
@@ -221,6 +231,7 @@ impl PromptConfig {
             PromptId::Subagent => self.subagent.as_deref(),
             PromptId::Team => self.team.as_deref(),
             PromptId::Title => self.title.as_deref(),
+            PromptId::StepSummary => self.step_summary.as_deref(),
         }
     }
 
@@ -235,6 +246,7 @@ impl PromptConfig {
             PromptId::Subagent => &mut self.subagent,
             PromptId::Team => &mut self.team,
             PromptId::Title => &mut self.title,
+            PromptId::StepSummary => &mut self.step_summary,
         }
     }
 
@@ -351,6 +363,7 @@ mod tests {
         assert_eq!(PromptId::Compaction.default_text(), SUMMARY_FORMAT);
         assert_eq!(PromptId::Subagent.default_text(), CHILD_PROMPT);
         assert_eq!(PromptId::Title.default_text(), title::SYSTEM);
+        assert_eq!(PromptId::StepSummary.default_text(), step_summary::SYSTEM);
     }
 
     #[test]

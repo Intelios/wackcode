@@ -1,6 +1,7 @@
 //! Settings › Sub-agents: how freely the agent hands work to sub-agents, the model the no-edit
-//! roles run on, the agents themselves, and other tools' agent folders. The Automatic titles card
-//! lives here too: both are about the small helper requests a chat makes beside its own.
+//! roles run on, the agents themselves, and other tools' agent folders. The Automatic titles and
+//! Step summaries cards live here too: all are about the small helper requests a chat makes
+//! beside its own.
 //!
 //! - **Delegation**: when it helps (the model decides), only when the user asks, or off (no
 //!   sub-agent tools at all).
@@ -208,7 +209,8 @@ pub struct SubagentsState {
 }
 
 impl SubagentsState {
-    pub fn data(&self, config: &AgentsConfig, connections: &[Connection], show_logos: bool, titles: TitlesData, cx: &App) -> SubagentsData {
+    pub fn data(&self, config: &AgentsConfig, connections: &[Connection], show_logos: bool, helpers: (TitlesData, TitlesData), cx: &App) -> SubagentsData {
+        let (titles, summaries) = helpers;
         let models: Vec<TitleModel> = connections
             .iter()
             .filter(|connection| connection.enabled)
@@ -249,6 +251,7 @@ impl SubagentsState {
             models,
             helper_open: self.helper_open,
             titles,
+            summaries,
             entries: self.entries.clone(),
             problems: self.problems.clone(),
             folder: self.folder.clone(),
@@ -278,6 +281,7 @@ pub struct SubagentsData {
     pub team_picked: Option<(String, String)>,
     pub team_open: bool,
     pub titles: TitlesData,
+    pub summaries: TitlesData,
     pub entries: Vec<AgentEntry>,
     pub problems: Vec<Problem>,
     pub folder: PathBuf,
@@ -306,6 +310,7 @@ pub fn page(data: SubagentsData, theme: &Theme) -> AnyElement {
         .child(agents_card(&data, theme))
         .child(folders_card(&data, theme))
         .child(crate::titles_card::card_view(data.titles, theme))
+        .child(crate::titles_card::card_view(data.summaries, theme))
         .into_any_element()
 }
 

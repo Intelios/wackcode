@@ -52,7 +52,7 @@ use crate::{
         NewChat, NewChatIn, SelectDraft, CloseDraft, NewTerminal, NewTerminalWith, TogglePaneMenu, ClosePaneMenu, HideSidePanel, ToggleSidePanel, RevealProject, OpenPaneKind, NextTab, OpenEffortMenu, OpenModelMenu, OpenSettings,
         OpenSettingsSection, PinProject, PreviousTab, RemoveConnection, RemovePicture, ShowCommandOutput, ShowPicture, ShuffleBackdrop, ToggleBackdropShuffle, ToggleModelLogos, RemoveProject, ResetDockSize,
         PickCommand, RetryWorkspaceFiles, SelectChat, Send, Stop, StopCommand, MoveToBackground, ToggleTasks, ToggleTasksPane, StopTask, ShowTask, ToggleAgentsPane, ShowTeam, ToggleBrowserPane, ToggleCanvasPane, ShowCanvas, WriteInComposer, ShowAgent, StopAgent, ShowChanges, ToggleChanges, ToggleProject, ToggleSidebar, ToggleTerminal, TriggerProjectCommand, Unqueue,
-        ToggleAutoTitles, ToggleTitleModels, ChooseTitleModel, RenameChat, RenameChatAt, CancelRename, ToggleProjectPicker, CloseProjectPicker, ChooseNewChatProject, OpenChatMenu, CloseChatMenu, ChatMenuPick, ChatPick, OpenPromptMenu, ClosePromptMenu, CopyPrompt, EditPrompt, CancelEdit, SendEdit, RewindPrompt, RetryPrompt, CancelRewind, ToggleRewindFile, ToggleRewindFiles, ConfirmRewind, UndoRewind, ToggleModelReasoning, ToggleModelRow, ToggleModelVision, AttachPictures, AttachFiles, AttachTerminalSelection, RemoveAttachment, InsertFile, RemoveFile, SteerQueued, RemoveQueued, OpenPicture, ClosePicture, StepPicture,
+        ToggleAutoTitles, ToggleTitleModels, ChooseTitleModel, ToggleStepSummaries, ToggleSummaryModels, ChooseSummaryModel, RenameChat, RenameChatAt, CancelRename, ToggleProjectPicker, CloseProjectPicker, ChooseNewChatProject, OpenChatMenu, CloseChatMenu, ChatMenuPick, ChatPick, OpenPromptMenu, ClosePromptMenu, CopyPrompt, EditPrompt, CancelEdit, SendEdit, RewindPrompt, RetryPrompt, CancelRewind, ToggleRewindFile, ToggleRewindFiles, ConfirmRewind, UndoRewind, ToggleModelReasoning, ToggleModelRow, ToggleModelVision, AttachPictures, AttachFiles, AttachTerminalSelection, RemoveAttachment, InsertFile, RemoveFile, SteerQueued, RemoveQueued, OpenPicture, ClosePicture, StepPicture,
         StartSuggestion, DismissSuggestion, CopySuggestion, OpenChat,
         ArchiveChat, ArchiveCurrentChat, ClearSearch, RevealScratchpadFile, DeleteAllArchived, DeleteArchivedChat, ToggleArchived, UnarchiveChat,
         ToggleModelEffort, SwitchSkill, SwitchSkillFolder, RemoveSkillFolder, OpenSkill, CopySkill, ChooseSkillUse, NewSkill, SaveSkill,
@@ -1684,6 +1684,12 @@ impl Render for Shell {
                     let (connection, model) = (action.connection.clone(), action.model.clone());
                     shell.with_app(cx, |app, cx| app.choose_title_model(&connection, &model, cx));
                 }))
+                .on_action(cx.listener(|shell, _: &ToggleStepSummaries, _, cx| shell.with_app(cx, |app, cx| app.toggle_step_summaries(cx))))
+                .on_action(cx.listener(|shell, _: &ToggleSummaryModels, _, cx| shell.with_app(cx, |app, cx| app.toggle_summary_models(cx))))
+                .on_action(cx.listener(|shell, action: &ChooseSummaryModel, _, cx| {
+                    let (connection, model) = (action.connection.clone(), action.model.clone());
+                    shell.with_app(cx, |app, cx| app.choose_summary_model(&connection, &model, cx));
+                }))
                 .on_action(cx.listener(|shell, _: &RenameChat, window, cx| shell.rename_on_screen(window, cx)))
                 .on_action(cx.listener(|shell, action: &RenameChatAt, window, cx| {
                     let (chat, place) = (action.chat.clone(), if action.sidebar { RenamePlace::Sidebar } else { RenamePlace::Header });
@@ -2768,7 +2774,10 @@ fn live_view(app: &AppState, cx: &App) -> (SidebarData, Screen, StripData) {
                     store.agents_config(),
                     store.connections(),
                     appearance.model_logos,
-                    crate::titles_card::TitlesData::new(store.auto_title(), store.connections(), appearance.model_logos, app.title_models_open, app.title_error.clone()),
+                    (
+                        crate::titles_card::TitlesData::new(crate::titles_card::Helper::Titles, store.auto_title(), store.connections(), appearance.model_logos, app.title_models_open, app.title_error.clone()),
+                        crate::titles_card::TitlesData::new(crate::titles_card::Helper::Summaries, store.step_summary(), store.connections(), appearance.model_logos, app.summary_models_open, app.summary_error.clone()),
+                    ),
                     cx,
                 ),
                 git: crate::git_page::GitData {

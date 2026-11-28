@@ -159,6 +159,7 @@ pub fn icon(id: PromptId) -> Icon {
         PromptId::Subagent => Icon::Duck,
         PromptId::Team => Icon::Duck,
         PromptId::Title => Icon::Pencil,
+        PromptId::StepSummary => Icon::Check,
     }
 }
 
@@ -173,6 +174,7 @@ fn row_tag(id: PromptId) -> &'static str {
         PromptId::Subagent => "prompt-row-subagent",
         PromptId::Team => "prompt-row-team",
         PromptId::Title => "prompt-row-title",
+        PromptId::StepSummary => "prompt-row-step-summary",
     }
 }
 

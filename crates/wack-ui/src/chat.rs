@@ -100,6 +100,9 @@ pub enum ChatEvent {
     AgentOpenedTab,
     /// The agent started a sub-agent: a Team chat's Agents pane may open on its overview.
     AgentStarted,
+    /// Groups of steps settled during the run: the step-summary model may name them, when the
+    /// user has switched it on. Each group is told once.
+    Summarise(Vec<work::SummaryJob>),
 }
 
 pub struct ChatSession {
@@ -138,6 +141,8 @@ pub struct ChatSession {
     run: Option<Running>,
     /// Numbers runs, so a finished run's task can never act on the run after it.
     runs_started: u64,
+    /// The groups already handed out for a summary this session, by id, so none is asked twice.
+    summarised: HashSet<String>,
     /// How full the model's context is, in tokens, when known.
     pub context_tokens: Option<u64>,
     /// The same, part by part, as the last run left it (`wack_core::context`); empty until a
@@ -292,7 +297,7 @@ impl ChatSession {
         let mut context_tokens = None;
         let mut saved_agents = Vec::new();
         let mut spent = wack_core::Usage::default();
-        let conversation = if session_path.exists() {
+        let mut conversation = if session_path.exists() {
             match wack_core::history_with_spend(session_path) {
                 Ok((history, spend)) => {
                     spent = spend;
@@ -309,6 +314,7 @@ impl ChatSession {
         } else {
             Conversation::default()
         };
+        conversation.summaries = wack_core::step_summary::load(session_path);
         let mut panes = ChatPanes::new(layout, cwd.clone());
         panes.set_runner(runner);
         panes.set_commands(commands.0, commands.1, cx);
@@ -349,6 +355,7 @@ impl ChatSession {
             steering: Vec::new(),
             run: None,
             runs_started: 0,
+            summarised: HashSet::new(),
             context_tokens,
             context_parts: Vec::new(),
             spent,
@@ -899,6 +906,7 @@ impl ChatSession {
         self.context_parts.clear();
         let mut conversation = Conversation::from_history(&history);
         conversation.suggestion_view = std::mem::take(&mut self.conversation.suggestion_view);
+        conversation.summaries = std::mem::take(&mut self.conversation.summaries);
         self.conversation = conversation;
         self.conversation.agents = self.agent_rows();
         self.cache = ReplyCache::default();
@@ -1089,6 +1097,7 @@ impl ChatSession {
             from = from.min(before);
         }
         self.refresh_from(from);
+        self.find_settled(cx);
         // What the model is drawing on the canvas, for the board (cleared as the call ends).
         let writing = if self.running() { self.conversation.canvas_writing() } else { None };
         self.panes.canvas_writing(writing, cx);
@@ -1099,6 +1108,51 @@ impl ChatSession {
             cx.emit(ChatEvent::Finished(result));
         }
         cx.notify();
+    }
+
+    /// Tells the app of the groups in the latest turn that have settled since it last looked
+    /// (`work::settled_groups`). A Chat area chat's work is drawn as chips, never named.
+    fn find_settled(&mut self, cx: &mut Context<Self>) {
+        if self.chat_area {
+            return;
+        }
+        let entries = &self.conversation.entries;
+        let Some(index) = entries.iter().rposition(|entry| matches!(entry, Entry::Turn(_))) else {
+            return;
+        };
+        let Entry::Turn(turn) = &entries[index] else {
+            return;
+        };
+        let prompt = entries[..index]
+            .iter()
+            .rev()
+            .find_map(|entry| match entry {
+                Entry::Prompt { text, .. } => Some(text.as_str()),
+                _ => None,
+            })
+            .unwrap_or_default();
+        let (asked, kept) = (&self.summarised, &self.conversation.summaries);
+        let jobs = work::settled_groups(turn, prompt, |id| !asked.contains(id) && !kept.contains_key(id));
+        if jobs.is_empty() {
+            return;
+        }
+        self.summarised.extend(jobs.iter().map(|job| job.id.clone()));
+        cx.emit(ChatEvent::Summarise(jobs));
+    }
+
+    /// The step-summary model named group `id`: kept beside the chat, and its line rewritten.
+    pub fn set_summary(&mut self, id: &str, summary: String, cx: &mut Context<Self>) {
+        // Unsaved, it still shows until the chat is read again.
+        let _ = wack_core::step_summary::save(&self.session_path, id, &summary);
+        self.conversation.summaries.insert(id.to_string(), summary);
+        self.conversation.named.insert(id.to_string(), std::time::Instant::now());
+        let holder = self.conversation.entries.iter().rposition(|entry| {
+            matches!(entry, Entry::Turn(turn) if turn.steps.iter().any(|step| matches!(step, Step::Tool(tool) if tool.id == id)))
+        });
+        if let Some(index) = holder {
+            self.refresh_entry(index);
+            cx.notify();
+        }
     }
 
     /// The text of the plan awaiting review.

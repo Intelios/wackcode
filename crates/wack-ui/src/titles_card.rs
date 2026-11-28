@@ -1,19 +1,21 @@
-//! Settings › Sub-agents › Automatic titles: version 2's auto-title card, beside the helper model
-//! (both are small requests a chat makes beside its own).
+//! Settings › Sub-agents › Automatic titles and Step summaries: version 2's auto-title card, and
+//! its twin for the labels of settled steps, beside the helper model (all small requests a chat
+//! makes beside its own). One card, worded for its [`Helper`].
 //!
 //! The model is picked from a list that opens inside the card, one row per model of each
 //! connection that is on; the switch cannot go on until one is picked. The engine checks the
-//! choice again when the switch goes on (`Store::set_auto_title`), and each new chat checks it
-//! once more, so a model removed later only costs a note in that chat's transcript.
+//! choice again when the switch goes on (`Store::set_auto_title`, `Store::set_step_summary`), and
+//! each request checks it once more, so a model removed later only costs a note in the chat's
+//! transcript.
 
 use gpui::{SharedString, div, prelude::*, px};
 use wack_core::{AutoTitleConfig, Connection};
 
 use crate::{
-    actions::{ChooseTitleModel, ToggleAutoTitles, ToggleTitleModels},
+    actions::{ChooseSummaryModel, ChooseTitleModel, ToggleAutoTitles, ToggleStepSummaries, ToggleSummaryModels, ToggleTitleModels},
     brand::{self, Brand},
     icon::Icon,
-    settings_kit::{card, dispatch, model_pill, row},
+    settings_kit::{card, model_pill, row},
     tags::Tag,
     theme::Theme,
     tools_page::switch,
@@ -30,8 +32,90 @@ pub struct TitleModel {
     pub brand: Option<Brand>,
 }
 
+/// Which small request the card sets up.
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
+pub enum Helper {
+    /// Automatic titles: names a new chat.
+    #[default]
+    Titles,
+    /// Step summaries: names each settled group of steps.
+    Summaries,
+}
+
+/// A card's words and the automation socket's names for its parts.
+struct Words {
+    card: &'static str,
+    note: &'static str,
+    model: &'static str,
+    about: &'static str,
+    switch: &'static str,
+    first: &'static str,
+    switch_tag: &'static str,
+    model_tag: &'static str,
+    rows: [&'static str; 6],
+    more: &'static str,
+}
+
+impl Helper {
+    fn words(self) -> Words {
+        match self {
+            Helper::Titles => Words {
+                card: "Automatic titles",
+                note: "One small request when a chat starts",
+                model: "Title model",
+                about: "Names each new chat from its first message. A small, fast model is plenty.",
+                switch: "Automatic titles",
+                first: "Choose a title model first",
+                switch_tag: "auto-titles",
+                model_tag: "title-model",
+                rows: ["title-model-0", "title-model-1", "title-model-2", "title-model-3", "title-model-4", "title-model-5"],
+                more: "title-model-more",
+            },
+            Helper::Summaries => Words {
+                card: "Step summaries",
+                note: "One small request as each group of steps settles",
+                model: "Summary model",
+                about: "Sums up the agent’s finished steps in one line, so the chat’s own model never spends on it. A small, fast model is plenty.",
+                switch: "Step summaries",
+                first: "Choose a summary model first",
+                switch_tag: "step-summaries",
+                model_tag: "summary-model",
+                rows: ["summary-model-0", "summary-model-1", "summary-model-2", "summary-model-3", "summary-model-4", "summary-model-5"],
+                more: "summary-model-more",
+            },
+        }
+    }
+
+    fn toggle(self) -> Box<dyn gpui::Action> {
+        match self {
+            Helper::Titles => Box::new(ToggleAutoTitles),
+            Helper::Summaries => Box::new(ToggleStepSummaries),
+        }
+    }
+
+    fn toggle_models(self) -> Box<dyn gpui::Action> {
+        match self {
+            Helper::Titles => Box::new(ToggleTitleModels),
+            Helper::Summaries => Box::new(ToggleSummaryModels),
+        }
+    }
+
+    fn choose(self, connection: String, model: String) -> Box<dyn gpui::Action> {
+        match self {
+            Helper::Titles => Box::new(ChooseTitleModel { connection, model }),
+            Helper::Summaries => Box::new(ChooseSummaryModel { connection, model }),
+        }
+    }
+}
+
+/// Sends `action` when clicked.
+fn send(action: Box<dyn gpui::Action>) -> impl Fn(&gpui::ClickEvent, &mut gpui::Window, &mut gpui::App) + 'static {
+    move |_, window, cx| window.dispatch_action(action.boxed_clone(), cx)
+}
+
 #[derive(Clone, Debug, Default, PartialEq)]
 pub struct TitlesData {
+    pub helper: Helper,
     pub enabled: bool,
     /// The picked model's id, when it is still listed. The list shows its connection.
     pub chosen: Option<SharedString>,
@@ -45,7 +129,7 @@ pub struct TitlesData {
 }
 
 impl TitlesData {
-    pub fn new(config: &AutoTitleConfig, connections: &[Connection], show_logos: bool, open: bool, error: Option<SharedString>) -> Self {
+    pub fn new(helper: Helper, config: &AutoTitleConfig, connections: &[Connection], show_logos: bool, open: bool, error: Option<SharedString>) -> Self {
         let models: Vec<TitleModel> = connections
             .iter()
             .filter(|connection| connection.enabled)
@@ -64,48 +148,41 @@ impl TitlesData {
         });
         let chosen = matched.map(|listed| listed.model.clone());
         let chosen_brand = matched.and_then(|listed| listed.brand);
-        Self { enabled: config.enabled, chosen, chosen_brand, picked, models, open, error }
+        Self { helper, enabled: config.enabled, chosen, chosen_brand, picked, models, open, error }
     }
 }
 
 pub fn card_view(data: TitlesData, theme: &Theme) -> impl IntoElement {
     let ready = data.chosen.is_some();
+    let words = data.helper.words();
     let toggle = div()
-        .id("auto-titles")
-        .when(ready || data.enabled, |control| control.cursor_pointer().on_click(dispatch(ToggleAutoTitles)))
-        .when(!ready && !data.enabled, |control| control.opacity(0.5).tooltip(tip("Choose a title model first")))
+        .id(words.switch_tag)
+        .when(ready || data.enabled, |control| control.cursor_pointer().on_click(send(data.helper.toggle())))
+        .when(!ready && !data.enabled, |control| control.opacity(0.5).tooltip(tip(words.first)))
         .child(switch(data.enabled, theme))
-        .tag("auto-titles");
+        .tag(words.switch_tag);
     let picker = model_pill(
-        "title-model",
+        words.model_tag,
         data.chosen.clone().unwrap_or_else(|| "Choose…".into()),
         data.chosen_brand,
         data.open,
         theme,
     )
     .max_w(px(260.))
-    .on_click(dispatch(ToggleTitleModels))
-    .tag("title-model");
+    .on_click(send(data.helper.toggle_models()))
+    .tag(words.model_tag);
 
-    let list = data.open.then(|| model_list(&data, theme));
-    card(Some("Automatic titles"), None, Some("One small request when a chat starts"), theme)
-        .child(
-            row("Title model", Some("Names each new chat from its first message. A small, fast model is plenty."))
-                .first()
-                .control(picker)
-                .view(theme),
-        )
+    let list = data.open.then(|| model_list(&data, &words, theme));
+    card(Some(words.card), None, Some(words.note), theme)
+        .child(row(words.model, Some(words.about)).first().control(picker).view(theme))
         .children(list)
-        .child(row("Automatic titles", None).control(toggle).view(theme))
+        .child(row(words.switch, None).control(toggle).view(theme))
         .when_some(data.error, |card, error| {
             card.child(div().px(px(18.)).pb(px(14.)).typography(Type::Ui).text_color(theme.danger).child(error))
         })
 }
 
-/// Tags for the automation socket, which takes only fixed names.
-const ROW_TAGS: [&str; 6] = ["title-model-0", "title-model-1", "title-model-2", "title-model-3", "title-model-4", "title-model-5"];
-
-fn model_list(data: &TitlesData, theme: &Theme) -> impl IntoElement {
+fn model_list(data: &TitlesData, words: &Words, theme: &Theme) -> impl IntoElement {
     let mut list = div().mx(px(18.)).mb(px(14.)).p(px(6.)).rounded(px(12.)).bg(theme.window).border_1().border_color(theme.border).flex().flex_col();
     if data.models.is_empty() {
         return list.child(
@@ -121,10 +198,10 @@ fn model_list(data: &TitlesData, theme: &Theme) -> impl IntoElement {
             );
         }
         let ticked = data.picked.as_ref().is_some_and(|(connection, model)| connection == &listed.connection && model == listed.model.as_ref());
-        let action = ChooseTitleModel { connection: listed.connection.clone(), model: listed.model.to_string() };
+        let action = data.helper.choose(listed.connection.clone(), listed.model.to_string());
         list = list.child(
             div()
-                .id(("title-model-row", index))
+                .id((words.model_tag, index))
                 .px(px(10.))
                 .h(px(30.))
                 .rounded(px(8.))
@@ -133,11 +210,12 @@ fn model_list(data: &TitlesData, theme: &Theme) -> impl IntoElement {
                 .gap(px(8.))
                 .cursor_pointer()
                 .hover(|row| row.bg(theme.hover))
-                .on_click(dispatch(action))
+                .on_click(send(action))
                 .when_some(listed.brand, |row, brand| row.child(brand.view(px(14.), theme)))
                 .child(div().flex_1().min_w_0().truncate().typography(Type::Ui).text_color(theme.text).child(listed.model.clone()))
                 .when(ticked, |row| row.child(Icon::Check.view(px(14.), theme.accent_text)))
-                .tag(ROW_TAGS.get(index).copied().unwrap_or("title-model-more")),
+                // The automation socket takes only fixed names.
+                .tag(words.rows.get(index).copied().unwrap_or(words.more)),
         );
     }
     list
@@ -163,14 +241,15 @@ mod tests {
     fn lists_only_models_of_connections_that_are_on() {
         let connections = [connection("a", true, &["claude-haiku-5-5", "big"]), connection("b", false, &["other"])];
         let config = AutoTitleConfig { enabled: false, connection: Some("a".into()), model: Some("claude-haiku-5-5".into()) };
-        let data = TitlesData::new(&config, &connections, true, false, None);
+        let data = TitlesData::new(Helper::Titles, &config, &connections, true, false, None);
         assert_eq!(data.models.len(), 2);
         assert_eq!(data.chosen.as_deref(), Some("claude-haiku-5-5"));
         assert_eq!(data.chosen_brand, Some(Brand::Claude));
         assert_eq!(data.models[0].brand, Some(Brand::Claude));
         assert_eq!(data.models[1].brand, None);
 
-        let hidden = TitlesData::new(&config, &connections, false, false, None);
+        let hidden = TitlesData::new(Helper::Summaries, &config, &connections, false, false, None);
+        assert_eq!(hidden.helper, Helper::Summaries);
         assert_eq!(hidden.chosen_brand, None);
         assert!(hidden.models.iter().all(|listed| listed.brand.is_none()));
     }
@@ -179,7 +258,7 @@ mod tests {
     fn a_pick_that_is_gone_shows_as_unchosen() {
         let connections = [connection("a", true, &["small"])];
         let config = AutoTitleConfig { enabled: true, connection: Some("b".into()), model: Some("other".into()) };
-        let data = TitlesData::new(&config, &connections, true, false, None);
+        let data = TitlesData::new(Helper::Titles, &config, &connections, true, false, None);
         assert_eq!(data.chosen, None);
         assert_eq!(data.chosen_brand, None);
         assert!(data.enabled);

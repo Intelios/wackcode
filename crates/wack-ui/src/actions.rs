@@ -266,6 +266,10 @@ actions!(
         ToggleAutoTitles,
         /// Settings › Sub-agents › Automatic titles: opens or closes the model list.
         ToggleTitleModels,
+        /// Settings › Sub-agents › Step summaries: the switch.
+        ToggleStepSummaries,
+        /// Settings › Sub-agents › Step summaries: opens or closes the model list.
+        ToggleSummaryModels,
         /// Settings › Prompts: saves the prompt in the editor.
         SavePrompt,
         /// Settings › Prompts: back to the prompts list, forgetting unsaved edits.
@@ -344,6 +348,14 @@ pub struct OpenChat {
 #[derive(Clone, Debug, PartialEq, Action)]
 #[action(namespace = wackcode, no_json)]
 pub struct ChooseTitleModel {
+    pub connection: String,
+    pub model: String,
+}
+
+/// Settings › Sub-agents › Step summaries: the model that writes them.
+#[derive(Clone, Debug, PartialEq, Action)]
+#[action(namespace = wackcode, no_json)]
+pub struct ChooseSummaryModel {
     pub connection: String,
     pub model: String,
 }

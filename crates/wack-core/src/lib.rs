@@ -8,7 +8,8 @@
 //! So far: the data folder, the secret store, connections, projects, chats, running the agent for
 //! a chat (`run`), what changed in a project (`git`), terminals (`terminal`), how the app looks
 //! (`appearance`), where each project's memory lives (`memory`), skills and slash commands
-//! (`skills`), sub-agents' settings (`agents`), automatic chat titles (`title`), the usage ledger TokenTrail reads (`usage`), the
+//! (`skills`), sub-agents' settings (`agents`), automatic chat titles (`title`), the small model's labels for settled steps
+//! (`step_summary`), the usage ledger TokenTrail reads (`usage`), the
 //! web tools' settings (`web`), the MCP servers (`mcp`), the Chat area's `@` references
 //! (`chat_refs`), the Code area's `@` workspace file list (`files`), the model catalogue that
 //! fills Settings › Providers' model rows (`catalog`), and taking a chat back to before one of
@@ -33,6 +34,7 @@ pub mod run;
 pub mod runner;
 pub mod secrets;
 pub mod skills;
+pub mod step_summary;
 pub mod store;
 pub mod terminal;
 pub mod title;
@@ -97,7 +99,7 @@ pub mod tasks {
 
 /// The provider-neutral conversation model, for code that reads messages.
 pub mod llm {
-    pub use wack_llm::{Block, Image};
+    pub use wack_llm::{Block, Image, Request};
 }
 
 /// Pictures: recognising them, viewing copies and a chat's saved originals.

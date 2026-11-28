@@ -24,9 +24,14 @@ pub enum Purpose {
     Compaction,
     /// An automatic chat title.
     Title,
+    /// A settled group of steps' one-line label, written by its own small model.
+    StepSummary,
 }
 
 impl Purpose {
+    /// Every purpose, for checking each against the ledger's contract.
+    pub const ALL: [Purpose; 5] = [Purpose::Chat, Purpose::Subagent, Purpose::Compaction, Purpose::Title, Purpose::StepSummary];
+
     /// The ledger's spelling, part of its published contract.
     pub fn as_str(self) -> &'static str {
         match self {
@@ -34,6 +39,7 @@ impl Purpose {
             Purpose::Subagent => "subagent",
             Purpose::Compaction => "compaction",
             Purpose::Title => "title",
+            Purpose::StepSummary => "step_summary",
         }
     }
 }

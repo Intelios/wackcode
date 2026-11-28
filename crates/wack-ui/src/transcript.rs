@@ -19,8 +19,10 @@
 //!   way shining in the present tense. Clicking the line folds the live group to it and back.
 //!   The accent is only ever on what is live and on actions.
 //! - A settled group's line names what it touched where that is short ("Read theme.rs and ran
-//!   the test suite", `work::sentence`). Pictures read one after another are one row, "Read 3
-//!   images", their thumbnails along it and along the folded line, each opening the lightbox.
+//!   the test suite", `work::sentence`). With Step summaries on, the small model's own line
+//!   replaces it once it comes ("Added a test and found the dev binary"), rising in lit by the
+//!   accent ([`NAMED`]). Pictures read one after another are one row, "Read 3 images", their
+//!   thumbnails along it and along the folded line, each opening the lightbox.
 //! - A thought is the duck and "Thought for 12.3s ›"; live, the duck paddles, "Thinking" shines,
 //!   its clock counts and its newest words run past beside it, version 2's stream. Opened, its
 //!   words are plain grey text under the line in a body of capped height that scrolls inside,
@@ -162,6 +164,9 @@ pub struct Work {
     pub rows: Vec<WorkRow>,
     /// While live, how many of the first rows are folded behind "N earlier steps".
     pub hidden: usize,
+    /// When the step-summary model's words for it arrived this session, so its line can show
+    /// them coming in ([`NAMED`]).
+    pub named: Option<std::time::Instant>,
 }
 
 impl Work {
@@ -668,7 +673,8 @@ fn work_log(work: &Work, theme: &Theme, handlers: &Handlers) -> AnyElement {
         } else {
             work.rows.iter().filter(|row| row.inline_pictures()).flat_map(|row| row.pictures.iter().cloned()).collect()
         };
-        Some(fold_line_with(&work.key, &work.label, work.open, pictures, theme, handlers))
+        let named = work.named.filter(|at| at.elapsed() < NAMED && !handlers.still);
+        Some(fold_line_with(&work.key, &work.label, work.open, pictures, named, theme, handlers))
     };
     let indented = head.is_some();
     // Its rows are drawn while it is open, and while it folds shut.
@@ -768,12 +774,44 @@ fn head_less(work: &Work) -> bool {
 
 /// A settled group's line, or an earlier turn's: what it did, grey, the chevron after the words.
 fn fold_line(key: &SharedString, label: &SharedString, open: bool, theme: &Theme, handlers: &Handlers) -> AnyElement {
-    fold_line_with(key, label, open, Vec::new(), theme, handlers)
+    fold_line_with(key, label, open, Vec::new(), None, theme, handlers)
 }
 
-/// [`fold_line`], with the thumbnails of `pictures` after the words.
-fn fold_line_with(key: &SharedString, label: &SharedString, open: bool, pictures: Vec<crate::pictures::Picture>, theme: &Theme, handlers: &Handlers) -> AnyElement {
+/// How long a group's new summary takes to come in.
+pub const NAMED: Duration = Duration::from_millis(700);
+
+/// A summary coming in: it rises into place from a touch below and fades up, lit in the accent
+/// at first and settling to the line's own colour.
+fn named_label(key: &SharedString, label: &SharedString, theme: &Theme) -> AnyElement {
+    let (from, to) = (theme.accent_text, theme.text_dim);
+    div()
+        .min_w_0()
+        .truncate()
+        .child(label.clone())
+        .with_animation(SharedString::from(format!("{key}-named")), Animation::new(NAMED).with_easing(gpui::ease_out_quint()), move |label, t| {
+            // The accent fades off the line's own colour, so the end is exactly the line at rest.
+            let lit = to.blend(Hsla { a: from.a * 0.8 * (1. - t), ..from });
+            label.opacity(0.15 + 0.85 * t).relative().top(px(4. * (1. - t))).text_color(lit)
+        })
+        .into_any_element()
+}
+
+/// [`fold_line`], with the thumbnails of `pictures` after the words, and its words coming in when
+/// they were `named` a moment ago.
+fn fold_line_with(
+    key: &SharedString,
+    label: &SharedString,
+    open: bool,
+    pictures: Vec<crate::pictures::Picture>,
+    named: Option<std::time::Instant>,
+    theme: &Theme,
+    handlers: &Handlers,
+) -> AnyElement {
     let thumbs = (!pictures.is_empty()).then(|| crate::pictures::Thumbs { pictures, key: format!("{key}-line-thumbs").into() });
+    let words = match named {
+        Some(_) => named_label(key, label, theme),
+        None => div().min_w_0().truncate().child(label.clone()).into_any_element(),
+    };
     let toggle = handlers.toggle.clone();
     let id = key.clone();
     let key_for_chevron = key.clone();
@@ -797,7 +835,7 @@ fn fold_line_with(key: &SharedString, label: &SharedString, open: bool, pictures
                 .text_color(theme.text_dim)
                 .hover(move |line| line.bg(hover).text_color(bright))
                 .on_click(move |_, window, cx| toggle(key.clone(), window, cx))
-                .child(div().min_w_0().truncate().child(label.clone()))
+                .child(words)
                 .children(thumbs.map(|thumbs| div().flex_none().pl(px(3.)).child(thumbs)))
                 .child(chevron(&key_for_chevron, open, theme.text_faint, handlers))
                 .tag("work-line"),

@@ -1,5 +1,7 @@
 //! Turns a [`Conversation`] into the rows the transcript draws: what each tool call says in the
-//! work log, the diff an edit opens into, how long a turn took. Pure, so it is tested here.
+//! work log, the diff an edit opens into, how long a turn took, and which groups of steps have
+//! settled for the step-summary model to name ([`settled_groups`]; a group is known by its first
+//! call's id). Pure, so it is tested here.
 
 use std::{
     collections::{HashMap, HashSet},
@@ -292,37 +294,13 @@ fn turn_work_items(
                 rows: Vec::new(),
                 key: key.to_string().into(),
                 hidden: 0,
+                named: None,
             }));
         }
         return;
     }
 
-    enum Chunk<'a> {
-        Work(Vec<(usize, &'a Step)>),
-        Commit(&'a ToolStep),
-        Compacted(usize, &'a Compaction),
-        /// What the model said between steps: its own words, never folded into a group.
-        Prose(usize, &'a str),
-    }
-
-    let mut chunks: Vec<Chunk<'_>> = Vec::new();
-    for (step_index, step) in turn.steps.iter().enumerate() {
-        if let Step::Note(text) = step {
-            if !text.trim().is_empty() {
-                chunks.push(Chunk::Prose(step_index, text));
-            }
-        } else if let Step::Compacted(compaction) = step {
-            chunks.push(Chunk::Compacted(step_index, compaction));
-        } else if let Step::Tool(tool) = step
-            && crate::commit::is_commit_tool(tool)
-        {
-            chunks.push(Chunk::Commit(tool));
-        } else if let Some(Chunk::Work(group)) = chunks.last_mut() {
-            group.push((step_index, step));
-        } else {
-            chunks.push(Chunk::Work(vec![(step_index, step)]));
-        }
-    }
+    let mut chunks = chunks(turn);
 
     // While a turn is live, its latest step is a finished commit or compaction, and no reply has
     // arrived yet, keep a live trailing work chip below it so the paddling duck shows the model is
@@ -378,7 +356,10 @@ fn turn_work_items(
                 }
                 // Counted as the steps they were; drawn with pictures read one after another as
                 // one row.
-                let (group_tally, group_label) = (tally(&rows), sentence(&rows));
+                // The step-summary model's words once it has them, else the app's own sentence.
+                let summarised = group_id(&steps).and_then(|id| conversation.summaries.get(id));
+                let named = group_id(&steps).and_then(|id| conversation.named.get(id)).copied();
+                let (group_tally, group_label) = (tally(&rows), summarised.cloned().unwrap_or_else(|| sentence(&rows)));
                 let rows = gather_pictures(rows, open);
                 // Agents still out keep their work group open after it settles, as a live group is.
                 let agents_out = rows.iter().any(|row| row.agent.as_ref().is_some_and(|agent| agent.state.working()));
@@ -407,10 +388,115 @@ fn turn_work_items(
                     hidden,
                     rows,
                     key: group_key.into(),
+                    named,
                 }));
             }
         }
     }
+}
+
+/// A turn's steps as the transcript lays them out: groups of work, split by what the model said
+/// between them, commits and compactions.
+enum Chunk<'a> {
+    Work(Vec<(usize, &'a Step)>),
+    Commit(&'a ToolStep),
+    Compacted(usize, &'a Compaction),
+    /// What the model said between steps: its own words, never folded into a group.
+    Prose(usize, &'a str),
+}
+
+fn chunks(turn: &Turn) -> Vec<Chunk<'_>> {
+    let mut chunks: Vec<Chunk<'_>> = Vec::new();
+    for (step_index, step) in turn.steps.iter().enumerate() {
+        if let Step::Note(text) = step {
+            if !text.trim().is_empty() {
+                chunks.push(Chunk::Prose(step_index, text));
+            }
+        } else if let Step::Compacted(compaction) = step {
+            chunks.push(Chunk::Compacted(step_index, compaction));
+        } else if let Step::Tool(tool) = step
+            && crate::commit::is_commit_tool(tool)
+        {
+            chunks.push(Chunk::Commit(tool));
+        } else if let Some(Chunk::Work(group)) = chunks.last_mut() {
+            group.push((step_index, step));
+        } else {
+            chunks.push(Chunk::Work(vec![(step_index, step)]));
+        }
+    }
+    chunks
+}
+
+/// The calls of a group that count as its steps: the todo list's are bookkeeping.
+fn counted_calls<'a>(steps: &'a [(usize, &'a Step)]) -> impl Iterator<Item = &'a ToolStep> {
+    steps.iter().filter_map(|(_, step)| match step {
+        Step::Tool(tool) if tool.name != wack_core::todo::TODO => Some(tool),
+        _ => None,
+    })
+}
+
+/// A group's lasting name: the id of its first call, which stays as the group grows. A group
+/// with no call has none.
+fn group_id<'a>(steps: &'a [(usize, &'a Step)]) -> Option<&'a str> {
+    steps.iter().find_map(|(_, step)| match step {
+        Step::Tool(tool) => Some(tool.id.as_str()),
+        _ => None,
+    })
+}
+
+/// A group of steps that has settled and is worth a summary from the step-summary model.
+#[derive(Clone, Debug, PartialEq)]
+pub struct SummaryJob {
+    /// The group's id ([`group_id`]), which the summary is kept under.
+    pub id: String,
+    /// What the agent meant: its words just before the group, or else the user's message.
+    pub intent: String,
+    pub steps: Vec<wack_core::step_summary::Step>,
+}
+
+/// Each output is cut to this many characters before the request cuts it again: enough for the
+/// model, without copying a long result around.
+const JOB_OUTPUT_CHARS: usize = 400;
+
+/// The groups of `turn` that have settled, hold at least
+/// [`wack_core::step_summary::MIN_STEPS`] steps and are `wanted` (by id): a group settles when
+/// the model writes after it, or the turn ends, with every call answered. `prompt` is the user's
+/// message the turn answers.
+pub fn settled_groups(turn: &Turn, prompt: &str, wanted: impl Fn(&str) -> bool) -> Vec<SummaryJob> {
+    let chunks = chunks(turn);
+    let last = chunks.len().saturating_sub(1);
+    let mut jobs = Vec::new();
+    let mut before: Option<&str> = None;
+    for (index, chunk) in chunks.iter().enumerate() {
+        match chunk {
+            Chunk::Prose(_, text) => before = Some(text),
+            Chunk::Work(steps) => {
+                let intent = before.take().unwrap_or(prompt);
+                let open = turn.live && index == last && turn.reply.trim().is_empty();
+                let calls: Vec<&ToolStep> = counted_calls(steps).collect();
+                let answered = calls.iter().all(|tool| tool.result.is_some());
+                let Some(id) = group_id(steps) else { continue };
+                if open || !answered || calls.len() < wack_core::step_summary::MIN_STEPS || !wanted(id) {
+                    continue;
+                }
+                let steps = calls
+                    .iter()
+                    .map(|tool| {
+                        let result = tool.result.as_ref();
+                        wack_core::step_summary::Step {
+                            tool: tool.name.clone(),
+                            input: tool.input.as_ref().map(Value::to_string).unwrap_or_default(),
+                            output: result.map(|result| result.text.chars().take(JOB_OUTPUT_CHARS).collect()).unwrap_or_default(),
+                            failed: result.is_some_and(|result| result.is_error),
+                        }
+                    })
+                    .collect();
+                jobs.push(SummaryJob { id: id.to_string(), intent: intent.to_string(), steps });
+            }
+            _ => before = None,
+        }
+    }
+    jobs
 }
 
 /// Pictures the model read one after another, as one row: "Read 3 images", their thumbnails
@@ -2437,6 +2523,83 @@ mod tests {
             .collect();
         assert_eq!(shapes, ["prompt", "work: Read a.rs", "reply", "work: Ran cargo test (1 failed)", "reply"], "one file read twice counts once");
         assert!(items.iter().all(|item| !matches!(item, Item::Work(work) if work.open)), "settled groups fold");
+    }
+
+    fn call(conversation: &mut Conversation, id: &str, name: &str, input: Value, answer: Option<&str>) {
+        conversation.apply(&wack_core::Event::ToolCall { id: id.into(), name: name.into(), input }, 2_000);
+        if let Some(content) = answer {
+            let result = wack_core::Event::ToolResult { id: id.into(), name: name.into(), content: content.into(), is_error: false, images: Vec::new() };
+            conversation.apply(&result, 2_000);
+        }
+    }
+
+    fn last_turn(conversation: &Conversation) -> &Turn {
+        conversation.entries.iter().rev().find_map(|entry| match entry {
+            Entry::Turn(turn) => Some(turn),
+            _ => None,
+        }).unwrap()
+    }
+
+    #[test]
+    fn a_group_settles_for_a_summary_once_words_follow_it_or_the_turn_ends() {
+        let mut conversation = Conversation::default();
+        conversation.send("Make the build pass", 1_000);
+        call(&mut conversation, "r1", "read", json!({ "path": "/w/a.rs" }), Some("fn a() {}"));
+        call(&mut conversation, "t1", wack_core::todo::TODO, json!({ "todos": [] }), Some("ok"));
+        call(&mut conversation, "b1", "bash", json!({ "command": "cargo build" }), None);
+        let all = |_: &str| true;
+        assert!(settled_groups(last_turn(&conversation), "Make the build pass", all).is_empty(), "still working: the group may grow");
+
+        conversation.apply(&wack_core::Event::ToolResult { id: "b1".into(), name: "bash".into(), content: "error: boom".into(), is_error: true, images: Vec::new() }, 3_000);
+        assert!(settled_groups(last_turn(&conversation), "Make the build pass", all).is_empty(), "answered, but nothing after it yet");
+
+        conversation.apply(&wack_core::Event::Text("The build fails on".into()), 4_000);
+        let jobs = settled_groups(last_turn(&conversation), "Make the build pass", all);
+        assert_eq!(jobs.len(), 1, "words after it close the group");
+        let job = &jobs[0];
+        assert_eq!(job.id, "r1", "named by its first call");
+        assert_eq!(job.intent, "Make the build pass", "the first group answers the user's message");
+        let tools: Vec<&str> = job.steps.iter().map(|step| step.tool.as_str()).collect();
+        assert_eq!(tools, ["read", "bash"], "the todo list's calls are bookkeeping");
+        assert_eq!(job.steps[0].input, r#"{"path":"/w/a.rs"}"#);
+        assert!(job.steps[1].failed && job.steps[1].output == "error: boom");
+        assert!(settled_groups(last_turn(&conversation), "", |id| id != "r1").is_empty(), "never asked twice");
+
+        // The next group says what the agent meant in its own words, and one step is not enough.
+        conversation.apply(&wack_core::Event::Text(" a missing import.".into()), 4_000);
+        call(&mut conversation, "e1", "edit", json!({ "path": "/w/a.rs" }), Some("ok"));
+        conversation.finish(&Ok(wack_core::Outcome::Done), 5_000);
+        assert!(settled_groups(last_turn(&conversation), "", |id| id != "r1").is_empty(), "a single step names itself");
+
+        let mut conversation = Conversation::default();
+        conversation.send("go", 1_000);
+        conversation.apply(&wack_core::Event::Text("Checking both files.".into()), 1_500);
+        call(&mut conversation, "a", "read", json!({ "path": "/w/a.rs" }), Some(""));
+        call(&mut conversation, "b", "read", json!({ "path": "/w/b.rs" }), Some(""));
+        conversation.finish(&Ok(wack_core::Outcome::Done), 5_000);
+        let jobs = settled_groups(last_turn(&conversation), "go", all);
+        assert_eq!((jobs.len(), jobs[0].intent.as_str()), (1, "Checking both files."), "the end of the turn settles the last group");
+    }
+
+    #[test]
+    fn a_summary_names_its_group_in_place_of_the_apps_sentence() {
+        let mut conversation = Conversation::default();
+        conversation.send("go", 1_000);
+        call(&mut conversation, "r1", "read", json!({ "path": "/w/a.rs" }), Some("x"));
+        call(&mut conversation, "b1", "bash", json!({ "command": "cargo test" }), Some("ok"));
+        conversation.finish(&Ok(wack_core::Outcome::Done), 3_000);
+        let label = |conversation: &Conversation| {
+            items(conversation, Path::new("/w"), &HashSet::new(), 4_000, &mut ReplyCache::default())
+                .into_iter()
+                .find_map(|item| match item {
+                    Item::Work(work) => Some(work.label.to_string()),
+                    _ => None,
+                })
+                .unwrap()
+        };
+        assert_eq!(label(&conversation), "Read a.rs and ran cargo test");
+        conversation.summaries.insert("r1".into(), "Checked the tests still pass".into());
+        assert_eq!(label(&conversation), "Checked the tests still pass");
     }
 
     #[test]

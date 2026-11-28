@@ -14,7 +14,8 @@ project's chat) or `chat` (the Chat area, whose records have a null `project` an
 scratchpad as `workspace`). Readers treat an absent `mode` as `code`.
 
 Purposes: `chat`, `subagent`, `title`, `compaction`, `branch_summary`, `goal_verification`,
-`commit_message`. Outcomes: `completed`, `failed`, `cancelled`. Sub-agent identity is
+`commit_message`, `step_summary` (a settled group of steps' one-line label, from its own small
+model). Outcomes: `completed`, `failed`, `cancelled`. Sub-agent identity is
 independent of purpose: a child's compaction still belongs to that child and parent chat.
 
 `tokens` contains nonnegative integers `input`, `output`, `cache_read`, `cache_write`.

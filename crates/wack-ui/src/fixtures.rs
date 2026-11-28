@@ -675,6 +675,25 @@ const THINKING: &str = "The Compare page picks its pair in loadCatalog(): the UR
 /// A finished turn the way a real one reads: reasoning and reading folded into a line, the
 /// model's own words between, the edits and checks folded, the answer and its changes.
 pub fn grouped_turn(open: &[&str]) -> Vec<Item> {
+    let (conversation, now) = grouped_conversation();
+    items(&conversation, open, now)
+}
+
+/// The same turn with Step summaries on: the small model's line names each group.
+pub fn summarised_turn() -> Vec<Item> {
+    let (mut conversation, now) = grouped_conversation();
+    for (group, summary) in [
+        ("g-1", "Traced where the Compare pair is chosen"),
+        ("g-5", "Cleared the default pair and type-checked"),
+        ("g-8", "Opened Compare on mock data and checked it"),
+    ] {
+        conversation.summaries.insert(group.into(), summary.into());
+    }
+    items(&conversation, &[], now)
+}
+
+/// [`grouped_turn`]'s conversation, and when it is looked at.
+fn grouped_conversation() -> (Conversation, u64) {
     let mut conversation = Conversation::default();
     let t = START;
     conversation.send("In the Compare tab I'd like it to start with no models: you go there to compare two specific ones, so let me choose them.", t);
@@ -714,7 +733,7 @@ pub fn grouped_turn(open: &[&str]) -> Vec<Item> {
     conversation.apply(&Event::Text("Done. The Compare tab now opens blank: both pickers start empty, nothing is compared until you choose two different models, and a link with `?a=…&b=…` still opens that matchup.\n\nA link naming a model that's gone clears to blank with a short notice instead of failing.".into()), t + 45_000);
     conversation.apply(&Event::Reply { usage: None }, t + 45_000);
     conversation.finish(&Ok(Outcome::Done), t + 46_000);
-    items(&conversation, open, t + 60_000)
+    (conversation, t + 60_000)
 }
 
 /// A turn whose model is reasoning now: a folded line of what it read, its words, and the

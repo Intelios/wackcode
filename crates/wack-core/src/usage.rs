@@ -39,8 +39,10 @@ const MAX_TS: i64 = 253_402_300_799_999;
 /// A token count a JSON reader can hold exactly.
 const MAX_COUNT: u64 = 9_007_199_254_740_991;
 
-const PURPOSES: [&str; 7] =
-    ["chat", "subagent", "title", "compaction", "branch_summary", "goal_verification", "commit_message"];
+/// Every purpose the contract names. A record with any other is dropped, so each
+/// `wack_agent::Purpose` must be here (a test checks).
+const PURPOSES: [&str; 8] =
+    ["chat", "subagent", "title", "compaction", "branch_summary", "goal_verification", "commit_message", "step_summary"];
 const OUTCOMES: [&str; 3] = ["completed", "failed", "cancelled"];
 const MODES: [&str; 2] = ["code", "chat"];
 
@@ -628,6 +630,28 @@ mod tests {
         assert_eq!(record["mode"], "code");
         assert!(record["ts"].as_i64().unwrap() > 0);
         assert_eq!(record["duration_ms"], 1234);
+    }
+
+    #[test]
+    fn every_purpose_the_agent_reports_is_one_the_contract_names() {
+        for purpose in Purpose::ALL {
+            assert!(PURPOSES.contains(&purpose.as_str()), "{purpose:?} would be dropped");
+        }
+        let temp = tempfile::tempdir().unwrap();
+        let run = recorder(temp.path());
+        run.record(ModelCall {
+            purpose: Purpose::StepSummary,
+            model: "small".into(),
+            duration_ms: 5,
+            outcome: CallOutcome::Completed,
+            usage: Some(Usage { input: 90, output: 9, cache_read: 0, cache_write: 0 }),
+            subagent_id: None,
+        });
+        let root = temp.path().join("usage/v1");
+        let month = fs::read_dir(&root).unwrap().next().unwrap().unwrap().path();
+        let file = fs::read_dir(&month).unwrap().next().unwrap().unwrap().path();
+        let record: Record = serde_json::from_str(fs::read_to_string(&file).unwrap().lines().next().unwrap()).unwrap();
+        assert_eq!(record.purpose, "step_summary");
     }
 
     #[test]

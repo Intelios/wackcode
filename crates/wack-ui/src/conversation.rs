@@ -278,6 +278,11 @@ pub struct Conversation {
     /// Every saved picture of the conversation, oldest first: what a reply's `img:` reference
     /// is looked up in.
     pub pictures: Vec<Picture>,
+    /// The step-summary model's labels for settled groups, by the id of each group's first call
+    /// (`wack_core::step_summary`). Kept by the chat, beside its session file.
+    pub summaries: std::collections::HashMap<String, String>,
+    /// When each summary that arrived this session did, so its line shows it coming in.
+    pub named: std::collections::HashMap<String, std::time::Instant>,
 }
 
 impl Turn {

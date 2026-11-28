@@ -437,6 +437,9 @@ struct State {
     /// Settings › Providers › Automatic titles.
     #[serde(default)]
     auto_title: crate::title::AutoTitleConfig,
+    /// Settings › Sub-agents › Step summaries.
+    #[serde(default)]
+    step_summary: crate::step_summary::StepSummaryConfig,
     /// Settings › Skills' and Settings › Commands' switches.
     #[serde(default)]
     skills: crate::skills::SkillsConfig,
@@ -1291,7 +1294,7 @@ impl Store {
     /// switching them off, or picking a model while off, always works.
     pub fn set_auto_title(&mut self, config: crate::title::AutoTitleConfig) -> Result<(), String> {
         if config.enabled {
-            self.title_model(&config)?;
+            self.helper_model(&config, "automatic titles")?;
         }
         if self.state.auto_title == config {
             return Ok(());
@@ -1300,19 +1303,19 @@ impl Store {
         self.save()
     }
 
-    /// The connection and model a title setting names, if both still exist and the connection is
-    /// on.
-    fn title_model(&self, config: &crate::title::AutoTitleConfig) -> Result<(Connection, Model), String> {
+    /// The connection and model a small helper's setting (titles, step summaries) names, if both
+    /// still exist and the connection is on. `what` names the helper in the error.
+    fn helper_model(&self, config: &crate::title::AutoTitleConfig, what: &str) -> Result<(Connection, Model), String> {
         let (Some(connection), Some(model)) = (config.connection.as_deref(), config.model.as_deref()) else {
-            return Err("Choose a model for automatic titles.".into());
+            return Err(format!("Choose a model for {what}."));
         };
         let connection = self
             .connections()
             .iter()
             .find(|listed| listed.id == connection)
-            .ok_or("The title model's connection is gone. Choose another model.")?;
+            .ok_or("That model's connection is gone. Choose another model.")?;
         if !connection.enabled {
-            return Err(format!("Switch on {} before using it for automatic titles.", connection.name));
+            return Err(format!("Switch on {} before using it for {what}.", connection.name));
         }
         let listed = connection
             .models
@@ -1322,15 +1325,41 @@ impl Store {
         Ok((connection.clone(), listed.clone()))
     }
 
-    /// What a new chat's title request needs: `None` while titles are off, an error when their
-    /// model can no longer be used, else the provider, the connection (whose id and name the
-    /// ledger records) and the model to ask.
-    pub fn title_setup(&self) -> Option<Result<(HttpProvider, Connection, Model), String>> {
-        let config = &self.state.auto_title;
+    /// What a small helper's request needs: `None` while it is off, an error when its model can
+    /// no longer be used, else the provider, the connection (whose id and name the ledger
+    /// records) and the model to ask.
+    fn helper_setup(&self, config: &crate::title::AutoTitleConfig, what: &str) -> Option<Result<(HttpProvider, Connection, Model), String>> {
         if !config.enabled {
             return None;
         }
-        Some(self.title_model(config).and_then(|(connection, model)| Ok((self.provider(&connection)?, connection, model))))
+        Some(self.helper_model(config, what).and_then(|(connection, model)| Ok((self.provider(&connection)?, connection, model))))
+    }
+
+    /// What a new chat's title request needs ([`Self::helper_setup`]).
+    pub fn title_setup(&self) -> Option<Result<(HttpProvider, Connection, Model), String>> {
+        self.helper_setup(&self.state.auto_title, "automatic titles")
+    }
+
+    /// Settings › Sub-agents › Step summaries, as saved.
+    pub fn step_summary(&self) -> &crate::step_summary::StepSummaryConfig {
+        &self.state.step_summary
+    }
+
+    /// Saves the step-summary setting, on the same terms as [`Self::set_auto_title`].
+    pub fn set_step_summary(&mut self, config: crate::step_summary::StepSummaryConfig) -> Result<(), String> {
+        if config.enabled {
+            self.helper_model(&config, "step summaries")?;
+        }
+        if self.state.step_summary == config {
+            return Ok(());
+        }
+        self.state.step_summary = config;
+        self.save()
+    }
+
+    /// What a step summary's request needs ([`Self::helper_setup`]).
+    pub fn summary_setup(&self) -> Option<Result<(HttpProvider, Connection, Model), String>> {
+        self.helper_setup(&self.state.step_summary, "step summaries")
     }
 
     /// Settings › Integrations: whether TokenTrail's ledger is being recorded.
@@ -2553,6 +2582,33 @@ mod tests {
         let off = AutoTitleConfig { enabled: false, ..chosen };
         store.set_auto_title(off).unwrap();
         assert!(store.title_setup().is_none());
+    }
+
+    #[test]
+    fn step_summaries_are_off_until_a_usable_model_is_chosen_and_apart_from_titles() {
+        use crate::step_summary::StepSummaryConfig;
+        let folder = tempfile::tempdir().unwrap();
+        let mut store = Store::open(folder.path()).unwrap();
+        assert_eq!(store.step_summary(), &StepSummaryConfig::default());
+        assert!(store.summary_setup().is_none(), "off: no request");
+
+        let on_without_model = StepSummaryConfig { enabled: true, ..StepSummaryConfig::default() };
+        assert_eq!(store.set_step_summary(on_without_model).unwrap_err(), "Choose a model for step summaries.");
+
+        let connection = store.add_connection(new("Small"), "key").unwrap();
+        let model = connection.models[0].id.clone();
+        let chosen = StepSummaryConfig { enabled: true, connection: Some(connection.id.clone()), model: Some(model.clone()) };
+        store.set_step_summary(chosen.clone()).unwrap();
+        let (_, _, asked) = store.summary_setup().unwrap().unwrap();
+        assert_eq!(asked.id, model);
+        assert!(store.title_setup().is_none(), "titles keep their own setting");
+        assert_eq!(Store::open(folder.path()).unwrap().step_summary(), &chosen, "saved");
+
+        store.set_connection_enabled(&connection.id, false).unwrap();
+        assert_eq!(
+            store.summary_setup().unwrap().err().as_deref(),
+            Some("Switch on Small before using it for step summaries.")
+        );
     }
 
     #[test]

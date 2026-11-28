@@ -28,7 +28,7 @@ use wack_core::{
     chat_refs::{self, ChatRef},
     files::{self, WorkspaceFiles},
     skills::{Command, CommandUse, Outgoing, active_slash, find, matching, parse_line, pick, resolve_message},
-    title, title_from,
+    step_summary, title, title_from,
 };
 
 use crate::{
@@ -292,6 +292,11 @@ pub struct AppState {
     /// could not be made.
     pub title_models_open: bool,
     pub title_error: Option<SharedString>,
+    /// Settings › Sub-agents › Step summaries: the model list is open, and what went wrong.
+    pub summary_models_open: bool,
+    pub summary_error: Option<SharedString>,
+    /// Chats already told this session that step summaries' model can't be used: told once.
+    summary_warned: HashSet<String>,
     /// The chat being renamed in place, if any.
     pub renaming: Option<Renaming>,
     /// The New Chat screen's list of projects is open.
@@ -562,6 +567,9 @@ impl AppState {
             title_swaps: HashMap::new(),
             title_models_open: false,
             title_error: None,
+            summary_models_open: false,
+            summary_error: None,
+            summary_warned: HashSet::new(),
             renaming: None,
             chat_menu: None,
             prompt_menu: None,
@@ -2550,6 +2558,50 @@ impl AppState {
         }
     }
 
+    /// Asks the step-summary model to name groups of steps that just settled in `chat`, when it
+    /// is switched on. The app's own sentence stays until each answer comes, and after a failure.
+    fn summarise(&mut self, chat: &str, jobs: Vec<crate::work::SummaryJob>, cx: &mut Context<Self>) {
+        let (provider, connection, model) = match self.store.summary_setup() {
+            None => return,
+            Some(Ok(setup)) => setup,
+            Some(Err(_)) => {
+                if self.summary_warned.insert(chat.to_string()) {
+                    self.note(chat, step_summary::UNUSABLE, cx);
+                }
+                return;
+            }
+        };
+        let system = self.store.prompts().step_summary.clone();
+        let requests: Vec<(String, wack_core::llm::Request)> = jobs
+            .into_iter()
+            .map(|job| (job.id, step_summary::request(&model, &job.intent, &job.steps, system.as_deref())))
+            .collect();
+        // Recorded as a run's calls are: against the chat's project, or as the Chat area's.
+        let recorder = self.store.chat(chat).and_then(|listed| self.store.chat_recorder(&connection, listed));
+        let work = Tokio::spawn(cx, async move {
+            let recorder = recorder.as_deref().map(|recorder| recorder as &dyn wack_core::Recorder);
+            let asks = requests.iter().map(|(id, request)| async { (id.clone(), step_summary::generate(&provider, request, recorder).await) });
+            futures::future::join_all(asks).await
+        });
+        let id = chat.to_string();
+        cx.spawn(async move |app, cx| {
+            let Ok(answers) = work.await else { return };
+            let _ = app.update(cx, |app, cx| {
+                // A chat deleted since keeps nothing.
+                if app.store.chat(&id).is_none() {
+                    return;
+                }
+                let Some(session) = app.sessions.get(&id).cloned() else { return };
+                for (group, answer) in answers {
+                    if let Ok(Some(summary)) = answer {
+                        session.update(cx, |session, cx| session.set_summary(&group, summary, cx));
+                    }
+                }
+            });
+        })
+        .detach();
+    }
+
     /// A word to the user in a chat's transcript.
     /// The chat whose composer is on screen, or `None` for a new chat's (Code or Chat area).
     pub fn composing_in(&self) -> Option<Option<String>> {
@@ -2854,6 +2906,37 @@ impl AppState {
 
     fn set_auto_title(&mut self, config: AutoTitleConfig, cx: &mut Context<Self>) {
         self.title_error = self.store.set_auto_title(config).err().map(Into::into);
+        cx.notify();
+    }
+
+    /// Settings › Sub-agents › Step summaries' switch. It cannot go on without a usable model.
+    pub fn toggle_step_summaries(&mut self, cx: &mut Context<Self>) {
+        let mut config = self.store.step_summary().clone();
+        config.enabled = !config.enabled;
+        self.set_step_summary(config, cx);
+    }
+
+    /// Picks the model that writes step summaries, and closes the list. Summaries that are on stay
+    /// on.
+    pub fn choose_summary_model(&mut self, connection: &str, model: &str, cx: &mut Context<Self>) {
+        let config = AutoTitleConfig {
+            enabled: self.store.step_summary().enabled,
+            connection: Some(connection.to_string()),
+            model: Some(model.to_string()),
+        };
+        self.summary_models_open = false;
+        self.set_step_summary(config, cx);
+    }
+
+    pub fn toggle_summary_models(&mut self, cx: &mut Context<Self>) {
+        self.summary_models_open = !self.summary_models_open;
+        cx.notify();
+    }
+
+    fn set_step_summary(&mut self, config: AutoTitleConfig, cx: &mut Context<Self>) {
+        self.summary_error = self.store.set_step_summary(config).err().map(Into::into);
+        // A model that works again may warn again.
+        self.summary_warned.clear();
         cx.notify();
     }
 
@@ -4011,6 +4094,7 @@ impl AppState {
                         }
                     }
                     ChatEvent::AgentStarted => app.team_worker_started(&id, cx),
+                    ChatEvent::Summarise(jobs) => app.summarise(&id, jobs.clone(), cx),
                     ChatEvent::AgentStartedCanvas => {
                         if let Some(session) = app.sessions.get(&id).cloned() {
                             session.update(cx, |session, cx| {

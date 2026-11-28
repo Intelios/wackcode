@@ -15,12 +15,13 @@
 mod bundle;
 
 use std::{
+    fs,
     os::unix::process::CommandExt,
     path::{Path, PathBuf},
     process::Command,
 };
 
-use bundle::{Flavour, Sources};
+use bundle::{Flavour, Notice, Sources};
 
 fn main() {
     let mut args = std::env::args().skip(1);
@@ -61,15 +62,98 @@ fn cargo_build(release: bool, features: &[&str]) -> Result<(), String> {
 fn sources(profile_dir: &Path, flavour: Flavour) -> Result<Sources, String> {
     let cef = cef_dll_sys::get_cef_dir()
         .ok_or("The CEF distribution was not found. Build once with `cargo build` so it downloads, and check CEF_PATH in .cargo/config.toml.")?;
+    let mut notices = vec![
+        // The model catalogue's snapshot is models.dev's data (MIT).
+        Notice::File { from: workspace_root().join("crates/wack-catalog/data/LICENSE.models.dev"), name: "LICENSE.models.dev" },
+    ];
+    notices.extend(cef_notices(&cef, flavour)?);
     Ok(Sources {
         app: profile_dir.join("wackcode"),
         helper: profile_dir.join("wackcode-helper"),
         icon: workspace_root().join("apps/wackcode/icons").join(flavour.icon()),
-        // The model catalogue's snapshot is models.dev's data (MIT).
-        notices: vec![workspace_root().join("crates/wack-catalog/data/LICENSE.models.dev")],
+        notices,
         cef,
         version: bundle::plist_version(env!("CARGO_PKG_VERSION")),
     })
+}
+
+/// The browser's licence notices: CEF's BSD licence and Chromium's credits, which shipping the
+/// framework in binary form requires. The credits are in the distribution; the licence exists
+/// only inside the archive it arrived in (the extraction keeps the credits but deletes the
+/// licence), so it is read back out of that. A release bundle is not written without them; a
+/// dev bundle warns and ships what it has.
+fn cef_notices(cef: &Path, flavour: Flavour) -> Result<Vec<Notice>, String> {
+    let credits = cef.join("CREDITS.html");
+    let mut notices = Vec::new();
+    let mut missing = Vec::new();
+    match cef_licence_text(cef) {
+        Ok(contents) => notices.push(Notice::Text { name: "LICENSE.cef.txt", contents }),
+        Err(message) => missing.push(message),
+    }
+    if credits.is_file() {
+        notices.push(Notice::File { from: credits, name: "CREDITS.chromium.html" });
+    } else {
+        missing.push(format!(
+            "Chromium's credits are missing: {} was not found, so the CEF distribution is incomplete.",
+            credits.display()
+        ));
+    }
+    if !missing.is_empty() {
+        let message = missing.join(" ");
+        match flavour {
+            Flavour::Release => return Err(message),
+            Flavour::Dev => eprintln!("xtask: {message}"),
+        }
+    }
+    Ok(notices)
+}
+
+/// CEF's `LICENSE.txt`, read out of the archive the distribution arrived in: the archive sits
+/// beside the extracted folder, and the directory inside it is named after the archive itself.
+fn cef_licence_text(cef: &Path) -> Result<String, String> {
+    let location = cef.parent().ok_or("The CEF distribution has no parent folder.")?;
+    let mut archives: Vec<PathBuf> = fs::read_dir(location)
+        .map_err(|e| format!("Could not read {}: {e}", location.display()))?
+        .filter_map(|entry| entry.ok())
+        .map(|entry| entry.path())
+        .filter(|path| path.is_file() && path.file_name().is_some_and(|name| name.to_string_lossy().ends_with(".tar.bz2")))
+        .collect();
+    let archive = match archives.len() {
+        1 => archives.remove(0),
+        0 => {
+            return Err(format!(
+                "CEF's licence could not be read: the archive the distribution came from is not in {}. Delete {} and build once so CEF downloads again, then bundle.",
+                location.display(),
+                location.display()
+            ))
+        }
+        _ => {
+            return Err(format!(
+                "CEF's licence could not be read: more than one archive is in {}.",
+                location.display()
+            ))
+        }
+    };
+    let folder = archive
+        .file_name()
+        .and_then(|name| name.to_str())
+        .and_then(|name| name.strip_suffix(".tar.bz2"))
+        .ok_or_else(|| format!("{} does not look like a CEF archive.", archive.display()))?;
+    let member = format!("{folder}/LICENSE.txt");
+    let output = Command::new("tar")
+        .arg("-xOf")
+        .arg(&archive)
+        .arg(&member)
+        .output()
+        .map_err(|e| format!("Could not run tar to read {}: {e}", archive.display()))?;
+    if !output.status.success() {
+        return Err(format!(
+            "tar could not read {member} from {}: {}",
+            archive.display(),
+            String::from_utf8_lossy(&output.stderr).trim()
+        ));
+    }
+    String::from_utf8(output.stdout).map_err(|_| format!("{member} in {} is not UTF-8 text.", archive.display()))
 }
 
 fn dev(mut app_args: Vec<String>) -> Result<(), String> {
@@ -111,4 +195,29 @@ fn release_bundle() -> Result<(), String> {
     }
     println!("{}", app.display());
     Ok(())
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn reads_cefs_licence_from_the_archive_beside_the_distribution() {
+        let dir = tempfile::tempdir().unwrap();
+        let folder = dir.path().join("cef_binary_156.0.30_macosarm64_minimal");
+        fs::create_dir_all(&folder).unwrap();
+        fs::write(folder.join("LICENSE.txt"), "CEF's BSD licence.\n").unwrap();
+        let archive = dir.path().join("cef_binary_156.0.30_macosarm64_minimal.tar.bz2");
+        let status = Command::new("tar")
+            .arg("-cjf")
+            .arg(&archive)
+            .arg(folder.file_name().unwrap())
+            .current_dir(dir.path())
+            .status()
+            .unwrap();
+        assert!(status.success());
+        let cef = dir.path().join("cef_macos_aarch64");
+        fs::create_dir_all(&cef).unwrap();
+        assert_eq!(cef_licence_text(&cef).unwrap(), "CEF's BSD licence.\n");
+    }
 }

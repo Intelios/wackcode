@@ -7,7 +7,9 @@
 //!   Info.plist
 //!   MacOS/WackCode                                   the app (`wackcode`)
 //!   Resources/AppIcon.icns
-//!   Resources/LICENSE.models.dev                     notices for data built into the app
+//!   Resources/LICENSE.models.dev                     licence notices: the app's own data, and
+//!   Resources/LICENSE.cef.txt                        with the browser CEF's BSD licence and
+//!   Resources/CREDITS.chromium.html                  Chromium's credits
 //!   Frameworks/Chromium Embedded Framework.framework
 //!   Frameworks/WackCode Helper.app                   five helper bundles, one binary
 //!   Frameworks/WackCode Helper (GPU).app             (`wackcode-helper`)
@@ -22,10 +24,11 @@
 //!   stays outside the bundle: codesign treats every file in `Contents/Frameworks` as code. Symlinks inside it are
 //!   kept as symlinks, as a framework's `Versions/Current` requires.
 //! - The executables are copied on every run, so the bundle always holds the binaries just built.
-//! - A release bundle must also ship CEF's and Chromium's licences: CEF is BSD-3-Clause and
-//!   Chromium adds the third-party licences in its credits; the distribution in `target/cef/`
-//!   carries `LICENSE.txt` and those credits. Not done yet: to do before the first release with
-//!   the browser.
+//! - Licence notices ship in `Resources` (`Notice`): models.dev's data, and with the browser
+//!   CEF's BSD licence and Chromium's credits, which distributing the framework requires. A
+//!   release bundle is not written without the browser's two; a dev bundle warns and ships
+//!   what it has. The licence text comes from `main.rs`, out of the archive the distribution
+//!   arrived in (the extraction keeps the credits but deletes the licence).
 
 use std::{
     fs, io,
@@ -86,12 +89,22 @@ pub struct Sources {
     pub app: PathBuf,
     pub helper: PathBuf,
     pub icon: PathBuf,
-    /// Licence notices for data built into the app, copied into `Resources` under their names.
-    pub notices: Vec<PathBuf>,
+    /// Licence notices, written into `Resources` under their names.
+    pub notices: Vec<Notice>,
     /// The CEF distribution's folder (the one holding the framework).
     pub cef: PathBuf,
     /// `CFBundleShortVersionString`: numbers only, as macOS requires.
     pub version: String,
+}
+
+/// A licence notice the bundle ships in `Resources`. The two kinds exist because CEF's licence
+/// arrives as text, read out of the archive the distribution came in (`main.rs`), while the
+/// other notices are files.
+pub enum Notice {
+    /// A file on disk, copied in under `name`.
+    File { from: PathBuf, name: &'static str },
+    /// Text held in memory, written in under `name`.
+    Text { name: &'static str, contents: String },
 }
 
 /// `3.0.0-dev.0` → `3.0.0`: Info.plist versions are dot-separated integers.
@@ -225,8 +238,14 @@ pub fn assemble(app_path: &Path, flavour: Flavour, sources: &Sources) -> Result<
     write(&contents.join("Info.plist"), &app_plist(flavour, &sources.version))?;
     fs::copy(&sources.icon, resources.join("AppIcon.icns")).map_err(|e| io_error("copy", &sources.icon, e))?;
     for notice in &sources.notices {
-        let name = notice.file_name().ok_or_else(|| format!("{} has no file name.", notice.display()))?;
-        fs::copy(notice, resources.join(name)).map_err(|e| io_error("copy", notice, e))?;
+        match notice {
+            Notice::File { from, name } => {
+                fs::copy(from, resources.join(name)).map_err(|e| io_error("copy", from, e))?;
+            }
+            Notice::Text { name, contents } => {
+                write(&resources.join(name), contents)?;
+            }
+        }
     }
     let executable = macos.join(EXECUTABLE);
     copy_executable(&sources.app, &executable)?;
@@ -289,14 +308,24 @@ mod tests {
         fs::create_dir_all(framework.join("Versions/A/Resources")).unwrap();
         fs::write(framework.join("Versions/A/Resources/marker"), "one").unwrap();
         symlink("A", framework.join("Versions/Current")).unwrap();
-        for (name, body) in [("app", "app"), ("helper", "helper"), ("icon.icns", "icon"), ("LICENSE.data", "MIT")] {
+        for (name, body) in [
+            ("app", "app"),
+            ("helper", "helper"),
+            ("icon.icns", "icon"),
+            ("LICENSE.data", "MIT"),
+            ("credits.html", "credits"),
+        ] {
             fs::write(root.join(name), body).unwrap();
         }
         let sources = Sources {
             app: root.join("app"),
             helper: root.join("helper"),
             icon: root.join("icon.icns"),
-            notices: vec![root.join("LICENSE.data")],
+            notices: vec![
+                Notice::File { from: root.join("LICENSE.data"), name: "LICENSE.data" },
+                Notice::File { from: root.join("credits.html"), name: "CREDITS.chromium.html" },
+                Notice::Text { name: "LICENSE.cef.txt", contents: "BSD-3-Clause".into() },
+            ],
             cef: cef.clone(),
             version: "3.0.0".into(),
         };
@@ -308,6 +337,8 @@ mod tests {
         assert_eq!(fs::read_dir(app.join("Contents/Frameworks")).unwrap().count(), 1 + HELPERS.len());
         assert_eq!(fs::read_to_string(&executable).unwrap(), "app");
         assert_eq!(fs::read_to_string(app.join("Contents/Resources/LICENSE.data")).unwrap(), "MIT");
+        assert_eq!(fs::read_to_string(app.join("Contents/Resources/CREDITS.chromium.html")).unwrap(), "credits");
+        assert_eq!(fs::read_to_string(app.join("Contents/Resources/LICENSE.cef.txt")).unwrap(), "BSD-3-Clause");
         let copied = app.join("Contents/Frameworks").join(FRAMEWORK);
         assert!(fs::symlink_metadata(copied.join("Versions/Current")).unwrap().file_type().is_symlink());
         for (suffix, _) in HELPERS {

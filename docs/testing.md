@@ -41,17 +41,13 @@ The report's `shown` is what the eye gets: frames a second, the gaps between the
 
 Both need the window in front and unhidden: macOS stops drawing a window that is covered, and the report then shows nothing. Don't take the front from the owner while they are working; ask them, or measure when they are away.
 
-Use them after touching anything drawn on every frame (glass, the backdrop, the transcript, anything in the composer), on the owner's M1 if you can. At 60 Hz a frame has 16.7 ms, the CPU's draw and the GPU's work both inside it. 2026-11-27, scrolling a long chat over a backdrop: the GPU took 17.6 ms a frame and the app ran at 40 to 48 frames a second. After the fixes below it took 6 to 8 ms, and the app held 60 with a handful of late frames in eight seconds. What it cost, from switching each part off in turn:
-
-- **A path: 5 to 7 ms.** GPUI draws every path through a window-sized, multisampled texture, so one small path costs a whole-window pass. The context ring was the only one; it is now a cached picture (`ring.rs`). Don't paint paths in anything on screen while a chat is in view.
-- **The glass: about 7 ms** for four panes, from layers each covering a whole pane (5.6 million pixels for the stage at 2x). Each layer now covers only where it shows (`glass.rs`).
-- **A live backdrop blur: about 17 ms** before the picture was baked (`backdrop::baked`).
+Use it after touching anything drawn on every frame (glass, the backdrop, the transcript, anything in the composer), on the owner's M1 if you can. At 60 Hz a frame has 16.7 ms, the CPU's draw and the GPU's work both inside it. What costs what is in [gpui.md](gpui.md#costs-worth-knowing).
 
 ## The dev app
 
-`cargo dev` runs the app with the `automation` and `screenshots` features. Use it for what the gallery cannot show: real windows, focus, typing, IME, resizing, animation. `cargo dev --smooth` leaves screenshots out, so the app draws as a release build does: start it that way when the owner wants to try the app, or to judge smoothness ([Frame rate](#frame-rate)).
+`cargo dev` runs the app with the `automation` and `screenshots` features. Use it for what the gallery cannot show: real windows, focus, typing, IME, resizing, animation. `cargo dev --smooth` leaves screenshots out, so the app draws as a release build does: start it that way when the owner wants to try the app, or to judge smoothness.
 
-It runs the app from a bundle, `target/debug/WackCode Dev.app`, because the browser engine only works inside one ([cef.md](cef.md)). The first build downloads CEF into `target/cef/`, about 100 MB, once. Arguments after `cargo dev` go to the app.
+It runs the app from a bundle, `target/debug/WackCode Dev.app`, because the browser engine only works inside one (`apps/xtask/src/bundle.rs`). The first build downloads CEF into `target/cef/`, about 100 MB, once. Arguments after `cargo dev` go to the app.
 
 It opens a Unix socket at `target/automation.sock` (set by `WACKCODE_AUTOMATION` in `.cargo/config.toml`; the path must stay under about 100 characters). Send one JSON object per line and read one back:
 
@@ -113,14 +109,3 @@ Use only the connection named **Testing (AI Agents may use this too)**. The owne
 ```sh
 cargo wack run --connection "Testing (AI Agents may use this too)" --cwd <scratch folder> "…"
 ```
-
-### Does Team pay? An A/B for the owner
-
-The Testing connection has only Flash-class models, so it proves Team's mechanics, not its worth. Whether a strong lead with a cheap crew beats the cheap model alone is for the owner to measure with their own connections:
-
-1. Pick five or so real tasks with a pass/fail check the project already has (a failing test to fix, a feature with its tests), in throwaway checkouts at the same commit.
-2. Run each task three times, each run in a fresh checkout: the cheap model alone (`--model cheap`), the strong model leading the cheap crew (`--model strong --crew cheap`), and the strong model alone (`--model strong`).
-3. Judge each run by the project's own tests, then by reading the diff.
-4. Compare tokens and time: `wack run` ends with the lead's own usage line and, for a Team, each agent with its tier, model and tokens, then the crew's total against the lead-model agents'. The usage ledger has the same calls, the agents' as `purpose: subagent`.
-
-Team earns its place when it passes where the cheap model alone fails, for well under the strong model's tokens. If it doesn't, change the contract (Settings › Prompts › Team lead), not the engine, first.

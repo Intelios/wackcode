@@ -1,5 +1,5 @@
 //! Canvas: boards of whole HTML mockups the agent draws and the user compares, comments on and
-//! tweaks (docs/architecture.md, "Canvas").
+//! tweaks (docs/architecture.md, "Canvases").
 //!
 //! - `canvases`: a chat's canvases, live: what the tools change and the board draws.
 //! - `comments`: the user's comments, pinned to an artboard's elements.

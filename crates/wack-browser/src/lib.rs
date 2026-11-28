@@ -9,7 +9,7 @@
 //!
 //! No GPUI here (docs/architecture.md): the UI hands the engine a raw NSView to host pages in and
 //! positions them; everything else is plain data. Security rules are in docs/security.md
-//! ("Network", "Credentials") and the CEF pin in docs/cef.md.
+//! ("Network", "Credentials"); the CEF pin and its bumping rules are in the root Cargo.toml.
 
 pub mod cef;
 mod main_thread;

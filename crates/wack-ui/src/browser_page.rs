@@ -6,7 +6,8 @@
 //!   storage, cache and history) is deleted. A running browser can't start again in the same
 //!   process, so then cookies and saved site logins go at once and the rest at the next launch
 //!   (`wack_browser::cef::clear_browsing_data`). The page says which happened.
-//! - **Engine**: the bundled Chromium's version (docs/cef.md: it has no updater).
+//! - **Engine**: the bundled Chromium's version (it has no updater: the bundled Chromium is
+//!   fixed at the CEF pin in the root Cargo.toml, bumped only as its own task).
 
 use gpui::{SharedString, div, prelude::*, px};
 use wack_browser::Viewport;

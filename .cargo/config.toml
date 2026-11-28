@@ -1,6 +1,7 @@
 [alias]
 # The dev app, with the automation socket compiled in (see docs/testing.md). It runs from a
-# bundle, `target/debug/WackCode Dev.app`, because the browser engine needs one (docs/cef.md).
+# bundle, `target/debug/WackCode Dev.app`, because the browser engine needs one
+# (apps/xtask/src/bundle.rs holds the layout and its invariants).
 dev = "run -q -p xtask -- dev"
 # Bundles: `cargo xtask bundle` writes the release app, `target/release/WackCode.app`.
 xtask = "run -q -p xtask --"

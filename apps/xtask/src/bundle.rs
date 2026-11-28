@@ -22,6 +22,10 @@
 //!   stays outside the bundle: codesign treats every file in `Contents/Frameworks` as code. Symlinks inside it are
 //!   kept as symlinks, as a framework's `Versions/Current` requires.
 //! - The executables are copied on every run, so the bundle always holds the binaries just built.
+//! - A release bundle must also ship CEF's and Chromium's licences: CEF is BSD-3-Clause and
+//!   Chromium adds the third-party licences in its credits; the distribution in `target/cef/`
+//!   carries `LICENSE.txt` and those credits. Not done yet: to do before the first release with
+//!   the browser.
 
 use std::{
     fs, io,

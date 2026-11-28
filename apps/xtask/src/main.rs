@@ -10,7 +10,7 @@
 //!   (notarization is out of scope).
 //!
 //! The browser engine (CEF) only works from inside a bundle, which is why `cargo dev` no longer
-//! runs the bare binary. See docs/cef.md.
+//! runs the bare binary; `bundle.rs` holds the layout and its invariants.
 
 mod bundle;
 

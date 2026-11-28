@@ -1,6 +1,6 @@
 # AGENTS.md
 
-WackCode is a native macOS coding agent: a Rust app drawn with GPUI, with its own agent core. This is **version 3**, a ground-up remake on the `3.0-Remake` branch. Version 2 (Tauri, React and the Pi coding agent) lives on `2.5-Legacy` and is reference material only. `README.md` still describes version 2 and is rewritten before release; until then, leave it alone.
+WackCode is a native macOS coding agent: a Rust app drawn with GPUI, with its own agent core. Version 2 (Tauri, React and the Pi coding agent) lives on `2.5-Legacy` and is reference material only. `README.md` still describes version 2 and is rewritten before release; until then, leave it alone.
 
 **Keep this file short:** it is sent with every agent request. It holds only rules that any change could break, plus the design direction. Area detail goes in `docs/`, and a feature's invariants go in comments next to its code, so read a file's header comment before changing it.
 
@@ -12,8 +12,8 @@ WackCode is a native macOS coding agent: a Rust app drawn with GPUI, with its ow
 - macOS 26+ on Apple Silicon only. Unix-only APIs are deliberate; don't "fix" them for other platforms.
 - Cargo only. No Node, no pnpm, no web UI.
 - No data compatibility with version 2: never read or write its files. The one shared contract is the usage ledger ([docs/wackcode-usage-v1.md](docs/wackcode-usage-v1.md)).
-- Out of scope; don't propose these as fixes: embedded editors, permission prompts (tool-call approval gates), automatic merging, notarization, auto-updates. Computer use's per-app access card is not one: it grants an app once per chat, never per action (the owner's call, 2026-11-24).
-- Cut from version 3 on purpose; don't bring these back: arcade games, forking chats, per-chat worktrees, the menu bar duck, the goal loop, Pi packages, subscription sign-ins, composer styles, dynamic backdrops, renaming the agent. Rewinding (with checkpoints), editing and retrying a message are back, on the owner's call (2026-11-27).
+- Out of scope; don't propose these as fixes: embedded editors, permission prompts (tool-call approval gates), automatic merging, notarization, auto-updates. Computer use's per-app access card is not one: it grants an app once per chat, never per action.
+- Cut on purpose; don't bring these back: arcade games, forking chats, per-chat worktrees, the menu bar duck, the goal loop, Pi packages, subscription sign-ins, composer styles, dynamic backdrops, renaming the agent. Rewinding (with checkpoints), editing and retrying a message are back.
 - To port something from version 2, read it from the legacy checkout (`../wackcode-legacy`, or `git show 2.5-Legacy:<path>`). Port the idea and the tested logic; don't port Tauri, Pi or web-view workarounds.
 - `todo.md` (gitignored) is the owner's idea list: ask before starting anything from it.
 
@@ -21,20 +21,22 @@ WackCode is a native macOS coding agent: a Rust app drawn with GPUI, with its ow
 
 - **`apps/wackcode/`**: the app binary. Opens the window and hands it to `wack-ui`.
 - **`apps/gallery/`**: renders UI scenes to PNG files (`cargo snap`).
-- **`apps/xtask/`**, **`apps/wackcode-helper/`**: the `.app` bundle the browser engine (CEF) needs, and its helper processes.
+- **`apps/xtask/`**, **`apps/wackcode-helper/`**: assemble the `.app` bundles the browser engine (CEF) needs, and its helper processes.
 - **`crates/wack-ui/`**: every view, the pane tree and layout solver, the theme. The only crate that may use GPUI.
 - **`crates/wack-core/`**: the engine: projects, chats, settings, secrets, Git, PTYs, events.
-- **`crates/wack-agent/`**, **`wack-llm/`**, **`wack-tools/`**: the agent loop, the provider wire formats, and the core tools.
-- **`crates/wack-computer/`**: computer use: the agent in the user's other Mac apps, and its access rules.
+- **`crates/wack-agent/`**: the turn loop, features (plan, questions, todos, sub-agents, team, suggestions, memory, skills), sessions and compaction.
+- **`crates/wack-llm/`**: the provider wire formats, streaming events, usage, retries.
+- **`crates/wack-tools/`**: the core file and shell tools.
+- **`crates/wack-web/`**, **`wack-browser/`**, **`wack-canvas/`**, **`wack-computer/`**, **`wack-mcp/`**: the web tools and their public-internet guard; the browser engine and the agent's browser tools; canvases; computer use; the MCP client.
+- **`crates/wack-catalog/`**: the model catalogue from models.dev, bundled and refreshable.
 - **`crates/wack-cli/`**: `wack`, the agent without the app.
 
 ## Read before changing
 
 | If you touch… | Read |
 |---|---|
-| Crate boundaries, the engine/UI split, where data lives, what is built so far and what comes next | [docs/architecture.md](docs/architecture.md) |
+| Crate boundaries, the engine/UI split, where data lives | [docs/architecture.md](docs/architecture.md) |
 | The GPUI version, its patches, bumping it | [docs/gpui.md](docs/gpui.md) |
-| The CEF (Chromium) version, the bundle, bumping it | [docs/cef.md](docs/cef.md) |
 | Network, credentials, the automation socket | [docs/security.md](docs/security.md) |
 | Checking your work: tests, the gallery, the dev app, real LLMs | [docs/testing.md](docs/testing.md) |
 | The usage ledger TokenTrail reads (a published contract) | [docs/wackcode-usage-v1.md](docs/wackcode-usage-v1.md) |

@@ -36,9 +36,7 @@ Measured on an M1 at 2x (docs/testing.md, Frame rate):
 
 ## Text input
 
-GPUI ships no text field, so WackCode has its own: `crates/wack-ui/src/text_field/`. `edit.rs` holds the text, selection, undo and IME composition as plain, tested Rust; `mod.rs` draws it and talks to macOS through GPUI's `EntityInputHandler`, which is what makes input methods, dictation and the character palette work. It started from zui's `examples/input.rs`.
-
-`gpui-base` (Zeron's unstyled gpui-component) was the plan, but it pins an older zui revision than ours, and Cargo will not patch a git dependency to another revision of the same repository. Owning the field also means one fewer revision to move in step with.
+GPUI ships no text field, so WackCode has its own: `crates/wack-ui/src/text_field/`. `edit.rs` holds the text, selection, undo and IME composition as plain, tested Rust; `mod.rs` draws it and talks to macOS through GPUI's `EntityInputHandler`, which is what makes input methods, dictation and the character palette work. Do not swap in Zeron's `gpui-base`: it pins an older zui revision than ours, and Cargo cannot patch a git dependency to another revision of the same repository.
 
 ## Bumping
 

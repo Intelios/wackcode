@@ -939,6 +939,7 @@ pub fn all() -> Vec<Scene> {
                         can_compact: true,
                         parts: fixtures::context_parts(tokens),
                         cache: Some(0.924),
+                        spent: 3_840_000,
                     }),
                     context_open: true,
                     ..fixtures::composer_after_turn(drawn)
@@ -964,6 +965,7 @@ pub fn all() -> Vec<Scene> {
                             can_compact: false,
                             parts: fixtures::context_parts(68_000),
                             cache: Some(0.924),
+                            spent: 3_840_000,
                         }),
                         ..fixtures::composer_after_turn(Input::Drawn {
                             text: Some("Run the retry tests now.".into()),
@@ -1002,6 +1004,7 @@ pub fn all() -> Vec<Scene> {
                             can_compact: false,
                             parts: fixtures::context_parts(68_000),
                             cache: Some(0.924),
+                            spent: 3_840_000,
                         }),
                         ..fixtures::composer_after_turn(Input::Drawn {
                             text: Some("Run the retry tests now.".into()),
@@ -1041,6 +1044,7 @@ pub fn all() -> Vec<Scene> {
                         can_compact: false,
                         parts: fixtures::context_parts(68_000),
                         cache: Some(0.924),
+                        spent: 3_840_000,
                     }),
                     ..fixtures::composer_after_turn(Input::Drawn {
                         text: text.map(Into::into),

@@ -249,6 +249,15 @@ impl Usage {
     }
 }
 
+impl std::ops::AddAssign for Usage {
+    fn add_assign(&mut self, other: Self) {
+        self.input += other.input;
+        self.output += other.output;
+        self.cache_read += other.cache_read;
+        self.cache_write += other.cache_write;
+    }
+}
+
 #[derive(Clone, Debug, PartialEq)]
 pub struct Response {
     pub message: Message,

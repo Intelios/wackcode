@@ -80,6 +80,9 @@ enum Entry {
         tokens_before: Option<u64>,
         #[serde(default, skip_serializing_if = "Option::is_none")]
         tokens_after: Option<u64>,
+        /// What the call that wrote the summary used, when the provider said.
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        usage: Option<Usage>,
     },
     /// Deferred tools the model has found, so a resumed chat offers the same tools.
     ToolsLoaded {
@@ -479,9 +482,10 @@ impl Session {
         Ok(true)
     }
 
-    /// Replaces all but the last `keep` messages with a summary. Returns `(tokens_before,
-    /// tokens_after)`: the context size before compaction and the estimated size after.
-    pub fn compact(&mut self, summary: Summary, keep: usize) -> Result<(u64, u64), String> {
+    /// Replaces all but the last `keep` messages with a summary, which a call that used `usage`
+    /// wrote. Returns `(tokens_before, tokens_after)`: the context size before compaction and the
+    /// estimated size after.
+    pub fn compact(&mut self, summary: Summary, keep: usize, usage: Option<Usage>) -> Result<(u64, u64), String> {
         let tokens_before = self.context_tokens();
         let from = self.messages.len() - keep.min(self.messages.len());
         let mut after = Vec::with_capacity(1 + self.messages.len() - from);
@@ -493,6 +497,7 @@ impl Session {
             keep,
             tokens_before: Some(tokens_before),
             tokens_after: Some(tokens_after),
+            usage,
         })?;
         self.apply_compaction(summary, keep);
         Ok((tokens_before, tokens_after))
@@ -574,7 +579,20 @@ pub enum HistoryEntry {
 /// Reads a whole chat for display, as it stands after any rewinds. Read-only: unlike
 /// [`Session::open`] it repairs nothing, so it is safe while a run is writing to the same file.
 pub fn history(path: &Path) -> Result<Vec<HistoryEntry>, String> {
+    history_with_spend(path).map(|(entries, _)| entries)
+}
+
+/// [`history`], and every token the chat's own model calls used, from the same read: each reply
+/// and each compaction's summary the file records, those a rewind took away included, since
+/// they were spent all the same. Its sub-agents' calls are in their own files.
+pub fn history_with_spend(path: &Path) -> Result<(Vec<HistoryEntry>, Usage), String> {
     let (lines, _) = read_lines(path)?;
+    let mut spend = Usage::default();
+    for line in &lines {
+        if let Entry::Message { usage: Some(usage), .. } | Entry::Compaction { usage: Some(usage), .. } = line {
+            spend += *usage;
+        }
+    }
     let Standing { entries: lines, last_rewind } = standing(lines);
     let mut entries = Vec::new();
     for line in lines {
@@ -593,7 +611,7 @@ pub fn history(path: &Path) -> Result<Vec<HistoryEntry>, String> {
     if let Some((_, files)) = last_rewind {
         entries.push(HistoryEntry::Rewound { files: files.is_some() });
     }
-    Ok(entries)
+    Ok((entries, spend))
 }
 
 #[cfg(test)]
@@ -661,7 +679,7 @@ mod tests {
             session.push(Message::user(text), None).unwrap();
         }
         let summary = Summary { body: "The story so far".into(), ..Summary::default() };
-        session.compact(summary.clone(), 1).unwrap();
+        session.compact(summary.clone(), 1, None).unwrap();
         session.push(Message::user("four"), None).unwrap();
 
         for session in [session, Session::open(&path).unwrap()] {
@@ -678,7 +696,7 @@ mod tests {
         let path = folder.path().join("chat.jsonl");
         let mut session = Session::create(&path, folder.path()).unwrap();
         session.push(Message::user("one"), None).unwrap();
-        session.compact(Summary { body: "so far".into(), ..Summary::default() }, 0).unwrap();
+        session.compact(Summary { body: "so far".into(), ..Summary::default() }, 0, None).unwrap();
         session.push(Message::user("two"), None).unwrap();
         // A line from before messages carried a time still reads.
         std::fs::OpenOptions::new()
@@ -726,7 +744,7 @@ mod tests {
         assert_eq!(session.latest_note("contract:"), Some("contract:plan"));
 
         // The note is summarised away; the state is not.
-        session.compact(Summary { body: "so far".into(), ..Summary::default() }, 1).unwrap();
+        session.compact(Summary { body: "so far".into(), ..Summary::default() }, 1, None).unwrap();
         session.push_note(Note { tag: "contract:normal".into(), text: "Normal rules".into() }).unwrap();
         for session in [session, Session::open(&path).unwrap()] {
             assert_eq!(session.latest_note("contract:"), Some("contract:normal"));
@@ -831,6 +849,28 @@ mod tests {
     }
 
     #[test]
+    fn the_spend_counts_every_call_a_rewind_or_compaction_hid() {
+        let folder = tempfile::tempdir().unwrap();
+        let path = folder.path().join("chat.jsonl");
+        let used = |input, output| Some(Usage { input, output, cache_read: 1_000, cache_write: 10 });
+        let mut session = Session::create(&path, folder.path()).unwrap();
+        session.push(Message::user("one"), None).unwrap();
+        session.push(reply("first"), used(100, 20)).unwrap();
+        session.compact(Summary { body: "so far".into(), ..Summary::default() }, 0, used(300, 40)).unwrap();
+        session.push(Message::user("two"), None).unwrap();
+        session.push(reply("second"), used(200, 30)).unwrap();
+        drop(session);
+        let all = Usage { input: 600, output: 90, cache_read: 3_000, cache_write: 30 };
+        assert_eq!(history_with_spend(&path).unwrap().1, all);
+
+        // The second reply leaves the conversation, but its tokens were spent all the same.
+        rewind(&path, 1, None).unwrap();
+        let (history, spend) = history_with_spend(&path).unwrap();
+        assert!(!history.iter().any(|entry| matches!(entry, HistoryEntry::Message { message, .. } if message.text() == "second")));
+        assert_eq!(spend, all);
+    }
+
+    #[test]
     fn a_rewind_past_a_compaction_brings_the_whole_conversation_back() {
         let folder = tempfile::tempdir().unwrap();
         let path = folder.path().join("chat.jsonl");
@@ -838,7 +878,7 @@ mod tests {
         for text in ["one", "two", "three"] {
             session.push(Message::user(text), None).unwrap();
         }
-        session.compact(Summary { body: "so far".into(), ..Summary::default() }, 1).unwrap();
+        session.compact(Summary { body: "so far".into(), ..Summary::default() }, 1, None).unwrap();
         session.push(Message::user("four"), None).unwrap();
         drop(session);
         assert!(texts(&path)[0].contains("so far"));

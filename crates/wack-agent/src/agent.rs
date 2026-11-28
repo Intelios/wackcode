@@ -955,7 +955,7 @@ impl Agent {
         let mut summary = Summary::build(self.session.summary(), &conversation, body);
         summary.sections = self.features.iter().flat_map(|feature| feature.summary_sections()).collect();
         let keep = messages.len() - cut;
-        let (tokens_before, tokens_after) = self.session.compact(summary.clone(), keep)?;
+        let (tokens_before, tokens_after) = self.session.compact(summary.clone(), keep, response.usage)?;
         events(Event::Compacted { usage: response.usage, summary, tokens_before, tokens_after });
         Ok(())
     }

@@ -141,6 +141,10 @@ pub struct ChatSession {
     /// The same, part by part, as the last run left it (`wack_core::context`); empty until a
     /// run in this window has ended.
     pub context_parts: Vec<wack_core::context::Part>,
+    /// Every token the chat's own model calls used: what its file recorded when last read
+    /// (`wack_core::history_with_spend`), plus each reply and compaction since. Its sub-agents'
+    /// are in `agents` (`session_tokens`).
+    spent: wack_core::Usage,
     /// The project's changed files against its last commit, and the lines added and removed:
     /// what the composer's tab counts. `None` until Git answers, or outside a repository.
     pub changes: Option<ChangeCount>,
@@ -285,9 +289,11 @@ impl ChatSession {
     ) -> Self {
         let mut context_tokens = None;
         let mut saved_agents = Vec::new();
+        let mut spent = wack_core::Usage::default();
         let conversation = if session_path.exists() {
-            match wack_core::history(session_path) {
-                Ok(history) => {
+            match wack_core::history_with_spend(session_path) {
+                Ok((history, spend)) => {
+                    spent = spend;
                     context_tokens = last_context(&history);
                     saved_agents = last_agents(&history);
                     Conversation::from_history(&history)
@@ -342,6 +348,7 @@ impl ChatSession {
             runs_started: 0,
             context_tokens,
             context_parts: Vec::new(),
+            spent,
             changes: None,
             counting: None,
             count_again: false,
@@ -876,13 +883,15 @@ impl ChatSession {
     /// Reads the conversation again from the chat's file, after a rewind changed it. Every item
     /// is rebuilt; what the user opened stays open where it still exists.
     pub fn reload(&mut self, cx: &mut Context<Self>) {
-        let history = match wack_core::history(&self.session_path) {
-            Ok(history) => history,
+        let (history, spent) = match wack_core::history_with_spend(&self.session_path) {
+            Ok(read) => read,
             Err(message) => {
                 self.show_failure(message, cx);
                 return;
             }
         };
+        // The file holds every call made since it was last read, so the count starts again from it.
+        self.spent = spent;
         self.context_tokens = last_context(&history);
         self.context_parts.clear();
         let mut conversation = Conversation::from_history(&history);
@@ -1019,7 +1028,9 @@ impl ChatSession {
                     match &event {
                         Event::Reply { usage: Some(usage) } => {
                             self.context_tokens = Some(usage.context_tokens() + usage.output);
+                            self.spent += *usage;
                         }
+                        Event::Compacted { usage: Some(usage), .. } => self.spent += *usage,
                         // Everything waiting is delivered together.
                         Event::Steered(_) => self.steering.clear(),
                         // A tool may have changed files.
@@ -1192,6 +1203,13 @@ impl ChatSession {
     /// The share of the chat's prompt tokens served from the provider's cache (`Conversation::cache_rate`).
     pub fn cache_rate(&self) -> Option<f32> {
         self.conversation.cache_rate()
+    }
+
+    /// Every token the chat has used: its own model's calls (rewound and compacted ones too) and
+    /// every round of each of its sub-agents, the one still working included.
+    pub fn session_tokens(&self) -> u64 {
+        let agents: u64 = self.agents.list().iter().map(|info| crate::work::spent(&info.spent)).sum();
+        crate::work::spent(&self.spent) + agents
     }
 
     /// Every token the chat's own model used since the user's latest message: its turns,

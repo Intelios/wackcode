@@ -111,7 +111,7 @@ fn drawn(text: Option<&'static str>, placeholder: &'static str) -> Input {
 /// from a quarter full (shell::meter), so not at these levels.
 fn meter(percent: u64) -> Option<Meter> {
     let tokens = CONTEXT_WINDOW * percent / 100;
-    Some(Meter { tokens, window: Some(CONTEXT_WINDOW), high: percent >= 80, can_compact: percent >= 25, parts: context_parts(tokens), cache: Some(0.924) })
+    Some(Meter { tokens, window: Some(CONTEXT_WINDOW), high: percent >= 80, can_compact: percent >= 25, parts: context_parts(tokens), cache: Some(0.924), spent: 3_840_000 })
 }
 
 pub const CONTEXT_WINDOW: u64 = 200_000;

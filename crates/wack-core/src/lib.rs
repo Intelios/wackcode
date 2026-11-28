@@ -53,7 +53,7 @@ pub use store::{
 };
 
 // What the UI needs from the layers below, so it depends on the engine alone.
-pub use wack_agent::{AgentMode, Control, Event, HistoryEntry, Outcome, Recorder, TOOL_SEARCH, history};
+pub use wack_agent::{AgentMode, Control, Event, HistoryEntry, Outcome, Recorder, TOOL_SEARCH, history, history_with_spend};
 pub use wack_agent::prompt::{WACKCODE_COAUTHOR_EMAIL, co_author_label, co_author_trailer};
 pub use wack_llm::{Message, RetryNotice, Role, Usage, WireFormat};
 pub use wack_web::{WEB_FETCH, WEB_SEARCH};

@@ -248,6 +248,8 @@ pub struct Meter {
     /// The share of the chat's prompt tokens the provider served from its cache, once a reply
     /// has said (`ChatSession::cache_rate`).
     pub cache: Option<f32>,
+    /// Every token the chat and its sub-agents have used (`ChatSession::session_tokens`).
+    pub spent: u64,
 }
 
 impl Meter {
@@ -1230,25 +1232,35 @@ fn context_card(meter: &Meter, working: bool, model_missing: bool, open: &[Kind]
     } else {
         ("Compacting summarises older turns to free room.", theme.text_faint)
     };
-    // How much of what the chat sent the provider read from its cache: cheap and fast when high.
-    let cache = div()
+    // A figure for the whole chat beside a label; a dash until there is one.
+    let stat = |label: &'static str, value: Option<String>, tag: &'static str| {
+        div()
+            .flex()
+            .items_center()
+            .gap(px(10.))
+            .child(div().flex_1().min_w_0().typography(Type::Small).text_color(theme.text_dim).child(label))
+            .child(
+                div()
+                    .flex_none()
+                    .typography(Type::Small)
+                    .font_weight(gpui::FontWeight::SEMIBOLD)
+                    .text_color(if value.is_some() { theme.text } else { theme.text_faint })
+                    .child(value.unwrap_or_else(|| "—".into())),
+            )
+            .tag(tag)
+    };
+    // What the chat has cost so far, sub-agents included, and how much of what it sent the
+    // provider read from its cache: cheap and fast when high.
+    let stats = div()
         .mt(px(10.))
         .pt(px(10.))
         .border_t_1()
         .border_color(theme.border)
         .flex()
-        .items_center()
-        .gap(px(10.))
-        .child(div().flex_1().min_w_0().typography(Type::Small).text_color(theme.text_dim).child("Prompt cache hits"))
-        .child(
-            div()
-                .flex_none()
-                .typography(Type::Small)
-                .font_weight(gpui::FontWeight::SEMIBOLD)
-                .text_color(if meter.cache.is_some() { theme.text } else { theme.text_faint })
-                .child(meter.cache.map(|rate| format!("{:.1}%", rate * 100.)).unwrap_or_else(|| "—".into())),
-        )
-        .tag("context-cache");
+        .flex_col()
+        .gap(px(6.))
+        .child(stat("Session tokens", (meter.spent > 0).then(|| count(meter.spent)), "context-spent"))
+        .child(stat("Prompt cache hits", meter.cache.map(|rate| format!("{:.1}%", rate * 100.)), "context-cache"));
     let foot = div()
         .mt(px(10.))
         .pt(px(10.))
@@ -1299,7 +1311,7 @@ fn context_card(meter: &Meter, working: bool, model_missing: bool, open: &[Kind]
         .child(hero)
         .child(bar)
         .child(rows)
-        .child(cache)
+        .child(stats)
         .child(foot)
         .tag("context-popover")
 }
